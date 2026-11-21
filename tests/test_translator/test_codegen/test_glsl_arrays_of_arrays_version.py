@@ -5,6 +5,8 @@ the only version WebGL 2 compiles, has none. Generated programs are compiled wit
 installed.
 """
 
+import functools
+import re
 import shutil
 import subprocess
 
@@ -33,7 +35,14 @@ def compile_with_glslang(tmp_path, code, stage="frag"):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def generate(source, codegen=GLSLCodeGen):
+def generate(source, codegen=None):
+    # The opengl target writes desktop GLSL whatever the #version line says, so a program with a GLSL ES #version
+    # line is generated for the gles target, which writes GLSL ES.
+    if codegen is None:
+        if re.search(r"^\s*#version\s+\d+\s+es\b", source, re.M):
+            codegen = functools.partial(GLSLCodeGen, target_profile="gles")
+        else:
+            codegen = GLSLCodeGen
     return codegen().generate(crosstl.translator.parse(source))
 
 

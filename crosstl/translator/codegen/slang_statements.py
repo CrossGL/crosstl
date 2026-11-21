@@ -260,6 +260,7 @@ class SlangStatementsMixin:
         )
 
     def generate_assignment(self, node):
+        node = self.slang_promoted_compound_assignment(node)
         matrix_product = self.slang_matrix_product_assignment(node)
         if matrix_product is not None:
             return self.generate_assignment(matrix_product)
@@ -288,6 +289,7 @@ class SlangStatementsMixin:
         return f"{left} {node.operator} {right}"
 
     def generate_assignment_statement(self, node):
+        node = self.slang_promoted_compound_assignment(node)
         matrix_product = self.slang_matrix_product_assignment(node)
         if matrix_product is not None:
             return self.generate_assignment_statement(matrix_product)
@@ -421,7 +423,9 @@ class SlangStatementsMixin:
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = self.type_name_string(expected_type)
         try:
-            return self.generate_expression(expr)
+            return self.slang_promoted_store(
+                expr, self.generate_expression(expr), expected_type
+            )
         finally:
             self.current_expression_expected_type = previous_expected_type
 

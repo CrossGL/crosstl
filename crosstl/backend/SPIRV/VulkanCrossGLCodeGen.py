@@ -4,6 +4,7 @@ from ...translator.codegen.image_access_contracts import SUPPORTED_IMAGE_FORMATS
 from ..common_ast import InitializerListNode
 from .buffer_memory_qualifiers import storage_buffer_memory_attribute_suffix
 from .depth_layout_import import fragment_depth_layout_attribute
+from .fragment_interlock_import import SPIRV_INTERLOCK_LAYOUTS
 from .import_exact_lookups import SpirvBuiltinUnsupportedError
 from .matrix_order_import import row_major_field_suffix
 from .ray_tracing_import import BUILTIN_VARIABLE_NAMES
@@ -227,6 +228,7 @@ class VulkanToCrossGLConverter:
         self.renamed_spirv_global_names = {}
         self.spirv_module_shader_stages = self.collect_spirv_module_shader_stages(ast)
         code = "shader main {\n"
+        is_assembly = getattr(ast, "spirv_assembly", False)
         stage_interface_layouts = self.spirv_stage_interface_layouts(ast)
         compute_layouts = [
             node
@@ -262,12 +264,9 @@ class VulkanToCrossGLConverter:
                 code += f"    {self.generate_global_assignment(node)};\n"
             elif isinstance(node, FunctionNode):
                 shader_stage = self.function_shader_stage(node)
-                if shader_stage is not None or node.name == "main":
-                    if shader_stage is None:
-                        shader_stage = self.infer_main_shader_stage(
-                            node, compute_layouts
-                        )
-
+                if shader_stage is None and not is_assembly and node.name == "main":
+                    shader_stage = self.infer_main_shader_stage(node, compute_layouts)
+                if shader_stage is not None:
                     if shader_stage == "compute":
                         code += "    // Compute Shader\n"
                         code += "    compute {\n"
@@ -761,6 +760,9 @@ class VulkanToCrossGLConverter:
                 layouts.append(
                     LayoutNode([("early_fragment_tests", None)], layout_type="in")
                 )
+            interlock = SPIRV_INTERLOCK_LAYOUTS.get(mode.get("mode"))
+            if interlock is not None:
+                layouts.append(LayoutNode([(interlock, None)], layout_type="in"))
         return layouts
 
     def spirv_geometry_execution_layouts(self, node):
@@ -847,7 +849,7 @@ class VulkanToCrossGLConverter:
         return bool(qualifier_names & self.fragment_execution_layout_qualifiers())
 
     def fragment_execution_layout_qualifiers(self):
-        return {"early_fragment_tests"}
+        return {"early_fragment_tests", *SPIRV_INTERLOCK_LAYOUTS.values()}
 
     def generate_compute_layout(self, node):
         qualifiers = ", ".join(

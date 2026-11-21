@@ -4,6 +4,8 @@ Every generated program here is also compiled with glslangValidator when it is i
 that carry several stages.
 """
 
+import functools
+import re
 import shutil
 import subprocess
 
@@ -36,7 +38,14 @@ def compile_with_glslang(tmp_path, code, stage):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def generate(source, stage=None, codegen=GLSLCodeGen):
+def generate(source, stage=None, codegen=None):
+    # The opengl target writes desktop GLSL whatever the #version line says, so a program with a GLSL ES #version
+    # line is generated for the gles target, which writes GLSL ES.
+    if codegen is None:
+        if re.search(r"^\s*#version\s+\d+\s+es\b", source, re.M):
+            codegen = functools.partial(GLSLCodeGen, target_profile="gles")
+        else:
+            codegen = GLSLCodeGen
     ast = crosstl.translator.parse(source)
     if stage is None:
         return codegen().generate(ast)

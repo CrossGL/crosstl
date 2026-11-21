@@ -106,6 +106,7 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     GLSL_VULKAN_RESOURCE_FORMS = False
     LOWERING_REFUSAL_TYPE = WebGLLoweringRefused
     GLSL_ARITHMETIC_CONVERSION_ERROR = WebGLArithmeticConversionError
+    GLSL_ES_OUTPUT = True
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = WebGLBooleanCompoundAssignmentError
     GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = WebGLBooleanOrderedIntrinsicError
     GLSL_STRUCT_CONSTRUCTION_ERROR = WebGLStructConstructionError
@@ -120,6 +121,7 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32})
     BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_", "webgl_", "_webgl_")
+    GLSL_RESERVES_BUILTIN_FUNCTION_NAMES = True
     UNSUPPORTED_VERTEX_OUTPUT_BUILTINS = {"gl_ClipDistance", "gl_CullDistance"}
     UNSUPPORTED_STAGE_NAMES = (
         {

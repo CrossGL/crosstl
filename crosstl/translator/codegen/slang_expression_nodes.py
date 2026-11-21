@@ -141,7 +141,10 @@ class SlangExpressionNodeMixin:
             # ``*name`` of a ``buffer T* name`` is its first element: a structured buffer has no address.
             return f"{postfix_operand(self.generate_expression(node.operand))}[0]"
         operand = self.generate_expression(node.operand)
-        if isinstance(node.operand, BinaryOpNode):
+        if self.slang_promotes_unary(node):
+            # C promotes a narrow scalar operand to int (``slang_integer_promotion``).
+            operand = f"int({operand})"
+        elif isinstance(node.operand, BinaryOpNode):
             operand = f"({operand})"
         if getattr(node, "is_postfix", False):
             return f"{postfix_operand(operand)}{node.op}"

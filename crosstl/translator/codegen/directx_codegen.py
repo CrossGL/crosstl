@@ -252,6 +252,7 @@ from .hlsl_texture_residency import (
     hlsl_texture_resident_call,
 )
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
+from .hlsl_vk_locations import hlsl_vk_location_prefix
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
     hlsl_wave_extension_call,
@@ -351,6 +352,7 @@ from .texture_residency import (
     TEXTURE_RESIDENCY_OPERATION,
     TEXTURE_RESIDENT_OPERATION,
 )
+from .type_query_memo import scoped_type_query
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
 from .union_lanes import hlsl_lane_helpers
 
@@ -2266,9 +2268,14 @@ class HLSLCodeGen(
                 qualifier = self.local_variable_qualifier(node)
                 # A module variable without ``static`` is an implicitly constant member of the $Globals
                 # constant buffer in HLSL; private per-invocation state needs ``static``.
-                if {"thread", "static"} & {
+                storage_qualifiers = {
                     str(value) for value in getattr(node, "qualifiers", []) or []
-                } and not qualifier.startswith("static"):
+                }
+                if {
+                    "private",
+                    "thread",
+                    "static",
+                } & storage_qualifiers and not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
             code += resource_identity_marker(node, var_name)
             if id(node) in self.hlsl_inferred_global_node_ids:
@@ -4521,7 +4528,11 @@ class HLSLCodeGen(
             elif resource_pointer_contract is None:
                 param_type = self.apply_hlsl_parameter_qualifiers(param_type, p)
                 param_type = f"{self.hlsl_interpolation_modifier_prefix(p)}{param_type}"
-            declaration = format_c_style_array_declaration(
+            # The guarded attribute lines start on a line of their own inside the parameter list.
+            vk_location = hlsl_vk_location_prefix(self, p)
+            declaration = (
+                "\n" + vk_location if vk_location else ""
+            ) + format_c_style_array_declaration(
                 param_type, self.hlsl_declaration_identifier_name(p.name)
             )
             emit_semantic = semantic
@@ -5791,6 +5802,7 @@ class HLSLCodeGen(
             return True
         return str(getattr(attr, "name", "")).lower() in metadata
 
+    @scoped_type_query
     def expression_result_type(self, expr):
         if expr is None:
             return None

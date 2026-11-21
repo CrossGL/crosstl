@@ -15,7 +15,8 @@ attributes. The generator pairs a texture with the sampler of that name, so the 
 ``sampler <texture>Sampler [[sampler(n)]]`` and samples through it; ``n`` is the texture's binding, as the HLSL
 generator uses ``s<n>`` beside ``t<n>``. A program that already declares a value of that name keeps it. A helper
 function's combined sampler parameter likewise takes a ``sampler <parameter>Sampler`` parameter after it, and every
-call passes the sampler of its argument.
+call passes the sampler of its argument. A combined sampler a stage block declares gets its sampler in the same
+stage block, so the stage's entry point takes it the same way.
 """
 
 from __future__ import annotations
@@ -147,17 +148,25 @@ def _is_sampler(argument, samplers, members):
     return _argument_name(argument) in samplers
 
 
-def _sampled_in(program, roots, candidates, helpers):
-    """The candidates a call samples through their own sampler state, or passes to a helper that does."""
+def _sampled_in(program, roots, candidates, helpers, scope=()):
+    """The candidates a call samples through their own sampler state, or passes to a helper that does.
+
+    ``scope`` holds the variables of the stage block the roots belong to, which hide program-scope ones.
+    """
     sampled = set()
     seen = set()
     members = _sampler_members(program)
     globals_ = {
         v.name: _type_name(getattr(v, "var_type", None))
-        for v in getattr(program, "global_variables", None) or []
+        for v in [*(getattr(program, "global_variables", None) or []), *scope]
+    }
+    scoped_samplers = {
+        v.name
+        for v in scope
+        if _type_name(getattr(v, "var_type", None)) in _SAMPLER_TYPES
     }
     for root in roots:
-        samplers = _sampler_names(program, root)
+        samplers = _sampler_names(program, root) | scoped_samplers
         types = dict(globals_)
         for parameter in getattr(root, "parameters", None) or []:
             types[parameter.name] = _type_name(getattr(parameter, "param_type", None))
@@ -236,37 +245,75 @@ def _sampler_for(texture, name, taken):
     )
 
 
+def _combined_samplers(variables):
+    return {
+        variable.name: variable
+        for variable in variables or []
+        if isinstance(variable, VariableNode)
+        and _type_name(variable.var_type) in COMBINED_SAMPLER_TYPES
+    }
+
+
+def _taken_bindings(variables):
+    return {
+        _binding_key(_binding_attributes(v))
+        for v in variables
+        if _type_name(getattr(v, "var_type", None)) in _SAMPLER_TYPES
+        and _binding_attributes(v)
+    }
+
+
+def _stage_functions(stage):
+    roots = list(getattr(stage, "local_functions", None) or [])
+    if getattr(stage, "entry_point", None) is not None:
+        roots.append(stage.entry_point)
+    return roots
+
+
 def bind_combined_samplers(ast):
     """``ast``, or a copy declaring a bound sampler for each combined sampler a sampling call reads."""
     if not isinstance(ast, ShaderNode):
         return ast
-    textures = {
-        variable.name: variable
-        for variable in getattr(ast, "global_variables", None) or []
-        if isinstance(variable, VariableNode)
-        and _type_name(variable.var_type) in COMBINED_SAMPLER_TYPES
-    }
-    if not textures:
+    textures = _combined_samplers(getattr(ast, "global_variables", None))
+    stages = _stages(ast)
+    staged = [_combined_samplers(getattr(s, "local_variables", None)) for s in stages]
+    if not textures and not any(staged):
         return ast
     helpers = _helper_sampler_parameters(ast)
-    sampled = _sampled_in(ast, _functions(ast), set(textures), helpers)
     declared = _declared_names(ast)
-    needed = sorted(name for name in sampled if f"{name}Sampler" not in declared)
-    if not needed and not helpers:
+    needed = []
+    if textures:
+        sampled = _sampled_in(ast, _functions(ast), set(textures), helpers)
+        needed = sorted(name for name in sampled if f"{name}Sampler" not in declared)
+    stage_needs = []
+    for stage, local in zip(stages, staged):
+        names = []
+        if local:
+            scope = list(getattr(stage, "local_variables", None) or [])
+            sampled = _sampled_in(
+                ast, _stage_functions(stage), set(local), helpers, scope
+            )
+            names = sorted(n for n in sampled if f"{n}Sampler" not in declared)
+        stage_needs.append(names)
+    if not needed and not any(stage_needs) and not helpers:
         return ast
     ast = deepcopy(ast)
     globals_ = list(ast.global_variables)
-    taken = {
-        _binding_key(_binding_attributes(v))
-        for v in globals_
-        if _type_name(getattr(v, "var_type", None)) in _SAMPLER_TYPES
-        and _binding_attributes(v)
-    }
+    taken = _taken_bindings(globals_)
     by_name = {getattr(v, "name", None): v for v in globals_}
     # After every other declaration, so that the samplers the program declares keep the slots they had.
     for name in needed:
         globals_.append(_sampler_for(by_name[name], f"{name}Sampler", taken))
     ast.global_variables = globals_
+    for stage, names in zip(_stages(ast), stage_needs):
+        if not names:
+            continue
+        local = list(stage.local_variables)
+        scoped = taken | _taken_bindings(local)
+        by_name = {getattr(v, "name", None): v for v in local}
+        for name in names:
+            local.append(_sampler_for(by_name[name], f"{name}Sampler", scoped))
+        stage.local_variables = local
     if helpers:
         _thread_helper_samplers(ast)
     return ast

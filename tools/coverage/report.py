@@ -35,10 +35,11 @@ SCHEMA = 3
 COLUMNS = ("name", "category", "group", "outcome", "detail")
 # The only names a ``file`` field may hold, so that loading a report never reads outside its directory.
 FEATURE_FILE = re.compile(r"features/[a-z0-9]+-[a-z]+\.json")
+# Likewise for a translation matrix cell (:mod:`.pairs`), whose features are in ``features/pairs/<source>-to-<target>``.
+CELL_FILE = re.compile(r"features/pairs/[a-z0-9]+-to-[a-z0-9]+\.json")
 # Directions CrossTL does not offer at all; the report lists them so a reader can tell "not offered" from 0 %.
 NOT_OFFERED = {
     ("opencl", "output"): "CrossTL has no OpenCL C generator",
-    ("webgl", "input"): "CrossTL has no WebGL source frontend",
     ("wgsl", "input"): "CrossTL has no WGSL source frontend",
 }
 
@@ -347,6 +348,7 @@ def merge(reports: list[dict]) -> dict:
     }
     merged["backends"] = backends
     merged.pop("pairs", None)
+    merged.pop("matrix", None)
     cells: dict[tuple[str, str], dict] = {}
     for report in reports:
         for cell in report.get("pairs", []):
@@ -400,9 +402,15 @@ def dumps(report: dict) -> str:
     return _json(stored)
 
 
+def cell_file(cell: dict) -> str:
+    """The path, on the coverage branch, of the features of the translation matrix cell ``cell``."""
+    return f"features/pairs/{cell['source']}-to-{cell['target']}.json"
+
+
 def site(report: dict) -> dict[str, str]:
-    """``report`` as the files of the coverage branch, by path: ``coverage.json`` without any feature rows, and one
-    ``features/<language>-<direction>.json`` with the rows of each backend that has features.
+    """``report`` as the files of the coverage branch, by path: ``coverage.json`` without any feature rows, one
+    ``features/<language>-<direction>.json`` with the rows of each backend that has features, and one
+    :func:`cell_file` with those of each cell of the translation matrix.
     """
     files = {}
     backends = []
@@ -422,23 +430,48 @@ def site(report: dict) -> dict[str, str]:
         )
         rest = {k: v for k, v in backend.items() if k != "features"}
         backends.append({**rest, "file": name})
-    return {"coverage.json": _json({**report, "backends": backends}), **files}
+    cells = []
+    for cell in report.get("pairs", []):
+        name = cell_file(cell)
+        if not CELL_FILE.fullmatch(name):
+            raise ValueError(f"{name!r} is not the name of a cell file")
+        stored = _rows(cell)
+        files[name] = _json(
+            {
+                key: stored[key]
+                for key in ("source", "target", "columns", "details", "features")
+            }
+        )
+        rest = {k: v for k, v in cell.items() if k != "features"}
+        cells.append({**rest, "file": name})
+    published = {**report, "backends": backends}
+    if "pairs" in report:
+        published["pairs"] = cells
+    return {"coverage.json": _json(published), **files}
 
 
-def _linked(backend: dict, directory: Path) -> dict:
-    """``backend`` with the rows of the feature file it names, read from ``directory``."""
-    name = backend["file"]
-    if not isinstance(name, str) or not FEATURE_FILE.fullmatch(name):
+def _linked(
+    entry: dict,
+    directory: Path,
+    pattern: re.Pattern = FEATURE_FILE,
+    owners: tuple[str, str] = ("language", "direction"),
+) -> dict:
+    """``entry``, a backend or a matrix cell, with the rows of the feature file it names, read from ``directory``.
+
+    The file must match ``pattern`` and name the entry's ``owners`` fields as its own.
+    """
+    name = entry["file"]
+    if not isinstance(name, str) or not pattern.fullmatch(name):
         raise ValueError(f"{name!r} is not the name of a feature file")
     base = directory.resolve()
     path = (base / name).resolve()
     if not path.is_relative_to(base):
         raise ValueError(f"{name} leads outside {directory}")
     stored = json.loads(path.read_text(encoding="utf-8"))
-    owner = (stored.get("language"), stored.get("direction"))
-    if owner != (backend.get("language"), backend.get("direction")):
+    owner = tuple(stored.get(field) for field in owners)
+    if owner != tuple(entry.get(field) for field in owners):
         raise ValueError(f"{name} holds the features of {owner[0]} {owner[1]}")
-    rest = {k: v for k, v in backend.items() if k != "file"}
+    rest = {k: v for k, v in entry.items() if k != "file"}
     return {**rest, **{k: stored[k] for k in ("columns", "details", "features")}}
 
 
@@ -461,13 +494,24 @@ def loads(text: str) -> dict:
 
 
 def load(path: Path) -> dict:
-    """The report in ``path``, reading the feature file each backend names, if any, from the same directory."""
+    """The report in ``path``, reading the feature file each backend or matrix cell names, if any, from the same
+    directory."""
     data = json.loads(path.read_text(encoding="utf-8"))
     backends = [
         _linked(b, path.parent) if isinstance(b, dict) and "file" in b else b
         for b in data["backends"]
     ]
-    return _expanded({**data, "backends": backends})
+    linked = {**data, "backends": backends}
+    if "pairs" in data:
+        linked["pairs"] = [
+            (
+                _linked(c, path.parent, CELL_FILE, ("source", "target"))
+                if isinstance(c, dict) and "file" in c
+                else c
+            )
+            for c in data["pairs"]
+        ]
+    return _expanded(linked)
 
 
 def write(report: dict, path: Path) -> None:

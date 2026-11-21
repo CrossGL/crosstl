@@ -10,6 +10,7 @@ from .c_family_operands import (
     prefix_unary_operand,
 )
 from .cuda_builtin_components import compute_builtin_subscript
+from .cuda_subscripts import vector_matrix_subscript, visit_as_reference
 from .enum_utils import generate_enum_constructor_expression
 from .generic_struct_utils import generate_struct_constructor_expression
 from .hip_refusals import HipLoweringRefused
@@ -39,7 +40,7 @@ class HipExpressionMixin:
         if result_info is None:
             return None
 
-        object_expr = self.visit(object_node)
+        object_expr = visit_as_reference(self, object_node)
         value_expr = self.visit(value_node)
         temp_name = self.next_hip_temp_variable("swizzle_value")
         value_info = self.swizzle_result_vector_info(
@@ -298,6 +299,9 @@ class HipExpressionMixin:
         builtin_component = self.hip_compute_builtin_index_component(node)
         if builtin_component is not None:
             return builtin_component
+        subscript = vector_matrix_subscript(self, node, HipLoweringRefused, "HIP")
+        if subscript is not None:
+            return subscript
         array = self.visit(node.array)
         self.subscript_index_depth += 1
         try:

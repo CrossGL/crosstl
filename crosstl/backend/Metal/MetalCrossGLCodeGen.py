@@ -100,6 +100,7 @@ from .crossgl_codegen.vector_types import MetalVectorTypeMixin
 from .explicit_specialization_annotations import explicit_specialization_annotation
 from .external_functions import refuse_external_function_calls
 from .function_constants import import_function_constant_defaults
+from .intersection_import import MetalIntersectionImport
 from .library_structs import declare_referenced_library_structs
 from .mesh_import import MetalMeshImport
 from .MetalAst import *
@@ -196,6 +197,7 @@ class MetalToCrossGLConverter(
     MetalAlignmentSpecifiers,
     MetalBufferLayoutImport,
     MetalMeshImport,
+    MetalIntersectionImport,
     MetalPostTessellationImport,
     MetalProgramRenderingMixin,
     MetalConverterSetupMixin,
@@ -1155,7 +1157,7 @@ float {scalar}(float base, float exponent) {{
                 and name == "position"
             ):
                 out = "gl_FragCoord"
-            elif name == "barycentric_coord":
+            elif name == "barycentric_coord" and name not in self.map_semantics:
                 out = (
                     "gl_BaryCoordNoPerspEXT"
                     if no_perspective_barycentric

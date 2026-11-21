@@ -5014,6 +5014,37 @@ def test_metal_pointer_typed_member_access_uses_arrow_operator():
     assert "payload.value" not in generated_code
 
 
+def test_metal_arrow_keeps_grouping_of_a_parenthesized_pointer_expression():
+    shader = """
+    shader MetalArrowGrouping {
+        struct S {
+            float a;
+            float b;
+        };
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer S* s;
+            buffer float* o;
+
+            void main() {
+                o[0] = (s + 1)->a;
+                o[1] = s->b;
+                o[2] = (o[2] > 0.0 ? s : s + 1)->b;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "o[0] = (s + 1)->a;" in generated_code
+    assert "o[1] = s->b;" in generated_code
+    assert "o[2] = (o[2] > 0.0 ? s : s + 1)->b;" in generated_code
+
+
 def test_metal_indexed_pointer_member_access_uses_element_dot_operator():
     shader = """
     shader MetalIndexedPointerMemberAccess {
@@ -15004,6 +15035,104 @@ def test_metal_stage_entry_name_avoids_local_helper_collision():
     assert "return fragment_main(uv);" in generated_code
 
 
+@pytest.mark.parametrize(
+    ("stage", "body", "expected"),
+    [
+        (
+            "compute",
+            """
+        @stage_entry
+        void main(RWStructuredBuffer<float> out_ @buffer(1), uint id @gl_GlobalInvocationID) {
+            out_[id] = 1.0;
+        }
+""",
+            "kernel void kernel_main(",
+        ),
+        (
+            "vertex",
+            """
+        @stage_entry
+        vec4 main(uint vid @gl_VertexID) @gl_Position {
+            return vec4(float(vid), 0.0, 0.0, 1.0);
+        }
+""",
+            "vertex float4 vertex_main(",
+        ),
+        (
+            "fragment",
+            """
+        @stage_entry
+        vec4 main(vec4 pos @gl_FragCoord) @gl_FragColor {
+            return pos;
+        }
+""",
+            "fragment float4 fragment_main(",
+        ),
+    ],
+)
+def test_metal_explicit_stage_entry_named_main_is_renamed(stage, body, expected):
+    shader = f"""
+    shader ExplicitMainEntry {{
+        {stage} {{
+{body}
+        }}
+    }}
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), stage
+    )
+
+    assert expected in generated_code
+    assert not re.search(r"(kernel|vertex|fragment)\s+\w+\s+main\(", generated_code)
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_explicit_stage_entry_named_main_avoids_helper_collision():
+    shader = """
+    shader ExplicitMainHelperCollision {
+        compute {
+            void kernel_main(RWStructuredBuffer<float> out_, uint id) {
+                out_[id] = 2.0;
+            }
+
+            @stage_entry
+            void main(RWStructuredBuffer<float> out_ @buffer(1), uint id @gl_GlobalInvocationID) {
+                kernel_main(out_, id);
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "compute"
+    )
+
+    assert "kernel void kernel_main_2(" in generated_code
+    assert "kernel void kernel_main(" not in generated_code
+    assert re.search(r"\bvoid kernel_main\(", generated_code)
+    compile_with_metal_if_available(generated_code)
+
+
+def test_metal_explicit_stage_entry_keeps_other_names():
+    shader = """
+    shader ExplicitNamedEntry {
+        fragment {
+            @stage_entry
+            vec4 shade(vec4 pos @gl_FragCoord) @gl_FragColor {
+                return pos;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
+    )
+
+    assert "fragment float4 shade(" in generated_code
+
+
 def test_metal_atomic_fetch_codegen():
     code = """
     shader main {
@@ -18593,7 +18722,7 @@ def test_metal_sampler_cube_uses_cube_texture_type():
     assert "envMap.sample" in generated_code
 
 
-def test_metal_rejects_non_resource_shadow_of_global_resource():
+def test_metal_renames_non_resource_shadow_of_global_resource():
     shader = """
     shader ResourceShadow {
         sampler2D colorMap;
@@ -18616,14 +18745,13 @@ def test_metal_rejects_non_resource_shadow_of_global_resource():
     }
     """
 
-    with pytest.raises(
-        ValueError,
-        match=(
-            "Non-resource local declaration\\(s\\) shadow Metal global "
-            "resource\\(s\\): colorMap, linearSampler"
-        ),
-    ):
-        MetalCodeGen().generate(crosstl.translator.parse(shader))
+    generated_code = MetalCodeGen().generate(crosstl.translator.parse(shader))
+
+    # The parameter and the local keep their values under names that no longer hide the resources.
+    assert "float4 shade(float colorMap_, FSInput input)" in generated_code
+    assert "float linearSampler_ = 1.0;" in generated_code
+    assert "return float4(colorMap_ + linearSampler_);" in generated_code
+    assert "texture2d<float> colorMap [[texture(0)]]" in generated_code
 
 
 def test_metal_rejects_texture_call_with_non_resource_argument():
@@ -35244,7 +35372,11 @@ def test_metal_verbatim_issue_3925_bounded_stage_texture_array():
     }
     """
     code = MetalCodeGen().generate(crosstl.translator.parse(shader))
-    assert "array<texture2d<float>, 2> tex" in code
+    # A run-time index makes the array a runtime descriptor array, which Metal holds in an argument buffer.
+    assert "struct tex_slot {" in code
+    assert "const device tex_slot* tex [[buffer(2)]]" in code
+    assert "array<texture2d<float>" not in code
+    compile_with_metal_if_available(code)
 
 
 def stage_block_texture_array_shader(body):
@@ -35264,35 +35396,42 @@ def stage_block_texture_array_shader(body):
     """
 
 
-@pytest.mark.parametrize(
-    "body",
-    [
-        "outp[i] = textureLod(tex[3], vec2(fin[i], 0.5), 0.0).x;",
-        "float acc = 0.0;"
-        " for (int j = 0; j < 4; j++) {"
-        " acc += textureLod(tex[j], vec2(fin[i], 0.5), 0.0).x; }"
-        " outp[i] = acc;",
-    ],
-    ids=["constant-index", "loop-index"],
-)
-def test_metal_stage_block_texture_array_is_sized_from_its_indices(body):
+def test_metal_stage_block_texture_array_is_sized_from_its_constant_indices():
     code = MetalCodeGen().generate(
-        crosstl.translator.parse(stage_block_texture_array_shader(body))
+        crosstl.translator.parse(
+            stage_block_texture_array_shader(
+                "outp[i] = textureLod(tex[3], vec2(fin[i], 0.5), 0.0).x;"
+            )
+        )
     )
 
+    # GLSL sizes an array that only constant indices reach.
     assert "array<texture2d<float>, 4> tex" in code
     compile_with_metal_if_available(code)
 
 
-def test_metal_stage_block_texture_array_refuses_an_unbounded_index():
-    shader = stage_block_texture_array_shader(
+@pytest.mark.parametrize(
+    "body",
+    [
+        "float acc = 0.0;"
+        " for (int j = 0; j < 4; j++) {"
+        " acc += textureLod(tex[j], vec2(fin[i], 0.5), 0.0).x; }"
+        " outp[i] = acc;",
         "int k = int(fin[0]);"
-        " outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x;"
+        " outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x;",
+    ],
+    ids=["loop-index", "unbounded-index"],
+)
+def test_metal_stage_block_texture_array_with_run_time_indices_is_an_argument_buffer(
+    body,
+):
+    code = MetalCodeGen().generate(
+        crosstl.translator.parse(stage_block_texture_array_shader(body))
     )
 
-    # As for a shader-scope array, no bound reaches the index.
-    with pytest.raises(ResourceArrayIndexUnboundedError, match="tex"):
-        MetalCodeGen().generate(crosstl.translator.parse(shader))
+    assert "const device tex_slot* tex [[buffer(2)]]" in code
+    assert "array<texture2d<float>" not in code
+    compile_with_metal_if_available(code)
 
 
 if __name__ == "__main__":

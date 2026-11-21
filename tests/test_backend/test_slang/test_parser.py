@@ -8,6 +8,7 @@ from crosstl.backend.slang.SlangAst import (
     AssignmentNode,
     AssociatedTypeNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     CallNode,
     CaseNode,
@@ -971,9 +972,13 @@ def test_switch_case_braced_blocks_and_empty_statements_parse():
     switch = function.body[0]
 
     assert isinstance(switch, SwitchNode)
-    assert isinstance(switch.cases[0].body[0], AssignmentNode)
-    assert isinstance(switch.cases[0].body[1], BreakNode)
-    assert isinstance(switch.default_case[0], BreakNode)
+    # Each braced case body is a nested block, so its declarations end with it.
+    case_block = switch.cases[0].body[0]
+    assert isinstance(case_block, BlockNode)
+    assert isinstance(case_block.statements[0], AssignmentNode)
+    assert isinstance(case_block.statements[1], BreakNode)
+    assert isinstance(switch.default_case[0], BlockNode)
+    assert isinstance(switch.default_case[0].statements[0], BreakNode)
 
 
 def test_lambda_expression_parsing():

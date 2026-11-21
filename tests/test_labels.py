@@ -88,6 +88,12 @@ def test_labels_that_the_coverage_issues_apply_are_defined():
     ]
     rows.append({"language": ir.LANGUAGE, "direction": "output"})
     used = {label for row in rows for label in issues.bug_labels(row)}
+    used |= {
+        label
+        for source in issues.PAIR_LANGUAGES
+        for target in issues.PAIR_LANGUAGES
+        for label in issues.pair_labels({"source": source, "target": target})
+    }
     assert used <= {label.name for label in load()}
 
 

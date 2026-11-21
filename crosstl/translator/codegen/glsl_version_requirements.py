@@ -20,6 +20,7 @@ import re
 from dataclasses import dataclass
 
 from .glsl_compute_derivative_groups import DERIVATIVE_GROUP_EXTENSIONS
+from .glsl_fragment_depth_layout import DEPTH_LAYOUTS as _DEPTH_LAYOUTS
 from .glsl_fragment_interlock import INTERLOCK_LAYOUTS
 from .glsl_spirv_varying_locations import (
     spirv_location_macro_definition,
@@ -364,6 +365,17 @@ _LAYOUT_REQUIREMENTS = {
     "uniform_block_layout": GLSLRequirement(
         "a uniform block layout", 330, 300, ("GL_ARB_uniform_buffer_object",)
     ),
+    # Conservative depth layouts on the gl_FragDepth redeclaration (GLSL 4.20 section 4.4.2.3). glslang refuses the
+    # redeclaration below GLSL 4.20 even with GL_ARB_conservative_depth enabled ("identifiers starting with gl_ are
+    # reserved"), so desktop output raises its version; GLSL ES has the layouts only through
+    # GL_EXT_conservative_depth.
+    "depth": GLSLRequirement(
+        "a conservative depth layout",
+        420,
+        None,
+        (),
+        ("GL_EXT_conservative_depth",),
+    ),
     # glslang accepts the GL_ARB_fragment_shader_interlock modes only from GLSL 4.50, extension or not.
     "interlock": GLSLRequirement("a fragment shader interlock layout", 450, None),
     # GL_KHR_compute_shader_derivatives and GL_NV_compute_shader_derivatives apply to GLSL 4.50 and later.
@@ -565,6 +577,8 @@ def _layout_line_requirements(ids, declaration, stage):
         requirements.append(_LAYOUT_REQUIREMENTS["interface"])
     if any(qualifier.startswith("local_size_") for qualifier in ids):
         requirements.append(_LAYOUT_REQUIREMENTS["local_size"])
+    if ids & _DEPTH_LAYOUTS:
+        requirements.append(_LAYOUT_REQUIREMENTS["depth"])
     if ids & INTERLOCK_LAYOUTS:
         requirements.append(_LAYOUT_REQUIREMENTS["interlock"])
     if ids & DERIVATIVE_GROUP_EXTENSIONS.keys():

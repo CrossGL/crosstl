@@ -241,9 +241,9 @@ class HipRecordCallMixin:
                 if source is None:
                     continue
                 if target is not None:
-                    if self.record_contains_union_storage(
+                    if self.record_contains_tracked_union_storage(
                         source
-                    ) or self.record_contains_union_storage(target):
+                    ) or self.record_contains_tracked_union_storage(target):
                         issues.append(
                             ("union function argument active storage", source)
                         )
@@ -338,7 +338,7 @@ class HipRecordCallMixin:
         definition = self.record_definition_from_type(call.name)
         if definition is not None:
             args = list(getattr(call, "args", None) or [])
-            if self.record_contains_union_storage(definition) and any(
+            if self.record_contains_tracked_union_storage(definition) and any(
                 self.infer_record_expression_definition(argument) is not None
                 for argument in args
             ):
@@ -378,7 +378,7 @@ class HipRecordCallMixin:
                 ("derived-to-base value conversion", source), context
             )
         if source is target and copy_semantics:
-            if self.record_contains_union_storage(source):
+            if self.record_contains_tracked_union_storage(source):
                 self.raise_record_semantic(
                     ("union-containing value flow active storage", source), context
                 )
@@ -487,7 +487,7 @@ class HipRecordCallMixin:
                 ("derived-to-base assignment conversion", source), context
             )
         if source is target:
-            if self.record_contains_union_storage(target):
+            if self.record_contains_tracked_union_storage(target):
                 self.raise_record_semantic(
                     ("union-containing assignment active storage", target), context
                 )

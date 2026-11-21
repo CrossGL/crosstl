@@ -96,6 +96,11 @@ class HipDeclarationMixin:
             member_type = self.cbuffer_member_type(member)
             declaration = self.format_typed_declarator(member_type, member.name)
             self.add_line(f"__constant__ {declaration};")
+            # Record the member's type so expressions on it, such as vector
+            # arithmetic, lower through the same helpers as other vectors.
+            self.register_variable_type(
+                member.name, self.type_name_string(member_type), member
+            )
         self.add_line()
         return ""
 

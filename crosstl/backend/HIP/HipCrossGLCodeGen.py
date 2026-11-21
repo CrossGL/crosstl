@@ -4,11 +4,17 @@ import re
 
 from ...translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ...translator.semantics.warp import ORDERED_WORKGROUP_BARRIER
+from ..CUDA.array_extents import IntegerConstants
 from ..CUDA.block_votes import BlockVoteLibrary, insert_block_vote_functions
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..CUDA.directed_rounding import (
     DirectedRoundingLibrary,
     insert_directed_rounding_functions,
+)
+from ..CUDA.function_templates import (
+    collect_function_templates,
+    generic_prefix,
+    template_parameters,
 )
 from ..CUDA.keyword_renames import source_identifier_names
 from ..CUDA.parameter_defaults import merge_declared_defaults, parameter_default_suffix
@@ -43,6 +49,7 @@ from .crossgl_codegen.statements import HipStatementMixin
 from .crossgl_codegen.surfaces import HipSurfaceMixin
 from .crossgl_codegen.textures import HipTextureMixin
 from .crossgl_codegen.type_conversion import HipTypeConversionMixin
+from .crossgl_codegen.union_layouts import HipUnionLayoutMixin
 from .HipAst import (
     ArrayAccessNode,
     EnumNode,
@@ -104,6 +111,7 @@ class HipToCrossGLConverter(
     HipExpressionMixin,
     HipStatementMixin,
     HipTypeConversionMixin,
+    HipUnionLayoutMixin,
     ImportRefusalMixin,
 ):
     """Serialize HIP backend AST nodes back into CrossGL source.
@@ -614,6 +622,7 @@ class HipToCrossGLConverter(
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.variable_type_scopes = [{}]
+        self.integer_constants = IntegerConstants()
         self.device_property_source_scopes = [{}]
         self.device_attribute_source_scopes = [{}]
         self.device_query_source_scopes = [{}]
@@ -645,6 +654,7 @@ class HipToCrossGLConverter(
         self.union_indirect_object_scopes = [set()]
         self.namespace_scope_variable = False
         self.namespace_constant_names = set()
+        self.function_templates = {}
         self.function_body_depth = 0
 
     def generate(self, ast_node):
@@ -677,6 +687,7 @@ class HipToCrossGLConverter(
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.variable_type_scopes = [{}]
+        self.integer_constants = IntegerConstants()
         self.device_property_source_scopes = [{}]
         self.device_attribute_source_scopes = [{}]
         self.device_query_source_scopes = [{}]
@@ -692,6 +703,7 @@ class HipToCrossGLConverter(
         self.anonymous_enum_count = 0
         self.global_resource_binding_count = 0
         self.namespace_constant_names = set()
+        self.function_templates = collect_function_templates(ast_node)
         self.function_body_depth = 0
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
@@ -700,9 +712,11 @@ class HipToCrossGLConverter(
         self.prepare_global_resource_bindings(ast_node)
         self.reference_parameters = ReferenceParameters(ast_node)
         self.emitted_buffer_layouts = EmittedBufferLayouts("HIP")
+        self.begin_union_layout_contracts()
         self.block_votes = BlockVoteLibrary(self.source_identifier_names)
         self.directed_rounding = DirectedRoundingLibrary(self.source_identifier_names)
         self.visit(ast_node)
+        self.apply_union_layout_contracts()
         self.emitted_buffer_layouts.apply(self.output)
         insert_block_vote_functions(
             self.output, self.block_votes, "// HIP to CrossGL conversion"
@@ -1274,6 +1288,9 @@ class HipToCrossGLConverter(
         )
         self.push_variable_type_scope()
         self.push_identifier_name_scope()
+        for parameter in template_parameters(node) or []:
+            # A template value parameter hides a namespace constant of its name.
+            self.integer_constants.declare(parameter.name)
         try:
             params = []
 
@@ -1323,7 +1340,14 @@ class HipToCrossGLConverter(
                 node, file_scope_off=self.fp_contract_file_scope_off
             ):
                 self.emit(PRECISE_FUNCTION_ATTRIBUTE)
-            self.emit(f"{return_type} {function_name}({param_str}) {{")
+            prefix = generic_prefix(
+                self,
+                node,
+                "HIP",
+                self.convert_hip_type_to_crossgl,
+                f"{return_type} {param_str}",
+            )
+            self.emit(f"{prefix}{return_type} {function_name}({param_str}) {{")
 
             self.indent_level += 1
             self.push_packed_argument_scope()
@@ -1568,6 +1592,9 @@ class HipToCrossGLConverter(
         ):
             return self.visit(raw_args[0].operand)
 
+        if len(raw_args) == 1:
+            return f"(*{formatted_args[0]})"
+
         return self.refuse_import(
             f"HIP load cache intrinsic {function_name}({', '.join(formatted_args)}): CrossGL loads take one "
             "address",
@@ -1628,16 +1655,19 @@ class HipToCrossGLConverter(
                 if width_limit == "WaveGetLaneCount()"
                 else f"(WaveGetLaneIndex() % {width_limit})"
             )
+            # Select the source lane first and read in every lane, as the
+            # mask-less __shfl_up/__shfl_down below do: the source lane is
+            # inactive in the lanes that take the other arm of ?: (#4569).
             if function_name == "__shfl_up_sync":
                 return (
+                    f"WaveReadLaneAt({value}, "
                     f"(({segment_lane} >= ({delta})) ? "
-                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() - ({delta}))) "
-                    f": {value})"
+                    f"(WaveGetLaneIndex() - ({delta})) : WaveGetLaneIndex()))"
                 )
             return (
+                f"WaveReadLaneAt({value}, "
                 f"((({segment_lane} + ({delta})) < {width_limit}) ? "
-                f"WaveReadLaneAt({value}, (WaveGetLaneIndex() + ({delta}))) "
-                f": {value})"
+                f"(WaveGetLaneIndex() + ({delta})) : WaveGetLaneIndex()))"
             )
 
         if function_name == "__shfl_xor_sync":
@@ -1820,22 +1850,26 @@ class HipToCrossGLConverter(
         if member_name == "shfl":
             source_lane = f"(({lane} - {local_lane}) + {lane_arg})"
             return f"WaveReadLaneAt({value}, {source_lane})"
+        # The shuffle runs in every lane and only its source lane is selected; a
+        # source outside the tile reads the caller's own lane (#4569).
         if member_name == "shfl_down":
             return (
+                f"WaveReadLaneAt({value}, "
                 f"((({local_lane} + ({lane_arg})) < {tile_size}) ? "
-                f"WaveReadLaneAt({value}, ({lane} + ({lane_arg}))) : {value})"
+                f"({lane} + ({lane_arg})) : {lane}))"
             )
         if member_name == "shfl_up":
             return (
+                f"WaveReadLaneAt({value}, "
                 f"(({local_lane} >= ({lane_arg})) ? "
-                f"WaveReadLaneAt({value}, ({lane} - ({lane_arg}))) : {value})"
+                f"({lane} - ({lane_arg})) : {lane}))"
             )
 
         source_local_lane = f"({local_lane} ^ ({lane_arg}))"
         source_lane = f"(({lane} - {local_lane}) + {source_local_lane})"
         return (
-            f"(({source_local_lane} < {tile_size}) ? "
-            f"WaveReadLaneAt({value}, {source_lane}) : {value})"
+            f"WaveReadLaneAt({value}, "
+            f"(({source_local_lane} < {tile_size}) ? {source_lane} : {lane}))"
         )
 
     def format_unsupported_cooperative_group_expression(
@@ -1918,9 +1952,19 @@ class HipToCrossGLConverter(
         target_type = self.convert_hip_type_to_crossgl(node.target_type)
         if node.is_array:
             size = self.visit(node.size) if node.size is not None else ""
+            if self.in_device_code:
+                return self.refuse_import(
+                    f"HIP new[] {target_type}({size}): CrossGL has no device heap",
+                    "0",
+                )
             return f"new_array<{target_type}>({size})"
 
         args = ", ".join(self.visit(arg) for arg in node.args)
+        if self.in_device_code:
+            return self.refuse_import(
+                f"HIP new {target_type}({args}): CrossGL has no device heap",
+                "0",
+            )
         return f"new<{target_type}>({args})"
 
     def get_member_query_path(self, node):

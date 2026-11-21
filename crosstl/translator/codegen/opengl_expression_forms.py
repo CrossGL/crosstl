@@ -6,6 +6,7 @@ from ..ast import (
 from .generic_struct_utils import (
     generate_struct_constructor_expression,
 )
+from .glsl_double_literals import binary64_literal_arms
 from .glsl_shared_array_values import (
     is_shared_array_value,
 )
@@ -537,6 +538,10 @@ class OpenGLExpressionFormMixin:
             source_node=expr,
             fail_closed=True,
         )
+        binary64_arms = binary64_literal_arms(self, expr)
+        if binary64_arms is not None:
+            # Two double constants: a plain conditional selects one exactly.
+            return f"({condition} ? {binary64_arms[0]} : {binary64_arms[1]})"
         if operand_types is None:
             true_expr = self.generate_expression(expr.true_expr)
             false_expr = self.generate_expression(expr.false_expr)

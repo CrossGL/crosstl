@@ -451,3 +451,12 @@ CROSSGL = {
         "        }\n    }\n}\n"
     ),
 }
+
+# The CrossGL probes of Metal's mesh features that differ from :data:`CROSSGL`. Metal's native probe links its
+# per-primitive colour by location (``[[user(locn0)]]``, :data:`METAL`), so its CrossGL probe states location 0, which
+# Metal output spells the same way, instead of the ``COLOR0`` semantic it would spell ``[[user(COLOR0)]]``.
+METAL_CROSSGL = {
+    "mesh-per-primitive-output": _crossgl_primitive(
+        "vec4 color @ location(0)", "color", f"vec4({_COLOR})"
+    ),
+}
