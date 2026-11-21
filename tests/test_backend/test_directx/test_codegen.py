@@ -3309,8 +3309,9 @@ def test_codegen_canonicalizes_dynamic_render_target_and_depth_semantics():
     """)
 
     assert "vec4 color @ gl_FragData[8];" in output
-    assert "float depth @ gl_FragDepth;" in output
-    assert "out float fallbackDepth @ gl_FragDepth" in output
+    # The direction each semantic promises stays as CrossGL's conservative depth layout.
+    assert "float depth @ gl_FragDepth @ depth_greater;" in output
+    assert "out float fallbackDepth @ gl_FragDepth @ depth_less" in output
     assert "@ SV_Target8" not in output
     assert "@ SV_DEPTHGREATEREQUAL" not in output
     assert "@ SV_DEPTHLESSEQUAL" not in output

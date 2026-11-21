@@ -88,7 +88,9 @@ def declarations(code, storage):
     return {
         name: type_name
         for type_name, name in re.findall(
-            rf"^(?:layout\([^)]*\) )?{storage} (\w+) (\w+);$", code, flags=re.MULTILINE
+            rf"^(?:layout\([^)]*\) |CROSSGL_LOCATION\(\d+\) )?{storage} (\w+) (\w+);$",
+            code,
+            flags=re.MULTILINE,
         )
     }
 

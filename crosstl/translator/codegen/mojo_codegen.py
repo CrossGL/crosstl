@@ -16,6 +16,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     MeshOpNode,
+    PointerAccessNode,
     RayQueryOpNode,
     RayTracingOpNode,
     StructNode,
@@ -48,6 +49,7 @@ from .mojo_functions import MojoFunctionMixin
 from .mojo_generic_types import MojoGenericTypeMixin
 from .mojo_match_lowering import MojoMatchMixin
 from .mojo_math_helpers import MojoMathHelperMixin
+from .mojo_pointer_expressions import MojoPointerExpressionMixin
 from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
     MojoLoweringRefused,
 )
@@ -242,6 +244,7 @@ class MojoCodeGen(
     MojoValueMixin,
     MojoCallExpressionMixin,
     MojoExpressionNodeMixin,
+    MojoPointerExpressionMixin,
     MojoResultTypeMixin,
 ):
     """Emit Mojo-like shader source from the shared CrossGL AST."""
@@ -892,6 +895,8 @@ class MojoCodeGen(
             op = self.map_operator(expr.op)
             if op in ["++", "--"]:
                 return self.generate_increment_expression(expr)
+            if op == "*":
+                return self.generate_mojo_dereference_expression(expr)
             operand = self.generate_expression(expr.operand)
             if op == "not":
                 operand_type = self.expression_result_type(expr.operand)
@@ -900,13 +905,12 @@ class MojoCodeGen(
                     return f"(~{operand})"
                 return f"(not {operand})"
             return f"({op}{operand})"
-        elif isinstance(expr, ArrayAccessNode):
-            # Handle array access properly
-            if hasattr(expr, "array") and hasattr(expr, "index"):
-                return self.generate_array_access_expression(expr)
-            else:
-                # Fallback for malformed ArrayAccessNode
-                return str(expr)
+        elif (
+            isinstance(expr, ArrayAccessNode)
+            and hasattr(expr, "array")
+            and hasattr(expr, "index")
+        ):
+            return self.generate_array_access_expression(expr)
         elif isinstance(expr, WaveOpNode):
             return self.generate_wave_op(expr)
         elif isinstance(expr, RayTracingOpNode):
@@ -922,17 +926,15 @@ class MojoCodeGen(
             )
         elif isinstance(expr, MemberAccessNode):
             return self.generate_mojo_member_access_expression(expr)
+        elif isinstance(expr, PointerAccessNode):
+            return self.generate_mojo_pointer_access_expression(expr)
         elif isinstance(expr, TernaryOpNode):
             return self.generate_mojo_ternary_expression(
                 expr, target_type, target_context
             )
-        elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
-            if hasattr(expr, "value"):
-                literal_type = getattr(
-                    getattr(expr, "literal_type", None), "name", None
-                )
-                return self.format_literal(expr.value, literal_type)
-            return str(expr)
+        elif "Literal" in str(expr.__class__) and hasattr(expr, "value"):
+            literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
+            return self.format_literal(expr.value, literal_type)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             return self.generate_mojo_identifier_like_expression(expr, target_type)
         elif hasattr(expr, "__class__") and "ExpressionStatement" in str(
@@ -942,24 +944,10 @@ class MojoCodeGen(
                 return self.generate_expression(expr.expression)
             else:
                 return self.generate_expression(expr)
-        else:
-            # For unknown expression types, handle special cases
-            expr_str = str(expr)
-            # Check if this looks like an array declaration being misinterpreted
-            if (
-                "ArrayAccessNode" in expr_str
-                and "array=" in expr_str
-                and "index=" in expr_str
-            ):
-                # Try to extract array name and size for array declarations
-                import re
-
-                array_match = re.search(r"array=(\w+).*?index=(\w+)", expr_str)
-                if array_match:
-                    array_name = array_match.group(1)
-                    array_match.group(2)
-                    return f"{array_name}"  # Just return the array name for now
-            return expr_str
+        # The repr of a node is valid Mojo call syntax, so an unhandled node is refused rather than printed.
+        raise MojoRefusal(
+            f"Mojo has no lowering for the CrossGL expression node {type(expr).__name__}"
+        )
 
     def generate_mesh_op(self, expr):
         operation = getattr(expr, "operation", "mesh intrinsic")
@@ -1289,6 +1277,9 @@ class MojoCodeGen(
         self.variable_types = value
 
     def expression_result_type(self, expr):
+        handled = self.mojo_pointer_expression_result_type(expr)
+        if handled is not UNHANDLED:
+            return handled
         handled = self.mojo_value_expression_result_type(expr)
         if handled is not UNHANDLED:
             return handled

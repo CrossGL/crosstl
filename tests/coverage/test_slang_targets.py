@@ -187,7 +187,7 @@ def test_slang_probes_failing_on_different_names_have_different_causes(monkeypat
             False, SLANGC_LOG.format(name=source)
         ),
     )
-    names = ("bitCount", "findMSB", "gl_NumWorkGroups")
+    names = ("bitCount", "findMSB", "crossgl_NumWorkGroups")
     details = [runner._validated("slang", name, "compute").log for name in names]
     features = [
         {"name": feature, "crossgl": crossgl, "detail": detail}
@@ -202,7 +202,7 @@ def test_slang_probes_failing_on_different_names_have_different_causes(monkeypat
     ]
     found = [causes.cause(feature, "slang") for feature in features]
     assert found[0] == found[1] == "error[E30015]: undefined identifier '<feature>'"
-    assert found[2] == "error[E30015]: undefined identifier 'gl_NumWorkGroups'"
+    assert found[2] == "error[E30015]: undefined identifier 'crossgl_NumWorkGroups'"
 
 
 @pytest.mark.parametrize(

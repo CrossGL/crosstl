@@ -12,6 +12,7 @@ from .glsl_wave_extended import (
     GLSL_EXTENDED_WAVE_ARITIES,
     GLSL_EXTENDED_WAVE_DIRECT_MAPPINGS,
     GLSL_EXTENDED_WAVE_EXTENSIONS,
+    GLSL_QUAD_VOTE_FUNCTIONS,
 )
 from .index_range_contracts import OPENGL_INDEX_PROFILE
 from .opengl_values import (
@@ -1034,6 +1035,7 @@ class OpenGLTableMixin:
         "WaveActiveBallot",
         "WaveActiveCountBits",
         "WavePrefixCountBits",
+        *GLSL_QUAD_VOTE_FUNCTIONS,
     }
     GLSL_WAVE_SCALAR_OR_VECTOR_OPERATIONS = {
         "WaveActiveAllEqual",

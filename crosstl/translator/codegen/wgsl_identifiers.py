@@ -17,6 +17,8 @@ from ..ast import (
 from .wgsl_builtin_functions import WGSL_BUILTIN_FUNCTIONS
 from .wgsl_numeric_types import unsupported_wgsl_numeric_family
 
+TEXTURE_COORDINATE_COMPONENTS = str.maketrans("stpq", "xyzw")
+
 
 class WGSLIdentifierMixin:
     """Identifier members of ``WGSLCodeGen``."""
@@ -193,7 +195,8 @@ class WGSLIdentifierMixin:
         if self.vector_component_type(
             object_type
         ) is not None and self.is_vector_member(expr.member):
-            return expr.member
+            # WGSL names components xyzw or rgba; GLSL's texture-coordinate names stpq are xyzw.
+            return expr.member.translate(TEXTURE_COORDINATE_COMPONENTS)
         struct_name = self.struct_type_name(object_type)
         if not struct_name:
             return self.safe_wgsl_identifier(expr.member)

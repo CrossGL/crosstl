@@ -259,6 +259,9 @@ class ControlFlowMixin:
         op_str = node.op.value if hasattr(node.op, "value") else str(node.op)
         if getattr(node, "is_postfix", False):
             return f"{expr}{op_str}"
+        if op_str[-1:] in {"+", "-"} and expr[:1] in {"+", "-"}:
+            # '-(-x)' written as '--x' would read as a decrement, and '+(+x)' as an increment.
+            return f"{op_str}({expr})"
         return f"{op_str}{expr}"
 
     def visit_SwitchStatementNode(self, node):

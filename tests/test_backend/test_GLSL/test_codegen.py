@@ -2763,7 +2763,7 @@ def test_codegen_push_constant_interface_block_preserves_attribute():
     parse_crossgl(crossgl)
 
 
-def test_codegen_push_constant_scalar_array_to_wgsl_uses_padded_elements(tmp_path):
+def test_codegen_push_constant_scalar_array_to_wgsl_keeps_std430_offsets(tmp_path):
     code = textwrap.dedent("""
         #version 450
         layout(push_constant, std430) uniform Material {
@@ -2781,11 +2781,10 @@ def test_codegen_push_constant_scalar_array_to_wgsl_uses_padded_elements(tmp_pat
 
     assert "cbuffer Material @push_constant @buffer_layout(std430) {" in crossgl
     assert "float fa[3];" in crossgl
-    assert (
-        "struct UniformArrayElementF32 {\n" "    @size(16) value: f32,\n" "};"
-    ) in wgsl
-    assert "@align(16) fa: array<UniformArrayElementF32, 3>," in wgsl
-    assert "_Material.fa[1].value" in wgsl
+    # std430 places fa[1] at byte 8, where WGSL's uniform layout of float[3] would put it at byte 32, so the block
+    # is read as 16-byte registers: fa[1] is the third word of the first register.
+    assert "registers: array<vec4<u32>, 1>," in wgsl
+    assert "bitcast<f32>(_Material.registers[0].z)" in wgsl
     validate_wgsl_with_naga(tmp_path, wgsl)
 
 

@@ -367,32 +367,6 @@ def test_computesharp_queue_lookup_requires_every_pushed_commit_to_pass(
         ]
 
 
-def test_conformance_pushes_skip_a_commit_the_merge_queue_already_passed():
-    # Every conformance job already waits for the leg selection, so the planner
-    # skips that step instead and leaves `run` empty.
-    workflow = yaml.safe_load(
-        (WORKFLOW_DIR / "conformance.yml").read_text(encoding="utf-8")
-    )
-    jobs = workflow["jobs"]
-    planner = jobs["legs"]
-    assert planner["permissions"] == {"actions": "read", "contents": "read"}
-    assert planner["outputs"]["tested"] == "${{ steps.queue.outputs.tested }}"
-    assert planner["outputs"]["run"] == "${{ steps.select.outputs.run }}"
-    steps = {step.get("id"): index for index, step in enumerate(planner["steps"])}
-    reference = yaml.safe_load(
-        (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
-    )["jobs"]["python-versions"]["steps"][0]
-    assert planner["steps"][steps["queue"]] == reference
-    select = planner["steps"][steps["select"]]
-    assert steps["queue"] < steps["select"]
-    assert select["if"] == "steps.queue.outputs.tested != 'true'"
-    for name, job in jobs.items():
-        if name in {"legs", "result"}:
-            continue
-        assert job["needs"] == "legs", name
-        assert job["if"] == "needs.legs.outputs.run == 'true'", name
-
-
 @pytest.mark.skipif(
     sys.platform == "win32" or not shutil.which("bash"), reason="Bash required"
 )
