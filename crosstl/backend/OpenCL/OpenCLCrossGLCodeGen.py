@@ -113,6 +113,7 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
 
     SOURCE_LANGUAGE_NAME = "OpenCL"
     ERASE_CONCRETE_TYPE_ALIASES = False
+    WRITE_FUNCTION_PROTOTYPES = False
     RECORD_SEMANTIC_ERROR = OpenCLRecordSemanticError
 
     CROSSGL_RESERVED_IDENTIFIERS = {
