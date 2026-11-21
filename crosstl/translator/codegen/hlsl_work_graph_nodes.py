@@ -400,7 +400,9 @@ class HlslWorkGraphNodeMixin:
             prefix.append(self.hlsl_node_attribute(attribute, spelling, siblings))
         if coherent:
             declaration = f"{_GLOBALLY_COHERENT} {declaration}"
-        return " ".join([*prefix, declaration])
+        # Attributes are written back to back, the way clang-format leaves them, so the output does not depend on
+        # whether a formatter is installed.
+        return f"{''.join(prefix)} {declaration}" if prefix else declaration
 
     def hlsl_work_graph_record_prefix(self, struct):
         """``[NodeTrackRWInputSharing] `` for a record structure marked to track it, and otherwise nothing."""

@@ -33,7 +33,8 @@ def _dxc(tmp_path, code, name="node.hlsl"):
 
 
 def _compact(code):
-    return " ".join(code.split())
+    """``code`` on one line, with semantics spelled ``name : SV_X`` whether or not clang-format ran."""
+    return re.sub(r"(\w): (SV_\w+)", r"\1 : \2", " ".join(code.split()))
 
 
 def _node(parameters, body, attributes, members="uint value;", extra=""):
