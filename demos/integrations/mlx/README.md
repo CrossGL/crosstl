@@ -503,31 +503,31 @@ python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_st
 
 ### Full-Entry Attention Execution
 
-`tests/kernels/test_current_attention.py` translates seventeen configurations
-of unchanged entries of `steel_attention.metal` at commit
-`9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. The float32 float-mask entries cover
-head dimensions 64, 72, 80, 96, 128 and 256 and the asymmetric query and value
-head dimensions (96, 64)
-(`steel_attention_float32_bq32_bk32_bd64_bv64_wm4_wn1_maskfloat32`, its `bd72`,
-`bd80`, `bd96_bv64` counterparts,
-`steel_attention_float32_bq32_bk16_bd128_bv128_wm4_wn1_maskfloat32` and
-`steel_attention_float32_bq32_bk16_bd256_bv256_wm4_wn2_maskfloat32`).
-The float16 and bfloat16 float-mask entries cover head dimension 64. The
-boolean-mask (`maskbool_`) entries cover float32 at 64 and 256, float16 at 96
-and 128 and bfloat16 at 80. Head dimension 256 uses the `wm4_wn2` entries:
-two simdgroups per query row each multiply half of the head dimension and add
+`tests/kernels/test_current_attention.py` translates 38 of the 52 entries of
+`steel_attention.metal` at commit
+`9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`, unchanged: every `wm4_wn1` entry
+with head dimensions 64, 72, 80, 96 and 128 or the asymmetric query and value
+head dimensions (96, 64), for float32, float16 and bfloat16 and for float and
+boolean (`maskbool_`) masks, and the float32 `wm4_wn2` entries of head
+dimension 256
+(`steel_attention_float32_bq32_bk16_bd256_bv256_wm4_wn2_maskfloat32` and its
+`maskbool_` counterpart). Each entry takes the key block the host selects, 32
+below head dimension 128 and 16 from it. In the `wm4_wn2` entries, two
+simdgroups per query row each multiply half of the head dimension and add
 their partial scores through the K/V tile reinterpreted as float32. Each entry
-is dispatched through the native Metal, DirectX or OpenGL loader. These
-thirteen freeze the six function constants to the aligned, masked
-configuration. Four more freeze other sets the host selects: unaligned
+is dispatched through the native Metal, DirectX or OpenGL loader. All 38
+freeze the six function constants to the aligned, masked configuration. Four
+more configurations freeze other sets the host selects: unaligned
 sequences with attention sinks (float32 float mask at 64, float16 boolean mask
 at 128), an unaligned causal mask with the logsumexp (float32 at 80) and an
 aligned causal mask with sinks and the logsumexp (bfloat16 at 64). The host
-returns the logsumexp only without an array mask. Not yet covered: head
+returns the logsumexp only without an array mask. Not yet covered (the gate's
+`NOT_COVERED` lists them): the six entries of head
 dimension 192, whose 16-bit tiles the OpenGL and bfloat16 DirectX outputs
-widen past the 32 KiB workgroup limit (#2307), and the float16 and bfloat16
-`wn2` entries, which multiply a float32 score tile by a 16-bit value tile
-(#2306). `AttnParams` and
+widen past the 32 KiB workgroup limit (#2307), and the eight float16 and
+bfloat16 `wn2` entries, which add their partial scores through a float32 view
+of the 16-bit K/V tile; DirectX and OpenGL refuse that view (#4823).
+`AttnParams` and
 `AttnMaskParams` are filled as
 `scaled_dot_product_attention.cpp` fills them, and the grid is the upstream
 `(NQ, H, B)` grid of `(32, 4, WN)` threadgroups.

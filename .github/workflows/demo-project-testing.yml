@@ -5262,35 +5262,6 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
-      - name: Prove current MLX attention native execution
-        shell: bash
-        env:
-          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
-          CROSTL_REQUIRE_MLX_CURRENT_ATTENTION: "1"
-          CROSTL_MLX_CURRENT_TARGET: ${{ runner.os == 'Windows' && 'directx' || runner.os == 'Linux' && 'opengl' || 'metal' }}
-          EGL_PLATFORM: surfaceless
-          LIBGL_ALWAYS_SOFTWARE: "1"
-          PYOPENGL_PLATFORM: egl
-        run: |
-          set -euo pipefail
-          mkdir -p mlx-attention-results
-          python tools/run_bounded_command.py \
-            --label "current MLX attention native execution" --timeout-seconds 1800 -- \
-            python -m pytest -q -n auto --dist loadgroup --durations=20 \
-              --basetemp=mlx-attention-results/pytest \
-              --junitxml=mlx-attention-results/results.xml \
-              demos/integrations/mlx/tests/kernels/test_current_attention.py
-
-      - name: Upload current MLX attention native evidence
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: mlx-attention-${{ runner.os }}
-          path: mlx-attention-results
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 14
-
       - name: Prove current MLX complex-power native dispatch
         shell: bash
         env:
@@ -8691,6 +8662,38 @@ jobs:
               --junitxml=mlx-current-results/${{ matrix.group }}.xml \
               demos/integrations/mlx/tests/kernels/test_current_steel_conv_general.py
 
+      # 38 of steel_attention.metal's 52 entries and four more frozen
+      # constant sets, in three shards.
+      - name: Prove current MLX steel attention native parity
+        if: matrix.family == 'steel-attention'
+        shell: bash
+        env:
+          CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream
+          CROSTL_REQUIRE_MLX_CURRENT_ATTENTION: "1"
+          CROSTL_MLX_CURRENT_ATTENTION_SHARD_INDEX: ${{ matrix.shard }}
+          CROSTL_MLX_CURRENT_ATTENTION_SHARD_COUNT: "3"
+          PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+          PYTHONUNBUFFERED: "1"
+        run: |
+          set -euo pipefail
+          case "$RUNNER_OS" in
+            Linux) export CROSTL_MLX_CURRENT_TARGET=opengl ;;
+            Windows) export CROSTL_MLX_CURRENT_TARGET=directx ;;
+            macOS) export CROSTL_MLX_CURRENT_TARGET=metal ;;
+            *) echo "Unsupported runner OS: $RUNNER_OS" >&2; exit 1 ;;
+          esac
+          mkdir -p mlx-current-results
+          python tools/run_bounded_command.py \
+            --label "current MLX steel attention native parity (shard ${{ matrix.shard }} of 3)" \
+            --timeout-seconds 5400 -- \
+            python -m pytest -q -n auto --dist loadgroup \
+              --basetemp=mlx-current-results/${{ matrix.group }} \
+              --junitxml=mlx-current-results/${{ matrix.group }}.xml \
+              demos/integrations/mlx/tests/kernels/test_current_attention.py
+
       - name: Upload current MLX native parity evidence
         if: always()
         uses: actions/upload-artifact@v7
@@ -8796,12 +8799,12 @@ jobs:
       fail-fast: false
       # GitHub expands at most 256 legs from one matrix, so the current-tree
       # families are split over three jobs that share one list of steps.
-      # 144 legs here, a third of them on macOS; the three jobs
+      # 153 legs here, a third of them on macOS; the three jobs
       # together run at most 28 legs at once, each group's platform legs
       # together.
       max-parallel: 8
       matrix:
-        group: [gemm-family-0, gemm-family-1, gemm-family-2, gemm-family-3, gemm-family-4, gemm-splitk-0, gemm-splitk-1, gemm-splitk-2, gemm-splitk-3, gemm-splitk-4, gemm-splitk-5, gemm-splitk-6, gemm-gather-0, gemm-gather-1, gemm-gather-2, gemm-gather-3, gemm-gather-4, gemm-gather-5, gemm-gather-6, steel-conv-0, steel-conv-1, steel-conv-2, steel-conv-3, steel-conv-4, steel-conv-5, steel-conv-general-0, steel-conv-general-1, steel-conv-general-2, gemm-masked-0, gemm-masked-1, gemm-masked-2, gemm-masked-3, gemm-masked-4, gemm-masked-5, gemm-masked-6, gemm-masked-7, gemm-masked-8, gemm-masked-9, gemm-masked-10, gemm-masked-11, gemm-masked-12, gemm-segmented-0, gemm-segmented-1, gemm-segmented-2, gemm-segmented-3, gemm-segmented-4, gemm-segmented-5, gemm-segmented-6]
+        group: [gemm-family-0, gemm-family-1, gemm-family-2, gemm-family-3, gemm-family-4, gemm-splitk-0, gemm-splitk-1, gemm-splitk-2, gemm-splitk-3, gemm-splitk-4, gemm-splitk-5, gemm-splitk-6, gemm-gather-0, gemm-gather-1, gemm-gather-2, gemm-gather-3, gemm-gather-4, gemm-gather-5, gemm-gather-6, steel-conv-0, steel-conv-1, steel-conv-2, steel-conv-3, steel-conv-4, steel-conv-5, steel-conv-general-0, steel-conv-general-1, steel-conv-general-2, gemm-masked-0, gemm-masked-1, gemm-masked-2, gemm-masked-3, gemm-masked-4, gemm-masked-5, gemm-masked-6, gemm-masked-7, gemm-masked-8, gemm-masked-9, gemm-masked-10, gemm-masked-11, gemm-masked-12, gemm-segmented-0, gemm-segmented-1, gemm-segmented-2, gemm-segmented-3, gemm-segmented-4, gemm-segmented-5, gemm-segmented-6, steel-attention-0, steel-attention-1, steel-attention-2]
         os: [ubuntu-latest, windows-latest, macOS-latest]
         include:
           - {group: gemm-family-0, family: gemm-family, shard: 0}
@@ -8852,6 +8855,9 @@ jobs:
           - {group: gemm-segmented-4, family: gemm-segmented, shard: 4}
           - {group: gemm-segmented-5, family: gemm-segmented, shard: 5}
           - {group: gemm-segmented-6, family: gemm-segmented, shard: 6}
+          - {group: steel-attention-0, family: steel-attention, shard: 0}
+          - {group: steel-attention-1, family: steel-attention, shard: 1}
+          - {group: steel-attention-2, family: steel-attention, shard: 2}
 
     # The steps of mlx-current-native-parity. Each runs only in its own groups.
     steps: *mlx-current-parity-steps
