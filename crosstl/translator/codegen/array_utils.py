@@ -560,6 +560,10 @@ def _is_signed_integer_scalar_type(type_name) -> bool:
     normalized = "".join(str(type_name or "").split()).lower()
     return normalized in {
         "bool",
+        "i8",
+        "i16",
+        "i32",
+        "i64",
         "char",
         "short",
         "int",
@@ -580,6 +584,10 @@ def _is_signed_integer_scalar_type(type_name) -> bool:
 def _is_unsigned_integer_scalar_type(type_name) -> bool:
     normalized = "".join(str(type_name or "").split()).lower()
     return normalized in {
+        "u8",
+        "u16",
+        "u32",
+        "u64",
         "uchar",
         "ushort",
         "uint",

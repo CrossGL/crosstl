@@ -1,8 +1,9 @@
 name: Lint
 
-# pre-commit.ci runs the pinned hooks on every pull request except black (see `ci.skip` in .pre-commit-config.yaml).
-# This workflow runs that pinned black hook on the Python files a pull request or merge-queue entry changes, so
-# unformatted files cannot reach main.
+# This workflow runs the pinned hooks in .pre-commit-config.yaml on the files a pull request or merge-queue entry
+# changes, so a change that a hook would rewrite cannot reach main. pre-commit.ci runs the same hooks on every file of
+# a pull request and pushes their fixes to it, so a file on main that a hook rewrites would reach every open pull
+# request as an extra commit. The local hooks run test files the test workflows already run, so this job skips them.
 
 on:
   pull_request:
@@ -16,10 +17,10 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  black:
-    name: Black on changed files
+  hooks:
+    name: Pinned hooks on changed files
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
         with:
@@ -30,21 +31,28 @@ jobs:
         with:
           python-version: "3.13"
 
-      - name: Run the pinned black hook
+      - name: Run the pinned hooks
+        env:
+          SKIP: crosstl-ci-workflow-tests,crosstl-pytest-failure-summary-tests,crosstl-examples-script-tests
         run: |
           set -euo pipefail
           # Both the pull-request merge commit and a merge-queue commit have the base as their first parent.
-          git diff --name-only --diff-filter=d -z HEAD^1 HEAD -- '*.py' '*.pyi' > changed
+          git diff --name-only --diff-filter=d -z HEAD^1 HEAD > changed
           if [ ! -s changed ]; then
-            echo "No Python files changed."
+            echo "No files changed."
             exit 0
           fi
           python -m pip install pre-commit==4.7.0
-          xargs -0 pre-commit run black --show-diff-on-failure --color=always --files < changed
+          # A change to the hooks or their pins can make any file fail them, so it runs them on every file.
+          if grep -qzx '\.pre-commit-config\.yaml' changed; then
+            pre-commit run --all-files --show-diff-on-failure --color=always
+          else
+            xargs -0 pre-commit run --show-diff-on-failure --color=always --files < changed
+          fi
 
   result:
     name: Lint result
-    needs: [black]
+    needs: [hooks]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

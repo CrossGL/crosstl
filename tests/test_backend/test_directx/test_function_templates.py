@@ -93,12 +93,12 @@ def test_template_call_results_take_their_deduced_types():
         RWStructuredBuffer<float2> f : register(u0);
         [numthreads(1, 1, 1)]
         void main(uint3 id : SV_DispatchThreadID) {
-            half h = (half)1;
+            float16_t h = (float16_t)1;
             f[id.x] = twice(h).xx;
         }
     """))
 
-    # The scalar ``half`` result widens through a vector constructor, not a swizzle of a scalar.
+    # The scalar ``float16_t`` result widens through a vector constructor, not a swizzle of a scalar.
     assert "f16vec2(twice(h))" in crossgl
 
 

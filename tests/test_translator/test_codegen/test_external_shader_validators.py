@@ -2356,11 +2356,12 @@ def test_real_world_urp_hlsl_include_imports_to_parseable_crossgl():
     crossgl = _hlsl_to_crossgl(URP_TOON_LIGHTING_HLSL_INCLUDE)
 
     assert URP_TOON_LIGHTING_SOURCE_URL.startswith("https://github.com/")
+    # DXC reads half as float without -enable-16bit-types, and this include names no 16-bit type.
     assert (
         "void CalculateMainLight_float(vec3 WorldPos, out vec3 Direction, "
-        "out vec3 Color, out float16 DistanceAtten, out float16 ShadowAtten)"
+        "out vec3 Color, out float DistanceAtten, out float ShadowAtten)"
     ) in crossgl
-    assert "f16vec4 shadowCoord = TransformWorldToShadowCoord(WorldPos);" in crossgl
+    assert " vec4 shadowCoord = TransformWorldToShadowCoord(WorldPos);" in crossgl
     assert "Light mainLight = GetMainLight(0);" in crossgl
     assert "Direction = mainLight.direction;" in crossgl
     assert "Color = mainLight.color;" in crossgl

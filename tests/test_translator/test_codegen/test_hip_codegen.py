@@ -14893,3 +14893,32 @@ def test_hip_const_match_expression_local_stays_assignable():
     assert "int value;" in hip_code
     assert "value = 10;" in hip_code
     assert "value = -1;" in hip_code
+
+
+def test_hip_cbuffer_vector_member_uses_vector_helpers(tmp_path):
+    source_code = """
+    shader P {
+        buffer float* outp;
+        cbuffer Params {
+            vec3 scale;
+        };
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec3 v = vec3(outp[i]);
+                vec3 a = v - scale / 2.0;
+                outp[i] = a.x + dot(scale, v);
+            }
+        }
+    }
+    """
+
+    ast = Parser(Lexer(source_code).tokens).parse()
+    hip_code = HipCodeGen().generate(ast)
+
+    assert "__constant__ float3 scale;" in hip_code
+    assert "cgl_float3_sub(v, cgl_float3_div_scalar(scale, 2.0f))" in hip_code
+    assert "cgl_float3_sub_scalar" not in hip_code
+    assert "cgl_float3_dot(scale, v)" in hip_code
+    compile_hip_if_hipcc_available(hip_code, tmp_path)
