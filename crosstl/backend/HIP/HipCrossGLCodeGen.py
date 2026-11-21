@@ -1340,7 +1340,13 @@ class HipToCrossGLConverter(
                 node, file_scope_off=self.fp_contract_file_scope_off
             ):
                 self.emit(PRECISE_FUNCTION_ATTRIBUTE)
-            prefix = generic_prefix(self, node, "HIP", self.convert_hip_type_to_crossgl)
+            prefix = generic_prefix(
+                self,
+                node,
+                "HIP",
+                self.convert_hip_type_to_crossgl,
+                f"{return_type} {param_str}",
+            )
             self.emit(f"{prefix}{return_type} {function_name}({param_str}) {{")
 
             self.indent_level += 1

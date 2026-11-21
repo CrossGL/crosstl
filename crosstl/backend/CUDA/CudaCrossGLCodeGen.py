@@ -779,7 +779,11 @@ class CudaToCrossGLConverter(
             if function_requires_no_contraction(node):
                 self.emit(PRECISE_FUNCTION_ATTRIBUTE)
             prefix = generic_prefix(
-                self, node, "CUDA", self.convert_cuda_type_to_crossgl
+                self,
+                node,
+                "CUDA",
+                self.convert_cuda_type_to_crossgl,
+                f"{return_type} {param_str}",
             )
             self.emit(f"{prefix}{return_type} {function_name}({param_str}) {{")
 

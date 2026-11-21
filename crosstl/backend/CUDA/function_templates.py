@@ -172,14 +172,18 @@ def collect_function_templates(program):
     return templates
 
 
-def generic_prefix(codegen, func, language, convert_type):
+def generic_prefix(codegen, func, language, convert_type, signature=""):
     """``generic<T, U = f32> `` for a device function template, ``""`` for any other function.
 
     ``convert_type`` maps a CUDA or HIP type spelling to CrossGL. A parameter that CrossGL generics cannot carry is
-    refused through ``codegen.refuse_import``.
+    refused through ``codegen.refuse_import``. ``signature`` is the CrossGL return type and parameter list the
+    importer writes: a dependent member type such as ``typename Box<T>::Type`` stays ``Box<T>::Type``, which a
+    CrossGL generic function cannot name, so such a template is written as before, without the prefix.
     """
     parameters = template_parameters(func)
     if not parameters or "__global__" in (getattr(func, "qualifiers", None) or []):
+        return ""
+    if "::" in signature:
         return ""
     if any(
         parameter.pack or parameter.kind == "template" or parameter.name is None

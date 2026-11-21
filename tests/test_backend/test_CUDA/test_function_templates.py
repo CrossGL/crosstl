@@ -20,6 +20,8 @@ from crosstl.backend.CUDA.function_templates import (
     parse_template_parameters,
 )
 from crosstl.backend.import_refusals import ImportRefused
+from crosstl.translator.lexer import Lexer as CrossGLLexer
+from crosstl.translator.parser import Parser as CrossGLParser
 
 TARGETS = ("cuda", "hip", "metal", "directx", "opengl", "vulkan")
 REQUIRE_ENV = "CROSSTL_REQUIRE_METAL_FUNCTION_TEMPLATES"
@@ -125,6 +127,22 @@ def test_parameters_without_a_generic_form_keep_the_function_as_it_was(
     crossgl = _import(tmp_path, language, source)
     assert "generic<" not in crossgl
     assert "i32 f(i32 x)" in crossgl
+
+
+@pytest.mark.parametrize("language", ["cuda", "hip"])
+def test_a_dependent_member_type_keeps_the_function_parseable(tmp_path, language):
+    # ``typename Box<T>::Type`` has no CrossGL generic spelling; a ``generic<T>`` prefix in front of a qualified
+    # ``Box<T>::Type`` return type would make the CrossGL unparseable, so the function is written as before.
+    source = (
+        "template <typename T>\nstruct Box { using Type = T; };\n"
+        "template <typename T>\n"
+        "__device__ typename Box<T>::Type same(const T v) { return v; }\n"
+    )
+    if language == "hip":
+        source = "#include <hip/hip_runtime.h>\n" + source
+    crossgl = _import(tmp_path, language, source)
+    CrossGLParser(CrossGLLexer(crossgl).tokens).parse()
+    assert "generic<T> Box<T>::Type" not in crossgl
 
 
 @pytest.mark.parametrize("language", ["cuda", "hip"])
