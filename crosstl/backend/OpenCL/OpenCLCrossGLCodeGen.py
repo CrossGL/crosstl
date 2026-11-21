@@ -31,6 +31,7 @@ from ..no_contraction import (
 from ..thread_hierarchy import kernel_workgroup_size_attribute
 from .compare_exchange import OpenCLCompareExchangeMixin, is_compare_exchange
 from .conversions import format_conversion, is_conversion_name
+from .enumerations import OpenCLEnumerationMixin
 from .global_variables import refuse_writable_global_variable
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 from .pointer_results import OpenCLPointerResultMixin
@@ -113,6 +114,7 @@ class OpenCLImageReadUnsupportedError(TranslationDiagnostic):
 
 
 class OpenCLToCrossGLConverter(
+    OpenCLEnumerationMixin,
     OpenCLSizeofScopeMixin,
     OpenCLPointerResultMixin,
     OpenCLCompareExchangeMixin,
@@ -802,37 +804,6 @@ class OpenCLToCrossGLConverter(
             self.emit(f"// {node.directive} {content}")
         else:
             self.emit(f"// {node.directive}")
-
-    def visit_EnumNode(self, node):
-        if getattr(node, "name", None):
-            enum_type = getattr(node, "underlying_type", None) or "uint"
-            self.register_type_alias(
-                node.name, self.convert_hip_type_to_crossgl(enum_type)
-            )
-            return super().visit_EnumNode(node)
-
-        next_value = 0
-        members = getattr(node, "members", None) or getattr(node, "variants", [])
-        for member in members:
-            if isinstance(member, tuple):
-                member_name, member_value = member
-            else:
-                member_name = getattr(member, "name", str(member))
-                member_value = getattr(member, "value", None)
-
-            if member_value is None:
-                value = str(next_value if next_value is not None else 0)
-            else:
-                value = self.visit(member_value)
-
-            self.emit(f"const i32 {member_name} = {value};")
-            next_value = self.next_anonymous_enum_value(value)
-
-    def next_anonymous_enum_value(self, value):
-        try:
-            return int(str(value), 0) + 1
-        except ValueError:
-            return None
 
     def visit_SyncNode(self, node):
         if node.sync_type == "barrier":
