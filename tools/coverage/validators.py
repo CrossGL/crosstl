@@ -379,6 +379,48 @@ def hlsl_profile(stage: str, target: str = "") -> str:
     return f"{HLSL_PREFIXES[stage]}_{model[0]}_{model[1]}"
 
 
+# A kernel whose source leaves its workgroup size to the host is written so that a compiler of GLSL, HLSL or Slang
+# source reads the size from three macros the host defines, and stops at an #error without them
+# (crosstl/translator/codegen/host_workgroup_size_ids.py). Such a translation is compiled as its host compiles it,
+# with a size of one in each dimension, as the conformance harness does (tests/conformance/validators.py).
+HOST_WORKGROUP_SIZE = "1"
+
+
+_GLSL_VERSION_LINE = re.compile(r"^[ \t]*#[ \t]*version\b[^\n]*\n", re.M)
+
+
+def _host_workgroup_macros(source: str) -> tuple[str, ...]:
+    from crosstl.translator.codegen.host_workgroup_size_ids import (
+        HOST_WORKGROUP_SIZE_MACROS,
+    )
+
+    if any(f"defined({macro})" in source for macro in HOST_WORKGROUP_SIZE_MACROS):
+        return HOST_WORKGROUP_SIZE_MACROS
+    return ()
+
+
+def host_workgroup_defines(source: str) -> list[str]:
+    """The ``-D`` arguments that size a translation whose host chooses its workgroup size, or none for any other."""
+    return [
+        argument
+        for macro in _host_workgroup_macros(source)
+        for argument in ("-D", f"{macro}={HOST_WORKGROUP_SIZE}")
+    ]
+
+
+def host_sized_glsl(source: str) -> str:
+    """``source`` as an OpenGL host compiles it: with the size macros defined after ``#version``, and a ``#line``
+    that keeps the log's line numbers those of ``source``. glslang takes ``-D`` only when it links."""
+    macros = _host_workgroup_macros(source)
+    version = _GLSL_VERSION_LINE.search(source)
+    if not macros or version is None:
+        return source
+    following = source.count("\n", 0, version.end()) + 1
+    defines = "".join(f"#define {macro} {HOST_WORKGROUP_SIZE}\n" for macro in macros)
+    end = version.end()
+    return f"{source[:end]}{defines}#line {following}\n{source[end:]}"
+
+
 def _dxc(
     name: str, source: str, stage: str, entry: str, scratch: str, target: str = ""
 ) -> Verdict:
@@ -404,6 +446,7 @@ def _dxc(
             "-HV",
             "2021",
             "-enable-16bit-types",
+            *host_workgroup_defines(source),
             name,
             "-Fo",
             "probe.bin",
@@ -448,7 +491,7 @@ COMPILE_ARGUMENTS = {
 }
 
 
-def _glsl(name: str, stage: str, target: str, scratch: str) -> Verdict:
+def _glsl(name: str, source: str, stage: str, target: str, scratch: str) -> Verdict:
     # GL_EXT_ray_tracing and GL_EXT_mesh_shader exist only for SPIR-V 1.4 and later, so those shaders are checked
     # for Vulkan, as are probes whose feature only GLSL for Vulkan has.
     if stage in SPIRV_1_4_STAGES:
@@ -457,6 +500,9 @@ def _glsl(name: str, stage: str, target: str, scratch: str) -> Verdict:
         environment = ["--target-env", SPIRV_ENVIRONMENT]
     else:
         environment = []
+    sized = host_sized_glsl(source)
+    if sized != source:
+        Path(scratch, name).write_text(sized)
     return run([*command("glslangValidator"), *environment, name], scratch)
 
 
@@ -476,6 +522,7 @@ def _slang(
             *command("slangc"),
             name,
             *entry_point,
+            *host_workgroup_defines(source),
             "-target",
             target or SLANG_TARGET,
             "-o",
@@ -547,7 +594,7 @@ def validate(
         if language == "webgl":
             return _essl(name, source, scratch)
         if language == "glsl":
-            return _glsl(name, stage, target, scratch)
+            return _glsl(name, source, stage, target, scratch)
         if language == "hlsl":
             return _dxc(name, source, stage, entry, scratch, target)
         if language == "metal":
