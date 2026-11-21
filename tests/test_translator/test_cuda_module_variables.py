@@ -111,7 +111,9 @@ def _translate(tmp_path, source, backend):
 
 def _kernel(code):
     """The text of the kernel ``k``."""
-    start = re.search(r"__global__ void (?:__launch_bounds__\(\d+\) )?k\(", code).start()
+    start = re.search(
+        r"__global__ void (?:__launch_bounds__\(\d+\) )?k\(", code
+    ).start()
     depth = 0
     for index in range(code.index("{", start), len(code)):
         depth += {"{": 1, "}": -1}.get(code[index], 0)
@@ -167,9 +169,7 @@ def test_read_module_variables_are_kernel_locals(tmp_path, backend, spelling):
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
-def test_a_written_module_variable_is_passed_to_helpers_by_reference(
-    tmp_path, backend
-):
+def test_a_written_module_variable_is_passed_to_helpers_by_reference(tmp_path, backend):
     code = _translate(tmp_path, WRITTEN, backend)
     assert _namespace_scope(code, "counter") == []
     assert re.search(r"__device__ void bump\(float& counter\)", code)
