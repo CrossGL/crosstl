@@ -35,6 +35,7 @@ from .comma_expressions import (
 )
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .cuda_library_functions import rename_cuda_library_functions
+from .cuda_subscripts import matrix_column_type
 from .cuda_unions import NativeUnions
 from .enum_utils import infer_enum_constructor_type
 from .float_remainder_assignment import float_remainder_assignment
@@ -763,7 +764,13 @@ class HipCodeGen(
         return None
 
     def array_access_element_type(self, type_name):
-        """Return the element type for HIP arrays and structured buffers."""
+        """Return the element type for HIP arrays and structured buffers.
+
+        A matrix subscript yields its column vector.
+        """
+        column_type = matrix_column_type(type_name)
+        if column_type is not None:
+            return column_type
         array_element_type = super().array_access_element_type(type_name)
         if array_element_type is not None:
             return array_element_type
