@@ -1,9 +1,10 @@
 """The CrossGL IR row: which semantic features of any backend CrossGL can express.
 
 Its feature universe is the union of every backend's output features, grouped by semantic id (:mod:`.semantic`); a
-function with no id takes the id of the functions that CrossGL spells the same way, and functions that still have
-none are one semantic feature per CrossGL spelling, named ``crossgl/<function>`` when several languages have it and
-``<language>/<function>`` otherwise. Any other feature without an id is a semantic feature of its own. A semantic
+function with no id takes the id of the GLSL function that SPIRV-Cross writes it for (:data:`.semantic.CROSS_COMPILED`)
+or of the functions that CrossGL spells the same way, and functions that still have none are one semantic feature
+per CrossGL spelling, named ``crossgl/<function>`` when several languages have it and ``<language>/<function>``
+otherwise. Any other feature without an id is a semantic feature of its own. A semantic
 feature is expressible, and counts as ``supported``, when the CrossGL probe of at least one member parses,
 type-checks and translates correctly to that member's backend, or translates to valid SPIR-V whose call has the
 member's semantic id (``expressed``, :func:`.runner.expressed`). Otherwise the row reports a ``wrong`` result before
@@ -15,14 +16,15 @@ from __future__ import annotations
 
 from . import spellings
 from .model import Score
-from .semantic import BORROWED
+from .semantic import BORROWED, CROSS_COMPILED
 
 LANGUAGE = "crossgl"
 DIRECTION = "ir"
 _PRECEDENCE = ("supported", "wrong", "refused", "untested")
 
 
-def _spelled(feature: dict) -> str:
+def spelling(feature: dict) -> str:
+    """The CrossGL name of a report ``feature``, which keys the features without a semantic id."""
     # A call that spells its generic arguments, as Slang's ``bit_cast<int>``, is keyed by the function's name, and so
     # is an operation CrossGL writes as an expression, as Slang's ``WorkgroupSize`` (``ivec3(gl_WorkGroupSize)``).
     spelled = feature.get("crossgl") or feature["name"]
@@ -31,7 +33,8 @@ def _spelled(feature: dict) -> str:
     return spelled.split("<", 1)[0]
 
 
-def _members(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
+def groups(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
+    """The ``(language, feature)`` members of each semantic feature of the offered output rows, by its name."""
     outputs = [b for b in backends if b["direction"] == "output" and b.get("offered")]
     ids = {
         (b["language"], f["name"]): f["semantic"]
@@ -46,7 +49,7 @@ def _members(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
     for backend in outputs:
         for feature in backend["features"]:
             if feature.get("semantic") and feature["category"] == "function":
-                shared.setdefault(_spelled(feature), set()).add(feature["semantic"])
+                shared.setdefault(spelling(feature), set()).add(feature["semantic"])
     alike = {
         spelled: found.pop() for spelled, found in shared.items() if len(found) == 1
     }
@@ -56,9 +59,11 @@ def _members(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
         lender = BORROWED.get(language, "")
         for feature in backend["features"]:
             function = feature["category"] == "function"
-            spelled = _spelled(feature)
+            spelled = spelling(feature)
+            twin = CROSS_COMPILED.get(language, {}).get(feature["name"], "")
             key = (
                 feature.get("semantic")
+                or ids.get(("glsl", twin))
                 or ids.get((lender, spelled))
                 or (alike.get(spelled, "") if function else "")
             )
@@ -69,11 +74,11 @@ def _members(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
     spread: dict[str, set[str]] = {}
     for language, feature, key in keyed:
         if not key and feature["category"] == "function":
-            spread.setdefault(_spelled(feature), set()).add(language)
+            spread.setdefault(spelling(feature), set()).add(language)
     groups: dict[str, list[tuple[str, dict]]] = {}
     for language, feature, key in keyed:
         if not key:
-            spelled = _spelled(feature)
+            spelled = spelling(feature)
             alone = feature["category"] != "function" or len(spread[spelled]) == 1
             key = f"{language if alone else LANGUAGE}/{spelled}"
         groups.setdefault(key, []).append((language, feature))
@@ -113,10 +118,10 @@ def _entry(key: str, members: list[tuple[str, dict]]) -> dict:
 
 def build(backends: list[dict]) -> dict | None:
     """The IR row for the report's backend rows, or ``None`` when no output direction was measured."""
-    groups = _members(backends)
-    if not groups:
+    grouped = groups(backends)
+    if not grouped:
         return None
-    features = [_entry(key, members) for key, members in sorted(groups.items())]
+    features = [_entry(key, members) for key, members in sorted(grouped.items())]
     score = Score()
     for feature in features:
         score.add(feature["outcome"])

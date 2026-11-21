@@ -406,6 +406,863 @@ def _generated_scalar_helper(function, walk_ast):
     )
 
 
+class _ConditionalCallFacts:
+    """The program facts that ``converge_subgroup_conditional_calls`` reads while it stages guarded inputs.
+
+    Each method was a closure of that function, and each attribute is a value the closures captured: the
+    program's functions and value types, the trusted helpers, and the wrapper summaries found so far.
+    """
+
+    def __init__(
+        self,
+        *,
+        map_operator,
+        walk_ast,
+        functions,
+        operations,
+        summaries,
+        floats,
+        scalar_types,
+        bitcast_widths,
+        value_structs,
+        value_types,
+        pure_float_arities,
+        empty_types,
+        trusted_helpers,
+    ):
+        self.map_operator = map_operator
+        self.walk_ast = walk_ast
+        self.functions = functions
+        self.operations = operations
+        self.summaries = summaries
+        self.floats = floats
+        self.scalar_types = scalar_types
+        self.bitcast_widths = bitcast_widths
+        self.value_structs = value_structs
+        self.value_types = value_types
+        self.pure_float_arities = pure_float_arities
+        self.empty_types = empty_types
+        self.trusted_helpers = trusted_helpers
+
+    def bitcast_target(self, node):
+        operation = _operation(node)
+        if (
+            not isinstance(node, FunctionCallNode)
+            or not isinstance(operation, str)
+            or node.generic_args
+            or len(node.arguments) != 1
+        ):
+            return None
+        match = re.fullmatch(r"as_type\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>", operation)
+        return match.group(1) if match else None
+
+    def trusted_call(self, node, types):
+        return (
+            isinstance(node, FunctionCallNode)
+            and _operation(node) in self.trusted_helpers
+            and not node.generic_args
+            and len(node.arguments) == 1
+            and self.value_type(node.arguments[0], types) in {"float", "float32_t"}
+        )
+
+    def pure_float_call(self, node, types):
+        operation = _operation(node)
+        argument_types = (
+            {self.value_type(argument, types) for argument in node.arguments}
+            if isinstance(node, FunctionCallNode)
+            else set()
+        )
+        return (
+            isinstance(node, FunctionCallNode)
+            and operation in self.pure_float_arities
+            and operation not in self.functions
+            and not node.generic_args
+            and len(node.arguments) == self.pure_float_arities[operation]
+            and (
+                argument_types <= {"float", "float32_t"}
+                # binary16 calls stay binary16 only when every operand is.
+                or len(argument_types) == 1
+                and argument_types <= {"float16", "half"}
+            )
+        )
+
+    def common_type(self, left, right):
+        if left == right:
+            return left
+        if left in self.floats or right in self.floats:
+            return "float"
+        if {left, right} & {"uint64", "uint64_t"}:
+            return "uint64"
+        if {left, right} & {"int64", "int64_t"}:
+            return "int64"
+        if left in {"uint", "uint32_t"} or right in {"uint", "uint32_t"}:
+            return "uint"
+        return "int"
+
+    def value_type(self, node, types):
+        if isinstance(node, IdentifierNode):
+            return types.get(node.name)
+        if isinstance(node, MemberAccessNode):
+            return self.value_structs.get(
+                self.value_type(node.object_expr, types), {}
+            ).get(node.member)
+        if isinstance(node, LiteralNode):
+            return _type_name(node.literal_type)
+        if isinstance(node, CastNode):
+            return _type_name(node.target_type)
+        if isinstance(node, ConstructorNode):
+            return _type_name(node.constructor_type)
+        if isinstance(node, UnaryOpNode):
+            return (
+                "bool"
+                if self.map_operator(node.operator) == "!"
+                else self.value_type(node.operand, types)
+            )
+        if isinstance(node, BinaryOpNode):
+            if self.map_operator(node.operator) in {
+                "==",
+                "!=",
+                "<",
+                "<=",
+                ">",
+                ">=",
+                "&&",
+                "||",
+            }:
+                return "bool"
+            left, right = self.value_type(node.left, types), self.value_type(
+                node.right, types
+            )
+            return self.common_type(left, right)
+        if isinstance(node, TernaryOpNode):
+            left, right = self.value_type(node.true_expr, types), self.value_type(
+                node.false_expr, types
+            )
+            if left == right:
+                return left
+            # Mixed arithmetic arms take the usual arithmetic conversion.
+            return (
+                self.common_type(left, right)
+                if {left, right} <= self.scalar_types - {"bool"}
+                else None
+            )
+        bitcast = self.bitcast_target(node)
+        if bitcast is not None:
+            return bitcast
+        operation = _operation(node)
+        if operation in self.functions:
+            function = self.resolve_function(node, types)
+            return _type_name(function.return_type) if function is not None else None
+        if operation in self.value_types:
+            return operation
+        if self.pure_float_call(node, types):
+            argument = self.value_type(node.arguments[0], types)
+            return argument if argument in {"float16", "half"} else "float"
+        if operation in {"isnan", "isinf"} | _VOTES:
+            return "bool"
+        if operation in {"asfloat", "asint", "asuint"}:
+            return {"asfloat": "float", "asint": "int", "asuint": "uint"}[operation]
+        if operation in self.operations and node.arguments:
+            return self.value_type(node.arguments[0], types)
+        return None
+
+    def integer_constant(self, node):
+        type_name = self.value_type(node, {})
+        shape = source_integer_shape(type_name) if type_name else None
+        if shape is None or shape[2] != 1 or shape[1] > 64:
+            return None
+        unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
+        if isinstance(node, LiteralNode) and type(node.value) is int:
+            value = node.value
+        elif isinstance(node, UnaryOpNode) and self.map_operator(node.operator) in {
+            "+",
+            "-",
+        }:
+            value = self.integer_constant(node.operand)
+            if value is None or unsigned and self.map_operator(node.operator) == "-":
+                return None
+            value *= -1 if self.map_operator(node.operator) == "-" else 1
+        else:
+            return None
+        minimum = 0 if unsigned else -(1 << (shape[1] - 1))
+        maximum = (1 << (shape[1] - (not unsigned))) - 1
+        return value if minimum <= value <= maximum else None
+
+    def exact_integer_constant(self, node):
+        """Exact unbounded value of a literal integer expression, else None."""
+        if isinstance(node, LiteralNode):
+            return node.value if type(node.value) is int else None
+        if isinstance(node, UnaryOpNode) and self.map_operator(node.operator) in {
+            "+",
+            "-",
+        }:
+            value = self.exact_integer_constant(node.operand)
+            if value is None:
+                return None
+            return -value if self.map_operator(node.operator) == "-" else value
+        if isinstance(node, BinaryOpNode) and self.map_operator(node.operator) in {
+            "+",
+            "-",
+            "*",
+        }:
+            left = self.exact_integer_constant(node.left)
+            right = self.exact_integer_constant(node.right)
+            if left is None or right is None:
+                return None
+            operator = self.map_operator(node.operator)
+            if operator == "+":
+                return left + right
+            return left - right if operator == "-" else left * right
+        return None
+
+    def integer_fits(self, type_name, value):
+        shape = source_integer_shape(type_name) if type_name else None
+        if shape is None or shape[2] != 1:
+            return False
+        unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
+        minimum = 0 if unsigned else -(1 << (shape[1] - 1))
+        maximum = (1 << (shape[1] - (not unsigned))) - 1
+        return minimum <= value <= maximum
+
+    def integral_float_literal(self, node):
+        """Exact integer value of a finite integral floating literal, else None."""
+        negative = False
+        while isinstance(node, UnaryOpNode) and self.map_operator(node.operator) in {
+            "+",
+            "-",
+        }:
+            negative ^= self.map_operator(node.operator) == "-"
+            node = node.operand
+        if not isinstance(node, LiteralNode) or type(node.value) is not float:
+            return None
+        if not math.isfinite(node.value) or not node.value.is_integer():
+            return None
+        return -int(node.value) if negative else int(node.value)
+
+    def converts_safely(self, target, value, types):
+        source = self.value_type(value, types)
+        if target in self.value_structs:
+            return source == target
+        constant = self.integer_constant(value)
+        if constant is None:
+            constant = self.exact_integer_constant(value)
+        if constant is None and target in self.scalar_types - self.floats - {"bool"}:
+            # MLX spells integer identities as static_cast<U>(1.0f); converting
+            # an exactly integral literal that fits the target is exact.
+            constant = self.integral_float_literal(value)
+        if constant is not None and target in self.scalar_types:
+            if target in self.floats | {"bool"}:
+                return True
+            shape = source_integer_shape(target)
+            unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
+            return (
+                (0 if unsigned else -(1 << (shape[1] - 1)))
+                <= constant
+                <= (1 << (shape[1] - (not unsigned))) - 1
+            )
+        return (
+            source in self.scalar_types
+            and target in self.scalar_types
+            and (target in self.floats | {"bool"} or source not in self.floats)
+        )
+
+    def resolve_function(self, call, types):
+        candidates = [
+            function
+            for function in self.functions.get(_operation(call), ())
+            if len(function.parameters) == len(call.arguments)
+        ]
+        if len(candidates) > 1:
+            candidates = [
+                function
+                for function in candidates
+                if all(
+                    (
+                        _type_name(parameter.param_type) in self.scalar_types
+                        and self.value_type(argument, types) in self.scalar_types
+                    )
+                    or (
+                        _type_name(parameter.param_type)
+                        in self.value_types | self.empty_types
+                        and self.value_type(argument, types)
+                        == _type_name(parameter.param_type)
+                    )
+                    for parameter, argument in zip(function.parameters, call.arguments)
+                )
+            ]
+        if len(candidates) > 1:
+            # Same-arity scalar overloads (MLX's 64-bit and bool shuffles) are
+            # only distinguishable by exact parameter matches.
+            def exact_matches(function):
+                return sum(
+                    self.value_type(argument, types) == _type_name(parameter.param_type)
+                    for parameter, argument in zip(function.parameters, call.arguments)
+                )
+
+            best = max(exact_matches(function) for function in candidates)
+            candidates = [
+                function for function in candidates if exact_matches(function) == best
+            ]
+        return candidates[0] if len(candidates) == 1 else None
+
+    def expression_inputs(self, node, parameters, types, visiting, initialized):
+        if (
+            isinstance(node, FunctionCallNode)
+            and _operation(node) in self.value_structs
+            and _operation(node) not in self.functions
+            and not node.generic_args
+        ):
+            node = ConstructorNode(NamedType(_operation(node)), node.arguments)
+        if isinstance(node, IdentifierNode) and node.name in parameters:
+            return (
+                (parameters[node.name], False)
+                if types[node.name] in self.value_types and node.name in initialized
+                else None
+            )
+        if isinstance(node, MemberAccessNode) and isinstance(
+            node.object_expr, IdentifierNode
+        ):
+            name = node.object_expr.name
+            if (
+                name in parameters
+                and self.value_type(node, types) in self.scalar_types
+                and (name in initialized or (name, node.member) in initialized)
+            ):
+                return parameters[name], False
+            return None
+        if isinstance(node, LiteralNode):
+            return frozenset(), False
+        if self.integer_constant(node) is not None:
+            return frozenset(), False
+        if (
+            isinstance(node, (UnaryOpNode, BinaryOpNode))
+            and checked_induction_value(node, {}) is not None
+        ):
+            return frozenset(), False
+        if isinstance(node, CastNode) and self.converts_safely(
+            _type_name(node.target_type), node.expression, types
+        ):
+            return self.expression_inputs(
+                node.expression, parameters, types, visiting, initialized
+            )
+        if (
+            isinstance(node, ConstructorNode)
+            and not node.named_arguments
+            and len(node.arguments) == 1
+            and self.converts_safely(
+                _type_name(node.constructor_type), node.arguments[0], types
+            )
+        ):
+            return self.expression_inputs(
+                node.arguments[0], parameters, types, visiting, initialized
+            )
+        if (
+            isinstance(node, ConstructorNode)
+            and _type_name(node.constructor_type) in self.value_structs
+        ):
+            fields = self.value_structs[_type_name(node.constructor_type)]
+            if (
+                node.named_arguments
+                or len(fields) != len(node.arguments)
+                or not all(
+                    self.converts_safely(field_type, argument, types)
+                    for field_type, argument in zip(fields.values(), node.arguments)
+                )
+            ):
+                return None
+            proofs = [
+                self.expression_inputs(
+                    argument, parameters, types, visiting, initialized
+                )
+                for argument in node.arguments
+            ]
+            if any(proof is None for proof in proofs):
+                return None
+            return frozenset().union(*(proof[0] for proof in proofs)), any(
+                proof[1] for proof in proofs
+            )
+        bitcast = self.bitcast_target(node)
+        if bitcast is not None:
+            source = self.value_type(node.arguments[0], types)
+            if (
+                source is None
+                or self.bitcast_widths.get(bitcast) is None
+                or self.bitcast_widths.get(bitcast) != self.bitcast_widths.get(source)
+            ):
+                return None
+            return self.expression_inputs(
+                node.arguments[0], parameters, types, visiting, initialized
+            )
+        children = None
+        if isinstance(node, UnaryOpNode):
+            operator = self.map_operator(node.operator)
+            operand_type = self.value_type(node.operand, types)
+            if (
+                operator in {"!", "+"}
+                or operator == "-"
+                and (
+                    operand_type in self.scalar_types - {"bool"}
+                    or checked_induction_value(node, {}) is not None
+                )
+                or operator == "~"
+                and operand_type in self.scalar_types - self.floats
+            ):
+                children = [node.operand]
+        elif isinstance(node, BinaryOpNode):
+            operator = self.map_operator(node.operator)
+            operands = {
+                self.value_type(node.left, types),
+                self.value_type(node.right, types),
+            }
+            # Integer +, - and * wrap on both targets; division can trap or
+            # depend on zero-filled staged inputs, so it stays floating-only.
+            if (
+                operator in {
+                    "==",
+                    "!=",
+                    "<",
+                    "<=",
+                    ">",
+                    ">=",
+                    "&&",
+                    "||",
+                    "&",
+                    "|",
+                    "^",
+                }
+                or operator in {"+", "-", "*"}
+                and operands <= self.scalar_types
+                and "bool" not in operands
+                and (
+                    operands & self.floats
+                    or (constant := self.exact_integer_constant(node)) is None
+                    or self.integer_fits(self.value_type(node, types), constant)
+                )
+                or operator == "/"
+                and operands <= self.floats
+            ):
+                children = [node.left, node.right]
+        elif isinstance(node, TernaryOpNode):
+            children = [node.condition, node.true_expr, node.false_expr]
+        if children is not None:
+            proofs = [
+                self.expression_inputs(child, parameters, types, visiting, initialized)
+                for child in children
+            ]
+            if any(proof is None for proof in proofs):
+                return None
+            return frozenset().union(*(proof[0] for proof in proofs)), any(
+                proof[1] for proof in proofs
+            )
+        operation = _operation(node)
+        if self.pure_float_call(node, types) or self.trusted_call(node, types):
+            proofs = [
+                self.expression_inputs(
+                    argument, parameters, types, visiting, initialized
+                )
+                for argument in node.arguments
+            ]
+            if any(proof is None for proof in proofs):
+                return None
+            return frozenset().union(*(proof[0] for proof in proofs)), any(
+                proof[1] for proof in proofs
+            )
+        if (
+            isinstance(node, FunctionCallNode)
+            and operation in self.scalar_types
+            and operation not in self.functions
+            and len(node.arguments) == 1
+            and not node.generic_args
+            and self.converts_safely(operation, node.arguments[0], types)
+        ):
+            return self.expression_inputs(
+                node.arguments[0], parameters, types, visiting, initialized
+            )
+        if (
+            isinstance(node, FunctionCallNode)
+            and operation in {"isnan", "isinf", "asfloat", "asint", "asuint"}
+            and operation not in self.functions
+            and len(node.arguments) == 1
+            and not node.generic_args
+            and self.value_type(node.arguments[0], types)
+            in {"float", "float32_t", "int", "int32_t", "uint", "uint32_t"}
+            | (self.floats if operation in {"isnan", "isinf"} else set())
+        ):
+            return self.expression_inputs(
+                node.arguments[0], parameters, types, visiting, initialized
+            )
+        if operation in self.operations and operation not in self.functions:
+            required = range(len(node.arguments))
+            collective = True
+        elif isinstance(node, FunctionCallNode):
+            proof = self.wrapper(node, visiting, allow_pure=True, types=types)
+            if proof is None:
+                return None
+            _function, required, collective = proof
+            if any(
+                _type_name(parameter.param_type) in self.value_types
+                and not self.converts_safely(
+                    _type_name(parameter.param_type), argument, types
+                )
+                for parameter, argument in zip(_function.parameters, node.arguments)
+            ):
+                return None
+        else:
+            return None
+        dependencies = set()
+        for index, argument in enumerate(node.arguments):
+            if index not in required:
+                if not (
+                    isinstance(argument, LiteralNode)
+                    or isinstance(argument, IdentifierNode)
+                    and argument.name in parameters
+                ):
+                    return None
+                continue
+            proof = self.expression_inputs(
+                argument, parameters, types, visiting, initialized
+            )
+            if proof is None:
+                return None
+            if operation in self.operations and index == 0 and not proof[0]:
+                return None
+            dependencies.update(proof[0])
+            collective |= proof[1]
+        return frozenset(dependencies), collective
+
+    def body_inputs(
+        self,
+        body,
+        parameters,
+        types,
+        visiting,
+        result_type,
+        constants=None,
+        controls=frozenset(),
+        initialized=None,
+    ):
+        # Names mark whole values; (name, field) tracks partial local construction.
+        initialized = set(parameters if initialized is None else initialized)
+        parameters, types, constants = (
+            dict(parameters),
+            dict(types),
+            dict(constants or {}),
+        )
+        dependencies, collective = set(), False
+        for statement in _statements(body):
+            member = None
+            if isinstance(statement, ExpressionStatementNode):
+                statement = statement.expression
+            if isinstance(statement, (VariableNode, AssignmentNode, ReturnNode)):
+                if isinstance(statement, VariableNode):
+                    allowed_qualifiers = {"const", "thread"}
+                    if _type_name(statement.var_type) in self.floats:
+                        allowed_qualifiers.add("precise")
+                    if (
+                        statement.name in types
+                        or statement.name in controls
+                        or statement.attributes
+                        or set(statement.qualifiers or []) - allowed_qualifiers
+                        or set(getattr(statement.var_type, "qualifiers", []) or [])
+                        - allowed_qualifiers
+                    ):
+                        return None
+                    name, target, value = (
+                        statement.name,
+                        _type_name(statement.var_type),
+                        statement.initial_value,
+                    )
+                    if value is None and target in self.value_structs:
+                        parameters[name], types[name] = frozenset(), target
+                        initialized.discard(name)
+                        continue
+                    if value is None and target in self.empty_types:
+                        parameters[name], types[name] = frozenset(), target
+                        initialized.add(name)
+                        continue
+                elif isinstance(statement, AssignmentNode):
+                    destination = statement.target
+                    if isinstance(destination, MemberAccessNode):
+                        member = destination.member
+                        destination = destination.object_expr
+                    operator = self.map_operator(statement.operator)
+                    compound = (
+                        operator[:-1]
+                        if member is None
+                        and operator in {"+=", "-=", "*=", "&=", "|=", "^="}
+                        else None
+                    )
+                    if (
+                        not isinstance(destination, IdentifierNode)
+                        or destination.name not in parameters
+                        or destination.name in controls
+                        or (operator != "=" and compound is None)
+                    ):
+                        return None
+                    name = destination.name
+                    target, value = types[name], statement.value
+                    if compound is not None:
+                        # `x op= v` reads the current whole value of `x`.
+                        value = BinaryOpNode(IdentifierNode(name), compound, value)
+                    if member is not None:
+                        target = self.value_structs.get(target, {}).get(member)
+                        if target is None:
+                            return None
+                else:
+                    name, target, value = None, result_type, statement.value
+                if isinstance(value, ArrayLiteralNode) and target in self.value_structs:
+                    value = ConstructorNode(NamedType(target), value.elements)
+                proof = self.expression_inputs(
+                    value, parameters, types, visiting, initialized
+                )
+                if (
+                    proof is None
+                    or target is not None
+                    and not self.converts_safely(target, value, types)
+                ):
+                    return None
+                if name is not None:
+                    if member is None:
+                        parameters[name], types[name] = proof[0], target
+                        initialized.add(name)
+                    else:
+                        parameters[name] |= proof[0]
+                        initialized.add((name, member))
+                        if all(
+                            (name, field) in initialized
+                            for field in self.value_structs[types[name]]
+                        ):
+                            initialized.add(name)
+                    constants.pop(name, None)
+                    if isinstance(statement, VariableNode) and "const" in set(
+                        statement.qualifiers or []
+                    ) | set(getattr(statement.var_type, "qualifiers", []) or []):
+                        constant = checked_induction_value(value, constants)
+                        if constant is not None:
+                            constants[name] = constant
+            elif isinstance(statement, (BlockNode, IfNode)):
+                if isinstance(statement, BlockNode):
+                    branches, conditions = [statement], []
+                elif (
+                    isinstance(statement.condition, LiteralNode)
+                    and type(statement.condition.value) is bool
+                    and not statement.else_if_conditions
+                    and not statement.else_if_bodies
+                ):
+                    branches = [
+                        (
+                            statement.then_branch
+                            if statement.condition.value
+                            else statement.else_branch
+                        )
+                    ]
+                    conditions = []
+                else:
+                    branches = [
+                        statement.then_branch,
+                        *statement.else_if_bodies,
+                        statement.else_branch,
+                    ]
+                    conditions = [statement.condition, *statement.else_if_conditions]
+                proofs = [
+                    self.expression_inputs(
+                        condition, parameters, types, visiting, initialized
+                    )
+                    for condition in conditions
+                ]
+                results = [
+                    self.body_inputs(
+                        branch,
+                        parameters,
+                        types,
+                        visiting,
+                        result_type,
+                        constants,
+                        controls,
+                        initialized,
+                    )
+                    for branch in branches
+                ]
+                if any(proof is None for proof in [*proofs, *results]):
+                    return None
+                proofs += [result[:2] for result in results]
+                if conditions and any(proof[1] for proof in proofs):
+                    return None
+                proof = frozenset().union(*(proof[0] for proof in proofs)), any(
+                    proof[1] for proof in proofs
+                )
+                for name in parameters:
+                    parameters[name] |= frozenset().union(
+                        *(result[2][name] for result in results)
+                    )
+                initialized.intersection_update(*(result[4] for result in results))
+                constants = {
+                    name: value
+                    for name, value in constants.items()
+                    if all(result[3].get(name) == value for result in results)
+                }
+            elif isinstance(statement, ForNode):
+                initial, condition, update = (
+                    statement.init,
+                    statement.condition,
+                    statement.update,
+                )
+                if (
+                    not isinstance(initial, VariableNode)
+                    or initial.name in parameters
+                    or initial.name in controls
+                    or initial.attributes
+                    or initial.qualifiers
+                    or not isinstance(condition, BinaryOpNode)
+                    or not isinstance(condition.left, IdentifierNode)
+                    or condition.left.name != initial.name
+                    or not isinstance(update, (AssignmentNode, UnaryOpNode))
+                ):
+                    return None
+                target = (
+                    update.target
+                    if isinstance(update, AssignmentNode)
+                    else update.operand
+                )
+                if (
+                    not isinstance(target, IdentifierNode)
+                    or target.name != initial.name
+                ):
+                    return None
+                terminate = (
+                    geometric_loop_terminates
+                    if self.map_operator(update.operator) in {"*=", "<<="}
+                    else fixed_stride_loop_terminates
+                )
+                if not terminate(
+                    _type_name(initial.var_type),
+                    initial.initial_value,
+                    condition.right,
+                    update,
+                    constants,
+                    self.map_operator(condition.operator),
+                ):
+                    return None
+                if any(
+                    isinstance(child, ReturnNode)
+                    for child in self.walk_ast(statement.body)
+                ):
+                    return None
+                nested_parameters = {**parameters, initial.name: frozenset()}
+                nested_types = {**types, initial.name: _type_name(initial.var_type)}
+                loop_controls = (
+                    controls
+                    | {initial.name}
+                    | {
+                        child.name
+                        for root in (condition.right, update)
+                        for child in self.walk_ast(root)
+                        if isinstance(child, IdentifierNode)
+                    }
+                )
+                result = self.body_inputs(
+                    statement.body,
+                    nested_parameters,
+                    nested_types,
+                    visiting,
+                    result_type,
+                    constants,
+                    loop_controls,
+                    initialized | {initial.name},
+                )
+                if result is None:
+                    return None
+                proof = result[:2]
+                for name in parameters:
+                    parameters[name] |= result[2][name]
+                initialized.intersection_update(result[4])
+                constants = {
+                    name: value
+                    for name, value in constants.items()
+                    if result[3].get(name) == value
+                }
+            else:
+                return None
+            dependencies.update(proof[0])
+            collective |= proof[1]
+        return frozenset(dependencies), collective, parameters, constants, initialized
+
+    def wrapper(self, call, visiting=frozenset(), *, allow_pure=False, types=None):
+        if getattr(call, "generic_args", None):
+            return None
+        function = self.resolve_function(call, types or {})
+        if function is None:
+            return None
+        key = id(function)
+        if key in visiting:
+            return None
+        if key not in self.summaries:
+            statements = _statements(function.body)
+            proof = None
+            if (
+                statements
+                and _always_returns(statements)
+                and _type_name(function.return_type) in self.value_types
+                and not getattr(function, "generic_params", None)
+                and not any(
+                    set(parameter.qualifiers or []) & {"out", "volatile"}
+                    or set(getattr(parameter.param_type, "qualifiers", []) or [])
+                    & {"volatile"}
+                    for parameter in function.parameters
+                )
+            ):
+                proof = self.body_inputs(
+                    statements,
+                    {
+                        parameter.name: frozenset({i})
+                        for i, parameter in enumerate(function.parameters)
+                    },
+                    {
+                        parameter.name: _type_name(parameter.param_type)
+                        for parameter in function.parameters
+                    },
+                    visiting | {key},
+                    _type_name(function.return_type),
+                )
+            if proof is not None:
+                for index, parameter in enumerate(function.parameters):
+                    if (
+                        index not in proof[0]
+                        and _type_name(parameter.param_type) in self.empty_types
+                    ):
+                        continue
+                    if _type_name(parameter.param_type) not in self.value_types or (
+                        set(parameter.qualifiers or [])
+                        | set(getattr(parameter.param_type, "qualifiers", []) or [])
+                    ) & {
+                        "out",
+                        "inout",
+                        "volatile",
+                        "device",
+                        "constant",
+                        "threadgroup",
+                        "groupshared",
+                    }:
+                        proof = None
+                        break
+            self.summaries[key] = proof[:2] if proof is not None else None
+        proof = self.summaries[key]
+        if proof is None or not (allow_pure or proof[1]):
+            return None
+        return (function, *proof) if allow_pure else (function, proof[0])
+
+    def root_name(self, node):
+        while isinstance(node, (ArrayAccessNode, MemberAccessNode)):
+            node = (
+                node.array_expr
+                if isinstance(node, ArrayAccessNode)
+                else node.object_expr
+            )
+        if isinstance(node, UnaryOpNode) and self.map_operator(node.operator) == "&":
+            return self.root_name(node.operand)
+        return node.name if isinstance(node, IdentifierNode) else None
+
+
 def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
     """Stage guarded inputs around pure subgroup wrappers in compute entries.
 
@@ -468,18 +1325,6 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         "uint2": 64,
     }
 
-    def bitcast_target(node):
-        operation = _operation(node)
-        if (
-            not isinstance(node, FunctionCallNode)
-            or not isinstance(operation, str)
-            or node.generic_args
-            or len(node.arguments) != 1
-        ):
-            return None
-        match = re.fullmatch(r"as_type\s*<\s*([A-Za-z_][A-Za-z0-9_]*)\s*>", operation)
-        return match.group(1) if match else None
-
     value_structs = {
         node.name: {
             member.name: _type_name(member.member_type) for member in node.members
@@ -530,797 +1375,23 @@ def converge_subgroup_conditional_calls(ast, entries, walk_ast, map_operator):
         and _generated_scalar_helper(candidates[0], walk_ast)
     }
 
-    def trusted_call(node, types):
-        return (
-            isinstance(node, FunctionCallNode)
-            and _operation(node) in trusted_helpers
-            and not node.generic_args
-            and len(node.arguments) == 1
-            and value_type(node.arguments[0], types) in {"float", "float32_t"}
-        )
-
-    def pure_float_call(node, types):
-        operation = _operation(node)
-        argument_types = (
-            {value_type(argument, types) for argument in node.arguments}
-            if isinstance(node, FunctionCallNode)
-            else set()
-        )
-        return (
-            isinstance(node, FunctionCallNode)
-            and operation in pure_float_arities
-            and operation not in functions
-            and not node.generic_args
-            and len(node.arguments) == pure_float_arities[operation]
-            and (
-                argument_types <= {"float", "float32_t"}
-                # binary16 calls stay binary16 only when every operand is.
-                or len(argument_types) == 1
-                and argument_types <= {"float16", "half"}
-            )
-        )
-
-    def common_type(left, right):
-        if left == right:
-            return left
-        if left in floats or right in floats:
-            return "float"
-        if {left, right} & {"uint64", "uint64_t"}:
-            return "uint64"
-        if {left, right} & {"int64", "int64_t"}:
-            return "int64"
-        if left in {"uint", "uint32_t"} or right in {"uint", "uint32_t"}:
-            return "uint"
-        return "int"
-
-    def value_type(node, types):
-        if isinstance(node, IdentifierNode):
-            return types.get(node.name)
-        if isinstance(node, MemberAccessNode):
-            return value_structs.get(value_type(node.object_expr, types), {}).get(
-                node.member
-            )
-        if isinstance(node, LiteralNode):
-            return _type_name(node.literal_type)
-        if isinstance(node, CastNode):
-            return _type_name(node.target_type)
-        if isinstance(node, ConstructorNode):
-            return _type_name(node.constructor_type)
-        if isinstance(node, UnaryOpNode):
-            return (
-                "bool"
-                if map_operator(node.operator) == "!"
-                else value_type(node.operand, types)
-            )
-        if isinstance(node, BinaryOpNode):
-            if map_operator(node.operator) in {
-                "==",
-                "!=",
-                "<",
-                "<=",
-                ">",
-                ">=",
-                "&&",
-                "||",
-            }:
-                return "bool"
-            left, right = value_type(node.left, types), value_type(node.right, types)
-            return common_type(left, right)
-        if isinstance(node, TernaryOpNode):
-            left, right = value_type(node.true_expr, types), value_type(
-                node.false_expr, types
-            )
-            if left == right:
-                return left
-            # Mixed arithmetic arms take the usual arithmetic conversion.
-            return (
-                common_type(left, right)
-                if {left, right} <= scalar_types - {"bool"}
-                else None
-            )
-        bitcast = bitcast_target(node)
-        if bitcast is not None:
-            return bitcast
-        operation = _operation(node)
-        if operation in functions:
-            function = resolve_function(node, types)
-            return _type_name(function.return_type) if function is not None else None
-        if operation in value_types:
-            return operation
-        if pure_float_call(node, types):
-            argument = value_type(node.arguments[0], types)
-            return argument if argument in {"float16", "half"} else "float"
-        if operation in {"isnan", "isinf"} | _VOTES:
-            return "bool"
-        if operation in {"asfloat", "asint", "asuint"}:
-            return {"asfloat": "float", "asint": "int", "asuint": "uint"}[operation]
-        if operation in operations and node.arguments:
-            return value_type(node.arguments[0], types)
-        return None
-
-    def integer_constant(node):
-        type_name = value_type(node, {})
-        shape = source_integer_shape(type_name) if type_name else None
-        if shape is None or shape[2] != 1 or shape[1] > 64:
-            return None
-        unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
-        if isinstance(node, LiteralNode) and type(node.value) is int:
-            value = node.value
-        elif isinstance(node, UnaryOpNode) and map_operator(node.operator) in {
-            "+",
-            "-",
-        }:
-            value = integer_constant(node.operand)
-            if value is None or unsigned and map_operator(node.operator) == "-":
-                return None
-            value *= -1 if map_operator(node.operator) == "-" else 1
-        else:
-            return None
-        minimum = 0 if unsigned else -(1 << (shape[1] - 1))
-        maximum = (1 << (shape[1] - (not unsigned))) - 1
-        return value if minimum <= value <= maximum else None
-
-    def exact_integer_constant(node):
-        """Exact unbounded value of a literal integer expression, else None."""
-        if isinstance(node, LiteralNode):
-            return node.value if type(node.value) is int else None
-        if isinstance(node, UnaryOpNode) and map_operator(node.operator) in {"+", "-"}:
-            value = exact_integer_constant(node.operand)
-            if value is None:
-                return None
-            return -value if map_operator(node.operator) == "-" else value
-        if isinstance(node, BinaryOpNode) and map_operator(node.operator) in {
-            "+",
-            "-",
-            "*",
-        }:
-            left = exact_integer_constant(node.left)
-            right = exact_integer_constant(node.right)
-            if left is None or right is None:
-                return None
-            operator = map_operator(node.operator)
-            if operator == "+":
-                return left + right
-            return left - right if operator == "-" else left * right
-        return None
-
-    def integer_fits(type_name, value):
-        shape = source_integer_shape(type_name) if type_name else None
-        if shape is None or shape[2] != 1:
-            return False
-        unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
-        minimum = 0 if unsigned else -(1 << (shape[1] - 1))
-        maximum = (1 << (shape[1] - (not unsigned))) - 1
-        return minimum <= value <= maximum
-
-    def integral_float_literal(node):
-        """Exact integer value of a finite integral floating literal, else None."""
-        negative = False
-        while isinstance(node, UnaryOpNode) and map_operator(node.operator) in {
-            "+",
-            "-",
-        }:
-            negative ^= map_operator(node.operator) == "-"
-            node = node.operand
-        if not isinstance(node, LiteralNode) or type(node.value) is not float:
-            return None
-        if not math.isfinite(node.value) or not node.value.is_integer():
-            return None
-        return -int(node.value) if negative else int(node.value)
-
-    def converts_safely(target, value, types):
-        source = value_type(value, types)
-        if target in value_structs:
-            return source == target
-        constant = integer_constant(value)
-        if constant is None:
-            constant = exact_integer_constant(value)
-        if constant is None and target in scalar_types - floats - {"bool"}:
-            # MLX spells integer identities as static_cast<U>(1.0f); converting
-            # an exactly integral literal that fits the target is exact.
-            constant = integral_float_literal(value)
-        if constant is not None and target in scalar_types:
-            if target in floats | {"bool"}:
-                return True
-            shape = source_integer_shape(target)
-            unsigned = shape[0] == ArithmeticScalarKind.UNSIGNED_INTEGER
-            return (
-                (0 if unsigned else -(1 << (shape[1] - 1)))
-                <= constant
-                <= (1 << (shape[1] - (not unsigned))) - 1
-            )
-        return (
-            source in scalar_types
-            and target in scalar_types
-            and (target in floats | {"bool"} or source not in floats)
-        )
-
-    def resolve_function(call, types):
-        candidates = [
-            function
-            for function in functions.get(_operation(call), ())
-            if len(function.parameters) == len(call.arguments)
-        ]
-        if len(candidates) > 1:
-            candidates = [
-                function
-                for function in candidates
-                if all(
-                    (
-                        _type_name(parameter.param_type) in scalar_types
-                        and value_type(argument, types) in scalar_types
-                    )
-                    or (
-                        _type_name(parameter.param_type) in value_types | empty_types
-                        and value_type(argument, types)
-                        == _type_name(parameter.param_type)
-                    )
-                    for parameter, argument in zip(function.parameters, call.arguments)
-                )
-            ]
-        if len(candidates) > 1:
-            # Same-arity scalar overloads (MLX's 64-bit and bool shuffles) are
-            # only distinguishable by exact parameter matches.
-            def exact_matches(function):
-                return sum(
-                    value_type(argument, types) == _type_name(parameter.param_type)
-                    for parameter, argument in zip(function.parameters, call.arguments)
-                )
-
-            best = max(exact_matches(function) for function in candidates)
-            candidates = [
-                function for function in candidates if exact_matches(function) == best
-            ]
-        return candidates[0] if len(candidates) == 1 else None
-
-    def expression_inputs(node, parameters, types, visiting, initialized):
-        if (
-            isinstance(node, FunctionCallNode)
-            and _operation(node) in value_structs
-            and _operation(node) not in functions
-            and not node.generic_args
-        ):
-            node = ConstructorNode(NamedType(_operation(node)), node.arguments)
-        if isinstance(node, IdentifierNode) and node.name in parameters:
-            return (
-                (parameters[node.name], False)
-                if types[node.name] in value_types and node.name in initialized
-                else None
-            )
-        if isinstance(node, MemberAccessNode) and isinstance(
-            node.object_expr, IdentifierNode
-        ):
-            name = node.object_expr.name
-            if (
-                name in parameters
-                and value_type(node, types) in scalar_types
-                and (name in initialized or (name, node.member) in initialized)
-            ):
-                return parameters[name], False
-            return None
-        if isinstance(node, LiteralNode):
-            return frozenset(), False
-        if integer_constant(node) is not None:
-            return frozenset(), False
-        if (
-            isinstance(node, (UnaryOpNode, BinaryOpNode))
-            and checked_induction_value(node, {}) is not None
-        ):
-            return frozenset(), False
-        if isinstance(node, CastNode) and converts_safely(
-            _type_name(node.target_type), node.expression, types
-        ):
-            return expression_inputs(
-                node.expression, parameters, types, visiting, initialized
-            )
-        if (
-            isinstance(node, ConstructorNode)
-            and not node.named_arguments
-            and len(node.arguments) == 1
-            and converts_safely(
-                _type_name(node.constructor_type), node.arguments[0], types
-            )
-        ):
-            return expression_inputs(
-                node.arguments[0], parameters, types, visiting, initialized
-            )
-        if (
-            isinstance(node, ConstructorNode)
-            and _type_name(node.constructor_type) in value_structs
-        ):
-            fields = value_structs[_type_name(node.constructor_type)]
-            if (
-                node.named_arguments
-                or len(fields) != len(node.arguments)
-                or not all(
-                    converts_safely(field_type, argument, types)
-                    for field_type, argument in zip(fields.values(), node.arguments)
-                )
-            ):
-                return None
-            proofs = [
-                expression_inputs(argument, parameters, types, visiting, initialized)
-                for argument in node.arguments
-            ]
-            if any(proof is None for proof in proofs):
-                return None
-            return frozenset().union(*(proof[0] for proof in proofs)), any(
-                proof[1] for proof in proofs
-            )
-        bitcast = bitcast_target(node)
-        if bitcast is not None:
-            source = value_type(node.arguments[0], types)
-            if (
-                source is None
-                or bitcast_widths.get(bitcast) is None
-                or bitcast_widths.get(bitcast) != bitcast_widths.get(source)
-            ):
-                return None
-            return expression_inputs(
-                node.arguments[0], parameters, types, visiting, initialized
-            )
-        children = None
-        if isinstance(node, UnaryOpNode):
-            operator = map_operator(node.operator)
-            operand_type = value_type(node.operand, types)
-            if (
-                operator in {"!", "+"}
-                or operator == "-"
-                and (
-                    operand_type in scalar_types - {"bool"}
-                    or checked_induction_value(node, {}) is not None
-                )
-                or operator == "~"
-                and operand_type in scalar_types - floats
-            ):
-                children = [node.operand]
-        elif isinstance(node, BinaryOpNode):
-            operator = map_operator(node.operator)
-            operands = {value_type(node.left, types), value_type(node.right, types)}
-            # Integer +, - and * wrap on both targets; division can trap or
-            # depend on zero-filled staged inputs, so it stays floating-only.
-            if (
-                operator in {
-                    "==",
-                    "!=",
-                    "<",
-                    "<=",
-                    ">",
-                    ">=",
-                    "&&",
-                    "||",
-                    "&",
-                    "|",
-                    "^",
-                }
-                or operator in {"+", "-", "*"}
-                and operands <= scalar_types
-                and "bool" not in operands
-                and (
-                    operands & floats
-                    or (constant := exact_integer_constant(node)) is None
-                    or integer_fits(value_type(node, types), constant)
-                )
-                or operator == "/"
-                and operands <= floats
-            ):
-                children = [node.left, node.right]
-        elif isinstance(node, TernaryOpNode):
-            children = [node.condition, node.true_expr, node.false_expr]
-        if children is not None:
-            proofs = [
-                expression_inputs(child, parameters, types, visiting, initialized)
-                for child in children
-            ]
-            if any(proof is None for proof in proofs):
-                return None
-            return frozenset().union(*(proof[0] for proof in proofs)), any(
-                proof[1] for proof in proofs
-            )
-        operation = _operation(node)
-        if pure_float_call(node, types) or trusted_call(node, types):
-            proofs = [
-                expression_inputs(argument, parameters, types, visiting, initialized)
-                for argument in node.arguments
-            ]
-            if any(proof is None for proof in proofs):
-                return None
-            return frozenset().union(*(proof[0] for proof in proofs)), any(
-                proof[1] for proof in proofs
-            )
-        if (
-            isinstance(node, FunctionCallNode)
-            and operation in scalar_types
-            and operation not in functions
-            and len(node.arguments) == 1
-            and not node.generic_args
-            and converts_safely(operation, node.arguments[0], types)
-        ):
-            return expression_inputs(
-                node.arguments[0], parameters, types, visiting, initialized
-            )
-        if (
-            isinstance(node, FunctionCallNode)
-            and operation in {"isnan", "isinf", "asfloat", "asint", "asuint"}
-            and operation not in functions
-            and len(node.arguments) == 1
-            and not node.generic_args
-            and value_type(node.arguments[0], types)
-            in {"float", "float32_t", "int", "int32_t", "uint", "uint32_t"}
-            | (floats if operation in {"isnan", "isinf"} else set())
-        ):
-            return expression_inputs(
-                node.arguments[0], parameters, types, visiting, initialized
-            )
-        if operation in operations and operation not in functions:
-            required = range(len(node.arguments))
-            collective = True
-        elif isinstance(node, FunctionCallNode):
-            proof = wrapper(node, visiting, allow_pure=True, types=types)
-            if proof is None:
-                return None
-            _function, required, collective = proof
-            if any(
-                _type_name(parameter.param_type) in value_types
-                and not converts_safely(
-                    _type_name(parameter.param_type), argument, types
-                )
-                for parameter, argument in zip(_function.parameters, node.arguments)
-            ):
-                return None
-        else:
-            return None
-        dependencies = set()
-        for index, argument in enumerate(node.arguments):
-            if index not in required:
-                if not (
-                    isinstance(argument, LiteralNode)
-                    or isinstance(argument, IdentifierNode)
-                    and argument.name in parameters
-                ):
-                    return None
-                continue
-            proof = expression_inputs(
-                argument, parameters, types, visiting, initialized
-            )
-            if proof is None:
-                return None
-            if operation in operations and index == 0 and not proof[0]:
-                return None
-            dependencies.update(proof[0])
-            collective |= proof[1]
-        return frozenset(dependencies), collective
-
-    def body_inputs(
-        body,
-        parameters,
-        types,
-        visiting,
-        result_type,
-        constants=None,
-        controls=frozenset(),
-        initialized=None,
-    ):
-        # Names mark whole values; (name, field) tracks partial local construction.
-        initialized = set(parameters if initialized is None else initialized)
-        parameters, types, constants = (
-            dict(parameters),
-            dict(types),
-            dict(constants or {}),
-        )
-        dependencies, collective = set(), False
-        for statement in _statements(body):
-            member = None
-            if isinstance(statement, ExpressionStatementNode):
-                statement = statement.expression
-            if isinstance(statement, (VariableNode, AssignmentNode, ReturnNode)):
-                if isinstance(statement, VariableNode):
-                    allowed_qualifiers = {"const", "thread"}
-                    if _type_name(statement.var_type) in floats:
-                        allowed_qualifiers.add("precise")
-                    if (
-                        statement.name in types
-                        or statement.name in controls
-                        or statement.attributes
-                        or set(statement.qualifiers or []) - allowed_qualifiers
-                        or set(getattr(statement.var_type, "qualifiers", []) or [])
-                        - allowed_qualifiers
-                    ):
-                        return None
-                    name, target, value = (
-                        statement.name,
-                        _type_name(statement.var_type),
-                        statement.initial_value,
-                    )
-                    if value is None and target in value_structs:
-                        parameters[name], types[name] = frozenset(), target
-                        initialized.discard(name)
-                        continue
-                    if value is None and target in empty_types:
-                        parameters[name], types[name] = frozenset(), target
-                        initialized.add(name)
-                        continue
-                elif isinstance(statement, AssignmentNode):
-                    destination = statement.target
-                    if isinstance(destination, MemberAccessNode):
-                        member = destination.member
-                        destination = destination.object_expr
-                    operator = map_operator(statement.operator)
-                    compound = (
-                        operator[:-1]
-                        if member is None
-                        and operator in {"+=", "-=", "*=", "&=", "|=", "^="}
-                        else None
-                    )
-                    if (
-                        not isinstance(destination, IdentifierNode)
-                        or destination.name not in parameters
-                        or destination.name in controls
-                        or (operator != "=" and compound is None)
-                    ):
-                        return None
-                    name = destination.name
-                    target, value = types[name], statement.value
-                    if compound is not None:
-                        # `x op= v` reads the current whole value of `x`.
-                        value = BinaryOpNode(IdentifierNode(name), compound, value)
-                    if member is not None:
-                        target = value_structs.get(target, {}).get(member)
-                        if target is None:
-                            return None
-                else:
-                    name, target, value = None, result_type, statement.value
-                if isinstance(value, ArrayLiteralNode) and target in value_structs:
-                    value = ConstructorNode(NamedType(target), value.elements)
-                proof = expression_inputs(
-                    value, parameters, types, visiting, initialized
-                )
-                if (
-                    proof is None
-                    or target is not None
-                    and not converts_safely(target, value, types)
-                ):
-                    return None
-                if name is not None:
-                    if member is None:
-                        parameters[name], types[name] = proof[0], target
-                        initialized.add(name)
-                    else:
-                        parameters[name] |= proof[0]
-                        initialized.add((name, member))
-                        if all(
-                            (name, field) in initialized
-                            for field in value_structs[types[name]]
-                        ):
-                            initialized.add(name)
-                    constants.pop(name, None)
-                    if isinstance(statement, VariableNode) and "const" in set(
-                        statement.qualifiers or []
-                    ) | set(getattr(statement.var_type, "qualifiers", []) or []):
-                        constant = checked_induction_value(value, constants)
-                        if constant is not None:
-                            constants[name] = constant
-            elif isinstance(statement, (BlockNode, IfNode)):
-                if isinstance(statement, BlockNode):
-                    branches, conditions = [statement], []
-                elif (
-                    isinstance(statement.condition, LiteralNode)
-                    and type(statement.condition.value) is bool
-                    and not statement.else_if_conditions
-                    and not statement.else_if_bodies
-                ):
-                    branches = [
-                        (
-                            statement.then_branch
-                            if statement.condition.value
-                            else statement.else_branch
-                        )
-                    ]
-                    conditions = []
-                else:
-                    branches = [
-                        statement.then_branch,
-                        *statement.else_if_bodies,
-                        statement.else_branch,
-                    ]
-                    conditions = [statement.condition, *statement.else_if_conditions]
-                proofs = [
-                    expression_inputs(
-                        condition, parameters, types, visiting, initialized
-                    )
-                    for condition in conditions
-                ]
-                results = [
-                    body_inputs(
-                        branch,
-                        parameters,
-                        types,
-                        visiting,
-                        result_type,
-                        constants,
-                        controls,
-                        initialized,
-                    )
-                    for branch in branches
-                ]
-                if any(proof is None for proof in [*proofs, *results]):
-                    return None
-                proofs += [result[:2] for result in results]
-                if conditions and any(proof[1] for proof in proofs):
-                    return None
-                proof = frozenset().union(*(proof[0] for proof in proofs)), any(
-                    proof[1] for proof in proofs
-                )
-                for name in parameters:
-                    parameters[name] |= frozenset().union(
-                        *(result[2][name] for result in results)
-                    )
-                initialized.intersection_update(*(result[4] for result in results))
-                constants = {
-                    name: value
-                    for name, value in constants.items()
-                    if all(result[3].get(name) == value for result in results)
-                }
-            elif isinstance(statement, ForNode):
-                initial, condition, update = (
-                    statement.init,
-                    statement.condition,
-                    statement.update,
-                )
-                if (
-                    not isinstance(initial, VariableNode)
-                    or initial.name in parameters
-                    or initial.name in controls
-                    or initial.attributes
-                    or initial.qualifiers
-                    or not isinstance(condition, BinaryOpNode)
-                    or not isinstance(condition.left, IdentifierNode)
-                    or condition.left.name != initial.name
-                    or not isinstance(update, (AssignmentNode, UnaryOpNode))
-                ):
-                    return None
-                target = (
-                    update.target
-                    if isinstance(update, AssignmentNode)
-                    else update.operand
-                )
-                if (
-                    not isinstance(target, IdentifierNode)
-                    or target.name != initial.name
-                ):
-                    return None
-                terminate = (
-                    geometric_loop_terminates
-                    if map_operator(update.operator) in {"*=", "<<="}
-                    else fixed_stride_loop_terminates
-                )
-                if not terminate(
-                    _type_name(initial.var_type),
-                    initial.initial_value,
-                    condition.right,
-                    update,
-                    constants,
-                    map_operator(condition.operator),
-                ):
-                    return None
-                if any(
-                    isinstance(child, ReturnNode) for child in walk_ast(statement.body)
-                ):
-                    return None
-                nested_parameters = {**parameters, initial.name: frozenset()}
-                nested_types = {**types, initial.name: _type_name(initial.var_type)}
-                loop_controls = (
-                    controls
-                    | {initial.name}
-                    | {
-                        child.name
-                        for root in (condition.right, update)
-                        for child in walk_ast(root)
-                        if isinstance(child, IdentifierNode)
-                    }
-                )
-                result = body_inputs(
-                    statement.body,
-                    nested_parameters,
-                    nested_types,
-                    visiting,
-                    result_type,
-                    constants,
-                    loop_controls,
-                    initialized | {initial.name},
-                )
-                if result is None:
-                    return None
-                proof = result[:2]
-                for name in parameters:
-                    parameters[name] |= result[2][name]
-                initialized.intersection_update(result[4])
-                constants = {
-                    name: value
-                    for name, value in constants.items()
-                    if result[3].get(name) == value
-                }
-            else:
-                return None
-            dependencies.update(proof[0])
-            collective |= proof[1]
-        return frozenset(dependencies), collective, parameters, constants, initialized
-
-    def wrapper(call, visiting=frozenset(), *, allow_pure=False, types=None):
-        if getattr(call, "generic_args", None):
-            return None
-        function = resolve_function(call, types or {})
-        if function is None:
-            return None
-        key = id(function)
-        if key in visiting:
-            return None
-        if key not in summaries:
-            statements = _statements(function.body)
-            proof = None
-            if (
-                statements
-                and _always_returns(statements)
-                and _type_name(function.return_type) in value_types
-                and not getattr(function, "generic_params", None)
-                and not any(
-                    set(parameter.qualifiers or []) & {"out", "volatile"}
-                    or set(getattr(parameter.param_type, "qualifiers", []) or [])
-                    & {"volatile"}
-                    for parameter in function.parameters
-                )
-            ):
-                proof = body_inputs(
-                    statements,
-                    {
-                        parameter.name: frozenset({i})
-                        for i, parameter in enumerate(function.parameters)
-                    },
-                    {
-                        parameter.name: _type_name(parameter.param_type)
-                        for parameter in function.parameters
-                    },
-                    visiting | {key},
-                    _type_name(function.return_type),
-                )
-            if proof is not None:
-                for index, parameter in enumerate(function.parameters):
-                    if (
-                        index not in proof[0]
-                        and _type_name(parameter.param_type) in empty_types
-                    ):
-                        continue
-                    if _type_name(parameter.param_type) not in value_types or (
-                        set(parameter.qualifiers or [])
-                        | set(getattr(parameter.param_type, "qualifiers", []) or [])
-                    ) & {
-                        "out",
-                        "inout",
-                        "volatile",
-                        "device",
-                        "constant",
-                        "threadgroup",
-                        "groupshared",
-                    }:
-                        proof = None
-                        break
-            summaries[key] = proof[:2] if proof is not None else None
-        proof = summaries[key]
-        if proof is None or not (allow_pure or proof[1]):
-            return None
-        return (function, *proof) if allow_pure else (function, proof[0])
-
-    def root_name(node):
-        while isinstance(node, (ArrayAccessNode, MemberAccessNode)):
-            node = (
-                node.array_expr
-                if isinstance(node, ArrayAccessNode)
-                else node.object_expr
-            )
-        if isinstance(node, UnaryOpNode) and map_operator(node.operator) == "&":
-            return root_name(node.operand)
-        return node.name if isinstance(node, IdentifierNode) else None
-
+    facts = _ConditionalCallFacts(
+        map_operator=map_operator,
+        walk_ast=walk_ast,
+        functions=functions,
+        operations=operations,
+        summaries=summaries,
+        floats=floats,
+        scalar_types=scalar_types,
+        bitcast_widths=bitcast_widths,
+        value_structs=value_structs,
+        value_types=value_types,
+        pure_float_arities=pure_float_arities,
+        empty_types=empty_types,
+        trusted_helpers=trusted_helpers,
+    )
+    wrapper = facts.wrapper
+    root_name = facts.root_name
     declared = {
         node.name
         for node in nodes

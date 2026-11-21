@@ -219,6 +219,16 @@ def descriptor_reading(opaque: str) -> tuple[Type, str] | None:
     )
 
 
+# DXC's BuiltInTrianglePositions, the three object-space vertex positions of a hit triangle that
+# TriangleObjectPositions returns (HLSL shader model 6.10), as the intrinsic table spells it.
+TRIANGLE_POSITIONS = "triangle_positions"
+
+
+def struct_reading(opaque: str) -> tuple[Type, str] | None:
+    """How a probe reads a built-in struct that a call returns: through its first member."""
+    return (Type("float", (3,)), "{}.p0") if opaque == TRIANGLE_POSITIONS else None
+
+
 _TUPLE = re.compile(r"Tuple<(\w+)((?:, \1)*)>")
 
 

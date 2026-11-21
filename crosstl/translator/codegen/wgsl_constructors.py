@@ -8,6 +8,7 @@ from ..ast import (
 )
 from ..refusals import WGSLRefusal
 from .generic_struct_utils import named_struct_constructor_arguments
+from .wgsl_matrix_resize import wgsl_matrix_resize
 
 
 class WGSLConstructorMixin:
@@ -41,6 +42,9 @@ class WGSLConstructorMixin:
             )
             if diagonal is not None:
                 return diagonal
+            resized = wgsl_matrix_resize(self, node.constructor_type, node.arguments[0])
+            if resized is not None:
+                return resized
         vector_shape = self.vector_shape(node.constructor_type)
         if vector_shape is not None:
             element_type, _size = vector_shape

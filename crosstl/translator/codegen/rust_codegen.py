@@ -3,10 +3,12 @@
 from ..ast import ArrayNode, EnumNode, FunctionNode, StructNode
 from ..explicit_specializations import explicit_specialization_refusals
 from ..refusals import RustRefusal
+from ..unhandled import UNHANDLED
 from .c_reference_parameters import is_output_parameter
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .lowering_refusals import LoweringRefusalMixin
 from .precise_evaluation import refuse_precise_evaluation
+from .rust_builtin_result_types import RustBuiltinResultTypeMixin
 from .rust_callables import RustCallableMixin
 from .rust_exact_lookups import (
     rust_generic_template_reason,
@@ -30,6 +32,12 @@ from .rust_result_types import RustResultTypeMixin
 from .rust_return_values import RustReturnValueMixin
 from .rust_stage_contracts import RustStageContractMixin
 from .rust_statements import RustStatementMixin
+from .rust_tables import (
+    RUST_FUNCTION_MAP,
+    RUST_SEMANTIC_MAP,
+    RUST_SYNC_MAP,
+    RUST_WAVE_OP_MAP,
+)
 from .rust_type_definitions import RustTypeDefinitionMixin
 from .rust_values import RustValueMixin
 from .sampler_pairs import canonicalize_separate_textures
@@ -54,6 +62,7 @@ class RustCodeGen(
     RustResourceAttributeMixin,
     RustOutputParameterMixin,
     LoweringRefusalMixin,
+    RustBuiltinResultTypeMixin,
 ):
     """Emit Rust-like GPU shader source from the shared CrossGL AST."""
 
@@ -265,321 +274,11 @@ class RustCodeGen(
             ),
         }
 
-        self.semantic_map = {
-            # Vertex attributes
-            "gl_VertexID": "vertex_id",
-            "gl_InstanceID": "instance_id",
-            "gl_BaseVertex": "start_vertex_location",
-            "gl_BaseInstance": "start_instance_location",
-            "gl_DrawID": "draw_id",
-            "gl_Position": "position",
-            "gl_PointSize": "point_size",
-            "gl_ClipDistance": "clip_distance",
-            "SV_Position": "position",
-            "SV_VertexID": "vertex_id",
-            "SV_InstanceID": "instance_id",
-            "SV_StartVertexLocation": "start_vertex_location",
-            "SV_StartInstanceLocation": "start_instance_location",
-            "SV_DrawID": "draw_id",
-            # Fragment attributes
-            "gl_FragColor": "target(0)",
-            "gl_FragColor0": "target(0)",
-            "gl_FragColor1": "target(1)",
-            "gl_FragColor2": "target(2)",
-            "gl_FragColor3": "target(3)",
-            "gl_FragDepth": "depth(any)",
-            "gl_FragCoord": "frag_coord",
-            "gl_FrontFacing": "front_facing",
-            "gl_PointCoord": "point_coord",
-            "gl_PrimitiveID": "primitive_id",
-            "gl_SampleID": "sample_index",
-            "SV_Target": "target(0)",
-            "SV_Target0": "target(0)",
-            "SV_Target1": "target(1)",
-            "SV_Target2": "target(2)",
-            "SV_Target3": "target(3)",
-            "SV_Target4": "target(4)",
-            "SV_Target5": "target(5)",
-            "SV_Target6": "target(6)",
-            "SV_Target7": "target(7)",
-            "SV_Depth": "depth(any)",
-            "SV_IsFrontFace": "front_facing",
-            "SV_PrimitiveID": "primitive_id",
-            "SV_SampleIndex": "sample_index",
-            # Compute attributes
-            "gl_WorkGroupID": "workgroup_id",
-            "gl_LocalInvocationID": "local_invocation_id",
-            "gl_GlobalInvocationID": "global_invocation_id",
-            "gl_LocalInvocationIndex": "local_invocation_index",
-            "SV_GroupID": "workgroup_id",
-            "SV_GroupThreadID": "local_invocation_id",
-            "SV_DispatchThreadID": "global_invocation_id",
-            "SV_GroupIndex": "local_invocation_index",
-            # Tessellation attributes
-            "gl_InvocationID": "output_control_point_id",
-            "gl_PrimitiveIDIn": "primitive_id",
-            "gl_TessCoord": "domain_location",
-            "SV_OutputControlPointID": "output_control_point_id",
-            "SV_DomainLocation": "domain_location",
-            # Ray tracing attributes
-            "payload": "ray_payload",
-            "rayPayloadEXT": "ray_payload",
-            "rayPayloadInEXT": "ray_payload",
-            "hit_attribute": "hit_attribute",
-            "hitAttributeEXT": "hit_attribute",
-            "callable_data": "callable_data",
-            "callableDataEXT": "callable_data",
-            "callableDataInEXT": "callable_data",
-            "gl_LaunchIDEXT": "launch_id",
-            "gl_LaunchSizeEXT": "launch_size",
-            "gl_HitTEXT": "hit_t",
-            "gl_HitKindEXT": "hit_kind",
-            "SV_DispatchRaysIndex": "launch_id",
-            "SV_DispatchRaysDimensions": "launch_size",
-            # Standard vertex semantics
-            "POSITION": "position",
-            "NORMAL": "normal",
-            "TANGENT": "tangent",
-            "BINORMAL": "binormal",
-            "TEXCOORD": "texcoord",
-            "TEXCOORD0": "texcoord(0)",
-            "TEXCOORD1": "texcoord(1)",
-            "TEXCOORD2": "texcoord(2)",
-            "TEXCOORD3": "texcoord(3)",
-            "COLOR": "color",
-            "COLOR0": "color(0)",
-            "COLOR1": "color(1)",
-        }
+        self.semantic_map = dict(RUST_SEMANTIC_MAP)
 
-        # Function mapping for common shader functions
-        self.function_map = {
-            "texture": "sample",
-            "textureLod": "sample_lod",
-            "textureLodOffset": "sample_lod_offset",
-            "textureGrad": "sample_grad",
-            "textureGradOffset": "sample_grad_offset",
-            "textureOffset": "sample_offset",
-            "textureProj": "sample_projected",
-            "textureProjLod": "sample_projected_lod",
-            "textureProjGrad": "sample_projected_grad",
-            "textureProjOffset": "sample_projected_offset",
-            "textureProjLodOffset": "sample_projected_lod_offset",
-            "textureProjGradOffset": "sample_projected_grad_offset",
-            "texelFetch": "texel_fetch",
-            "texelFetchOffset": "texel_fetch_offset",
-            "textureQueryLevels": "texture_query_levels",
-            "textureQueryLod": "texture_query_lod",
-            "textureSamples": "texture_samples",
-            "imageLoad": "image_load",
-            "imageStore": "image_store",
-            "imageSize": "image_size",
-            "imageSamples": "image_samples",
-            "imageAtomicAdd": "image_atomic_add",
-            "imageAtomicMin": "image_atomic_min",
-            "imageAtomicMax": "image_atomic_max",
-            "imageAtomicAnd": "image_atomic_and",
-            "imageAtomicOr": "image_atomic_or",
-            "imageAtomicXor": "image_atomic_xor",
-            "imageAtomicExchange": "image_atomic_exchange",
-            "imageAtomicCompSwap": "image_atomic_comp_swap",
-            "TraceRay": "trace_ray",
-            "CallShader": "call_shader",
-            "ReportHit": "report_hit",
-            "IgnoreHit": "ignore_hit",
-            "AcceptHitAndEndSearch": "accept_hit_and_end_search",
-            "textureCompare": "texture_compare",
-            "textureCompareOffset": "texture_compare_offset",
-            "textureCompareLod": "texture_compare_lod",
-            "textureCompareLodOffset": "texture_compare_lod_offset",
-            "textureCompareGrad": "texture_compare_grad",
-            "textureCompareGradOffset": "texture_compare_grad_offset",
-            "textureCompareProj": "texture_compare_projected",
-            "textureCompareProjOffset": "texture_compare_projected_offset",
-            "textureCompareProjLod": "texture_compare_projected_lod",
-            "textureCompareProjLodOffset": "texture_compare_projected_lod_offset",
-            "textureCompareProjGrad": "texture_compare_projected_grad",
-            "textureCompareProjGradOffset": "texture_compare_projected_grad_offset",
-            "textureGatherCompare": "texture_gather_compare",
-            "textureGatherCompareOffset": "texture_gather_compare_offset",
-            "normalize": "normalize",
-            "dot": "dot",
-            "cross": "cross",
-            "length": "length",
-            "distance": "distance",
-            "reflect": "reflect",
-            "refract": "refract",
-            "faceforward": "faceforward",
-            "outerProduct": "outer_product",
-            "transpose": "transpose",
-            "determinant": "determinant",
-            "inverse": "inverse",
-            "matrixCompMult": "matrix_comp_mult",
-            "sin": "sin",
-            "cos": "cos",
-            "tan": "tan",
-            "asin": "asin",
-            "acos": "acos",
-            "atan": "atan",
-            "atan2": "atan2",
-            "sinh": "sinh",
-            "cosh": "cosh",
-            "tanh": "tanh",
-            "degrees": "degrees",
-            "radians": "radians",
-            "sqrt": "sqrt",
-            "rcp": "rcp",
-            "inversesqrt": "rsqrt",
-            "inverseSqrt": "rsqrt",
-            "pow": "pow",
-            "trunc": "trunc",
-            "roundEven": "round_even",
-            "fma": "fma",
-            "mad": "fma",
-            "ldexp": "ldexp",
-            "exp": "exp",
-            "exp2": "exp2",
-            "log": "log",
-            "log2": "log2",
-            "abs": "abs",
-            "sign": "sign",
-            "isnan": "isnan",
-            "isinf": "isinf",
-            "isfinite": "isfinite",
-            "any": "any",
-            "all": "all",
-            "lessThan": "less_than",
-            "lessThanEqual": "less_than_equal",
-            "greaterThan": "greater_than",
-            "greaterThanEqual": "greater_than_equal",
-            "equal": "equal",
-            "notEqual": "not_equal",
-            "bitCount": "bit_count",
-            "bitfieldReverse": "bitfield_reverse",
-            "findLSB": "find_lsb",
-            "findMSB": "find_msb",
-            "bitfieldExtract": "bitfield_extract",
-            "bitfieldInsert": "bitfield_insert",
-            "floatBitsToInt": "float_bits_to_int",
-            "floatBitsToUint": "float_bits_to_uint",
-            "intBitsToFloat": "int_bits_to_float",
-            "uintBitsToFloat": "uint_bits_to_float",
-            "doubleBitsToLong": "double_bits_to_long",
-            "longBitsToDouble": "long_bits_to_double",
-            "packUnorm2x16": "pack_unorm_2x16",
-            "packSnorm2x16": "pack_snorm_2x16",
-            "packUnorm4x8": "pack_unorm_4x8",
-            "packSnorm4x8": "pack_snorm_4x8",
-            "packHalf2x16": "pack_half_2x16",
-            "packDouble2x32": "pack_double_2x32",
-            "unpackUnorm2x16": "unpack_unorm_2x16",
-            "unpackSnorm2x16": "unpack_snorm_2x16",
-            "unpackUnorm4x8": "unpack_unorm_4x8",
-            "unpackSnorm4x8": "unpack_snorm_4x8",
-            "unpackHalf2x16": "unpack_half_2x16",
-            "unpackDouble2x32": "unpack_double_2x32",
-            "min": "min",
-            "max": "max",
-            "clamp": "clamp",
-            "mix": "lerp",
-            "smoothstep": "smoothstep",
-            "step": "step",
-            "dFdx": "dfdx",
-            "dFdy": "dfdy",
-            "ddx": "dfdx",
-            "ddy": "dfdy",
-            "dFdxFine": "dfdx_fine",
-            "dFdyFine": "dfdy_fine",
-            "ddx_fine": "dfdx_fine",
-            "ddy_fine": "dfdy_fine",
-            "dFdxCoarse": "dfdx_coarse",
-            "dFdyCoarse": "dfdy_coarse",
-            "ddx_coarse": "dfdx_coarse",
-            "ddy_coarse": "dfdy_coarse",
-            "fwidth": "fwidth",
-            "fwidthFine": "fwidth_fine",
-            "fwidthCoarse": "fwidth_coarse",
-            "floor": "floor",
-            "ceil": "ceil",
-            "round": "round",
-            "frac": "fract",
-            "fract": "fract",
-            "mod": "modulo",
-            "fmod": "modulo",
-            "barrier": "workgroup_barrier",
-            "workgroupBarrier": "workgroup_barrier",
-            "workgroupExecutionBarrier": "workgroup_barrier",
-            "memoryBarrier": "memory_barrier",
-            "memoryBarrierShared": "memory_barrier_shared",
-            "memoryBarrierBuffer": "memory_barrier_buffer",
-            "memoryBarrierImage": "memory_barrier_image",
-            "groupMemoryBarrier": "group_memory_barrier",
-            "allMemoryBarrier": "all_memory_barrier",
-            "deviceMemoryBarrier": "device_memory_barrier",
-            "GroupMemoryBarrier": "group_memory_barrier",
-            "GroupMemoryBarrierWithGroupSync": "group_memory_barrier_with_group_sync",
-            "DeviceMemoryBarrier": "device_memory_barrier",
-            "DeviceMemoryBarrierWithGroupSync": "device_memory_barrier_with_group_sync",
-            "AllMemoryBarrier": "all_memory_barrier",
-            "AllMemoryBarrierWithGroupSync": "all_memory_barrier_with_group_sync",
-            "WaveShuffle": "subgroup_shuffle",
-            "WaveShuffleXor": "subgroup_shuffle_xor",
-            "__shfl_down_sync": "subgroup_shuffle_down",
-        }
-        self.wave_op_map = {
-            "WaveActiveSum": "subgroup_add",
-            "WaveActiveProduct": "subgroup_mul",
-            "WaveActiveMin": "subgroup_min",
-            "WaveActiveMax": "subgroup_max",
-            "WaveActiveAnyTrue": "subgroup_any",
-            "WaveActiveAllTrue": "subgroup_all",
-            "WaveActiveAllEqual": "subgroup_all_equal",
-            "WaveActiveBallot": "subgroup_ballot",
-            "WaveActiveCountBits": "subgroup_ballot_bit_count",
-            "WaveActiveBitAnd": "subgroup_and",
-            "WaveActiveBitOr": "subgroup_or",
-            "WaveActiveBitXor": "subgroup_xor",
-            "WaveGetLaneCount": "subgroup_size",
-            "WaveGetLaneIndex": "subgroup_invocation_id",
-            "WaveIsFirstLane": "subgroup_elect",
-            "WaveReadLaneFirst": "subgroup_broadcast_first",
-            "WaveReadLaneAt": "subgroup_broadcast",
-            "WavePrefixSum": "subgroup_exclusive_add",
-            "WavePrefixProduct": "subgroup_exclusive_mul",
-            "WavePrefixCountBits": "subgroup_exclusive_ballot_bit_count",
-            "WaveMatch": "subgroup_match",
-            "WaveMultiPrefixSum": "subgroup_partitioned_add",
-            "WaveMultiPrefixProduct": "subgroup_partitioned_mul",
-            "WaveMultiPrefixCountBits": "subgroup_partitioned_ballot_bit_count",
-            "WaveMultiPrefixBitAnd": "subgroup_partitioned_and",
-            "WaveMultiPrefixBitOr": "subgroup_partitioned_or",
-            "WaveMultiPrefixBitXor": "subgroup_partitioned_xor",
-            "QuadReadLaneAt": "subgroup_quad_broadcast",
-            "QuadReadAcrossX": "subgroup_quad_swap_horizontal",
-            "QuadReadAcrossY": "subgroup_quad_swap_vertical",
-            "QuadReadAcrossDiagonal": "subgroup_quad_swap_diagonal",
-            "QuadAny": "subgroup_quad_any",
-            "QuadAll": "subgroup_quad_all",
-            "WaveShuffle": "subgroup_shuffle",
-            "WaveShuffleXor": "subgroup_shuffle_xor",
-        }
-        self.sync_map = {
-            "barrier": "workgroup_barrier",
-            "workgroupBarrier": "workgroup_barrier",
-            "workgroupExecutionBarrier": "workgroup_barrier",
-            "memoryBarrier": "memory_barrier",
-            "memoryBarrierShared": "memory_barrier_shared",
-            "memoryBarrierBuffer": "memory_barrier_buffer",
-            "memoryBarrierImage": "memory_barrier_image",
-            "groupMemoryBarrier": "group_memory_barrier",
-            "allMemoryBarrier": "all_memory_barrier",
-            "deviceMemoryBarrier": "device_memory_barrier",
-            "GroupMemoryBarrier": "group_memory_barrier",
-            "GroupMemoryBarrierWithGroupSync": "group_memory_barrier_with_group_sync",
-            "DeviceMemoryBarrier": "device_memory_barrier",
-            "DeviceMemoryBarrierWithGroupSync": "device_memory_barrier_with_group_sync",
-            "AllMemoryBarrier": "all_memory_barrier",
-            "AllMemoryBarrierWithGroupSync": "all_memory_barrier_with_group_sync",
-        }
+        self.function_map = dict(RUST_FUNCTION_MAP)
+        self.wave_op_map = dict(RUST_WAVE_OP_MAP)
+        self.sync_map = dict(RUST_SYNC_MAP)
         self.variable_types = {}
         self.local_variable_names = set()
         self.lazy_static_names = set()
@@ -1288,282 +987,19 @@ class RustCodeGen(
         if wave_type is not None:
             return wave_type
 
-        if mapped_name in {
-            "sample",
-            "sample_bias",
-            "sample_sampler",
-            "sample_bias_sampler",
-            "sample_lod",
-            "sample_lod_sampler",
-            "sample_lod_offset",
-            "sample_lod_offset_sampler",
-            "sample_grad",
-            "sample_grad_sampler",
-            "sample_grad_offset",
-            "sample_grad_offset_sampler",
-            "sample_offset",
-            "sample_offset_bias",
-            "sample_offset_sampler",
-            "sample_offset_bias_sampler",
-            "sample_projected",
-            "sample_projected_bias",
-            "sample_projected_sampler",
-            "sample_projected_bias_sampler",
-            "sample_projected_lod",
-            "sample_projected_lod_sampler",
-            "sample_projected_grad",
-            "sample_projected_grad_sampler",
-            "sample_projected_offset",
-            "sample_projected_offset_bias",
-            "sample_projected_offset_sampler",
-            "sample_projected_offset_bias_sampler",
-            "sample_projected_lod_offset",
-            "sample_projected_lod_offset_sampler",
-            "sample_projected_grad_offset",
-            "sample_projected_grad_offset_sampler",
-            "texel_fetch",
-            "texel_fetch_offset",
-        }:
-            if arg_types:
-                return self.texture_sample_result_type(arg_types[0])
-            return "vec4"
+        handled = self.rust_resource_builtin_result_type(
+            func_name, arg_types, mapped_name
+        )
+        if handled is not UNHANDLED:
+            return handled
 
-        if mapped_name in {
-            "texture_gather",
-            "texture_gather_sampler",
-            "texture_gather_component",
-            "texture_gather_component_sampler",
-            "texture_gather_offset",
-            "texture_gather_offset_sampler",
-            "texture_gather_offset_component",
-            "texture_gather_offset_component_sampler",
-            "texture_gather_offsets",
-            "texture_gather_offsets_sampler",
-            "texture_gather_offsets_component",
-            "texture_gather_offsets_component_sampler",
-        }:
-            if arg_types:
-                return self.texture_gather_result_type(arg_types[0])
-            return "vec4"
+        handled = self.rust_math_builtin_result_type(arg_types, mapped_name)
+        if handled is not UNHANDLED:
+            return handled
 
-        if mapped_name.startswith("sample_shadow"):
-            return "float"
-
-        if mapped_name in {"texture_size", "texture_size_lod"} and arg_types:
-            if func_name == "textureDimensions":
-                return self.texture_dimensions_result_type(arg_types[0])
-            return self.texture_size_result_type(arg_types[0])
-
-        if mapped_name in {"texture_query_levels", "texture_samples"}:
-            return "int"
-
-        if mapped_name in {"texture_query_lod", "texture_query_lod_sampler"}:
-            return "vec2"
-
-        if mapped_name.startswith("texture_compare"):
-            return "float"
-
-        if mapped_name.startswith("texture_gather_compare"):
-            return "vec4"
-
-        if mapped_name in {"image_load", "image_load_sample"} and arg_types:
-            return self.storage_image_value_result_type(arg_types[0])
-
-        if mapped_name == "image_size" and arg_types:
-            return self.storage_image_size_result_type(arg_types[0])
-
-        if mapped_name == "image_samples":
-            return "int"
-
-        if mapped_name.startswith("image_atomic_") and arg_types:
-            return self.storage_image_atomic_result_type(arg_types[0])
-
-        if mapped_name == "buffer_load" and arg_types:
-            return self.buffer_element_result_type(arg_types[0])
-
-        if mapped_name == "buffer_consume" and arg_types:
-            return self.buffer_element_result_type(arg_types[0])
-
-        if mapped_name in {
-            "image_store",
-            "image_store_sample",
-            "buffer_store",
-            "buffer_dimensions",
-            "buffer_append",
-        }:
-            return "void"
-
-        if (
-            mapped_name in {"normalize", "reflect", "refract", "faceforward"}
-            and arg_types
-        ):
-            return arg_types[0]
-
-        if mapped_name == "cross" and len(arg_types) >= 2:
-            return self.promoted_value_type(arg_types[0], arg_types[1]) or arg_types[0]
-
-        if mapped_name in {"dot", "length", "distance"} and arg_types:
-            return self.vector_or_scalar_component_type(arg_types[0])
-
-        if mapped_name == "outer_product" and len(arg_types) >= 2:
-            return self.outer_product_result_type(arg_types[0], arg_types[1])
-
-        if mapped_name == "matrix_comp_mult" and len(arg_types) >= 2:
-            return self.promoted_matrix_type(arg_types[0], arg_types[1])
-
-        if mapped_name == "transpose" and arg_types:
-            matrix_info = self.matrix_type_info(arg_types[0])
-            if matrix_info is not None:
-                return self.matrix_type_for_dimensions(
-                    matrix_info["component_type"],
-                    matrix_info["rows"],
-                    matrix_info["columns"],
-                )
-
-        if mapped_name == "determinant" and arg_types:
-            matrix_info = self.matrix_type_info(arg_types[0])
-            if matrix_info is not None:
-                return matrix_info["component_type"]
-
-        if mapped_name == "inverse" and arg_types:
-            matrix_info = self.matrix_type_info(arg_types[0])
-            if matrix_info is not None:
-                return arg_types[0]
-
-        if (
-            mapped_name in {
-                "sqrt",
-                "rcp",
-                "rsqrt",
-                "abs",
-                "floor",
-                "ceil",
-                "round",
-                "trunc",
-                "round_even",
-                "sin",
-                "cos",
-                "tan",
-                "asin",
-                "acos",
-                "atan",
-                "sinh",
-                "cosh",
-                "tanh",
-                "exp",
-                "exp2",
-                "log",
-                "log2",
-                "degrees",
-                "radians",
-                "fract",
-                "sign",
-            }
-            and arg_types
-        ):
-            return arg_types[0]
-
-        if mapped_name in {"isnan", "isinf", "isfinite"} and arg_types:
-            return self.boolean_value_type(arg_types[0])
-
-        if mapped_name in {"any", "all"} and arg_types:
-            return "bool"
-
-        relational_operator = {
-            "less_than": "<",
-            "less_than_equal": "<=",
-            "greater_than": ">",
-            "greater_than_equal": ">=",
-            "equal": "==",
-            "not_equal": "!=",
-        }.get(mapped_name)
-        if relational_operator is not None and len(arg_types) >= 2:
-            return self.relational_function_result_type(
-                arg_types[0], arg_types[1], relational_operator
-            )
-
-        if mapped_name in {"bit_count", "find_lsb", "find_msb"} and arg_types:
-            return self.integer_index_value_type(arg_types[0])
-
-        if mapped_name in {"bitfield_reverse", "bitfield_extract"} and arg_types:
-            return arg_types[0]
-
-        if mapped_name == "bitfield_insert" and len(arg_types) >= 2:
-            return self.promoted_value_type(arg_types[0], arg_types[1]) or arg_types[0]
-
-        bitcast_component_type = {
-            "double_bits_to_long": "ulong",
-            "float_bits_to_int": "int",
-            "float_bits_to_uint": "uint",
-            "int_bits_to_float": "float",
-            "long_bits_to_double": "double",
-            "uint_bits_to_float": "float",
-        }.get(mapped_name)
-        if bitcast_component_type is not None and arg_types:
-            return self.bitcast_value_type(arg_types[0], bitcast_component_type)
-
-        if mapped_name in {
-            "pack_unorm_2x16",
-            "pack_snorm_2x16",
-            "pack_unorm_4x8",
-            "pack_snorm_4x8",
-            "pack_half_2x16",
-        }:
-            return "uint"
-
-        if mapped_name == "pack_double_2x32":
-            return "double"
-
-        unpack_vector_type = {
-            "unpack_unorm_2x16": "vec2",
-            "unpack_snorm_2x16": "vec2",
-            "unpack_half_2x16": "vec2",
-            "unpack_double_2x32": "uvec2",
-            "unpack_unorm_4x8": "vec4",
-            "unpack_snorm_4x8": "vec4",
-        }.get(mapped_name)
-        if unpack_vector_type is not None:
-            return unpack_vector_type
-
-        if (
-            mapped_name in {"min", "max", "pow", "modulo", "atan2"}
-            and len(arg_types) >= 2
-        ):
-            return self.promoted_value_type(arg_types[0], arg_types[1])
-
-        if mapped_name == "fma" and len(arg_types) >= 3:
-            return self.promoted_argument_type(arg_types[:3])
-
-        if mapped_name == "ldexp" and arg_types:
-            return arg_types[0]
-
-        if mapped_name == "clamp" and arg_types:
-            return self.promoted_argument_type(arg_types[:3])
-
-        if mapped_name == "lerp" and len(arg_types) >= 2:
-            return self.promoted_value_type(arg_types[0], arg_types[1])
-
-        if mapped_name == "smoothstep" and len(arg_types) >= 3:
-            return self.promoted_argument_type(arg_types[:3])
-
-        if mapped_name == "step" and len(arg_types) >= 2:
-            return self.promoted_argument_type(arg_types[:2])
-
-        if (
-            mapped_name in {
-                "dfdx",
-                "dfdy",
-                "dfdx_fine",
-                "dfdy_fine",
-                "dfdx_coarse",
-                "dfdy_coarse",
-                "fwidth",
-                "fwidth_fine",
-                "fwidth_coarse",
-            }
-            and arg_types
-        ):
-            return arg_types[0]
+        handled = self.rust_bitwise_numeric_builtin_result_type(arg_types, mapped_name)
+        if handled is not UNHANDLED:
+            return handled
 
         return None
 
