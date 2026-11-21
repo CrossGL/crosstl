@@ -1193,6 +1193,10 @@ class GLSLCodeGen(
                     records.append((name, node))
                     continue
                 operation = self.glsl_wave_operation_name(name)
+            if operation == "WaveGetLaneIndex":
+                # A lane query exchanges nothing: under software lowering it
+                # is gl_LocalInvocationIndex modulo the width in any function.
+                continue
             if operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
                 records.append((operation, node))
         return records
@@ -1203,6 +1207,12 @@ class GLSLCodeGen(
         return any(
             self.semantic_from_node(node) in inputs
             or (isinstance(node, IdentifierNode) and node.name in inputs)
+            or (isinstance(node, WaveOpNode) and node.operation == "WaveGetLaneIndex")
+            or (
+                isinstance(node, FunctionCallNode)
+                and self.glsl_wave_operation_name(self.function_call_name(node))
+                == "WaveGetLaneIndex"
+            )
             for node in self.walk_ast(root)
         )
 
@@ -10715,6 +10725,12 @@ class GLSLCodeGen(
         diagnostic_operation=None,
         source_location=None,
     ):
+        if (
+            self.software_subgroup_width is not None
+            and operation == "WaveGetLaneIndex"
+            and not arguments
+        ):
+            return self.stage_input_builtin_alias("gl_SubgroupInvocationID", "compute")
         if self.software_subgroup_width is not None:
             return self.generate_glsl_software_subgroup_operation(
                 operation,

@@ -22,6 +22,7 @@ from ..MetalAst import (
     TernaryOpNode,
     VariableNode,
 )
+from ..simdgroup_lane_queries import generate_simdgroup_lane_query
 from ..sparse_color import METAL_SPARSE_TEXTURE_METHODS, import_sparse_color_member
 from ..static_member_calls import unresolved_static_member_call_owner
 from .support import (
@@ -208,6 +209,9 @@ class MetalExpressionMixin:
         )
         if cooperative_matrix_call is not None:
             return cooperative_matrix_call
+        lane_query = generate_simdgroup_lane_query(self, expr)
+        if lane_query is not None:
+            return lane_query
         constructor_arguments = expr.args
         if (
             getattr(expr, "is_braced_constructor", False)
