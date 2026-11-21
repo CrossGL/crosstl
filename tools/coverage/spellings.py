@@ -281,11 +281,13 @@ COUNTERPARTS["metal"].update(
 # Metal functions that take memory flags, which CrossGL writes as the operations the Metal importer makes of them. The
 # probe passes mem_none and memory_order_relaxed. A simdgroup barrier with mem_none is CrossGL's execution-only
 # subgroupExecutionBarrier, and a fence keeps its flags, order and scope as CrossGL constants (:data:`OTHER_NAMES`).
-# CrossGL has no atomic subtraction, so it adds the negated operand, which gives the same wrapped result.
+# CrossGL has no atomic subtraction, so it adds the negated operand, which gives the same wrapped result, for
+# atomic_fetch_sub as for atomic_fetch_sub_explicit.
 COUNTERPARTS["metal"].update(
     {
         "simdgroup_barrier": "void subgroupExecutionBarrier()",
         "atomic_thread_fence": "void atomicThreadFence()",
+        "atomic_fetch_sub": "int atomicAdd(inout int, int)",
         "atomic_fetch_sub_explicit": "int atomicAdd(inout int, int)",
     }
 )
@@ -405,12 +407,13 @@ OTHER_NAMES = {
         ),
     },
     # Metal's fence takes its scope as a third argument that defaults to thread_scope_device (MSL 4.1, "Fence
-    # Functions"). Its atomic_fetch_sub_explicit is an atomicAdd of the negated operand, as the Metal importer
-    # writes it.
+    # Functions"). Its atomic_fetch_sub and atomic_fetch_sub_explicit are an atomicAdd of the negated operand, as the
+    # Metal importer writes them.
     "metal": {
         "atomic_thread_fence": (
             "atomicThreadFence(mem_none, memory_order_relaxed, thread_scope_device)"
         ),
+        "atomic_fetch_sub": "atomicAdd({0}, -({1}))",
         "atomic_fetch_sub_explicit": "atomicAdd({0}, -({1}))",
     },
     # CUDA's fdivide and, without fast math, fdividef return a / b (__clang_cuda_math.h).
@@ -506,6 +509,21 @@ OTHER_NAMES = {
     },
     "rust": rust_spellings.OTHER_NAMES,
 }
+# Metal's other ballots return a simd_vote or quad_vote mask, whose vote_t integer CrossGL computes from its wave
+# ballot (crossgl.dialect.CrossGLDialect.reading). A SIMD-group's mask has a bit per lane, which is the first 64 bits
+# of the ballot. A quad's mask keeps 4 bits (metal_quadgroup masks quad_vote's vote_t with 0xf), those of the 4
+# consecutive lanes of the lane's quad. An active-threads mask is the ballot of true.
+_SIMD_MASK = (
+    "(uint64(WaveActiveBallot({0}).x) | (uint64(WaveActiveBallot({0}).y) << 32))"
+)
+_QUAD_MASK = "((WaveActiveBallot({0})[WaveGetLaneIndex() >> 5u] >> (WaveGetLaneIndex() & 28u)) & 0xFu)"
+OTHER_NAMES["metal"].update(
+    {
+        "simd_active_threads_mask": _SIMD_MASK.format("true"),
+        "quad_active_threads_mask": _QUAD_MASK.format("true"),
+        "quad_ballot": _QUAD_MASK,
+    }
+)
 
 
 def spelling(language: str, name: str, glsl_names: set[str] | frozenset[str]) -> str:

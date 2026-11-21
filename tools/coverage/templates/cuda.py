@@ -45,6 +45,7 @@ from . import (
     pointers,
     portability,
     primitives,
+    promotion,
     qualifiers,
     rasterization,
     rays,
@@ -67,7 +68,7 @@ from . import (
     vertices,
     workgroups,
 )
-from .base import ABSENT, GRAPHICS_ONLY, Template, scalar
+from .base import ABSENT, GRAPHICS_ONLY, Template, narrow_scalar, scalar
 from .family import C_FAMILY
 
 _CSTDINT = "#include <cstdint>"
@@ -142,6 +143,7 @@ CUDA = {
     **pointers.KERNELS,
     **memory.KERNELS,
     **unions.KERNELS,
+    **promotion.KERNELS,
     **subgroups.CUDA,
     **specializations.KERNELS,
     **qualifiers.CUDA,
@@ -163,10 +165,10 @@ CUDA = {
     "runtime-array-length": ABSENT,
     "half": scalar("__half", "fin", "#include <cuda_fp16.h>"),
     "double": scalar("double", "fin"),
-    "int8": scalar("int8_t", prelude=_CSTDINT),
-    "uint8": scalar("uint8_t", prelude=_CSTDINT),
-    "int16": scalar("int16_t", prelude=_CSTDINT),
-    "uint16": scalar("uint16_t", prelude=_CSTDINT),
+    "int8": narrow_scalar("int8_t", _CSTDINT),
+    "uint8": narrow_scalar("uint8_t", _CSTDINT),
+    "int16": narrow_scalar("int16_t", _CSTDINT),
+    "uint16": narrow_scalar("uint16_t", _CSTDINT),
     "int64": scalar("int64_t", prelude=_CSTDINT),
     "uint64": scalar("uint64_t", prelude=_CSTDINT),
     "shared-memory": Template(

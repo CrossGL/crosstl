@@ -784,7 +784,11 @@ def test_effect_compile_pixel_shader_wires_opengl_fragment_entry_body():
     )
 
     assert "void main()" in generated
-    assert "vec4 tex = texture(Texture, texCoord);" in generated
+    # An OpenGL compilation reads the combined Texture; a Vulkan one pairs it with TextureSampler.
+    assert (
+        "vec4 tex = texture(CROSSGL_SAMPLED(sampler2D(Texture, TextureSampler), Texture),"
+        " texCoord);"
+    ) in generated
     assert "fragColor = (tex * color);" in generated
 
 

@@ -18,6 +18,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
 )
 from .spirv_entry_workgroup_sizes import plan_entry_workgroup_sizes
+from .spirv_fragment_interlock import plan_fragment_interlock
 from .spirv_mesh_builtins import is_glsl_mesh_builtin_output_declaration
 from .spirv_specialized_workgroup_size import module_compute_stage_config
 
@@ -213,6 +214,7 @@ class SpirvModulePhaseMixin:
         )
         self.collect_stage_local_storage_image_pointer_metadata(ast)
         self.reserve_explicit_resource_bindings(ast)
+        plan_fragment_interlock(self, ast)
         for stage_type, stage in (getattr(ast, "stages", None) or {}).items():
             if self.stage_key(stage_type) == "tessellation_control":
                 self.tessellation_control_stage = stage

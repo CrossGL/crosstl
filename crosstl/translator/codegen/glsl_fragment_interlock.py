@@ -1,7 +1,7 @@
 """Fragment shader interlock in GLSL output.
 
-A rasterizer-ordered resource (HLSL's ``RasterizerOrderedBuffer`` and ``RasterizerOrderedTexture2D``, CrossGL's
-``@rasterizer_ordered``) orders the accesses that the fragments covering one pixel make to it by the order of their
+A rasterizer-ordered resource (HLSL's ``RasterizerOrderedBuffer`` and ``RasterizerOrderedTexture2D``, MSL's
+``[[raster_order_group(N)]]``, CrossGL's ``@rasterizer_ordered`` on a declaration or a fragment entry parameter) orders the accesses that the fragments covering one pixel make to it by the order of their
 primitives. GLSL expresses that with GL_ARB_fragment_shader_interlock: the fragment stage declares an interlock mode,
 ``layout(pixel_interlock_ordered) in;``, and brackets the accesses with ``beginInvocationInterlockARB()`` and
 ``endInvocationInterlockARB()``. DXC lowers rasterizer-ordered views to SPIR-V the same way, with one critical
@@ -85,9 +85,16 @@ def _attribute_names(node):
     }
 
 
-def _rasterizer_ordered_resources(ast):
+def _rasterizer_ordered_resources(ast, fragment_entries=()):
+    """The ordered resources a program declares globally, in its fragment stage or as fragment entry parameters.
+
+    Metal import writes ``[[raster_order_group(N)]]`` on a fragment argument as an entry parameter marked
+    ``@rasterizer_ordered``, which the GLSL output declares as a global storage buffer or image.
+    """
     declarations = list(getattr(ast, "global_variables", []) or [])
     declarations += collect_stage_local_variables(ast, "fragment")
+    for func in fragment_entries:
+        declarations += list(getattr(func, "parameters", []) or [])
     return tuple(
         sorted(
             {
@@ -134,7 +141,7 @@ def plan_fragment_interlock(codegen, ast, target_stage=None):
     ]
     if not fragment_entries:
         return NO_INTERLOCK
-    resources = _rasterizer_ordered_resources(ast)
+    resources = _rasterizer_ordered_resources(ast, fragment_entries)
     calls = _calls_interlock(codegen, ast)
     wraps = bool(resources) and not calls
     return FragmentInterlockPlan(
