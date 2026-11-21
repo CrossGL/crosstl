@@ -443,9 +443,7 @@ def _execute(
             if texts[1] != result.sources[1]:
                 lowered.add(index)
         if runs_as == "spirv" and any(_FLOAT16.search(text) for text in texts):
-            skipped[index] = (
-                "its SPIR-V declares a 16-bit float, which lavapipe does not round through"
-            )
+            skipped[index] = "its SPIR-V declares a 16-bit float, which lavapipe does not round through"
             continue
         if runs_as == "spirv" and any(_UNREPEATABLE.search(text) for text in texts):
             skipped[index] = (

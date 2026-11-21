@@ -241,9 +241,12 @@ def _run(args: argparse.Namespace) -> int:
             for target, tool in validators.SLANG_SOURCE_TARGETS.items()
             if not validators.command(tool)
         ]
-    # HLSL features that need shader model 6.10 are checked by DXC's Shader Model 6.10 preview.
-    if "hlsl" in languages and not validators.available(
-        "hlsl", validators.HLSL_PREVIEW
+    # HLSL features that need shader model 6.10 are checked by DXC's Shader Model 6.10 preview. An execution-only
+    # run gives no static verdict, and the runtimes compile with the pinned DXC, so it does not need the preview.
+    if (
+        "hlsl" in languages
+        and not args.execution_only
+        and not validators.available("hlsl", validators.HLSL_PREVIEW)
     ):
         missing.append("hlsl for shader model 6.10 (dxc-preview)")
     # SPIR-V input probes are lowered from GLSL, and from HLSL or Slang for the constructs GLSL cannot spell.

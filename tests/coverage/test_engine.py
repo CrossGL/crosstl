@@ -600,6 +600,28 @@ def test_strict_run_names_exactly_the_missing_lowering_tool(monkeypatch, capsys)
     )
 
 
+@pytest.mark.parametrize("execution_only", [False, True])
+def test_only_a_static_hlsl_run_needs_the_shader_model_preview(
+    monkeypatch, capsys, execution_only
+):
+    from tools.coverage import __main__ as cli
+
+    monkeypatch.setattr(
+        validators,
+        "available",
+        lambda language, target="": language != "wgsl"
+        and target != validators.HLSL_PREVIEW,
+    )
+    monkeypatch.setattr(lowering, "can_lower", lambda language: True)
+    argv = ["run", "--strict", "--execute", "--backend", "hlsl", "--backend", "wgsl"]
+    assert cli.main(argv + ["--execution-only"] * execution_only) == 2
+    error = capsys.readouterr().err
+    assert error.startswith(
+        f"error: missing tools for wgsl ({validators.TOOLS['wgsl']})"
+    )
+    assert ("dxc-preview" in error) is not execution_only
+
+
 @pytest.mark.parametrize(
     ("banner", "found"),
     [("Mojo 1.1.0 (8189361e)", True), ("mojo 24.4.0 (59977802)", False)],
