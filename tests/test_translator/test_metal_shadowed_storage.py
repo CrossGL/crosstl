@@ -119,7 +119,8 @@ ENTRY_INITIALIZER = """shader S {
 def translate(tmp_path, source, suffix):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source, encoding="utf-8")
-    return crosstl.translate(str(path), backend="metal")
+    # Unformatted, so the expected spellings do not depend on whether clang-format is installed.
+    return crosstl.translate(str(path), backend="metal", format_output=False)
 
 
 def _signature(code, name):
@@ -134,12 +135,12 @@ def test_cuda_helper_parameter_named_like_the_kernel_buffer(tmp_path):
     assert "return o_ * 2;" in code
     # ``in`` is a CrossGL keyword: the buffer is ``in_``, and the parameter that shadows it is renamed too.
     assert re.search(r"int o_ = in__ \+ 1;\s*return o_;", code), code
-    assert "device int *o [[buffer(1)]]" in code
+    assert "device int* o [[buffer(1)]]" in code
 
 
 def test_nested_local_ends_with_its_block(tmp_path):
     code = translate(tmp_path, HLSL_KERNEL, ".hlsl")
-    assert _signature(code, "f") == "int v, device int *o"
+    assert _signature(code, "f") == "int v, device int* o"
     assert "int r = o[0];" in code
     assert "int o_ = v;" in code
     assert _signature(code, "g") == "int o_"
@@ -148,7 +149,7 @@ def test_nested_local_ends_with_its_block(tmp_path):
 def test_program_scope_resource_names(tmp_path):
     code = translate(tmp_path, PROGRAM_SCOPE, ".cgl")
     assert _signature(code, "twice") == "int o_"
-    assert _signature(code, "first") == "int v, device int *o"
+    assert _signature(code, "first") == "int v, device int* o"
     assert "int o_ = v;" in code
 
 
@@ -161,13 +162,13 @@ def test_threadgroup_parameter_in_a_helper_whose_callee_reads_it(tmp_path):
 
 def test_uniform_and_constant_buffer_members(tmp_path):
     code = translate(tmp_path, UNIFORM, ".cgl")
-    assert _signature(code, "f") == "int v, constant int &a"
+    assert _signature(code, "f") == "int v, constant int& a"
     assert "int a_ = v;" in code
     # A helper that never reads the uniform keeps its parameter name.
     assert _signature(code, "g") == "int a"
 
     code = translate(tmp_path, HLSL_CBUFFER, ".hlsl")
-    assert _signature(code, "f") == "int v, constant Params &params"
+    assert _signature(code, "f") == "int v, constant Params& params"
     assert "int r = params.a;" in code
     assert "int a_ = v;" in code
     assert _signature(code, "g") == "int a"
