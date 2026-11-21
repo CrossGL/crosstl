@@ -157,6 +157,22 @@ EXPECTED_REJECTIONS = {
         "with no warp, so a warp shuffle has no other lane to read and is "
         "refused rather than replaced by a one-lane stand-in."
     ),
+    # Rust output writes rust-gpu (spirv_std) kernels and refuses, by construct, what it does not lower yet:
+    # textures and samplers, constant buffers, uniforms whose std140 layout differs from rust-gpu's #[repr(C)]
+    # glam layout, Booleans in buffers, buffer pointers passed to helpers and warp shuffles.
+    **{
+        (category, name, "rust"): (
+            "Rust output refuses resources and intrinsics rust-gpu does not lower yet "
+            "with a typed diagnostic instead of writing code rust-gpu rejects."
+        )
+        for category, name in (
+            ("advanced", "ArrayTest"),
+            ("advanced", "GenericPatternMatching"),
+            ("cross_platform", "UniversalPBRShader"),
+            ("graphics", "ComplexShader"),
+            ("gpu_computing", "MatrixMultiplication"),
+        )
+    },
     # CUDA and HIP declare only __global__ kernels, so a vertex or fragment entry has no form there.
     **{
         (category, name, backend): (

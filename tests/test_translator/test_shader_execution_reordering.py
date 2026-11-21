@@ -10,6 +10,7 @@ rejects it: ``xcrun metal`` reports ``error: use of undeclared identifier 'dx'``
 import pytest
 
 import crosstl
+from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.codegen.stage_refusals import StageUnsupportedError
 from crosstl.translator.semantics.shader_execution_reordering import (
     ShaderExecutionReorderingUnsupportedError,
@@ -111,6 +112,13 @@ def test_a_ray_stage_without_reordering_still_translates(tmp_path):
         if target in KERNEL_ONLY_TARGETS:
             # CUDA and HIP have no ray-tracing pipeline to run a ray generation entry.
             with pytest.raises(StageUnsupportedError):
+                crosstl.translate(str(path), backend=target)
+            continue
+        if target == "rust":
+            # The rust-gpu output does not lower ray tracing entry points yet, and refuses them by name.
+            with pytest.raises(
+                LoweringRefused, match="ray_generation entry points are not lowered"
+            ):
                 crosstl.translate(str(path), backend=target)
             continue
         assert crosstl.translate(str(path), backend=target).strip()

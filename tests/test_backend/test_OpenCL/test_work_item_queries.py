@@ -78,10 +78,38 @@ def test_a_runtime_dimension_reads_the_component_or_the_out_of_range_value(
         ("get_num_groups(0x10)", "1u"),
         ("get_global_size((uint)5)", "1u"),
         ("get_enqueued_local_size(4)", "1u"),
+        # A cast converts to its type's width first (C11 6.3.1.3), then the uint parameter takes the value.
+        ("get_local_size((uchar)259)", "1u"),
+        ("get_group_id((ushort)65539)", "0u"),
+        ("get_local_id((char)255)", "0u"),
+        ("get_num_groups((ushort)(char)-1)", "1u"),
+        ("get_global_id(-(uchar)255)", "0u"),
+        ("get_global_size((ulong)-1)", "1u"),
+        ("get_local_size((unsigned char)4)", "1u"),
     ],
 )
 def test_a_constant_dimension_of_three_or_more_folds(query, value):
     assert stored(query) == value
+
+
+@pytest.mark.parametrize(
+    "query, component",
+    [
+        # Each converts to a dimension of 0, 1 or 2, so none reads the out-of-range value.
+        ("get_local_size((uchar)256)", "gl_WorkGroupSize.x"),
+        ("get_group_id((ushort)65537)", "gl_WorkGroupID.y"),
+        ("get_global_id((uchar)-255)", "gl_GlobalInvocationID.y"),
+        ("get_local_id((uint)-4294967294)", "gl_LocalInvocationID.z"),
+        ("get_num_groups((bool)7)", "gl_NumWorkGroups.y"),
+    ],
+)
+def test_a_narrow_cast_that_wraps_into_range_is_not_folded_out_of_range(
+    query, component
+):
+    # The importer maps the component or keeps the call for the CrossGL translation to refuse (#4819); it never
+    # stores the value a dimension of 3 or more reads.
+    value = stored(query)
+    assert value == component or value.startswith(query[: query.index("(") + 1]), value
 
 
 @pytest.mark.parametrize(

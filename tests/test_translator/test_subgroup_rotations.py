@@ -9,6 +9,7 @@ import pytest
 import crosstl
 from crosstl.translator import ast as A
 from crosstl.translator import parse
+from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from crosstl.translator.semantics import WaveRotationUnsupportedError
 from crosstl.translator.semantics.hub_types import call_name
 from crosstl.translator.semantics.scoped_walk import program_stages
@@ -264,7 +265,7 @@ def test_unsupported_calls_are_refused(body, reason):
 
 
 @pytest.mark.parametrize(
-    "backend", ["directx", "metal", "cuda", "hip", "opengl", "slang", "rust"]
+    "backend", ["directx", "metal", "cuda", "hip", "opengl", "slang"]
 )
 def test_targets_read_the_rotated_lane(tmp_path, backend):
     output = translate(tmp_path, ALL_ROTATIONS, backend)
@@ -273,6 +274,12 @@ def test_targets_read_the_rotated_lane(tmp_path, backend):
     assert not re.search(
         r"\b(WaveRotate|WaveClusteredRotate|subgroupRotate)\s*\(", output
     )
+
+
+def test_rust_output_refuses_the_rotations(tmp_path):
+    # Rust output writes rust-gpu kernels, which do not lower subgroup operations yet: a typed refusal.
+    with pytest.raises(RustLoweringRefused, match="subgroup operations"):
+        translate(tmp_path, ALL_ROTATIONS, "rust")
 
 
 def test_crossgl_output_keeps_the_rotations(tmp_path):

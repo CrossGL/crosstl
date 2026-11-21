@@ -22,6 +22,9 @@ instead when the importer cannot describe that layout:
 * a union whose own alignment attribute is not a literal.
 
 A struct with anonymous union members is refused too, because the importer writes those members one after another.
+
+The HIP importer writes the same contract for a HIP union, with ``hip`` as its ABI: hipcc lays a union out by the
+same C++ rules, and HIP's vector types have CUDA's sizes and alignments.
 """
 
 from __future__ import annotations
@@ -32,7 +35,7 @@ from .buffer_layout_import import KernelBufferLayouts, record_alignment
 
 __all__ = ["SOURCE_ABI", "UnionLayoutContracts", "anonymous_union_members"]
 
-# The ABI name the contract records; the generators that rebuild a union natively accept only their own ABI.
+# The ABI name the CUDA importer records. The CUDA and HIP generators compare the recorded layout, not this name.
 SOURCE_ABI = "cuda"
 
 
@@ -68,17 +71,24 @@ class _Union:
     members: list = field(
         default_factory=list
     )  # (CrossGL type text, name, output line, issue)
+    issue: str = ""  # why the union's storage is not described, found before its members are written
 
-    def member(self, member_type, member_name, index, node):
-        """Record a member line; ``node`` is the source member, checked for layout the parser dropped."""
-        self.members.append((member_type, member_name, index, _member_issue(node)))
+    def member(self, member_type, member_name, index, node, issue=""):
+        """Record a member line; ``node`` is the source member, checked for layout the parser dropped.
+
+        ``issue`` is a reason the importer found itself, such as a bit-field width it does not write.
+        """
+        self.members.append(
+            (member_type, member_name, index, issue or _member_issue(node))
+        )
 
 
 class UnionLayoutContracts:
     """The unions an importer wrote, marked with their layout contract once the program is rendered."""
 
-    def __init__(self, label="CUDA"):
+    def __init__(self, label="CUDA", abi=SOURCE_ABI):
         self.label = label
+        self.abi = abi
         self.unions = []
 
     def union(self, name, attributes, index):
@@ -104,7 +114,7 @@ class UnionLayoutContracts:
             self.label,
         )
         for record in self.unions:
-            if not record.members:
+            if not record.members and not record.issue:
                 continue  # a declaration without members has no storage to share
             contract = self._contract(record, planner)
             if isinstance(contract, str):
@@ -113,7 +123,7 @@ class UnionLayoutContracts:
             size, alignment, member_layouts = contract
             output[record.index] = _prefix(
                 output[record.index],
-                f"@union_layout({size}, {alignment}, little_endian, {SOURCE_ABI})",
+                f"@union_layout({size}, {alignment}, little_endian, {self.abi})",
             )
             for (_type, _name, index, _issue), (member_size, member_alignment) in zip(
                 record.members, member_layouts
@@ -124,8 +134,10 @@ class UnionLayoutContracts:
                 )
 
     def _contract(self, record, planner):
-        """``(size, alignment, member layouts)`` of ``record`` in CUDA's layout, or the reason it has none."""
+        """``(size, alignment, member layouts)`` of ``record`` in the source's layout, or the reason it has none."""
         subject = f"{self.label} union '{record.name}'"
+        if record.issue:
+            return f"{subject}: {record.issue}; CrossGL cannot describe its storage"
         alignment, unmodelled = record_alignment(record.attributes)
         if unmodelled:
             return f"{subject}: its layout attribute {unmodelled} is not modelled, so CrossGL cannot describe its storage"

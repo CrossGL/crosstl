@@ -132,8 +132,25 @@ def test_each_structure_of_a_constant_array_gets_lists(tmp_path, backend, declar
 @pytest.mark.parametrize("backend", ["metal", "directx", "vulkan"])
 def test_array_constructor_that_is_not_a_member_is_refused(tmp_path, backend):
     # A shader-scope initializer has no statement to declare a local before, so an
-    # array constructor that is not itself a member of the list is refused.
+    # array constructor that is not itself a member of the list is refused. (One
+    # indexed with an integer literal is replaced with its element instead.)
     with pytest.raises(ArrayConstructorUnsupportedError, match="constant 'C'"):
         translate_constant(
-            tmp_path, backend, "const W C = {{float[2](1.0, 2.0)[1], 2.0}, 3.0};", "C.s"
+            tmp_path,
+            backend,
+            "const W C = {{float[2](1.0, 2.0)[1 + 0], 2.0}, 3.0};",
+            "C.s",
         )
+
+
+@pytest.mark.parametrize(
+    ("backend", "declaration"),
+    [("metal", "constant W C = "), ("directx", "static const W C = ")],
+)
+def test_literal_indexed_array_constructor_is_its_element(
+    tmp_path, backend, declaration
+):
+    output = translate_constant(
+        tmp_path, backend, "const W C = {{float[2](1.0, 2.0)[1], 2.0}, 3.0};", "C.s"
+    )
+    assert declaration + "{{2.0, 2.0}, 3.0};" in output

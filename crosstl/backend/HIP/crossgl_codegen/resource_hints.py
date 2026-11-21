@@ -231,7 +231,11 @@ class HipResourceHintMixin:
             self.union_indirect_object_scopes.pop()
 
     def register_union_object_declaration(self, name, definition, declaration):
-        if not name or definition is None or not getattr(definition, "is_union", False):
+        if (
+            not name
+            or definition is None
+            or not self.union_tracks_active_member(definition)
+        ):
             return
         if name in self.union_object_identity_scopes[-1]:
             self.raise_record_semantic(
@@ -241,7 +245,11 @@ class HipResourceHintMixin:
         self.union_object_identity_scopes[-1][name] = f"{name}#{id(declaration)}"
 
     def register_union_indirect_object(self, name, raw_type, definition):
-        if not name or definition is None or not getattr(definition, "is_union", False):
+        if (
+            not name
+            or definition is None
+            or not self.union_tracks_active_member(definition)
+        ):
             return
         compact = str(raw_type).replace(" ", "")
         if "*" in compact or "&" in compact or compact.startswith("ptr<"):

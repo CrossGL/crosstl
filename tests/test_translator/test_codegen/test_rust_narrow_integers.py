@@ -6,18 +6,27 @@ narrower than 32 bits to ``int`` (``semantics.hub_types.promote``), so ``30000 +
 60000 and ``3 - 5`` on two ``uint16`` values is -2.
 """
 
+import shutil
 import subprocess
 
 import pytest
 
 import crosstl
+from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from tests.test_translator.test_codegen.test_rust_codegen import (
     generate_code,
     parse_code,
-    rust_smoke_source,
-    rustc_or_skip,
+    rust_host_source,
     tokenize_code,
 )
+
+
+def rustc_or_skip():
+    rustc = shutil.which("rustc")
+    if rustc is None:
+        pytest.skip("rustc is not installed")
+    return rustc
+
 
 HELPERS = """
 shader NarrowArithmetic {
@@ -46,7 +55,7 @@ def test_ir_narrow_integer_spellings_are_rust_types():
 
 
 def test_narrow_integer_arithmetic_runs_with_integer_promotion(tmp_path):
-    source = rust_smoke_source(rust(HELPERS)) + (
+    source = rust_host_source(rust(HELPERS)) + (
         "\nfn main() {\n"
         '    println!("{}", add16(30000, 30000));\n'
         '    println!("{}", sub16u(3, 5));\n'
@@ -84,11 +93,14 @@ def test_narrow_integer_arithmetic_runs_with_integer_promotion(tmp_path):
         ),
     ],
 )
-def test_imported_byte_arithmetic_translates_to_rust(tmp_path, source, name):
+def test_imported_byte_kernels_are_refused(tmp_path, source, name):
     path = tmp_path / name
     path.write_text(source, encoding="utf-8")
 
-    generated = crosstl.translate(str(path), backend="rust", format_output=False)
-
-    assert "(((v.x as i32) + (v.y as i32))" in generated
-    assert "as u8)" in generated
+    # The imported kernel's buffers bind as storage slices, but its plain-value parameter ``n`` has no rust-gpu
+    # binding yet (a compute entry point takes only built-in inputs), so it is refused by name.
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"compute entry parameter 'n' is not a compute built-in input",
+    ):
+        crosstl.translate(str(path), backend="rust", format_output=False)

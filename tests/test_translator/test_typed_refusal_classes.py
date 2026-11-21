@@ -199,7 +199,7 @@ TRANSLATIONS = [
     ("geometry.cgl", GEOMETRY, "cuda", "cuda-stage-unsupported"),
     ("geometry.cgl", GEOMETRY, "hip", "hip-stage-unsupported"),
     ("geometry.cgl", GEOMETRY, "mojo", "mojo-refused"),
-    ("geometry.cgl", GEOMETRY, "rust", "rust-refused"),
+    ("geometry.cgl", GEOMETRY, "rust", "rust-lowering-unsupported"),
     ("control.cgl", TESSELLATION_CONTROL, "slang", "slang-refused"),
     ("mesh.cgl", MESH, "opengl", "opengl-refused"),
     ("duplicate.cgl", DUPLICATE_UNIFORM, "directx", "target-refused"),
