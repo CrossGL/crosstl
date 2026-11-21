@@ -15,6 +15,11 @@ from pathlib import Path
 import pytest
 import yaml
 
+from demos.integrations.mlx.tests.upstream_checkouts import (
+    KERNEL_TREE,
+    fetches,
+    upstream_fetches,
+)
 from tests import workflow_text
 from tests.test_ci_workflows import (
     RUNNER_OSES,
@@ -1238,8 +1243,7 @@ def test_affine_metal_numerics_reuse_the_complete_source_bundle():
         "mlx-quantized-metal-sources",
     ]
     assert 'MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"' in job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in job
-    assert "sparse-checkout set mlx/backend/metal/kernels" in job
+    assert fetches(job, "$MLX_CORPUS_COMMIT", "mlx-affine-upstream")
     assert '--timeout-seconds 900 --label "Affine Metal roundtrip" --' in step
     assert "python demos/integrations/mlx/prove_quantized_metal.py" in step
     assert "--mlx-root mlx-affine-upstream" in step
@@ -1384,15 +1388,40 @@ def test_directx_corpus_report_matches_compiler_runner(family):
     assert len(_matrix_values(job, "shard_index")) == validation["ci_shard_count"]
 
 
+def test_every_mlx_checkout_retries_and_verifies_the_pinned_commit():
+    """A dropped connection retries; it must not fail a queue group."""
+    jobs = yaml.safe_load(_workflow_texts()["demo-project-testing.yml"])["jobs"]
+    found = {}
+    for name, job in jobs.items():
+        for step in job.get("steps", []):
+            run = step.get("run", "")
+            assert "ml-explore/mlx.git" not in run, (name, step.get("name"))
+            assert not re.search(r"git -C mlx[\w-]*", run), (name, step.get("name"))
+            for directory, commit, sparse in upstream_fetches(run):
+                variable = commit.removeprefix("$")
+                assert variable in job["env"], (name, commit)
+                assert re.fullmatch(r"[0-9a-f]{40}", job["env"][variable])
+                assert all(not path.startswith("/") for path in sparse)
+                found.setdefault(name, []).append(directory)
+            if "fetch_upstream" in run:
+                assert run.count("fetch_upstream") == len(upstream_fetches(run))
+    assert {
+        "mlx-smoke",
+        "mlx-metal-porting",
+        "portable-host",
+        "directx",
+        "opengl",
+        "metal",
+        "mlx-current-native-parity",
+    } <= set(found)
+
+
 def test_mlx_gather_checkout_preserves_pinned_source_bytes():
     workflow = (WORKFLOW_DIR / "demo-project-testing.yml").read_text(encoding="utf-8")
     for target in ("metal", "metal-float", "directx", "opengl"):
         job = _workflow_job_section(workflow, target)
         step = workflow_text.workflow_step_section(job, "Checkout pinned upstream MLX")
-        initialization = step.index("git init mlx-upstream")
-        configuration = step.index("git -C mlx-upstream config core.autocrlf false")
-        checkout = step.index("git -C mlx-upstream checkout --detach FETCH_HEAD")
-        assert initialization < configuration < checkout
+        assert upstream_fetches(step) == [("mlx-upstream", "$MLX_COMMIT", ())]
 
 
 def test_mlx_float_atomic_reference_uses_fixed_metal_toolchain():
@@ -1436,35 +1465,26 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert f'MLX_COMMIT: "{mlx_reference_commit}"' in mlx_porting
     assert f'MLX_CORPUS_COMMIT: "{mlx_corpus_commit}"' in mlx_porting
     assert f'MLX_CURRENT_TREE_COMMIT: "{mlx_current_tree_commit}"' in mlx_porting
-    assert 'git -C mlx-upstream checkout "$MLX_COMMIT"' in mlx_porting
-    assert 'git -C mlx-upstream checkout "$MLX_CORPUS_COMMIT"' in mlx_porting
+    assert fetches(mlx_porting, "$MLX_COMMIT", "mlx-upstream")
+    assert fetches(mlx_porting, "$MLX_CORPUS_COMMIT", "mlx-upstream")
     current_runtime_checkout = workflow_text.workflow_step_section(
         mlx_porting,
         "Checkout current MLX runtime proof corpus",
     )
-    assert "git clone --filter=blob:none --no-checkout" in current_runtime_checkout
-    assert "mlx-current-upstream" in current_runtime_checkout
-    assert (
-        'git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"'
-        in current_runtime_checkout
-    )
-    assert (
-        'test "$(git -C mlx-current-upstream rev-parse HEAD)" = '
-        '"$MLX_CORPUS_COMMIT"' in current_runtime_checkout
-    )
+    assert upstream_fetches(current_runtime_checkout) == [
+        ("mlx-current-upstream", "$MLX_CORPUS_COMMIT", KERNEL_TREE)
+    ]
     current_tree_checkout = workflow_text.workflow_step_section(
         mlx_porting,
         "Checkout current MLX kernel tree",
     )
-    assert "mlx-current-tree-upstream" in current_tree_checkout
-    assert (
-        "git -C mlx-current-tree-upstream checkout --detach "
-        '"$MLX_CURRENT_TREE_COMMIT"' in current_tree_checkout
-    )
-    assert (
-        'test "$(git -C mlx-current-tree-upstream rev-parse HEAD)" = '
-        '"$MLX_CURRENT_TREE_COMMIT"' in current_tree_checkout
-    )
+    assert upstream_fetches(current_tree_checkout) == [
+        (
+            "mlx-current-tree-upstream",
+            "$MLX_CURRENT_TREE_COMMIT",
+            (*KERNEL_TREE, "python/tests", "tests"),
+        )
+    ]
     current_census = workflow_text.workflow_step_section(
         mlx_porting,
         "Audit current MLX kernel census",
@@ -2102,9 +2122,9 @@ def test_mlx_platform_runtime_workflow_preserves_pinned_checkout():
         _workflow_job_section(workflow, name)
         for name in ("directx-dispatch-sequence", "opengl-dispatch-sequence")
     )
-    assert workflow.count("checkout --detach FETCH_HEAD") == 2
-    assert workflow.count('rev-parse HEAD)" = "$MLX_COMMIT"') == 2
-    assert workflow.count("sparse-checkout set mlx/backend/metal/kernels") == 2
+    assert (
+        upstream_fetches(workflow) == [("mlx-upstream", "$MLX_COMMIT", KERNEL_TREE)] * 2
+    )
     assert workflow.count("CROSTL_MLX_SOURCE_ROOT: mlx-upstream") == 2
     assert "continue-on-error" not in workflow
 
@@ -3416,7 +3436,7 @@ def test_mlx_project_porting_workflow_runs_unary_complete_opengl_proof():
     assert "glslangValidator --version" in opengl_job
     assert "spirv-val --version" in opengl_job
     assert "Checkout current MLX unary corpus" in opengl_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in opengl_job
+    assert fetches(opengl_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     opengl_step = workflow_text.workflow_step_section(
         opengl_job,
@@ -3472,7 +3492,7 @@ def test_mlx_project_porting_workflow_runs_unary_complete_directx_proof():
     assert 'pinned: "true"' in directx_job
     assert "shell: pwsh" not in directx_job
     assert "Checkout current MLX unary corpus" in directx_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in directx_job
+    assert fetches(directx_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     directx_step = workflow_text.workflow_step_section(
         directx_job,
@@ -3521,7 +3541,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
     assert "python -m pip install -e . pytest-xdist" in sources
     assert "xcrun" not in sources
     assert 'MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"' in sources
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in sources
+    assert fetches(sources, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
     source_step = workflow_text.workflow_step_section(
         sources, "Verify and export complete binary Metal sources"
     )
@@ -3666,7 +3686,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_opengl_proof():
     assert "glslangValidator --version" in binary_opengl_job
     assert "spirv-val --version" in binary_opengl_job
     assert "Checkout current MLX binary corpus" in binary_opengl_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in binary_opengl_job
+    assert fetches(binary_opengl_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     binary_opengl_step = workflow_text.workflow_step_section(
         binary_opengl_job,
@@ -3723,10 +3743,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_directx_proof():
     assert 'pinned: "true"' in directx_job
     assert "shell: pwsh" not in directx_job
     assert "Checkout current MLX binary corpus" in directx_job
-    assert "config core.autocrlf false" in directx_job
-    assert "sparse-checkout init --cone" in directx_job
-    assert "sparse-checkout set mlx/backend/metal/kernels" in directx_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in directx_job
+    assert fetches(directx_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     directx_step = workflow_text.workflow_step_section(
         directx_job,
@@ -4040,7 +4057,7 @@ def test_mlx_project_porting_workflow_runs_copy_complete_opengl_proof():
     assert "glslangValidator --version" in copy_opengl_job
     assert "spirv-val --version" in copy_opengl_job
     assert "Checkout current MLX copy corpus" in copy_opengl_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in copy_opengl_job
+    assert fetches(copy_opengl_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     copy_opengl_step = workflow_text.workflow_step_section(
         copy_opengl_job,
@@ -4095,7 +4112,7 @@ def test_mlx_project_porting_workflow_runs_copy_complete_directx_proof():
     assert 'pinned: "true"' in copy_directx_job
     assert "shell: pwsh" not in copy_directx_job
     assert "Checkout current MLX copy corpus" in copy_directx_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in copy_directx_job
+    assert fetches(copy_directx_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     copy_directx_step = workflow_text.workflow_step_section(
         copy_directx_job,
@@ -4224,7 +4241,7 @@ def test_mlx_project_porting_workflow_requires_quantized_wide_opengl_compilation
     assert "continue-on-error" not in job
     assert "uses: ./.github/actions/apt-install" in job
     assert "packages: glslang-tools spirv-tools" in job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in job
+    assert fetches(job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
     assert 'CROSTL_REQUIRE_MLX_QUANTIZED_WIDE_OPENGL: "1"' in job
     assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in job
     assert "python -m pytest -q -n auto" in job
@@ -4262,7 +4279,7 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_opengl_proof():
     assert "glslangValidator --version" in reduce_opengl_job
     assert "spirv-val --version" in reduce_opengl_job
     assert "Checkout current MLX reduce corpus" in reduce_opengl_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in reduce_opengl_job
+    assert fetches(reduce_opengl_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     reduce_opengl_step = workflow_text.workflow_step_section(
         reduce_opengl_job,
@@ -4317,7 +4334,7 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_directx_proof():
     assert 'pinned: "true"' in reduce_directx_job
     assert "shell: pwsh" not in reduce_directx_job
     assert "Checkout current MLX reduce corpus" in reduce_directx_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in reduce_directx_job
+    assert fetches(reduce_directx_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     reduce_directx_step = workflow_text.workflow_step_section(
         reduce_directx_job,

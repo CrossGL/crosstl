@@ -105,22 +105,10 @@ jobs:
       - name: Checkout pinned MLX kernels
         # The full tree is retained in the native jobs; smoke reads only kernel sources.
         run: |
-          git init mlx-smoke-upstream
-          git -C mlx-smoke-upstream config core.autocrlf false
-          git -C mlx-smoke-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-smoke-upstream sparse-checkout init --cone
-          git -C mlx-smoke-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-smoke-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-smoke-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-smoke-upstream "$MLX_COMMIT" --sparse mlx/backend/metal/kernels
       - name: Checkout complete-family MLX kernels
         run: |
-          git init mlx-canary-upstream
-          git -C mlx-canary-upstream config core.autocrlf false
-          git -C mlx-canary-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-canary-upstream sparse-checkout init --cone
-          git -C mlx-canary-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-canary-upstream fetch --depth=1 origin "$MLX_CORPUS_COMMIT"
-          git -C mlx-canary-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-canary-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
       - name: Install pinned Linux DXC
         uses: ./.github/actions/install-linux-dxc
         with:
@@ -310,11 +298,7 @@ jobs:
           python -m pip install -e . pytest pytest-xdist numpy moderngl PyOpenGL "PyYAML>=6,<7"
       - name: Checkout pinned upstream MLX
         run: |
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
       - name: Validate indexed OpenGL gather and resource aggregates
         env:
           CROSTL_REQUIRE_HALF_BUFFER_RUNTIME: "1"
@@ -471,11 +455,7 @@ jobs:
         run: python -m pip install -e . pytest pytest-xdist numpy "PyYAML>=6,<7"
       - name: Checkout pinned upstream MLX
         run: |
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
       - name: Validate general gather and empty arrays
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
@@ -618,11 +598,7 @@ jobs:
         run: python -m pip install -e . pytest pytest-xdist numpy "PyYAML>=6,<7"
       - name: Checkout pinned upstream MLX
         run: |
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
       - name: Validate float compare-exchange and scatter
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
@@ -707,11 +683,7 @@ jobs:
           Copy-Item "$warpRoot/build/native/bin/x64/d3d10warp.dll" "$env:pythonLocation/d3d10warp.dll"
       - name: Checkout pinned upstream MLX
         run: |
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
       - name: Validate indexed DirectX gather and resource aggregates
         env:
           CROSTL_REQUIRE_HALF_BUFFER_RUNTIME: "1"
@@ -936,10 +908,7 @@ jobs:
               2>&1 | tee .mlx-metal-host/multiwave-reductions.log
       - name: Checkout pinned upstream MLX
         run: |
-          git init mlx-upstream
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
       - name: Validate pinned inverse hyperbolic cosine
         env:
           CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-upstream
@@ -1160,29 +1129,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf mlx-metal-source
-          git init mlx-metal-source
-          git -C mlx-metal-source remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-metal-source config advice.detachedHead false
-          git -C mlx-metal-source sparse-checkout init --no-cone
-          git -C mlx-metal-source sparse-checkout set /mlx/backend/metal/kernels/
-          git -C mlx-metal-source fetch --depth=1 --filter=blob:none origin "$MLX_COMMIT"
-          git -C mlx-metal-source checkout --detach FETCH_HEAD
-          test "$(git -C mlx-metal-source rev-parse HEAD)" = "$MLX_COMMIT"
-          test -z "$(git -C mlx-metal-source status --porcelain=v1 --untracked-files=all -- mlx/backend/metal/kernels)"
+          python -m demos.integrations.mlx.fetch_upstream mlx-metal-source "$MLX_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Checkout full pinned MLX test tree
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf mlx-upstream
-          git init mlx-upstream
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream config advice.detachedHead false
-          git -C mlx-upstream fetch --depth=1 --filter=blob:none origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
-          test "$(git -C mlx-upstream rev-parse HEAD)" = "$MLX_COMMIT"
-          test -z "$(git -C mlx-upstream status --porcelain=v1 --untracked-files=all)"
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
 
       - name: Run native Metal reference baseline
         run: |
@@ -1272,16 +1225,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf mlx-upstream
-          git init mlx-upstream
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream config advice.detachedHead false
-          git -C mlx-upstream sparse-checkout init --cone
-          git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-upstream fetch --depth=1 --filter=blob:none origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
-          test "$(git -C mlx-upstream rev-parse HEAD)" = "$MLX_COMMIT"
-          test -z "$(git -C mlx-upstream status --porcelain=v1 --untracked-files=all)"
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Prove Direct3D ordered dispatch sequence
         env:
@@ -1334,16 +1278,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf mlx-upstream
-          git init mlx-upstream
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream config advice.detachedHead false
-          git -C mlx-upstream sparse-checkout init --cone
-          git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-upstream fetch --depth=1 --filter=blob:none origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
-          test "$(git -C mlx-upstream rev-parse HEAD)" = "$MLX_COMMIT"
-          test -z "$(git -C mlx-upstream status --porcelain=v1 --untracked-files=all)"
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Prove OpenGL ordered dispatch sequence
         env:
@@ -2201,11 +2136,7 @@ jobs:
                steps.host-warp-identity.outcome == 'success') }}
         run: |
           set -euo pipefail
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
           mkdir -p .mlx-portable-host
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-host/adaptation.json
       - name: Validate pinned checked reductions
@@ -2678,11 +2609,7 @@ jobs:
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-small-rows/adaptation.json
       - name: Build adapted upstream MLX
         run: |
@@ -2945,11 +2872,7 @@ jobs:
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-half/adaptation.json
       - name: Build adapted upstream MLX
         run: |
@@ -3241,11 +3164,7 @@ jobs:
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-quantized/adaptation.json
       - name: Build adapted upstream MLX
         run: |
@@ -3480,11 +3399,7 @@ jobs:
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-quantized/adaptation.json
       - name: Build adapted upstream MLX
         run: |
@@ -3624,11 +3539,7 @@ jobs:
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-integer64/adaptation.json
       - name: Build adapted upstream MLX
         run: |
@@ -3812,11 +3723,7 @@ jobs:
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-slice-update/adaptation.json
       - name: Build adapted upstream MLX
         run: |
@@ -4018,11 +3925,7 @@ jobs:
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-scatter/adaptation.json
       - name: Build adapted upstream MLX
         run: |
@@ -4094,11 +3997,7 @@ jobs:
       - name: Check out pinned MLX kernels
         run: |
           set -euo pipefail
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
       - name: Translate complete row shard
         run: |
           set -euo pipefail
@@ -4269,11 +4168,7 @@ jobs:
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-reductions/adaptation.json
       - name: Build adapted upstream MLX
         run: |
@@ -4797,12 +4692,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf mlx-upstream
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream sparse-checkout init --cone
-          git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-upstream checkout "$MLX_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Validate binary32 arithmetic
         shell: bash
@@ -4848,25 +4738,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf mlx-current-upstream
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Checkout current MLX kernel tree
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf mlx-current-tree-upstream
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-tree-upstream
-          git -C mlx-current-tree-upstream config core.autocrlf false
-          git -C mlx-current-tree-upstream sparse-checkout init --cone
-          git -C mlx-current-tree-upstream sparse-checkout set mlx/backend/metal/kernels python/tests tests
-          git -C mlx-current-tree-upstream checkout --detach "$MLX_CURRENT_TREE_COMMIT"
-          test "$(git -C mlx-current-tree-upstream rev-parse HEAD)" = "$MLX_CURRENT_TREE_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-tree-upstream "$MLX_CURRENT_TREE_COMMIT" --sparse mlx/backend/metal/kernels python/tests tests
 
       - name: Audit current MLX kernel census
         if: runner.os == 'Linux'
@@ -7522,13 +7400,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf mlx-current-tree-upstream
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-tree-upstream
-          git -C mlx-current-tree-upstream config core.autocrlf false
-          git -C mlx-current-tree-upstream sparse-checkout init --cone
-          git -C mlx-current-tree-upstream sparse-checkout set mlx/backend/metal/kernels python/tests tests
-          git -C mlx-current-tree-upstream checkout --detach "$MLX_CURRENT_TREE_COMMIT"
-          test "$(git -C mlx-current-tree-upstream rev-parse HEAD)" = "$MLX_CURRENT_TREE_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-tree-upstream "$MLX_CURRENT_TREE_COMMIT" --sparse mlx/backend/metal/kernels python/tests tests
 
       - name: Prove current MLX ternary native parity
         if: matrix.group == 'elementwise'
@@ -8899,12 +8771,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Verify and export complete unary Metal sources
         env:
@@ -9045,12 +8912,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Prove current MLX complete unary family OpenGL translation
         env:
@@ -9121,12 +8983,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Prove current MLX complete unary family DirectX translation
         env:
@@ -9192,12 +9049,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Verify and export complete binary Metal sources
         env:
@@ -9329,12 +9181,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Verify and export complete copy Metal sources
         env:
@@ -9466,12 +9313,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Verify and export complete reduce Metal sources
         env:
@@ -9603,12 +9445,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Verify and export complete quantized Metal sources
         env:
@@ -9679,12 +9516,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-affine-upstream
-          git -C mlx-affine-upstream config core.autocrlf false
-          git -C mlx-affine-upstream sparse-checkout init --cone
-          git -C mlx-affine-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-affine-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-affine-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-affine-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Download all quantized Metal source shards
         uses: actions/download-artifact@v8
@@ -9768,12 +9600,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Compile quantized wide OpenGL variants
         env:
@@ -9845,12 +9672,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Prove current MLX complete reduce family OpenGL translation
         env:
@@ -9925,12 +9747,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Prove current MLX complete copy family OpenGL translation
         env:
@@ -10001,12 +9818,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Prove current MLX complete copy family DirectX translation
         env:
@@ -10077,12 +9889,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Prove current MLX complete reduce family DirectX translation
         env:
@@ -10157,12 +9964,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Prove current MLX complete binary family OpenGL translation
         env:
@@ -10233,12 +10035,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-current-upstream
-          git -C mlx-current-upstream config core.autocrlf false
-          git -C mlx-current-upstream sparse-checkout init --cone
-          git -C mlx-current-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"
-          test "$(git -C mlx-current-upstream rev-parse HEAD)" = "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-current-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Prove current MLX complete binary family DirectX translation
         env:
@@ -10300,11 +10097,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          rm -rf mlx-upstream
-          git clone --filter=blob:none --no-checkout https://github.com/ml-explore/mlx.git mlx-upstream
-          git -C mlx-upstream sparse-checkout init --cone
-          git -C mlx-upstream sparse-checkout set mlx/backend/metal/kernels
-          git -C mlx-upstream checkout "$MLX_CORPUS_COMMIT"
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_CORPUS_COMMIT" --sparse mlx/backend/metal/kernels
 
       - name: Enumerate current MLX Metal entry points
         shell: bash
