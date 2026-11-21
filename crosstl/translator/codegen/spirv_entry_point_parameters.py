@@ -22,6 +22,7 @@ from .spirv_interface_locations import (
     plan_entry_input_locations,
     plan_struct_member_locations,
 )
+from .spirv_interpolation import record_entry_input_variable
 from .spirv_invariant_outputs import decorate_invariant_builtin_output
 from .spirv_separate_textures import separate_texture_type_info
 from .spirv_stage_distances import (
@@ -1016,6 +1017,7 @@ class SpirvEntryPointParameterMixin:
         runtime_parameters: List[Tuple[VariableNode, SpirvId, SpirvId]],
         execution_model: Optional[str],
     ):
+        self.entry_input_interface_variables = {}
         self.entry_descriptor_slots = plan_entry_descriptor_slots(
             self,
             [param for param, _param_type, _value_type in runtime_parameters],
@@ -1270,6 +1272,9 @@ class SpirvEntryPointParameterMixin:
                     member_name=member_name,
                     member_index=location_index,
                 )
+                record_entry_input_variable(
+                    self, getattr(param, "name", None), member_name, variable
+                )
                 components.append(
                     self.load_entry_point_interface_value(variable, member_type)
                 )
@@ -1285,6 +1290,7 @@ class SpirvEntryPointParameterMixin:
             param,
             member_index=self.entry_input_locations.get((id(param), None)),
         )
+        record_entry_input_variable(self, getattr(param, "name", None), None, variable)
         return self.load_entry_point_interface_value(variable, param_value_type)
 
     def register_entry_point_return_outputs(

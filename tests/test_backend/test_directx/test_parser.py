@@ -1252,7 +1252,13 @@ def test_parse_block_scope_class_declarations_from_dxc_spec():
 
     body = ast.functions[0].body
 
-    assert [(statement.vtype, statement.name) for statement in body] == [
+    # A block-scope class is a local struct declaration.
+    assert [type(statement).__name__ for statement in body[:2]] == [
+        "StructNode",
+        "StructNode",
+    ]
+    assert [statement.name for statement in body[:2]] == ["Class", "SuperClass"]
+    assert [(statement.vtype, statement.name) for statement in body[2:]] == [
         ("Class", "C"),
         ("SuperClass", "SC"),
     ]
