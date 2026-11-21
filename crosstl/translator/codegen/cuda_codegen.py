@@ -27,7 +27,6 @@ from .comma_expressions import (
     is_comma_expression,
 )
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
-from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_bindings import CudaBindingMixin
 from .cuda_buffer_calls import CudaBufferCallMixin
 from .cuda_expression_types import CudaExpressionTypeMixin
@@ -36,6 +35,7 @@ from .cuda_function_calls import CudaFunctionCallMixin
 from .cuda_function_parts import CudaFunctionPartsMixin
 from .cuda_function_prototypes import late_called_functions, prototype_of
 from .cuda_gather import CudaGatherMixin
+from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_math_calls import CudaMathCallMixin
 from .cuda_query_metadata import CudaQueryMetadataMixin
