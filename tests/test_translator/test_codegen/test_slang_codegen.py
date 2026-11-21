@@ -7193,7 +7193,12 @@ def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes():
     ) in generated_code
     assert "CallShader(1, callableData);" in generated_code
     assert "bool accepted = ReportHit(1.0, 0, attributes);" in generated_code
-    assert "bool acceptedWithoutAttributes = ReportHit(2.0, 1);" in generated_code
+    # Slang's ReportHit needs attributes (E30439): the call without them reports a placeholder of the declared type.
+    assert "static HitAttributes crossgl_hit_attributes;" in generated_code
+    assert (
+        "bool acceptedWithoutAttributes = ReportHit(2.0, 1, crossgl_hit_attributes);"
+        in generated_code
+    )
     assert "IgnoreHit();" in generated_code
     assert "AcceptHitAndEndSearch();" in generated_code
     assert "void CallableMain(inout CallableData data)" in generated_code

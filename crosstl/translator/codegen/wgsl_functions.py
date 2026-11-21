@@ -16,6 +16,7 @@ from .wgsl_stage_io import (
     interpolation_qualifiers,
     with_interpolation,
 )
+from .wgsl_subgroup_operations import wgsl_wave_builtin_inputs
 
 
 class WGSLFunctionMixin:
@@ -325,6 +326,10 @@ class WGSLFunctionMixin:
             return {}
         referenced = {}
         for node in body.walk():
+            wave_builtin = wgsl_wave_builtin_inputs(node)
+            if wave_builtin:
+                # WaveGetLaneIndex() and the operations written with it read the built-in input.
+                referenced[f"{node.operation}()"] = wave_builtin
             if not isinstance(node, IdentifierNode):
                 continue
             builtin = self.BUILTIN_IDENTIFIER_ALIASES.get(node.name)

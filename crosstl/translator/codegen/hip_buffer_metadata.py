@@ -10,6 +10,7 @@ from .c_reference_parameters import (
     multi_component_swizzle_arguments,
     overlapping_output_arguments,
 )
+from .cuda_subscripts import matrix_column_output_arguments
 from .generic_function_utils import generic_function_specialization_named
 from .hip_refusals import HipLoweringRefused
 from .resource_arrays import format_array_declarator
@@ -275,6 +276,18 @@ class HipBufferMetadataMixin:
                     f"overlapping out/inout arguments: {func_name} receives "
                     f"{', '.join(overlapping)} through more than one parameter that "
                     "reaches the caller; HIP references would not copy out separately"
+                ]
+            )
+        columns = matrix_column_output_arguments(self, params, raw_args)
+        if columns:
+            raise HipLoweringRefused(
+                [
+                    f"matrix column passed to an out/inout parameter: {func_name} receives "
+                    + ", ".join(
+                        f"a column m[i] as argument {position}" for position in columns
+                    )
+                    + "; HIP reads a column as a new vector, which a reference cannot "
+                    "bind to; copy it into a local, pass that and assign it back"
                 ]
             )
         swizzles = multi_component_swizzle_arguments(
