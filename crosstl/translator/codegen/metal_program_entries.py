@@ -62,7 +62,10 @@ from .metal_specialization_constants import (
     render_metal_specialization_constant,
     render_metal_specialization_macro,
 )
-from .metal_stage_input_builtins import split_metal_stage_input_builtins
+from .metal_stage_input_builtins import (
+    lower_metal_helper_invocation_reads,
+    split_metal_stage_input_builtins,
+)
 from .metal_vertex_input_builtins import refuse_unbound_metal_vertex_inputs
 from .pointer_reinterpret import (
     crossgl_literal_positive_integer,
@@ -412,6 +415,7 @@ class MetalProgramEntryMixin:
         ast = rename_metal_keyword_parameters(ast)
         refuse_unbound_metal_vertex_inputs(ast, self)
         ast = split_metal_stage_input_builtins(ast, self)
+        ast = lower_metal_helper_invocation_reads(ast, self.refuse_lowering)
         ast = offset_metal_draw_base_indices(ast, self)
         return ast, target_stage
 

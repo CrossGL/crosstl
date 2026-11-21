@@ -12,11 +12,13 @@ a copy of the program before generation, as the GLSL and HLSL generators lower t
 - a read of a member becomes the storage's bits as the member's type (``uintBitsToFloat``, ``int``/``ivecN``, or
   the words themselves), and a write stores the value's bits; a compound write reads, combines and stores;
 - an element of a word-array view (``float a[2]`` in eight bytes) reads and writes one component of the storage;
+- a ``u8vec4`` byte view (``uchar4 bytes[2]``) reads each vector as the four bytes of one word, and a write of the
+  vector or of one lane stores into that word (:mod:`.spirv_union_bytes`);
 - a constructor initializes the first member, as a C union initializer does, and a brace initializer is one.
 
 :class:`.union_layout.UnionLayoutCollector` checks the contract for every generator. A view this pass cannot express
-exactly raises :class:`UnionLayoutError`, which names the union, the member and the reason: a sub-word lane or byte
-view in use, a whole-array view used as a value, the address of a view or a view passed by reference, a
+exactly raises :class:`UnionLayoutError`, which names the union, the member and the reason: a sub-word lane view or a
+signed or Boolean byte view in use, a byte write that cannot be packed in one evaluation, a whole-array view used as a value, the address of a view or a view passed by reference, a
 reinterpreting write whose value is used, a union in a stage input or output, and a member access whose object type
 is unknown. A union in a buffer or uniform block keeps the source layout, because its storage has the union's size and
 alignment.
@@ -59,9 +61,19 @@ from ..semantics.hub_types import (
     type_from_name,
     type_from_node,
 )
+from ..semantics.narrow import NARROW_TARGETS
 from ..semantics.rewrite import child_slots, clone, get_child, is_pure, set_child
 from ..semantics.scoped_walk import ScopedWalker, program_stages
 from .array_utils import collect_literal_int_constants, evaluate_literal_int_expression
+from .spirv_union_bytes import (
+    BYTE_KINDS,
+    byte_decode,
+    byte_encode,
+    byte_lane_write,
+    is_byte_lane_helper,
+    lane_of,
+    packable,
+)
 from .union_layout import UnionLayoutCollector
 
 __all__ = ["UnionLayoutError", "lower_union_storage"]
@@ -224,16 +236,19 @@ class UnionViewFinder(ScopedWalker):
     express raises through ``fail`` while the program is unchanged.
     """
 
-    def __init__(self, program, layouts, fail, label):
+    def __init__(self, program, layouts, fail, label, narrow_registers=False):
         super().__init__(program)
         self.layouts = layouts
         self.fail = fail
         self.label = label
+        # Narrow-integer legalization ran: a u8vec4 value outside the union is an ivec4 register.
+        self.narrow_registers = narrow_registers
         self.views = {}
         self.array_views = {}
         self.indexed = set()
         self.elements = {}
         self.writes = {}
+        self.lane_writes = {}
         self.statements = set()
         self.constructors = {}
         self.member_names = {
@@ -314,7 +329,7 @@ class UnionViewFinder(ScopedWalker):
         elif isinstance(node, FunctionCallNode):
             self.visit_call(node)
         elif isinstance(node, ExpressionStatementNode):
-            if isinstance(node.expression, AssignmentNode):
+            if isinstance(node.expression, (AssignmentNode, FunctionCallNode)):
                 self.statements.add(id(node.expression))
         elif isinstance(node, ForNode):
             for part in (node.init, node.update):
@@ -335,7 +350,7 @@ class UnionViewFinder(ScopedWalker):
             member = layout["members"].get(node.member)
             if member is None:
                 return
-            self.require_word_view(layout, member)
+            self.require_lowered_view(layout, member)
             view = (layout, member, node)
             self.views[id(node)] = view
             if member["kind"].endswith("_array"):
@@ -358,13 +373,53 @@ class UnionViewFinder(ScopedWalker):
                 f"the type of the object of '.{node.member}' is not known, so it may be a view of the union",
             )
 
+    def byte_view(self, expr):
+        """The view when ``expr`` is one u8vec4 of a byte view (an element of an array view), else ``None``."""
+        view = self.view_of(expr)
+        if view is None or view_kind(view[1]) not in BYTE_KINDS:
+            return None
+        if id(expr) in self.elements or not view[1]["kind"].endswith("_array"):
+            return view
+        return None
+
+    def record_lane_write(self, node, vector, lane, value, operator):
+        view = self.byte_view(vector)
+        if view is None:
+            return False
+        layout, member, _ = view
+        if operator != "=" or not is_pure(lane) or not is_pure(vector):
+            self.fail(
+                layout,
+                member,
+                "byte-lane-write-unsupported",
+                "a byte write reads and rewrites its storage word, so it must be a simple assignment whose "
+                "object and lane index have no side effects",
+            )
+        self.lane_writes[id(node)] = (view, vector, lane, value)
+        return True
+
     def visit_assignment(self, node):
         target = node.target
+        lane = lane_of(target)
+        if lane is not None and self.record_lane_write(
+            node, lane[0], lane[1], node.value, node.operator
+        ):
+            return
         view = self.view_of(target)
         if view is not None and (
             id(target) in self.elements or not view[1]["kind"].endswith("_array")
         ):
             layout, member, _ = view
+            if view_kind(member) in BYTE_KINDS and (
+                node.operator != "=" or not packable(node.value)
+            ):
+                self.fail(
+                    layout,
+                    member,
+                    "byte-view-write-unsupported",
+                    "a write of a byte vector packs its four lanes into one word, so it must be a simple "
+                    "assignment of a four-component constructor or of a value without side effects",
+                )
             if view_kind(member) != "uint32" and node.operator != "=":
                 if not is_pure(target):
                     self.fail(
@@ -409,7 +464,16 @@ class UnionViewFinder(ScopedWalker):
         if name in self.layouts and name not in self.functions:
             self.visit_constructor(node, self.layouts[name])
             return
-        for index, argument in enumerate(node.arguments or []):
+        arguments = list(node.arguments or [])
+        skipped = None
+        if is_byte_lane_helper(name, self.functions) and len(arguments) == 3:
+            if self.record_lane_write(
+                node, arguments[0], arguments[1], arguments[2], "="
+            ):
+                skipped = 0
+        for index, argument in enumerate(arguments):
+            if index == skipped:
+                continue
             view = self.view_in(argument)
             if view is not None and self.reference_parameter(name, index):
                 self.fail(
@@ -451,6 +515,11 @@ class UnionViewFinder(ScopedWalker):
         self.require_word_view(layout, member)
         self.constructors[id(node)] = (layout, "first")
 
+    def require_lowered_view(self, layout, member):
+        """Refuse a view other than a 32-bit word view or a u8vec4 byte view."""
+        if view_kind(member) not in BYTE_KINDS:
+            self.require_word_view(layout, member)
+
     def require_word_view(self, layout, member):
         """Refuse a sub-word lane or byte view; a union may declare one that the program never uses."""
         if view_kind(member) not in WORD_KINDS:
@@ -479,6 +548,14 @@ class UnionViewFinder(ScopedWalker):
                     "interpreted-assignment-value-unsupported",
                     "the value of a reinterpreting write is the stored word, not the assigned value",
                 )
+        for write_id, (view, _vector, _lane, _value) in self.lane_writes.items():
+            if write_id not in self.statements:
+                self.fail(
+                    view[0],
+                    view[1],
+                    "interpreted-assignment-value-unsupported",
+                    "the value of a byte write is the stored word, not the assigned value",
+                )
 
 
 class UnionStorageRewriter:
@@ -496,6 +573,8 @@ class UnionStorageRewriter:
 
     def replace(self, node):
         finder = self.finder
+        if id(node) in finder.lane_writes:
+            return self.lane_write(*finder.lane_writes[id(node)])
         if id(node) in finder.writes:
             return self.write(node, finder.writes[id(node)])
         view = finder.view_of(node)
@@ -522,8 +601,15 @@ class UnionStorageRewriter:
     def width(view, storage):
         return 1 if isinstance(storage, ArrayAccessNode) else view[0]["word_count"]
 
+    def lane_write(self, view, vector, lane, value):
+        storage = self.storage(vector)
+        merged = byte_lane_write(storage, self.replace(lane), self.replace(value))
+        return AssignmentNode(storage, merged, "=")
+
     def decode(self, view, storage):
         kind = view_kind(view[1])
+        if kind in BYTE_KINDS:
+            return byte_decode(storage, self.finder.narrow_registers)
         width = self.width(view, storage)
         if kind == "float32":
             return call("uintBitsToFloat", [storage])
@@ -533,6 +619,8 @@ class UnionStorageRewriter:
 
     def encode(self, view, storage, value):
         kind = view_kind(view[1])
+        if kind in BYTE_KINDS:
+            return byte_encode(value)
         width = self.width(view, storage)
         if kind == "float32":
             return call("floatBitsToUint", [value])
@@ -714,7 +802,9 @@ def lower_union_storage(program, target):
             )
 
     brace_initializers(program, layouts)
-    finder = UnionViewFinder(program, layouts, fail, label)
+    finder = UnionViewFinder(
+        program, layouts, fail, label, narrow_registers=target in NARROW_TARGETS
+    )
     finder.run_program()
     finder.finish()
     UnionStorageRewriter(finder).rewrite(program)

@@ -123,6 +123,10 @@ from .interface_block_instances import (
     InterfaceBlockInstanceUnsupportedError,
     declare_interface_block_instances,
 )
+from .intersection_results import (
+    IntersectionResultUnsupportedError,
+    lower_intersection_results,
+)
 from .intrinsic_named_functions import (
     IntrinsicOverloadAmbiguousError,
     resolve_intrinsic_named_functions,
@@ -150,6 +154,10 @@ from .narrow_arithmetic import wrap_narrow_arithmetic
 from .non_uniform_indices import strip_non_uniform_qualifiers
 from .opaque_structs import OpaqueStructUnsupportedError, legalize_opaque_struct_members
 from .packed_members import PackedMemberLayoutError, refuse_unplaced_packed_members
+from .partitioned_waves import (
+    PartitionedWaveUnsupportedError,
+    lower_partitioned_wave_operations,
+)
 from .program_families import discharge_program_families
 from .push_constant_layouts import mark_push_constant_layouts
 from .relative_vertex_ids import (
@@ -221,6 +229,7 @@ from .structured_layouts import (
     StructuredLayoutUnsupportedError,
     legalize_structured_layouts,
 )
+from .subgroup_rotations import WaveRotationUnsupportedError, lower_wave_rotations
 from .subpass_inputs import SubpassInputUnsupportedError, lower_subpass_inputs
 from .task_payload_storage import declare_task_payload_storage
 from .template_assertions import resolve_template_assertions
@@ -281,6 +290,8 @@ __all__ = [
     "TessFactorUnsupportedError",
     "ConstantBufferTooLargeError",
     "CudaWarpIntrinsicUnsupportedError",
+    "PartitionedWaveUnsupportedError",
+    "WaveRotationUnsupportedError",
     "DebugPrintfUnsupportedError",
     "DescriptorArrayUnsupportedError",
     "DeviceReferenceUnsupportedError",
@@ -302,6 +313,7 @@ __all__ = [
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
     "InterfaceBlockInstanceUnsupportedError",
+    "IntersectionResultUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
     "LocalStructUnsupportedError",
     "MetalBarycentricsUnsupportedError",
@@ -406,7 +418,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
     layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). Every use of a
     type alias then names the aliased type, the MSL, HLSL and GLSL generators keeping program-scope aliases
-    (:mod:`.type_aliases`). Each ``static_assert`` is then checked and removed, a false or unevaluable one being
+    (:mod:`.type_aliases`). For targets other than Metal, an intersection entry that returns Metal's result
+    structure becomes a ``void`` entry that calls ``ReportHit`` (:mod:`.intersection_results`). Each ``static_assert`` is then checked and removed, a false or unevaluable one being
     refused with :class:`StaticAssertionFailedError` or :class:`StaticAssertionUnresolvedError`
     (:mod:`.static_assertions`). Scalar brace initializers become zero or their single converted value,
     and excess scalar values are refused (:mod:`.scalar_brace_values`). GLSL's
@@ -494,7 +507,10 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     textures or images are flattened into separate resources for SPIR-V, or refused with
     :class:`OpaqueStructUnsupportedError` (:mod:`.opaque_structs`), and arrays of arrays of resources become
     one-dimensional descriptor arrays (:mod:`.descriptor_arrays`).
-    CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`). HLSL's
+    CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`), and partitioned
+    wave reductions and scans become loops over the subgroup's lanes, or are refused with
+    :class:`PartitionedWaveUnsupportedError` (:mod:`.partitioned_waves`), and subgroup rotations become
+    ``WaveReadLaneAt`` reads of the rotated lane (:mod:`.subgroup_rotations`). HLSL's
     ``countbits``, ``reversebits``, ``firstbithigh`` and ``firstbitlow`` become the GLSL functions with HLSL's
     ``uint`` results on targets without them, and bit counts, bit reversals and signed ``abs`` of 8- and 16-bit
     integers are spelled on 32-bit operands, so 32-bit carriers compute them at the value's width
@@ -556,6 +572,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_texel_offsets(program, report.target)
     fold_sizeof_values(program, report.target)
     resolve_type_aliases(program, report.target)
+    lower_intersection_results(program, report.target)
     lower_storage_variables(program, report.target)
     lower_uniform_variables(program, report.target)
     orient_row_major_struct_members(program, report.target)
@@ -634,6 +651,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_shadow_samples(program, report.target)
     legalize_implicit_lod(program, report.target)
     legalize_cuda_warp_intrinsics(program, report.target)
+    lower_partitioned_wave_operations(program, report.target)
+    lower_wave_rotations(program, report.target)
     legalize_half_floats(program, report.source, report.target)
     legalize_bit_functions(program, report.source, report.target)
     legalize_narrow_integers(program, report.source, report.target)

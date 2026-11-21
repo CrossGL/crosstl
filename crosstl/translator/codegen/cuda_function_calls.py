@@ -12,6 +12,11 @@ from .cuda_tables import (
     CUDA_INTEGER_BIT_FUNCTION_ALIASES,
     CUDA_WAVE_OP_ARITIES,
 )
+from .cuda_type_reinterpretation import (
+    as_type_result_type,
+    is_as_type_call,
+    lower_as_type,
+)
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generate_static_generic_numeric_call,
@@ -306,6 +311,8 @@ class CudaFunctionCallMixin:
         return func_name
 
     def cuda_bitcast_result_type(self, func_name, raw_args):
+        if is_as_type_call(func_name):
+            return as_type_result_type(self, func_name)
         wide_bitcast = CUDA_64BIT_BITCAST_FUNCTIONS.get(func_name)
         if (
             wide_bitcast is not None
@@ -337,6 +344,15 @@ class CudaFunctionCallMixin:
         return None
 
     def generate_cuda_bitcast_call(self, func_name, raw_args, args):
+        if is_as_type_call(func_name) and not self.is_user_defined_function(func_name):
+            return lower_as_type(
+                self,
+                func_name,
+                raw_args,
+                args,
+                CudaLoweringRefused,
+                self.require_cuda_vector_bitcast_helper,
+            )
         result_type = self.cuda_bitcast_result_type(func_name, raw_args)
         if result_type is None:
             return None

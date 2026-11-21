@@ -49217,7 +49217,10 @@ def test_translate_project_metal_matmul_uint2_grid_id_normalizes_for_compute_tar
     assert "uint2 id" not in hip
 
     mojo = outputs["mojo"]
-    assert "id_globalInvocationID: SIMD[DType.uint32, 4]" in mojo
+    assert (
+        "var id_globalInvocationID = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+        "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+    ) in mojo
     assert (
         "var id: SIMD[DType.uint32, 2] = "
         "SIMD[DType.uint32, 2](id_globalInvocationID[0], "
@@ -56449,8 +56452,12 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
 
     assert "# CrossGL GPU builtin placeholders" not in output
     assert "struct _CrossGLGpuBuiltinU32Vec3" not in output
-    assert "fn saxpy(global_idx_uint: SIMD[DType.uint32, 4]) -> None:" in output
-    assert "var gid: Int32 = global_idx_uint[0]" in output
+    assert "def saxpy(" in output
+    assert (
+        "var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+        "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+    ) in output
+    assert "var gid: Int32 = Int32(global_idx_uint[0])" in output
     assert "gl_GlobalInvocationID" not in output
 
     assert "crossgl-gpu-builtin-placeholders" not in payload["summary"].get(
@@ -56476,8 +56483,11 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
             }
             """,
             # The grid index imports as the global invocation id.
-            ["global_idx_uint: SIMD[DType.uint32, 4]"],
-            "var i: Int32 = global_idx_uint[0]",
+            [
+                "var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+                "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+            ],
+            "var i: Int32 = Int32(global_idx_uint[0])",
         ),
         (
             "add_kernel.hip",
@@ -56494,8 +56504,11 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
                 }
             }
             """,
-            ["global_idx_uint: SIMD[DType.uint32, 4]"],
-            "var i: Int32 = global_idx_uint[0]",
+            [
+                "var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+                "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+            ],
+            "var i: Int32 = Int32(global_idx_uint[0])",
         ),
     ],
 )
@@ -56957,11 +56970,11 @@ def test_translate_project_rust_gpu_mutable_fragment_output_lowers_for_native_ta
     }
 
     mojo = outputs["mojo"]
-    assert "fn main_fs() -> SIMD[DType.float32, 4]:" in mojo
+    assert "def main_fs() -> SIMD[DType.float32, 4]:" in mojo
     assert "var output: SIMD[DType.float32, 4]" in mojo
     assert "output = SIMD[DType.float32, 4](1.0, 0.0, 0.0, 1.0)" in mojo
     assert "return output" in mojo
-    assert "fn main_fs(output" not in mojo
+    assert "def main_fs(output" not in mojo
     assert "CrossGL parameter semantic" not in mojo
 
     rust = outputs["rust"]
