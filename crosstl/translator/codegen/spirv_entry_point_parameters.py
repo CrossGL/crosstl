@@ -18,11 +18,11 @@ from .spirv_argument_tables import plan_entry_descriptor_slots
 from .spirv_conservative_depth import DEPTH_LAYOUT_ATTRIBUTES, record_depth_layout
 from .spirv_extension_builtins import unmapped_builtin_reason
 from .spirv_inline_requirements import is_inline_spirv_attribute
-from .spirv_interpolation import record_entry_input_variable
 from .spirv_interface_locations import (
     plan_entry_input_locations,
     plan_struct_member_locations,
 )
+from .spirv_interpolation import record_entry_input_variable
 from .spirv_invariant_outputs import decorate_invariant_builtin_output
 from .spirv_separate_textures import separate_texture_type_info
 from .spirv_stage_distances import (

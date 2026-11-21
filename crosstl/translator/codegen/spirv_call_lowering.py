@@ -29,12 +29,12 @@ from .spirv_exponent_builtins import (
     spirv_output_operand_call,
 )
 from .spirv_fragment_interlock import INTERLOCK_CALLS, spirv_interlock_call
+from .spirv_geometry_streams import (
+    STREAM_FUNCTIONS,
+)
 from .spirv_interpolation import (
     SPIRV_INTERPOLATION_FUNCTIONS,
     spirv_interpolation_call,
-)
-from .spirv_geometry_streams import (
-    STREAM_FUNCTIONS,
 )
 from .spirv_shader_clock import (
     SPIRV_SHADER_CLOCKS,
