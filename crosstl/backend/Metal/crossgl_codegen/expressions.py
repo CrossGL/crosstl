@@ -25,7 +25,10 @@ from ..MetalAst import (
 )
 from ..ordered_atomics import refuse_unfenced_atomic_call
 from ..sparse_color import METAL_SPARSE_TEXTURE_METHODS, import_sparse_color_member
-from ..static_member_calls import unresolved_static_member_call_owner
+from ..static_member_calls import (
+    refuse_dependent_member_call,
+    unresolved_static_member_call_owner,
+)
 from ..vote_masks import (
     render_ballot_call,
     render_vote_mask_conversion,
@@ -400,6 +403,9 @@ class MetalExpressionMixin:
             materialized_name,
             expr.args,
             getattr(expr, "source_location", None),
+        )
+        refuse_dependent_member_call(
+            self, materialized_name, getattr(expr, "source_location", None)
         )
         unbound_member = unresolved_static_member_call_owner(self, materialized_name)
         if unbound_member is not None:
