@@ -13,7 +13,6 @@ already converts to the vectors' component type, and GLSL.std.450 Refract types 
 
 from __future__ import annotations
 
-from typing import List
 
 from .spirv_values import SpirvId
 
@@ -53,8 +52,8 @@ def _component(codegen, value: SpirvId) -> str:
 
 
 def widen_float_operands(
-    codegen, function_name: str, args: List[SpirvId]
-) -> List[SpirvId]:
+    codegen, function_name: str, args: list[SpirvId]
+) -> list[SpirvId]:
     """``args`` with each ``float`` scalar or vector converted to ``double`` when another operand is ``double``.
 
     Calls with a non-floating operand (``mix`` with a Boolean selector, an integer operand) keep their operands.
