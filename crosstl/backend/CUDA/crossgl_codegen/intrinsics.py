@@ -5,6 +5,7 @@ from ...bfloat16_conversions import format_bfloat16_conversion
 from ...thread_hierarchy import global_invocation_axis
 from ..CudaAst import UnaryOpNode
 from ..directed_rounding import refuse_directed_rounding
+from ..pointer_math_import import format_pointer_output_call
 from ..sizeof_operands import sizeof_type_operand
 
 
@@ -75,6 +76,13 @@ class CudaImportIntrinsicMixin:
             return self.format_cuda_fold_expression(node.args)
         if raw_name == "cuda_comma_expression":
             return self.format_cuda_comma_expression(node.args)
+
+        if not self.is_user_defined_function(raw_name):
+            pointer_output_call = format_pointer_output_call(
+                self, raw_name, node.args, UnaryOpNode
+            )
+            if pointer_output_call is not None:
+                return pointer_output_call
 
         args = [self.visit(arg) for arg in node.args]
         if raw_name == "sizeof" and len(args) == 1 and isinstance(node.args[0], str):
