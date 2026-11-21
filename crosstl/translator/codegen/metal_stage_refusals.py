@@ -8,7 +8,8 @@ object and mesh pipeline, so the generator refuses the stage instead of writing 
 Metal tessellation is structured differently from HLSL's and GLSL's (MSL section 5.1.5, "Post-tessellation vertex
 functions"): tessellation factors and per-patch data are written to buffers by a compute kernel, and the
 post-tessellation ``[[patch(...)]] vertex`` function reads them with the control points through ``[[stage_in]]``.
-Until the hull and domain stages are lowered to that form they are refused too.
+A tessellation evaluation (domain) stage becomes that function (:mod:`.metal_post_tessellation`); until the hull
+stage is lowered to the compute kernel it is refused too.
 """
 
 from __future__ import annotations
@@ -26,14 +27,19 @@ _REASONS = {
         "Language Specification 5.1.5); lowering a tessellation control (hull) stage to that kernel is not "
         "implemented"
     ),
-    "tessellation_evaluation": (
-        "Metal evaluates tessellated patches in a [[patch]] post-tessellation vertex function that reads its "
-        "control points and per-patch data through [[stage_in]] (Metal Shading Language Specification 5.1.5); "
-        "lowering a tessellation evaluation (domain) stage to that function is not implemented"
-    ),
 }
 
 METAL_REFUSED_STAGES = frozenset(_REASONS)
+
+# A stage Metal writes in one form and refuses in another (:mod:`.metal_post_tessellation`).
+_FORM_REASONS = {
+    "tessellation_evaluation": (
+        "Metal evaluates tessellated patches in a [[patch]] post-tessellation vertex function that reads its "
+        "control points and per-patch data through [[stage_in]] (Metal Shading Language Specification 5.1.5); "
+        "a tessellation evaluation stage that reads gl_in, gl_TessCoord and per-vertex input arrays, as GLSL "
+        "writes it, is not lowered to that function yet, only one that takes an OutputPatch and @domain"
+    ),
+}
 
 
 class MetalStageUnsupportedError(TranslationDiagnostic):
@@ -43,7 +49,8 @@ class MetalStageUnsupportedError(TranslationDiagnostic):
 
     def __init__(self, stage: str):
         self.stage = stage
-        super().__init__(f"{_REASONS[stage]} (stage {stage})", target="metal")
+        reason = _REASONS.get(stage) or _FORM_REASONS[stage]
+        super().__init__(f"{reason} (stage {stage})", target="metal")
 
 
 def refuse_metal_stages(stage_names) -> None:
