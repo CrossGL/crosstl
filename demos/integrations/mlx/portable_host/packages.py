@@ -60,6 +60,15 @@ UNARY_OPERATIONS = (
     "Round",
 )
 UNARY_ENTRIES = tuple(f"v_{op}float32float32" for op in UNARY_OPERATIONS)
+# MLX's Log2 and Log10 call metal::precise::log2 and metal::precise::log10,
+# which keep Metal's finite accuracy near one through the profiled base-two
+# logarithm. A target's own log2 is off by up to 2^-21 absolutely there, which
+# the upstream tests' np.allclose rejects for results near zero.
+LOG2_PROFILES = (
+    ("binary32_log2_operand_profile", "flush-subnormals"),
+    ("binary32_log2_accuracy_profile", "portable-finite"),
+)
+LOG2_OPERATIONS = frozenset({"Log2", "Log10"})
 COPY_SOURCE = "mlx/backend/metal/kernels/copy.metal"
 COPY_ENTRY = "ggn2_dynamic_copyuint32uint32"
 BOOLEAN_COPY_ENTRY = "ggn2_dynamic_copybool_bool_"
@@ -261,6 +270,21 @@ OPENGL_COPY_INDEX_ASSERTIONS = (
 OPENGL_SLICE_UPDATE_INDEX_ASSERTIONS = ("output_offset", "out_ + out_idx")
 
 
+def metal_source_options(entries):
+    """The Metal source options of one prebuilt family's translation."""
+    options = [
+        ("binary32_fma_profile", "rne-flush"),
+        ("binary32_sqrt_profile", "flush-subnormals"),
+        ("binary32_rsqrt_profile", "flush-subnormals"),
+    ]
+    if any(
+        entry.startswith("v_") and entry[2:].startswith(tuple(LOG2_OPERATIONS))
+        for entry in entries
+    ):
+        options.extend(LOG2_PROFILES)
+    return "".join(f'{option} = "{value}"\n' for option, value in options)
+
+
 def _opengl_index_assertions(target, assertions):
     if target != "opengl":
         return ""
@@ -383,9 +407,8 @@ def build_packages(root, output, target, *, family="base", jobs=1):
                 f'[project.entry_workgroup_size_rules."{source}"]\n"{patterns[source]}" = [1, 1, 1]\n'
                 for source in sources
             )
-            + '[project.source_options.metal]\nbinary32_fma_profile = "rne-flush"\n'
-            + 'binary32_sqrt_profile = "flush-subnormals"\n'
-            + 'binary32_rsqrt_profile = "flush-subnormals"\n'
+            + "[project.source_options.metal]\n"
+            + metal_source_options(entries)
             + _opengl_index_assertions(
                 target,
                 [

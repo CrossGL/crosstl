@@ -25,10 +25,15 @@ from crosstl.translator.ast import (
     IdentifierNode,
     IfNode,
     LiteralNode,
+    PointerType,
     PrimitiveType,
     ReturnNode,
 )
 from crosstl.translator.codegen.directx_codegen import DirectXSoftwareSubgroupError
+from crosstl.translator.codegen.GLSL_codegen import (
+    GLSLCodeGen,
+    OpenGLSoftwareSubgroupError,
+)
 from crosstl.translator.codegen.lane_symmetry import (
     SYMMETRIC,
     UNIFORM,
@@ -167,19 +172,35 @@ def _reasons(report):
     ]
 
 
-def test_directx_schedules_tiles_from_lane_symmetric_reductions(tmp_path):
-    report = _report(tmp_path, "directx", _kernel())
+HELPER_CALLS = {
+    "directx": ("bool schedule_row_tile_16(", "__crossgl_software_subgroup_"),
+    "opengl": ("bool schedule_row_tile_16_", "crossglSoftwareSubgroup"),
+}
+TARGETS = tuple(HELPER_CALLS)
+
+
+def _refused(report, target):
+    return _codes(report) == [f"project.translate.{target}-software-subgroup-invalid"]
+
+
+@pytest.mark.parametrize("target", TARGETS)
+def test_schedules_tiles_from_lane_symmetric_reductions(tmp_path, target):
+    report = _report(tmp_path, target, _kernel())
     assert _codes(report) == [], report.to_json()["diagnostics"]
     (artifact,) = report.to_json()["artifacts"]
     generated = (tmp_path / artifact["path"]).read_text()
     # The helper keeps its software-subgroup reduction, shuffles and early
     # return; the entry leaves when it returns false.
-    assert "bool schedule_row_tile_16(" in generated
-    assert "__crossgl_software_subgroup_sum_int" in generated
-    assert "__crossgl_software_subgroup_read_lane_at_int" in generated
-    _compile(generated, "directx", tmp_path)
+    helper, prefix = HELPER_CALLS[target]
+    assert helper in generated
+    for operation in ("sum_int", "read_lane_at_int"):
+        if target == "opengl":
+            operation = "".join(part.title() for part in operation.split("_"))
+        assert f"{prefix}{operation}" in generated
+    _compile(generated, target, tmp_path)
 
 
+@pytest.mark.parametrize("target", TARGETS)
 @pytest.mark.parametrize(
     ("owner", "options"),
     [
@@ -193,20 +214,22 @@ def test_directx_schedules_tiles_from_lane_symmetric_reductions(tmp_path):
         (OWNER, {"immutable": False}),
     ],
 )
-def test_directx_refuses_exits_on_values_that_are_not_uniform(tmp_path, owner, options):
-    report = _report(tmp_path, "directx", _kernel(owner), **options)
-    assert _codes(report) == ["project.translate.directx-software-subgroup-invalid"]
+def test_refuses_exits_on_values_that_are_not_uniform(tmp_path, target, owner, options):
+    report = _report(tmp_path, target, _kernel(owner), **options)
+    assert _refused(report, target), report.to_json()["diagnostics"]
 
 
-def test_directx_receives_uniform_results_through_reference_parameters(tmp_path):
+@pytest.mark.parametrize("target", TARGETS)
+def test_receives_uniform_results_through_reference_parameters(tmp_path, target):
     # rows comes from a broadcast at owner_lane, a uniform unsigned local the
     # helper's condition bounds below the subgroup width.
-    report = _report(tmp_path, "directx", _kernel(consumer=ROWS_LOOP))
+    report = _report(tmp_path, target, _kernel(consumer=ROWS_LOOP))
     assert _codes(report) == [], report.to_json()["diagnostics"]
     (artifact,) = report.to_json()["artifacts"]
-    _compile((tmp_path / artifact["path"]).read_text(), "directx", tmp_path)
+    _compile((tmp_path / artifact["path"]).read_text(), target, tmp_path)
 
 
+@pytest.mark.parametrize("target", TARGETS)
 @pytest.mark.parametrize(
     ("owner", "lane_type"),
     [
@@ -216,20 +239,14 @@ def test_directx_receives_uniform_results_through_reference_parameters(tmp_path)
         ("ushort(simd_shuffle(int(tiles_through <= tile), simd_lane_id))", "ushort"),
     ],
 )
-def test_directx_refuses_reference_results_from_unproven_lanes(
-    tmp_path, owner, lane_type
+def test_refuses_reference_results_from_unproven_lanes(
+    tmp_path, target, owner, lane_type
 ):
     source = _kernel(owner, ROWS_LOOP).replace(
         "const ushort owner_lane", f"const {lane_type} owner_lane"
     )
-    report = _report(tmp_path, "directx", source)
-    assert _codes(report) == ["project.translate.directx-software-subgroup-invalid"]
-
-
-def test_opengl_still_requires_entry_level_collective_helpers(tmp_path):
-    report = _report(tmp_path, "opengl", _kernel())
-    assert _codes(report) == ["project.translate.opengl-software-subgroup-invalid"]
-    assert _reasons(report) == ["helper-call-not-uniform"]
+    report = _report(tmp_path, target, source)
+    assert _refused(report, target), report.to_json()["diagnostics"]
 
 
 @pytest.mark.parametrize(
@@ -250,6 +267,110 @@ def test_full_subgroup_reduction_bounds_a_collective_loop(threads, accepted):
     else:
         with pytest.raises(DirectXSoftwareSubgroupError):
             _codegen().generate_stage(parse(source), "compute")
+
+
+GLSL_LOOP = """
+shader LaneSymmetricLoopExits {
+    cbuffer Dispatch @binding(0) {
+        uint nRows;
+    };
+
+    compute {
+        layout(local_size_x = THREADS, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            float total = 0.0;
+            for (uint row = 0u; row < nRows; row++) {
+                total += WaveActiveSum(float(gl_LocalInvocationIndex));
+                EXIT
+            }
+            total += WaveActiveSum(1.0);
+        }
+    }
+}
+"""
+
+
+def _glsl(exit_statement, threads=64):
+    source = GLSL_LOOP.replace("THREADS", str(threads)).replace("EXIT", exit_statement)
+    return GLSLCodeGen(software_subgroup_width=32).generate(parse(source))
+
+
+@pytest.mark.parametrize(
+    "exit_statement",
+    [
+        "break;",
+        "continue;",
+        "return;",
+        # A condition every invocation evaluates alike.
+        "if (nRows > 4u) { break; }",
+        # A full-subgroup reduction of a uniform value.
+        "if (WaveActiveSum(1u) > 16u) { break; }",
+    ],
+)
+def test_opengl_loops_keep_exits_every_invocation_takes(tmp_path, exit_statement):
+    generated = _glsl(exit_statement)
+    assert "crossglSoftwareSubgroupSumFloat(" in generated
+    _compile(generated, "opengl", tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("exit_statement", "threads"),
+    [
+        ("if (gl_LocalInvocationIndex == 0u) { break; }", 64),
+        # The subgroups reduce different lanes of the invocation index.
+        ("if (WaveActiveSum(gl_LocalInvocationIndex) > 600u) { break; }", 64),
+        # A partial subgroup sums fewer lanes than a full one.
+        ("if (WaveActiveSum(1u) > 16u) { break; }", 48),
+    ],
+)
+def test_opengl_loops_refuse_exits_that_may_diverge(exit_statement, threads):
+    with pytest.raises(OpenGLSoftwareSubgroupError) as raised:
+        _glsl(exit_statement, threads)
+    assert raised.value.reason == "potentially-divergent-control-flow"
+
+
+SCHEDULE_CALL = (
+    "!schedule_row_tile<16>(offsets, E, M, tid.y, simd_lane_id, row, group, rows)"
+)
+
+
+@pytest.mark.parametrize("target", TARGETS)
+@pytest.mark.parametrize(
+    "condition",
+    [
+        # Every invocation evaluates the right operand, or none does: the
+        # left operand is workgroup-uniform. This is the shape of MLX's
+        # gather_mm_rhs guard.
+        f"M <= int(tid.x) || {SCHEDULE_CALL}",
+        f"E > 0 && {SCHEDULE_CALL}",
+        f"(E > 0 ? {SCHEDULE_CALL} : true)",
+    ],
+)
+def test_helper_calls_under_uniform_short_circuits_are_proven(
+    tmp_path, target, condition
+):
+    report = _report(tmp_path, target, _kernel().replace(SCHEDULE_CALL, condition))
+    assert _codes(report) == [], report.to_json()["diagnostics"]
+    (artifact,) = report.to_json()["artifacts"]
+    _compile((tmp_path / artifact["path"]).read_text(), target, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "condition",
+    [
+        # The right operand of a short-circuit operator runs only in the
+        # invocations its varying left operand selects.
+        f"lid > 0u && {SCHEDULE_CALL}",
+        f"lid == 0u || {SCHEDULE_CALL}",
+        f"(lid > 0u ? {SCHEDULE_CALL} : true)",
+        # An else-if condition runs only where a varying first one failed.
+        f"lid == 0u) {{ return; }} else if ({SCHEDULE_CALL}",
+    ],
+)
+def test_opengl_refuses_helper_calls_a_condition_may_skip(tmp_path, condition):
+    report = _report(tmp_path, "opengl", _kernel().replace(SCHEDULE_CALL, condition))
+    assert _refused(report, "opengl"), report.to_json()["diagnostics"]
+    assert _reasons(report) == ["helper-call-not-uniform"]
 
 
 def _literal(value):
@@ -293,6 +414,117 @@ def test_constant_lanes_fold_only_value_preserving_conversions():
         folder._constant_lane(FunctionCallNode(IdentifierNode("f"), [_literal(1)]))
         is None
     )
+
+
+def test_local_names_shadow_module_constant_lanes():
+    from crosstl.translator.codegen.lane_symmetry import FunctionSymmetry
+
+    class Rules:
+        @staticmethod
+        def constant_int(node):
+            # The module declares a constant LANE = 3.
+            return 3 if getattr(node, "name", None) == "LANE" else None
+
+        @staticmethod
+        def walk(node):
+            return [node]
+
+    folder = FunctionSymmetry.__new__(FunctionSymmetry)
+    folder.rules = Rules()
+    folder.function = None
+    folder.declared = set()
+    assert folder._constant_lane(IdentifierNode("LANE")) == 3
+    # A local LANE holds whatever the function stores in it.
+    folder.declared = {"LANE"}
+    assert folder._constant_lane(IdentifierNode("LANE")) is None
+
+
+def _view_levels(pointer_type):
+    """Levels after ``P view = table; int value = view[lane];``."""
+    from crosstl.translator.ast import (
+        ArrayAccessNode,
+        FunctionNode,
+        ParameterNode,
+        VariableNode,
+    )
+    from crosstl.translator.codegen.lane_symmetry import (
+        LaneSymmetryAnalysis,
+        SymmetryRules,
+    )
+
+    def walk(node):
+        pending = [node]
+        while pending:
+            current = pending.pop()
+            if isinstance(current, (list, tuple)):
+                pending.extend(current)
+            elif current is not None:
+                yield current
+                pending.extend(current.child_nodes())
+
+    rules = SymmetryRules(
+        walk=walk,
+        map_operator=lambda operator: operator,
+        collective=lambda node: None,
+        call_target=lambda call: None,
+        pure_call=lambda call: False,
+        call_dependencies=lambda call: None,
+        storage_load=lambda node: None,
+        constant_int=lambda node: None,
+        call_writes=lambda call: set(),
+        seeded_parameter=lambda parameter: True,
+        volatile=lambda declaration: False,
+        storage_parameter=lambda parameter: True,
+        private_reference=lambda parameter: False,
+        width=32,
+        full_subgroups=True,
+        reductions=frozenset(),
+        broadcasts=frozenset(),
+        lane_preserving=frozenset(),
+    )
+    table_type = PointerType(PrimitiveType("int"), False, "device", "read")
+    function = FunctionNode(
+        "f",
+        PrimitiveType("void"),
+        [
+            ParameterNode("table", table_type),
+            ParameterNode("lane", PrimitiveType("uint")),
+        ],
+        [
+            VariableNode("view", pointer_type, IdentifierNode("table")),
+            VariableNode(
+                "value",
+                PrimitiveType("int"),
+                ArrayAccessNode(IdentifierNode("view"), IdentifierNode("lane")),
+            ),
+        ],
+    )
+    facts = LaneSymmetryAnalysis(rules).analyze(
+        function, {"table": UNIFORM, "lane": SYMMETRIC}, True
+    )
+    return {name: facts.name_level(name) for name in ("table", "view", "value")}
+
+
+def test_read_only_storage_views_keep_their_referent_level():
+    # A read-only view cannot write the storage it reads, so lowering a
+    # parameter to a view, as OpenGL resource references do, keeps loads
+    # through it at the parameter's level.
+    read_only = PointerType(PrimitiveType("int"), False, "device", "read")
+    assert _view_levels(read_only) == {
+        "table": UNIFORM,
+        "view": UNIFORM,
+        "value": SYMMETRIC,
+    }
+    # A writable view, or one into private memory, still fails closed.
+    for writable in (
+        PointerType(PrimitiveType("int"), True, "device", "read_write"),
+        PointerType(PrimitiveType("int"), False, "thread", "read"),
+    ):
+        assert _view_levels(writable) == {
+            "table": VARYING,
+            "view": VARYING,
+            "value": VARYING,
+        }
 
 
 def _offsets_case():
@@ -354,11 +586,7 @@ def test_expected_tiles_cover_every_branch():
 def test_lane_symmetric_schedule_executes(tmp_path, consumer):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required lane-symmetric execution")
-    target = {"darwin": "metal", "win32": "directx"}.get(sys.platform)
-    if target is None:
-        pytest.skip(
-            "OpenGL software subgroups refuse this helper (CrossGL/crosstl#2546)"
-        )
+    target = {"darwin": "metal", "win32": "directx", "linux": "opengl"}[sys.platform]
     source = _kernel(consumer=consumer)
     report = _report(tmp_path, target, source)
     assert _codes(report) == []

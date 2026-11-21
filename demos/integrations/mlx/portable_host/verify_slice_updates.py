@@ -8,6 +8,7 @@ import sys
 import unittest
 from pathlib import Path
 
+from demos.integrations.mlx.portable_host import elementwise_evidence
 from demos.integrations.mlx.portable_host import slice_capacity_workloads as capacity
 from demos.integrations.mlx.portable_host import slice_update_workloads as workloads
 from demos.integrations.mlx.portable_host.gather_evidence import audit_native_execution
@@ -58,6 +59,11 @@ def worker(args):
             slice_updates=args.slice_updates,
             reductions=args.reductions,
             retain_native_modules=True,
+            # mx.allclose compares with scalar operands (vs_, sv_), which no
+            # prebuilt family installs and the native path translates from
+            # the pinned source. The negative controls keep no source, so
+            # each still finds its package missing.
+            mlx_root=args.mlx_root if args.worker == "native" else None,
         )
         if args.worker.startswith("missing-"):
             host.descriptors.pop(
@@ -267,7 +273,19 @@ def verify(args):
             trace[small_count:count] if mode == "native" else [],
             native=mode == "native",
         )
-    checked = 0
+    installed = {
+        entry
+        for _, index, variants in packages
+        if not variants
+        for entry in index["descriptors"]
+    }
+    # The scalar-operand kernels mx.allclose reaches run from the lazy cache;
+    # their audit derives each package again from the pinned source.
+    checked = len(
+        elementwise_evidence.audit_lazy_events(
+            trace, args.mlx_root, args.packages, target, installed
+        )
+    )
     for directory, index, variants in packages:
         events = [
             event

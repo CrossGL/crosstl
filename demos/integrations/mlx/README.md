@@ -390,11 +390,11 @@ CROSTL_MLX_CURRENT_GEMM_GATHER_SHARD_COUNT=7 \
 python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_gemm_gather.py
 ```
 
-The two `gather_mm_rhs` entries are not covered. They derive each row tile
-from `offsets` with subgroup scans and return early on their reduction.
-Immutable `offsets` storage (#2263) is not enough: DirectX and OpenGL can
-lower the early return only once reductions of values equal in every subgroup
-count as workgroup-uniform (#2546).
+The two `gather_mm_rhs` entries are not covered by this gate. They derive
+each row tile from `offsets` with subgroup scans and return early on their
+reduction. With `offsets` immutable and `num_groups` bounded, DirectX and
+OpenGL treat that reduction as workgroup-uniform, and the MLX host runs both
+entries through `verify_gather_mm.py` and the upstream sorted gather tests.
 
 #### Block-masked GEMM
 
@@ -5763,9 +5763,18 @@ the guarded 5,188-byte GLSL artifact with `glslangValidator`; its SHA-256 remain
 continues to reject a device subgroup width other than 32 before translated
 work.
 
-The native DirectX case is not currently a passing portability claim: the
-checkpoint run returned an incorrect value, tracked in
-[#2120](https://github.com/CrossGL/crosstl/issues/2120). The original numerical
+The native DirectX case is not currently a passing portability claim on every
+WARP build: the checkpoint run returned an incorrect value, tracked in
+[#2120](https://github.com/CrossGL/crosstl/issues/2120). The WARP conformance
+matrix traced it to fixed HLSL controls without CrossTL code generation: WARP
+1.0.21 returns wrong `WaveActiveSum` results for partially active waves in
+512-invocation `[WaveSize(32)]` groups, which is this kernel's `tid < 16` step,
+and the matrix's reference library, WARP 1.0.19, passes those controls. The
+failure is intermittent on 1.0.21: nightly run 44536955139 returned
+`2.8010599678452525e+29` from the same HLSL that earlier nightlies read back as
+`256.0`. Windows CI therefore runs this dot step on checksum-pinned WARP 1.0.19
+through `select_reference_warp.ps1` and restores the required WARP 1.0.21
+library afterwards, also after a failure. The original numerical
 assertion remains required. Windows CI retains the translation report, package,
 loader descriptor, input fixture, dispatch plan, availability details, DXC
 command and compiled artifacts, and returned values under `mlx-dot-directx`,

@@ -8,7 +8,10 @@ import sys
 import unittest
 from pathlib import Path
 
-from demos.integrations.mlx.portable_host import integer64_workloads
+from demos.integrations.mlx.portable_host import (
+    elementwise_evidence,
+    integer64_workloads,
+)
 from demos.integrations.mlx.portable_host.prepare import COMMIT, verify_prepared
 from demos.integrations.mlx.portable_host.reduction_packages import load_index
 from demos.integrations.mlx.portable_host.runtime import HostRuntime
@@ -19,10 +22,13 @@ from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 UPSTREAM_TESTS = ("test_ops.TestOps.test_clip", "test_ops.TestOps.test_meshgrid")
 NEGATIVE_CHECKS = {
     "missing": "No translated package for v_Absint64int64",
-    "int16": "unary dispatch requires float32 arrays",
+    # Without the pinned source no package serves 16-bit absolute values.
+    "int16": "No translated package for v_Absint16int16",
     "large-allocation": "exceeds its allocation",
-    "reduction": "matching float32/int32/uint32 numeric arrays",
-    "bitwise": "supported dtype",
+    # The 64-bit sum is looked up like every other reduction, and no family
+    # installs it.
+    "reduction": "No translated package for all_reduce_sumint64",
+    "bitwise": "No translated package for vv_BitwiseAndint64",
 }
 
 
@@ -48,6 +54,11 @@ def worker(args):
             integer64=args.integer64,
             absolute=args.absolute,
             reductions=args.reductions,
+            # The upstream tests also reach scalar-operand kernels (sv_, vs_)
+            # no prebuilt family installs, which the native path translates
+            # from the pinned source. The negative controls keep no source,
+            # so each still finds its package missing.
+            mlx_root=args.mlx_root if args.worker == "native" else None,
         )
         if args.worker == "missing":
             host.descriptors.pop("v_Absint64int64")
@@ -217,7 +228,18 @@ def verify(args):
         raise ValueError("Integer64 trace count differs")
     integer64_workloads.validate(results["cpu"], [], native=False)
     integer64_workloads.validate(results["native"], trace[:count], native=True)
-    verify_native_identity(trace, target)
+    installed = {
+        entry
+        for _, index, variants in packages
+        if not variants
+        for entry in index["descriptors"]
+    }
+    # Lazy dispatches run on the native runtime directly; their audit checks
+    # the native modules the parity adapter's identity steps cover otherwise.
+    lazy = elementwise_evidence.audit_lazy_events(
+        trace, args.mlx_root, args.packages, target, installed
+    )
+    verify_native_identity(elementwise_evidence.remaining(trace, lazy), target)
     checked = 0
     for directory, index, variants in packages:
         events = [
@@ -232,6 +254,7 @@ def verify(args):
         ]
         checked += len(events)
         verify_artifacts(events, directory, index, variants=variants)
+    checked += len(lazy)
     if checked != len(trace):
         raise ValueError("Integer64 trace references an unknown or duplicate artifact")
     if before != verify_prepared(args.mlx_root) or sources != upstream_test_sources(

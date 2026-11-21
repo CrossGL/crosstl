@@ -40,7 +40,7 @@ def test_complete_slice_update_evidence(target, native):
     records, trace = evidence(target, native=native)
     assert len(records) == 304
     assert {case["layout"] for case in records} == set(workloads.LAYOUTS)
-    assert {case["dtype"] for case in records} == set(workloads.copies.DTYPES)
+    assert {case["dtype"] for case in records} == set(workloads.copies.STORAGE_DTYPES)
     workloads.validate(records, trace, native=native)
 
 
@@ -286,3 +286,50 @@ def test_slice_update_ci_requires_native_execution_and_evidence():
     )
     assert upload["if"] == "always()" and upload["with"]["include-hidden-files"] is True
     assert upload["with"]["path"] == ".mlx-portable-slice-update"
+
+
+class _Constructed(Exception):
+    pass
+
+
+@pytest.mark.parametrize("mode", ("native", "missing"))
+def test_only_the_native_worker_translates_scalar_operand_kernels(
+    tmp_path, monkeypatch, mode
+):
+    """mx.allclose reaches vs_ and sv_ kernels no prebuilt family installs."""
+    import sys
+    import types
+    from types import SimpleNamespace
+
+    core = types.ModuleType("mlx.core")
+    core.is_available = lambda device: False
+    core.gpu = "gpu"
+    monkeypatch.setitem(sys.modules, "mlx", types.ModuleType("mlx"))
+    monkeypatch.setitem(sys.modules, "mlx.core", core)
+    sys.modules["mlx"].core = core
+    seen = {}
+
+    def runtime(*args, **kwargs):
+        seen.update(kwargs)
+        raise _Constructed
+
+    monkeypatch.setattr(proof, "HostRuntime", runtime)
+    worker = (
+        "native"
+        if mode == "native"
+        else next(name for name in proof.NEGATIVE_CHECKS if name.startswith("missing-"))
+    )
+    args = SimpleNamespace(
+        output_dir=tmp_path / "out",
+        worker=worker,
+        packages=tmp_path / "packages",
+        integer64=None,
+        slice_updates=None,
+        reductions=[],
+        mlx_root=tmp_path / "mlx",
+    )
+    with pytest.raises(_Constructed):
+        proof.worker(args)
+    # The negative controls keep no source, so each still finds its package
+    # missing.
+    assert seen["mlx_root"] == (tmp_path / "mlx" if mode == "native" else None)

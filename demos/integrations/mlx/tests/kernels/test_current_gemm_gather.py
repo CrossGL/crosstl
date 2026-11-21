@@ -8,10 +8,9 @@ with the buffers ``matmul.cpp`` binds: operand batches selected through
 ``lhs_indices`` and ``rhs_indices``, including repeated, reordered, strided
 and broadcast indices over multi-dimensional operand batches. Every output
 word, guards included, must equal an exact reference; on Metal it must also
-equal the original source. ``gather_mm_rhs`` derives its row tile from
-``offsets`` with subgroup scans and returns early on their reduction, which
-DirectX and OpenGL can lower only once reductions of values equal in every
-subgroup count as workgroup-uniform (#2546), so it is not covered.
+equal the original source. ``gather_mm_rhs`` is not covered here; the MLX
+host runs it through ``verify_gather_mm.py`` and the upstream sorted gather
+tests.
 """
 
 import hashlib
