@@ -30,6 +30,17 @@ passes the same mask, and the mask contains the calling lane (GL_NV_shader_subgr
 
 :mod:`crosstl.translator.semantics.partitioned_waves` lowers the partitioned operations to loops over the lanes of
 the subgroup for every target that does not register them as native.
+
+Rotations read the value of another lane at a fixed distance, wrapping around (GL_KHR_shader_subgroup_rotate; SPIR-V
+``OpGroupNonUniformRotateKHR``; MSL ``simd_shuffle_rotate_down``). ``delta`` is a dynamically uniform ``uint``:
+
+* ``WaveRotate(value, delta)``: the value of lane ``(WaveGetLaneIndex() + delta) & (WaveGetLaneCount() - 1)``.
+* ``WaveClusteredRotate(value, delta, clusterSize)``: the rotation within the aligned cluster of the calling lane,
+  the value of lane ``((WaveGetLaneIndex() + delta) & (clusterSize - 1)) + (WaveGetLaneIndex() & ~(clusterSize -
+  1))``. ``clusterSize`` is a constant power of two no larger than the subgroup.
+
+The result of reading an inactive lane is undefined. :mod:`crosstl.translator.semantics.wave_rotations` lowers the
+rotations to ``WaveReadLaneAt`` for every target that does not register them as native.
 """
 
 from __future__ import annotations
@@ -115,8 +126,15 @@ WAVE_PARTITIONED_OPERATIONS = {
     "WaveMultiPrefixExclusiveMax": ("max", "exclusive"),
 }
 
-# GL_KHR_shader_subgroup_{basic,vote,arithmetic,ballot,shuffle,shuffle_relative,clustered,quad},
-# GL_NV_shader_subgroup_partitioned and GL_ARB_shader_group_vote functions that have a CrossGL wave operation.
+# Rotations: name -> argument count.
+WAVE_ROTATE_OPERATIONS = {
+    "WaveRotate": 2,
+    "WaveClusteredRotate": 3,
+}
+
+# GL_KHR_shader_subgroup_{basic,vote,arithmetic,ballot,shuffle,shuffle_relative,clustered,quad,rotate},
+# GL_EXT_shader_quad_control, GL_NV_shader_subgroup_partitioned and GL_ARB_shader_group_vote functions that have a
+# CrossGL wave operation.
 GLSL_SUBGROUP_FUNCTIONS = {
     "subgroupElect": "WaveIsFirstLane",
     "subgroupAll": "WaveActiveAllTrue",
@@ -169,6 +187,12 @@ GLSL_SUBGROUP_FUNCTIONS = {
     "subgroupQuadSwapHorizontal": "QuadReadAcrossX",
     "subgroupQuadSwapVertical": "QuadReadAcrossY",
     "subgroupQuadSwapDiagonal": "QuadReadAcrossDiagonal",
+    # GL_EXT_shader_quad_control; SPIR-V OpGroupNonUniformQuadAllKHR and OpGroupNonUniformQuadAnyKHR.
+    "subgroupQuadAll": "QuadAll",
+    "subgroupQuadAny": "QuadAny",
+    # GL_KHR_shader_subgroup_rotate.
+    "subgroupRotate": "WaveRotate",
+    "subgroupClusteredRotate": "WaveClusteredRotate",
     "subgroupPartitionNV": "WaveMatch",
     "subgroupPartitionedExclusiveAddNV": "WaveMultiPrefixSum",
     "subgroupPartitionedExclusiveMulNV": "WaveMultiPrefixProduct",

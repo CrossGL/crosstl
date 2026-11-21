@@ -31,6 +31,12 @@ from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ..wave_operations import WAVE_PARTITIONED_OPERATIONS
 from .hub_types import HubType
+from .lane_reads import (
+    lane_read,
+    parse_helper_function,
+    type_spelling,
+    wave_operand_type,
+)
 from .rewrite import call, child_slots, get_child, set_child
 from .scoped_walk import ScopedWalker
 
@@ -43,22 +49,6 @@ __all__ = [
 
 _NATIVE: dict[str, frozenset[str]] = {"cgl": frozenset(WAVE_PARTITIONED_OPERATIONS)}
 
-_COMPONENTS = "xyzw"
-_SCALAR_NAMES = {
-    ("f", 16): "half",
-    ("f", 32): "float",
-    ("f", 64): "double",
-    ("i", 32): "int",
-    ("u", 32): "uint",
-    ("b", 1): "bool",
-}
-_VECTOR_PREFIXES = {
-    ("f", 16): "f16vec",
-    ("f", 32): "vec",
-    ("f", 64): "dvec",
-    ("i", 32): "ivec",
-    ("u", 32): "uvec",
-}
 _INFINITY = "uintBitsToFloat(0x7f800000u)"
 # The identity of each operator for each operand kind (SPIR-V 3.42.24, "Non-Uniform Instructions").
 _IDENTITIES = {
@@ -103,25 +93,6 @@ _SCOPES = {
     "inclusive": "lane <= self_lane && ",
     "exclusive": "lane < self_lane && ",
 }
-# Wave operations whose result has the type of their first argument, for operands that are themselves wave calls.
-_SAME_TYPE_PREFIXES = (
-    "WaveActive",
-    "WavePrefix",
-    "WaveRead",
-    "QuadRead",
-    "WaveShuffle",
-    "WaveClustered",
-)
-_OTHER_TYPE_OPERATIONS = frozenset(
-    {
-        "WaveActiveAllTrue",
-        "WaveActiveAnyTrue",
-        "WaveActiveAllEqual",
-        "WaveActiveBallot",
-        "WaveActiveCountBits",
-        "WavePrefixCountBits",
-    }
-)
 
 
 class PartitionedWaveUnsupportedError(TranslationDiagnostic):
@@ -150,31 +121,14 @@ def native_partitioned_wave_operations(target) -> frozenset[str]:
     return _NATIVE.get(str(target or ""), frozenset())
 
 
-def _type_spelling(value: HubType) -> str | None:
-    key = (value.kind, value.bits)
-    if value.lanes == 1:
-        return _SCALAR_NAMES.get(key)
-    prefix = _VECTOR_PREFIXES.get(key)
-    return f"{prefix}{value.lanes}" if prefix else None
-
-
 def _helper_source(name, operator, scope, value: HubType, spelling):
-    scalar = _SCALAR_NAMES[(value.kind, value.bits)]
+    scalar = type_spelling(value.with_lanes(1)) if value.lanes > 1 else spelling
     identity = _IDENTITIES[(operator, value.kind)]
     if value.kind == "f" and value.bits != 32:
         identity = f"{scalar}({identity})"
     if value.lanes > 1:
         identity = f"{spelling}({identity})"
-    if value.kind == "b":
-        # Wave reads take numeric values on Direct3D and Metal, so a bool travels as a uint.
-        read = "WaveReadLaneAt(value ? 1u : 0u, lane) != 0u"
-    elif value.lanes == 1:
-        read = "WaveReadLaneAt(value, lane)"
-    else:
-        reads = ", ".join(
-            f"WaveReadLaneAt(value.{c}, lane)" for c in _COMPONENTS[: value.lanes]
-        )
-        read = f"{spelling}({reads})"
+    read = lane_read(value, spelling)
     combine = (_COMBINE_BOOL if value.kind == "b" else _COMBINE)[operator]
     return (
         f"{spelling} {name}({spelling} value, uvec4 mask) {{\n"
@@ -195,23 +149,14 @@ def _helper_source(name, operator, scope, value: HubType, spelling):
     )
 
 
-def _parse_function(source):
-    from ..lexer import Lexer
-    from ..parser import Parser
-
-    shader = Parser(
-        Lexer(f"shader crossgl_partitioned_waves {{\n{source}}}\n").tokens
-    ).parse()
-    (function,) = shader.functions
-    return function
-
-
 class _PartitionedWaveLowering(ScopedWalker):
     def __init__(self, program, target):
         super().__init__(program)
         self.target = target
         self.native = native_partitioned_wave_operations(target)
         self.replacements: dict[int, A.FunctionCallNode] = {}
+        # The replaced calls, kept alive so that their ids are not reused before :meth:`finish`.
+        self.originals: list[A.WaveOpNode] = []
         self.helpers: dict[tuple[str, HubType], str] = {}
         self.functions: list[A.FunctionNode] = []
         self.taken = {
@@ -236,17 +181,7 @@ class _PartitionedWaveLowering(ScopedWalker):
         )
 
     def operand_type(self, expr) -> HubType | None:
-        while (
-            isinstance(expr, A.WaveOpNode)
-            and expr.arguments
-            and expr.operation not in _OTHER_TYPE_OPERATIONS
-            and (
-                expr.operation.startswith(_SAME_TYPE_PREFIXES)
-                or expr.operation in WAVE_PARTITIONED_OPERATIONS
-            )
-        ):
-            expr = expr.arguments[0]
-        return self.scope.infer(expr)
+        return wave_operand_type(self.scope, expr)
 
     def visit(self, node):
         if not self.lowered(node):
@@ -257,7 +192,7 @@ class _PartitionedWaveLowering(ScopedWalker):
         if value is None:
             self.refuse(node, "the operand type cannot be inferred", "operand-type")
         operator, scope = WAVE_PARTITIONED_OPERATIONS[node.operation]
-        spelling = _type_spelling(value)
+        spelling = type_spelling(value)
         if (
             spelling is None
             or (operator, value.kind) not in _IDENTITIES
@@ -272,6 +207,7 @@ class _PartitionedWaveLowering(ScopedWalker):
         replacement = call(name, list(node.arguments))
         replacement.source_location = getattr(node, "source_location", None)
         self.replacements[id(node)] = replacement
+        self.originals.append(node)
 
     def helper(self, operation, operator, scope, value, spelling):
         key = (operation, value)
@@ -285,7 +221,9 @@ class _PartitionedWaveLowering(ScopedWalker):
         self.taken.add(name)
         self.helpers[key] = name
         self.functions.append(
-            _parse_function(_helper_source(name, operator, scope, value, spelling))
+            parse_helper_function(
+                _helper_source(name, operator, scope, value, spelling)
+            )
         )
         return name
 

@@ -248,6 +248,7 @@ from .vertex_input_positions import (
 from .void_casts import VoidCastError, lower_void_casts
 from .void_values import VoidValueError, refuse_void_values
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
+from .wave_rotations import WaveRotationUnsupportedError, lower_wave_rotations
 from .written_stage_inputs import copy_written_stage_inputs
 
 __all__ = [
@@ -270,6 +271,7 @@ __all__ = [
     "ConstantBufferTooLargeError",
     "CudaWarpIntrinsicUnsupportedError",
     "PartitionedWaveUnsupportedError",
+    "WaveRotationUnsupportedError",
     "DebugPrintfUnsupportedError",
     "DescriptorArrayUnsupportedError",
     "DeviceReferenceUnsupportedError",
@@ -478,7 +480,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     one-dimensional descriptor arrays (:mod:`.descriptor_arrays`).
     CUDA warp shuffles are then emulated or refused for targets without CUDA warps (:mod:`.warp`), and partitioned
     wave reductions and scans become loops over the subgroup's lanes, or are refused with
-    :class:`PartitionedWaveUnsupportedError` (:mod:`.partitioned_waves`). HLSL's
+    :class:`PartitionedWaveUnsupportedError` (:mod:`.partitioned_waves`), and subgroup rotations become
+    ``WaveReadLaneAt`` reads of the rotated lane (:mod:`.wave_rotations`). HLSL's
     ``countbits``, ``reversebits``, ``firstbithigh`` and ``firstbitlow`` become the GLSL functions with HLSL's
     ``uint`` results on targets without them, and bit counts, bit reversals and signed ``abs`` of 8- and 16-bit
     integers are spelled on 32-bit operands, so 32-bit carriers compute them at the value's width
@@ -615,6 +618,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     legalize_implicit_lod(program, report.target)
     legalize_cuda_warp_intrinsics(program, report.target)
     lower_partitioned_wave_operations(program, report.target)
+    lower_wave_rotations(program, report.target)
     legalize_half_floats(program, report.source, report.target)
     legalize_bit_functions(program, report.source, report.target)
     legalize_narrow_integers(program, report.source, report.target)
