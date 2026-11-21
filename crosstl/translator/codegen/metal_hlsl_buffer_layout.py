@@ -92,6 +92,8 @@ METAL_ELEMENT_SUFFIXES = {1: ".x", 2: ".xy", 3: ".xyz", 4: ""}
 # names; the layout tables use the Metal ``long``/``ulong`` keywords, which
 # name the same types.
 METAL_SCALAR_ALIASES = {"int64_t": "long", "uint64_t": "ulong"}
+# A scalar member is declared with the fixed-width name, as the rest of the Metal output spells it.
+METAL_FIXED_WIDTH_SCALARS = {alias: name for name, alias in METAL_SCALAR_ALIASES.items()}
 
 
 @dataclass
@@ -404,6 +406,7 @@ class MetalHlslBufferLayouts:
         kind = layout_type.kind
         if kind == "scalar":
             storage, size = METAL_SCALAR_STORAGE[layout_type.scalar]
+            storage = METAL_FIXED_WIDTH_SCALARS.get(storage, storage)
             read = "bool" if layout_type.scalar == "bool" else None
             return storage, size, size, read, None, None
         if kind == "vector":

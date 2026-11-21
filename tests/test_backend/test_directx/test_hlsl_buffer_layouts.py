@@ -395,22 +395,37 @@ def test_metal_rejects_hlsl_layouts_it_cannot_reproduce():
             """)
 
 
-def test_crossgl_buffers_without_a_layout_keep_the_metal_layout():
-    metal = generate_metal_from_crossgl("""
-        shader main {
-            cbuffer Params {
-                bool enabled;
-                ivec3 offset;
-                float scale;
-            }
-            compute {
-                @ numthreads(1, 1, 1)
-                void main(uvec3 id @ gl_GlobalInvocationID) @ stage_entry {
-                    float value = enabled ? scale : 0.0;
-                }
+_CROSSGL_PARAMS = """
+    shader main {
+        cbuffer Params LAYOUT {
+            bool enabled;
+            ivec3 offset;
+            float scale;
+        }
+        compute {
+            @ numthreads(1, 1, 1)
+            void main(uvec3 id @ gl_GlobalInvocationID) @ stage_entry {
+                float value = enabled ? scale : 0.0;
             }
         }
-        """)
+    }
+    """
+
+
+def test_crossgl_buffers_without_a_layout_take_std140_in_metal():
+    # As in the GLSL and SPIR-V outputs: the bool takes 4 bytes and the ivec3 starts at byte 16.
+    metal = generate_metal_from_crossgl(_CROSSGL_PARAMS.replace("LAYOUT", ""))
+
+    assert (
+        "    uint enabled;\n    char _pad1[12];\n    packed_int3 offset;\n    float scale;\n"
+        in metal
+    )
+
+
+def test_crossgl_buffers_marked_with_the_metal_layout_keep_it():
+    metal = generate_metal_from_crossgl(
+        _CROSSGL_PARAMS.replace("LAYOUT", "@buffer_layout(metal)")
+    )
 
     assert "    bool enabled;\n    int3 offset;\n    float scale;\n" in metal
 

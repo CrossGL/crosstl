@@ -6589,7 +6589,7 @@ def test_metal_fixed_width_scalar_array_aliases_map_in_aggregate_declarations():
     # The unmarked cbuffer takes std140: each array element fills a 16-byte slot.
     assert "int4 smalls[2];" in generated_code
     assert "uint count;" in generated_code
-    assert "long delta;" in generated_code
+    assert "int64_t delta;" in generated_code
     assert "uint64_t bump(uint64_t counters[2], AliasPayload payload)" in generated_code
     assert "uint64_t localCounters[2];" in generated_code
     assert "uint64_t one = uint64_t(1u);" in generated_code
