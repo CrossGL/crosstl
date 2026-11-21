@@ -7193,7 +7193,12 @@ def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes():
     ) in generated_code
     assert "CallShader(1, callableData);" in generated_code
     assert "bool accepted = ReportHit(1.0, 0, attributes);" in generated_code
-    assert "bool acceptedWithoutAttributes = ReportHit(2.0, 1);" in generated_code
+    # Slang's ReportHit needs attributes (E30439): the call without them reports a placeholder of the declared type.
+    assert "static HitAttributes crossgl_hit_attributes;" in generated_code
+    assert (
+        "bool acceptedWithoutAttributes = ReportHit(2.0, 1, crossgl_hit_attributes);"
+        in generated_code
+    )
     assert "IgnoreHit();" in generated_code
     assert "AcceptHitAndEndSearch();" in generated_code
     assert "void CallableMain(inout CallableData data)" in generated_code
@@ -11845,9 +11850,8 @@ def test_slang_sampler_descriptor_arrays_remap_overlapping_target_registers():
         ": register(s7, space0);" in generated_code
     )
     assert (
-        "shadowMaps[descriptor].SampleCmp(shadowSamplers[descriptor], uv, depth)" in (
-            generated_code
-        )
+        "shadowMaps[descriptor].SampleCmp(shadowSamplers[descriptor], uv, depth)"
+        in (generated_code)
     )
 
 
@@ -25077,9 +25081,8 @@ def test_slang_lowers_matrix_comp_mult_and_outer_product():
         generated_code
     )
     assert (
-        "float3 d = (_crossgl_outer_product_float3x2(q.xyz, q.xy))._m01_m11_m21;" in (
-            generated_code
-        )
+        "float3 d = (_crossgl_outer_product_float3x2(q.xyz, q.xy))._m01_m11_m21;"
+        in (generated_code)
     )
     assert "float2 e = (_crossgl_outer_product_float2x3(q.xy, q.xyz))._m02_m12;" in (
         generated_code

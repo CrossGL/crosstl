@@ -4,7 +4,9 @@ GL_EXT_ray_tracing declares a stage's payload, hit attributes and callable data 
 ``reportIntersectionEXT(t, kind)`` reports the hit attribute variable implicitly. The Slang generator copied that form:
 slangc treats a non-``static`` global as a uniform, so a write to it failed with E30011, and ``ReportHit`` without
 its attribute argument with E30439. ``crosstl/translator/codegen/slang_glsl_ray_interfaces.py`` now runs the DXR
-rewrite of :mod:`crosstl.translator.semantics.hlsl_ray_interfaces` for Slang too.
+rewrite of :mod:`crosstl.translator.semantics.hlsl_ray_interfaces` for a Slang program with such variables, and gives
+``ReportHit(t, kind)`` placeholder attributes in any other; a CrossGL ray stage without them keeps the Slang
+generator's own forms.
 """
 
 import re
@@ -22,6 +24,10 @@ INTERSECTION = (
     HEADER
     + "hitAttributeEXT vec2 attribs;\n"
     + "void main() { attribs = vec2(0.5); reportIntersectionEXT(1.0, 0u); }\n"
+)
+
+INTERSECTION_WITHOUT_ATTRIBUTES = (
+    HEADER + "void main() { reportIntersectionEXT(1.0, 0u); }\n"
 )
 
 CLOSEST_HIT = (
@@ -92,6 +98,7 @@ RECURSIVE_HIT = (
 
 STAGES = {
     "rint": (INTERSECTION, "intersection"),
+    "rint-unattributed": (INTERSECTION_WITHOUT_ATTRIBUTES, "intersection"),
     "rchit": (CLOSEST_HIT, "closesthit"),
     "rahit": (ANY_HIT, "anyhit"),
     "rmiss": (MISS, "miss"),
@@ -101,7 +108,7 @@ STAGES = {
 
 
 def _translate(tmp_path, source, suffix):
-    path = tmp_path / f"shader.{suffix}"
+    path = tmp_path / f"shader.{suffix.split('-')[0]}"
     path.write_text(source)
     return crosstl.translate(str(path), backend="slang", format_output=False)
 
@@ -117,6 +124,30 @@ def test_intersection_reports_the_static_hit_attribute_variable(tmp_path):
     assert "attribs.value = float2(0.5);" in code, code
     assert "ReportHit(1.0, 0u, attribs);" in code, code
     assert "float2 attribs;" not in code, code
+
+
+def test_an_intersection_without_attributes_reports_a_placeholder(tmp_path):
+    code = _compact(_translate(tmp_path, INTERSECTION_WITHOUT_ATTRIBUTES, "rint"))
+    assert "struct CrossGLHitAttributesUnused { uint unused; };" in code, code
+    assert "static CrossGLHitAttributesUnused crossgl_hit_attributes;" in code, code
+    assert "ReportHit(1.0, 0u, crossgl_hit_attributes);" in code, code
+
+
+def test_a_crossgl_stage_without_glsl_interfaces_keeps_the_slang_forms(tmp_path):
+    source = """
+        shader S {
+            struct Payload { vec3 color; };
+            ray_closest_hit {
+                void main(inout Payload payload @ray_payload) {
+                    payload.color = vec3(float(gl_InstanceCustomIndexEXT), gl_HitTEXT, 0.0);
+                }
+            }
+        }
+        """
+    code = _compact(_translate(tmp_path, source, "cgl"))
+    assert "void main(inout Payload payload : ray_payload)" in code, code
+    assert "float3(float(InstanceID()), RayTCurrent(), 0.0)" in code, code
+    assert "crossgl" not in code.lower(), code
 
 
 def test_closest_hit_receives_the_payload_and_attributes_as_parameters(tmp_path):

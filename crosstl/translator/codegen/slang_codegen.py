@@ -442,7 +442,7 @@ class SlangCodeGen(
         # Slang textures are separate objects, as in HLSL: a separate CrossGL texture declares the same Texture2D.
         ast = canonicalize_separate_textures(ast)
         ast = lower_slang_storage_instances(ast)
-        lower_slang_glsl_ray_interfaces(ast)
+        lower_slang_glsl_ray_interfaces(ast, self)
         try:
             return self.refusals.run(self.generate_checked_program, ast)
         finally:
