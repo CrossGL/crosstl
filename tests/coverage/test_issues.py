@@ -219,8 +219,9 @@ def test_wrong_results_with_one_cause_are_one_bug_issue():
         'CUDA output: identifier "erff" is undefined',
     ]
     assert (
-        "The coverage probes for 2 CUDA output features give a wrong result"
-        in bugs[0].body
+        "The coverage probes for 2 CUDA output features give a wrong result" in bugs[
+            0
+        ].body
     )
     assert "Affected features: `atomicAdd`, `sinf`." in bugs[0].body
     assert "--feature atomicAdd" in bugs[0].body
