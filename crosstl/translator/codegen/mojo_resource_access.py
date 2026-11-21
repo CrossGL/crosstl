@@ -32,7 +32,7 @@ class MojoResourceAccessMixin:
 
         self.register_resource_access_metadata(node, type_name)
         _, count = self.resource_base_type_and_count(type_name)
-        namespace = self.mojo_resource_binding_namespace(resource_kind)
+        namespace = self.mojo_resource_binding_namespace_with_class(resource_kind, node)
         set_index = self.explicit_resource_set_index(node)
         binding = self.explicit_resource_binding_index(node)
         source_binding = None
@@ -54,8 +54,9 @@ class MojoResourceAccessMixin:
                 self.reserve_source_resource_binding(
                     namespace, set_index, source_binding, 1, name
                 )
-                key = (namespace, set_index)
-                if self.resource_binding_range_conflicts(key, binding, count):
+                if self.resource_binding_family_conflicts(
+                    namespace, set_index, binding, count
+                ):
                     binding = self.next_available_resource_binding(
                         namespace, set_index, count
                     )
