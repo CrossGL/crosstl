@@ -111,7 +111,7 @@ def _compile(tmp_path, metal):
 
 
 def _signature(metal, stage):
-    match = re.search(rf"^{stage} \w+ {stage}_main\((.*?)\) {{", metal, re.M | re.S)
+    match = re.search(rf"^{stage} \w+ {stage}_main\((.*?)\) {{", metal, re.MULTILINE | re.DOTALL)
     assert match is not None, metal
     return match.group(1)
 
@@ -167,7 +167,9 @@ def test_hlsl_per_vertex_and_per_instance_structures_compile(tmp_path):
 
 
 def test_single_structure_input_keeps_its_parameter(tmp_path):
-    source = TWO_STRUCTS.replace("VSOut main(PosIn p, ColorIn c)", "VSOut main(PosIn p)")
+    source = TWO_STRUCTS.replace(
+        "VSOut main(PosIn p, ColorIn c)", "VSOut main(PosIn p)"
+    )
     source = source.replace("o.color = c.color;", "o.color = vec4(1.0);")
 
     metal = _metal(tmp_path, source)

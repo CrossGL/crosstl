@@ -92,7 +92,9 @@ def _attribute_owners(codegen, inputs) -> dict[int, str]:
         if struct is not None:
             indices = nested_stage_input_attribute_indices(codegen, struct)
         else:
-            index = codegen.metal_attribute_index_from_attribute(record.get("attribute"))
+            index = codegen.metal_attribute_index_from_attribute(
+                record.get("attribute")
+            )
             indices = [] if index is None else [index]
         for index in indices:
             previous = owners.setdefault(index, record["name"])
