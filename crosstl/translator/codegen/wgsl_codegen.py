@@ -45,6 +45,7 @@ from .enum_utils import (
 from .precise_evaluation import refuse_precise_evaluation
 from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .sampler_pairs import canonicalize_separate_textures
+from .spirv_union_storage import lower_union_storage
 from .stage_utils import normalize_stage_name, requested_stage_name
 from .wgsl_array_constructors import (
     wgsl_array_constructor,
@@ -122,6 +123,7 @@ from .wgsl_struct_initializers import (
 )
 from .wgsl_texture_calls import WGSLTextureCallMixin
 from .wgsl_type_names import WGSLTypeNameMixin
+from .wgsl_uniform_registers import wgsl_uniform_register_load
 from .wgsl_unsigned_builtin_members import is_int_builtin_member
 from .wgsl_unsigned_negation import wgsl_unsigned_negation
 from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
@@ -883,6 +885,7 @@ class WGSLCodeGen(
         self._frexp_modf_helpers = {}
         self._matrix_inverse_helpers = {}
         self._matrix_resize_helpers = {}
+        self._uniform_registers = None
         self._half_conversion_helpers = {}
         self._constant_values = {}
         self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
@@ -916,6 +919,7 @@ class WGSLCodeGen(
     def generate_program(self, ast, target_stage=None):
         refuse_cooperative_matrices(ast, label="WGSL", target="wgsl")
         refuse_precise_evaluation(ast, label="WGSL", target="wgsl")
+        ast = lower_union_storage(ast, "wgsl")
         target_stage = requested_stage_name(target_stage)
         # WGSL textures are separate objects: a separate CrossGL texture (texture2DShadow, utexture2D,
         # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.
@@ -1235,6 +1239,10 @@ class WGSLCodeGen(
             )
         if isinstance(expr, LiteralNode):
             return self.generate_literal(expr)
+        if self._uniform_registers is not None:
+            register_value = wgsl_uniform_register_load(self, expr)
+            if register_value is not None:
+                return register_value
         if isinstance(expr, IdentifierNode):
             enum_constant = self._enum_variant_constants.get(expr.name)
             if enum_constant is not None:

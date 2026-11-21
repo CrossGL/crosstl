@@ -12,6 +12,7 @@ from ..ast import (
 from ..refusals import HipRefusal
 from .array_utils import split_array_type_suffix
 from .cuda_function_prototypes import late_called_functions, prototype_of
+from .cuda_shared_memory import helper_shared_variables
 from .enum_utils import (
     enum_struct_fields,
     generate_enum_constants,
@@ -366,8 +367,15 @@ class HipVisitorMixin:
                 if hasattr(stage_type, "name")
                 else str(stage_type).lower()
             )
+            self.file_scope_shared_variable_ids.update(
+                id(var)
+                for var in helper_shared_variables(stage, self.is_hip_shared_variable)
+            )
             for var in getattr(stage, "local_variables", []) or []:
-                if self.is_hip_shared_variable(var):
+                if (
+                    self.is_hip_shared_variable(var)
+                    and id(var) not in self.file_scope_shared_variable_ids
+                ):
                     continue
                 if self.hip_stage_local_builtin_role(stage_name, var) is not None:
                     # A stage-local input that names a compute built-in is the

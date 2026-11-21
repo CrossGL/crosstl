@@ -43,6 +43,7 @@ from .cuda_refusals import CudaLoweringRefused
 from .cuda_resource_access import CudaResourceAccessMixin
 from .cuda_resource_calls import CudaResourceCallMixin
 from .cuda_semantics import CudaSemanticMixin
+from .cuda_shared_memory import helper_shared_variables
 from .cuda_stage_attributes import CudaStageAttributeMixin
 from .cuda_stage_checks import CudaStageCheckMixin
 from .cuda_statements import CudaStatementMixin
@@ -61,6 +62,7 @@ from .cuda_tables import (
 )
 from .cuda_textures import CudaTextureMixin
 from .cuda_types import CudaTypeMixin
+from .cuda_unions import NativeUnions
 from .cuda_vector_types import CudaVectorTypeMixin
 from .cuda_visitor import CudaVisitorMixin
 from .cuda_wave_ops import CudaWaveOpMixin
@@ -74,7 +76,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
 )
 from .generic_global_types import collect_constant_and_cbuffer_member_types
-from .gpu_device_globals import is_constant_value_declaration
+from .gpu_device_globals import at_file_scope, is_constant_value_declaration
 from .lowering_refusals import LoweringRefusalMixin
 from .precise_evaluation import PreciseEvaluationMixin
 from .relational_builtins import lower_relational_builtins
@@ -216,6 +218,7 @@ class CudaCodeGen(
         self.cuda_used_resource_bindings = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
+        self.native_unions = NativeUnions(self, CudaRefusal, "CUDA")
         self.struct_member_semantics = {}
         self.struct_member_image_accesses = {}
         self.function_return_types = {}
@@ -365,6 +368,7 @@ class CudaCodeGen(
         self.cuda_resource_binding_cursors = {}
         self.cuda_used_resource_bindings = {}
         self.structs_by_name = self.collect_structs_by_name(ast_node)
+        self.native_unions = NativeUnions(self, CudaRefusal, "CUDA")
         (
             self.struct_member_types,
             self.struct_member_image_accesses,
@@ -394,6 +398,10 @@ class CudaCodeGen(
         )
         self.reject_unsupported_generic_functions(ast_node)
         self.helper_functions = {}
+        # File-scope constants already folded, by name (cuda_constant_folding).
+        self.folded_constants = {}
+        # Workgroup variables declared at file scope because a stage function uses them (cuda_shared_memory).
+        self.file_scope_shared_variable_ids = set()
         self.query_metadata_aliases = {}
         self.query_return_sources = self.collect_simple_query_return_sources(ast_node)
         self.query_local_resource_names_by_function = {}
@@ -533,8 +541,15 @@ class CudaCodeGen(
                 if hasattr(stage_type, "name")
                 else str(stage_type).lower()
             )
+            self.file_scope_shared_variable_ids.update(
+                id(var)
+                for var in helper_shared_variables(stage, self.is_cuda_shared_variable)
+            )
             for var in getattr(stage, "local_variables", []) or []:
-                if self.is_cuda_shared_variable(var):
+                if (
+                    self.is_cuda_shared_variable(var)
+                    and id(var) not in self.file_scope_shared_variable_ids
+                ):
                     continue
                 if self.cuda_stage_local_builtin_role(stage_name, var) is not None:
                     # A stage-local input that names a compute built-in is the
@@ -858,6 +873,9 @@ class CudaCodeGen(
                         qualifiers.append("__shared__")
                     elif "uniform" in qualifier:
                         qualifiers.append("__constant__")
+                    elif qualifier == "device" and at_file_scope(self):
+                        # A program-scope variable in device memory, which every thread reads and writes.
+                        qualifiers.append("__device__")
 
             qualifier_str = " ".join(qualifiers)
             if qualifier_str:
@@ -969,6 +987,13 @@ class CudaCodeGen(
         raw_args = list(getattr(node, "arguments", []) or [])
         args = [self.visit(arg) for arg in raw_args]
 
+        union_constructor = self.native_unions.constructor(
+            constructor_type,
+            raw_args,
+            getattr(node, "named_arguments", None),
+        )
+        if union_constructor is not None:
+            return union_constructor
         if constructor_type in self.structs_by_name:
             args = self.cuda_struct_constructor_brace_arguments(node, constructor_type)
             mapped_type = self.convert_crossgl_type_to_cuda(constructor_type)
@@ -1560,5 +1585,7 @@ class CudaCodeGen(
                 member_type = member.member_type
             else:
                 member_type = member.vtype
+            # Kernels name the member directly, and vector arithmetic on it needs its type.
+            self.register_variable_type(member.name, member_type, member)
             declaration = self.format_typed_declarator(member_type, member.name)
             self.emit(f"__constant__ {declaration};")

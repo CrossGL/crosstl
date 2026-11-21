@@ -208,13 +208,17 @@ jobs:
           python demos/integrations/computesharp/retained.py run
           --source upstream-computesharp --output evidence/retained
       - name: Evaluate the HLSL intrinsics on WARP
+        # The probe builds the upstream sources, so it runs in their checkout,
+        # whose global.json selects the SDK they pin.
+        working-directory: upstream-computesharp
         shell: pwsh
         run: |
           $probe = Join-Path $env:GITHUB_WORKSPACE "demos/integrations/computesharp/precision/IntrinsicProbe.csproj"
           $root = Join-Path $env:GITHUB_WORKSPACE "upstream-computesharp"
-          dotnet run --project $probe -c Release -p:Platform=x64 "-p:ComputeSharpRoot=$root" -- run warp evidence/precision/directx
+          $evidence = Join-Path $env:GITHUB_WORKSPACE "evidence/precision"
+          dotnet run --project $probe -c Release -p:Platform=x64 "-p:ComputeSharpRoot=$root" -- run warp (Join-Path $evidence "directx")
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          dotnet run --project $probe -c Release -p:Platform=x64 "-p:ComputeSharpRoot=$root" --no-build -- export evidence/precision/shaders
+          dotnet run --project $probe -c Release -p:Platform=x64 "-p:ComputeSharpRoot=$root" --no-build -- export (Join-Path $evidence "shaders")
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v7
         if: always()
