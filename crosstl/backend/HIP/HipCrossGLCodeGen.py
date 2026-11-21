@@ -5,7 +5,12 @@ import re
 from ...translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ...translator.semantics.warp import ORDERED_WORKGROUP_BARRIER
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
+from ..CUDA.directed_rounding import (
+    DirectedRoundingLibrary,
+    insert_directed_rounding_functions,
+)
 from ..CUDA.keyword_renames import source_identifier_names
+from ..CUDA.parameter_defaults import merge_declared_defaults, parameter_default_suffix
 from ..CUDA.pointer_math_import import sine_cosine_statements
 from ..CUDA.reference_parameters import ReferenceParameters
 from ..import_refusals import HipImportRefused, ImportRefusalMixin
@@ -618,6 +623,7 @@ class HipToCrossGLConverter(
         self.generated_matrix_helper_types = set()
         self.namespace_aliases = {}
         self.source_identifier_names = frozenset()
+        self.directed_rounding = None
         self.anonymous_enum_count = 0
         self.global_resource_bindings = {}
         self.global_resource_binding_count = 0
@@ -657,6 +663,12 @@ class HipToCrossGLConverter(
             ast_node
         )
         self.user_function_names = self.collect_user_function_names(ast_node)
+        # A prototype's default arguments belong to its definition (C++17 [dcl.fct.default]).
+        merge_declared_defaults(
+            stmt
+            for stmt in getattr(ast_node, "statements", None) or []
+            if isinstance(stmt, FunctionNode)
+        )
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
         )
@@ -686,8 +698,12 @@ class HipToCrossGLConverter(
         self.prepare_global_resource_bindings(ast_node)
         self.reference_parameters = ReferenceParameters(ast_node)
         self.emitted_buffer_layouts = EmittedBufferLayouts("HIP")
+        self.directed_rounding = DirectedRoundingLibrary(self.source_identifier_names)
         self.visit(ast_node)
         self.emitted_buffer_layouts.apply(self.output)
+        insert_directed_rounding_functions(
+            self.output, self.directed_rounding, "// HIP to CrossGL conversion"
+        )
         return "\n".join(self.output)
 
     def refuse_incomplete_record_values(self, ast_node):
@@ -1178,6 +1194,10 @@ class HipToCrossGLConverter(
 
         for stmt in node.statements:
             if isinstance(stmt, FunctionNode):
+                if getattr(stmt, "body", None) is None:
+                    # A prototype: CrossGL declares each function once, at its definition, and the generators
+                    # declare a function ahead of an earlier caller where the target needs it.
+                    continue
                 if self.is_generated_matrix_helper_function(stmt):
                     continue
                 if hasattr(stmt, "qualifiers") and "__global__" in getattr(
@@ -1282,10 +1302,13 @@ class HipToCrossGLConverter(
                     if getattr(self, "reference_parameters", None) is None:
                         self.reference_parameters = ReferenceParameters(None)
                     mode = self.reference_parameters.mode(node, index)
+                    default = parameter_default_suffix(
+                        self, node.name, param_name, param, "HIP"
+                    )
                     params.append(
-                        f"{mode} {param_type} {output_name}"
+                        f"{mode} {param_type} {output_name}{default}"
                         if mode
-                        else f"{param_type} {output_name}"
+                        else f"{param_type} {output_name}{default}"
                     )
 
             param_str = ", ".join(params)

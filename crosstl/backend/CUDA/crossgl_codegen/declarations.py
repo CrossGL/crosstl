@@ -13,6 +13,7 @@ from ..CudaAst import (
     UnaryOpNode,
 )
 from ..local_memory_spaces import crossgl_zero_value
+from ..parameter_defaults import merge_declared_defaults
 from ..reference_parameters import ReferenceParameters
 from ..union_layout_import import anonymous_union_members
 
@@ -51,6 +52,7 @@ class CudaImportDeclarationMixin:
                 self.emit("")
 
         self.reference_parameters = ReferenceParameters(node)
+        merge_declared_defaults(getattr(node, "functions", None))
         if hasattr(node, "functions") and node.functions:
             for func in node.functions:
                 if getattr(func, "body", None) is None:
