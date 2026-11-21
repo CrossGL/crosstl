@@ -306,12 +306,22 @@ class MetalProgramRenderingMixin:
             }
             for enum, enum_name in emitted_enums:
                 code += f"    enum {enum_name} {{\n"
-                for member_name, member_value in enum.members:
-                    if member_value is not None:
-                        value = self.generate_expression(member_value, False)
-                        code += f"        {member_name} = {value},\n"
-                    else:
-                        code += f"        {member_name},\n"
+                # An enumerator is in scope from its own definition on, also in a scoped enum's later
+                # initializers (C++17 [basic.scope.pdecl]/3): ``enum class W { P = 2, Q = P + 3 }``.
+                declared_members = {}
+                self.identifier_maps.append(declared_members)
+                try:
+                    for member_name, member_value in enum.members:
+                        if member_value is not None:
+                            value = self.generate_expression(member_value, False)
+                            code += f"        {member_name} = {value},\n"
+                        else:
+                            code += f"        {member_name},\n"
+                        declared_members[member_name] = (
+                            f"{enum_name}::{self.sanitize_identifier(member_name)}"
+                        )
+                finally:
+                    self.identifier_maps.pop()
                 code += "    };\n\n"
         for struct_node in structs:
             if isinstance(struct_node, StructNode):
