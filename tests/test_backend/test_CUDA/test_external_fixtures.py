@@ -2634,8 +2634,8 @@ def test_cuda_math_api_rounding_single_precision_intrinsics_codegen_reparse():
     # Single Precision Intrinsics.
     # URL:
     # https://docs.nvidia.com/cuda/archive/13.1.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__INTRINSIC__SINGLE.html
-    # The round-to-nearest intrinsics are the plain operations. The directed ones (_rd, _ru, _rz) have no CrossGL
-    # form and are refused (crosstl/backend/CUDA/directed_rounding.py).
+    # The round-to-nearest intrinsics are the plain operations. The directed ones (_rd, _ru, _rz) call CrossGL
+    # functions that compute the directed result exactly (crosstl/backend/CUDA/directed_rounding.py).
     source = """
     __device__ float rounded_intrinsics(float x, float y, float z) {
         float ops = __fadd_rn(x, y) + __fsub_rn(x, y) + __fmul_rn(x, y);
@@ -2672,16 +2672,24 @@ def test_cuda_math_api_rounding_single_precision_intrinsics_codegen_reparse():
     }:
         assert raw_name not in crossgl
 
-    for directed in (
-        "__fsub_rz(x, y)",
-        "__fmul_ru(x, y)",
-        "__fdiv_rd(x, y)",
-        "__fmaf_ieee_rz(x, y, z)",
+    for directed, call in (
+        ("__fsub_rz(x, y)", "fsub_rz(f32(x), f32(y))"),
+        ("__fmul_ru(x, y)", "fmul_ru(f32(x), f32(y))"),
+        ("__fdiv_rd(x, y)", "fdiv_rd(f32(x), f32(y))"),
+        ("__fmaf_ieee_rz(x, y, z)", "fmaf_ieee_rz(f32(x), f32(y), f32(z))"),
     ):
-        with pytest.raises(DirectedRoundingUnsupportedError):
-            cuda_to_crossgl(
-                f"__device__ float f(float x, float y, float z) {{ return {directed}; }}"
-            )
+        crossgl = cuda_to_crossgl(
+            f"__device__ float f(float x, float y, float z) {{ return {directed}; }}"
+        )
+        assert_crossgl_reparse(crossgl)
+        assert f"return {call};" in crossgl
+        assert directed.split("(")[0] not in crossgl
+
+    with pytest.raises(DirectedRoundingUnsupportedError):
+        cuda_to_crossgl(
+            "#include <cuda_fp16.h>\n"
+            "__device__ __half f(float x) { return __float2half_rz(x); }"
+        )
 
 
 def test_cuda_math_api_float_to_integer_conversion_intrinsics_codegen_reparse():

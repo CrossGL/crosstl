@@ -4,7 +4,7 @@ from ...assignment_operands import grouped_operand
 from ...bfloat16_conversions import format_bfloat16_conversion
 from ...thread_hierarchy import global_invocation_axis
 from ..CudaAst import UnaryOpNode
-from ..directed_rounding import refuse_directed_rounding
+from ..directed_rounding import directed_rounding_call, refuse_directed_rounding
 from ..pointer_math_import import format_pointer_output_call
 from ..sizeof_operands import sizeof_type_operand
 
@@ -139,6 +139,11 @@ class CudaImportIntrinsicMixin:
         if warp_intrinsic is not None:
             return warp_intrinsic
 
+        directed_rounding = directed_rounding_call(
+            self.directed_rounding, raw_name, args
+        )
+        if directed_rounding is not None:
+            return directed_rounding
         refuse_directed_rounding(raw_name)
         bfloat16_conversion = format_bfloat16_conversion(raw_name, args)
         if bfloat16_conversion is not None:
