@@ -375,8 +375,9 @@ def test_a_late_nightly_run_publishes_its_matrix_with_the_newer_rows():
     build = steps["Build the published files"]
     assert build["if"] == "steps.published.outputs.publish != 'false'"
     assert (
-        'publish "$RUNNER_TEMP/previous/coverage.json" --matrix coverage.json'
-        in build["run"]
+        'publish "$RUNNER_TEMP/previous/coverage.json" --matrix coverage.json' in build[
+            "run"
+        ]
     )
     assert steps["Replace the coverage branch"]["if"] == build["if"]
     kept = steps["Keep the published report"]
