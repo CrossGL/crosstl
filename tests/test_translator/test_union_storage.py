@@ -23,6 +23,10 @@ union Flags { uint word; bool4 lanes; };
 union FloatPair { float2 values; uint2 words; float scalars[2]; int signed_words[2]; };
 union Lanes { uint word; uchar bytes[4]; char signed_bytes[4]; ushort halves[2]; short signed_halves[2]; half floats[2]; };
 union WideLanes { uint2 words; uchar bytes[8]; };
+struct HalfPair { half d; half m; };
+union PairWord { uint word; HalfPair pair; half2 dm; };
+union Record { float4 data; float3 center; uint4 words; };
+union Split { uint2 words; uint word; ushort low; };
 template <typename T> constexpr constant uint lanes_per_word = sizeof(uint) / sizeof(T);
 template <typename T> union Packed { T val[lanes_per_word<T>]; uint bits; };
 struct Holder { Bits values[2]; };
@@ -238,6 +242,28 @@ CASES = {
         ["selected", "count"],
         [119, 1],
     ),
+    # A structure member and a narrow vector are lanes of the word: d and dm.x are the low half, m and dm.y the high.
+    "struct_lanes": (
+        "PairWord value; value.word = 0x3C00C000u; value.pair.m = half(0.5f); HalfPair copy = value.pair;",
+        ["value.word", "uint(float(copy.d) * -1.0f)", "uint(float(value.dm.y) * 4.0f)"],
+        [0x3800C000, 2, 2],
+    ),
+    "vector_lanes": (
+        "PairWord value; value.dm = half2(half(1.0f), half(-2.0f)); value.dm = value.dm.yx; half first = value.dm.x;",
+        ["value.word", "uint(float(first) * -1.0f)", "uint(float(value.pair.m))"],
+        [0x3C00C000, 2, 1],
+    ),
+    # float3 covers the first three words of its 16 bytes; the fourth is padding.
+    "padded_vector": (
+        "Record value; value.words = uint4(1u, 2u, 3u, 0x40800000u); uint padding = uint(value.data.w); value.center = float3(1.0f, 2.0f, 3.0f);",
+        ["value.words.x", "value.words.z", "uint(value.center.z + value.center[1])", "padding"],
+        [0x3F800000, 0x40400000, 5, 4],
+    ),
+    "partial_scalars": (
+        "Split value; value.words = uint2(0x44332211u, 0x88776655u); value.low = ushort(0xABCDu); uint word = value.word;",
+        ["value.words.x", "value.words.y", "word", "uint(value.low)"],
+        [0x4433ABCD, 0x88776655, 0x4433ABCD, 0xABCD],
+    ),
 }
 
 
@@ -294,13 +320,13 @@ def test_union_storage_executes_natively(tmp_path, case):
 @pytest.mark.parametrize(
     ("declaration", "reason"),
     [
-        ("union Bad { uint2 words; uint word; };", "member-size-mismatch"),
+        ("union Bad { uint4 words; uint pair[2]; };", "member-size-mismatch"),
         (
             "union Bad { uint words[2]; uchar4 bytes[2]; };",
             "aggregate-alignment-unsupported",
         ),
         (
-            "union Bad { uint3 words; uchar4 bytes[4]; };",
+            "union Bad { uint4 words; float2 pairs[2]; };",
             "member-storage-shape-mismatch",
         ),
         (

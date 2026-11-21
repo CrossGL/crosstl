@@ -13868,7 +13868,7 @@ def test_metal_union_layout_diagnostic_matches_direct_and_project(tmp_path):
     repo.mkdir()
     source_path = repo / "unsupported-union.metal"
     source_path.write_text(
-        "union Unsupported { uint2 words; uint word; };\n",
+        "union Unsupported { uint4 words; uint pair[2]; };\n",
         encoding="utf-8",
     )
 
