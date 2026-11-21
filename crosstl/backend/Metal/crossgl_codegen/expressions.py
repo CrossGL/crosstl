@@ -24,6 +24,7 @@ from ..MetalAst import (
     VariableNode,
 )
 from ..ordered_atomics import refuse_unfenced_atomic_call
+from ..quad_lane_moves import render_quad_lane_move
 from ..sparse_color import METAL_SPARSE_TEXTURE_METHODS, import_sparse_color_member
 from ..static_member_calls import unresolved_static_member_call_owner
 from ..vote_masks import (
@@ -422,7 +423,7 @@ class MetalExpressionMixin:
                 self.generate_sampler_constructor_arg(arg, is_main) for arg in expr.args
             )
         else:
-            args = ", ".join(
+            rendered = [
                 (
                     wrapper_arguments[index]
                     if index in wrapper_arguments
@@ -431,7 +432,13 @@ class MetalExpressionMixin:
                     )
                 )
                 for index in range(len(expr.args))
+            ]
+            quad_call = render_quad_lane_move(
+                self, materialized_name, function_name, expr, rendered
             )
+            if quad_call is not None:
+                return quad_call
+            args = ", ".join(rendered)
         if metal_fast_math_operation(materialized_name) == function_name:
             # CrossGL keeps the namespace for the Metal backend; its parser
             # hands every other backend the plain builtin.
