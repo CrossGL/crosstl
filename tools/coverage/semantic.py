@@ -219,7 +219,10 @@ def lower(feature: Feature) -> tuple[str, str]:
         return f"GLSL.std.450:{feature.name}", ""
     if (feature.language, feature.group) in UNIDENTIFIED:
         return "", UNIDENTIFIED[feature.language, feature.group]
-    if feature.target:
+    # A probe checked for another target than the usual one has no SPIR-V the usual compiler writes, except an HLSL
+    # probe that DXC checks as SPIR-V, as for printf.
+    spirv = (feature.language, feature.target) == ("hlsl", validators.HLSL_SPIRV)
+    if feature.target and not spirv:
         return "", f"probed for {feature.target}, not SPIR-V"
     if feature.language not in lowering.SPIRV_COMPILERS:
         return "", f"no SPIR-V compiler for {feature.language}"

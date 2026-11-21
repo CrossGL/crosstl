@@ -161,6 +161,8 @@ def build(
         # Slang functions that SPIR-V lacks, or that slangc cannot write as valid SPIR-V, are compiled for HLSL and
         # checked by DXC.
         | ({"dxc"} if "slang" in languages else set())
+        # HLSL features that need shader model 6.10 are checked by DXC's Shader Model 6.10 preview.
+        | ({"dxc-preview"} if "hlsl" in languages else set())
         | ({"spirv-dis"} if set(languages) & set(lowering.SPIRV_COMPILERS) else set())
         # SPIR-V input probes are glslang's output, and DXC's for the constructs GLSL cannot spell.
         | (

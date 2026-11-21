@@ -30,6 +30,9 @@ class OpenGLTableMixin:
     """Table members of ``GLSLCodeGen``."""
 
     GLSL_TARGET_DISPLAY_NAME = "OpenGL"
+    # Separate samplers and runtime texture arrays keep their own declarations under ``#ifdef VULKAN``
+    # (glsl_vulkan_resources).
+    GLSL_VULKAN_RESOURCE_FORMS = True
     # One compilation unit holds one entry per stage, main (glsl_stage_entries.refuse_repeated_stage_entries).
     one_entry_per_stage = True
 
