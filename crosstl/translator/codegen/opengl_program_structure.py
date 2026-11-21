@@ -69,6 +69,7 @@ from .generic_struct_utils import (
     generic_struct_specialized_type_name,
 )
 from .glsl_builtin_functions import called_builtin_spellings, reset_builtin_spellings
+from .glsl_call_helpers import reset_glsl_call_helpers
 from .glsl_exact_lookups import glsl_undeclared_call_reasons
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_refusals import stageless_entry_refusal_reason
@@ -1308,6 +1309,7 @@ class OpenGLProgramStructureMixin:
         self.glsl_vulkan_resource_exclusions = frozenset()
         reset_builtin_spellings(self)
         while True:
+            reset_glsl_call_helpers(self)
             code = self._generate_program_attempt(ast, target_stage, early_exits)
             shadowed = called_builtin_spellings(self, code)
             if shadowed:
