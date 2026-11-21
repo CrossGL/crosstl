@@ -143,10 +143,10 @@ from .mojo_tables import (
 )
 from .mojo_target_shapes import MojoTargetShapeMixin
 from .mojo_type_declarations import MojoTypeDeclarationMixin
-from .mojo_wave_ops import MOJO_WAVE_IMPORTS, MojoWaveOpMixin
 from .mojo_types import MojoTypeMixin
 from .mojo_values import MojoValueMixin
 from .mojo_vector_ops import MojoVectorOpMixin
+from .mojo_wave_ops import MOJO_WAVE_IMPORTS, MojoWaveOpMixin
 from .precise_evaluation import refuse_precise_evaluation
 from .sampler_pairs import canonicalize_separate_textures
 from .written_function_names import (
