@@ -178,7 +178,7 @@ def test_integer_and_boolean_specialization_operations_stay_constants(tmp_path):
 
 
 def test_es_enables_non_constant_global_initializers_for_spirv(tmp_path):
-    code = translate_glsl(tmp_path, ES_COMPUTE, "comp")
+    code = translate_glsl(tmp_path, ES_COMPUTE, "comp", backend="gles")
 
     lines = code.splitlines()
     assert lines[:4] == [
@@ -194,7 +194,7 @@ def test_es_enables_non_constant_global_initializers_for_spirv(tmp_path):
     assert_glslang_accepts(tmp_path, code, "comp")
 
 
-@pytest.mark.parametrize("backend", ["opengl", "webgl"])
+@pytest.mark.parametrize("backend", ["gles", "webgl"])
 def test_es_extension_precedes_source_precision_statements(tmp_path, backend):
     code = translate_glsl(tmp_path, ES_FRAGMENT, "frag", backend=backend)
 

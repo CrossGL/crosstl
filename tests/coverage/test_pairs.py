@@ -178,6 +178,18 @@ def test_a_pair_is_one_crosstl_call_from_the_source_backend(monkeypatch, checked
     assert calls == [(".comp", "directx", "opengl")]
 
 
+def test_a_webgl_probe_of_a_compute_feature_is_checked_as_a_fragment_shader(
+    monkeypatch, checked
+):
+    # GLSL ES 3.00 has no compute stage, so the WebGL probe and its translation are fragment shaders.
+    monkeypatch.setattr(runner, "translate", lambda *args: "void main() {}")
+    webgl = Feature("webgl", "function", "abs", ABS, crossgl="abs")
+    result = pairs.run_pair(webgl, "webgl", "glsl", GLSL_ABS)
+    assert result.outcome == "supported"
+    assert result.sources == ()
+    assert checked == [("glsl", "compute", "main", ""), ("glsl", "fragment", "", "")]
+
+
 def test_the_partner_sets_the_compiler_target(checked):
     vulkan = Feature("glsl", "function", "abs", ABS, crossgl="abs", target="vulkan")
     pairs.run_pair(HLSL_ABS, "hlsl", "glsl", vulkan)

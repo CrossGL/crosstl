@@ -1,5 +1,6 @@
 import copy
 import json
+import urllib.error
 
 import pytest
 
@@ -538,3 +539,79 @@ def test_glsl_inventory_spans_both_profiles(inventories):
     )
     assert items["glsl.layout.std430"]["category"] == "resource"
     assert {item["category"] for item in items.values()} <= set(CATEGORIES)
+
+
+class _Reply:
+    def __init__(self, body):
+        self.body = body
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def read(self):
+        return self.body
+
+
+def _scripted_urlopen(monkeypatch, outcomes):
+    """Replace urlopen with one that raises or returns ``outcomes`` in order; returns the call log."""
+    calls = []
+    sleeps = []
+
+    def urlopen(request, timeout):
+        calls.append(request.full_url)
+        outcome = outcomes[len(calls) - 1]
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return _Reply(outcome)
+
+    monkeypatch.setattr(inventory.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(inventory.time, "sleep", sleeps.append)
+    return calls, sleeps
+
+
+def _http_error(code):
+    return urllib.error.HTTPError("https://example.test/x", code, "reply", {}, None)
+
+
+@pytest.mark.parametrize(
+    "transient",
+    [
+        _http_error(503),
+        _http_error(429),
+        TimeoutError("read timed out"),
+        ConnectionResetError("reset"),
+    ],
+    ids=["503", "429", "timeout", "reset"],
+)
+def test_download_retries_transient_failures(monkeypatch, transient):
+    calls, sleeps = _scripted_urlopen(
+        monkeypatch, [transient, urllib.error.URLError("refused"), b"body"]
+    )
+    assert inventory.download("https://example.test/x") == b"body"
+    assert len(calls) == 3
+    assert sleeps == [
+        inventory.DOWNLOAD_BACKOFF_SECONDS,
+        2 * inventory.DOWNLOAD_BACKOFF_SECONDS,
+    ]
+
+
+def test_download_raises_the_last_transient_failure(monkeypatch):
+    last = _http_error(502)
+    calls, _ = _scripted_urlopen(
+        monkeypatch, [_http_error(503), _http_error(500), last]
+    )
+    with pytest.raises(type(last)) as raised:
+        inventory.download("https://example.test/x")
+    assert raised.value is last
+    assert len(calls) == inventory.DOWNLOAD_ATTEMPTS
+
+
+def test_download_does_not_retry_client_errors(monkeypatch):
+    calls, sleeps = _scripted_urlopen(monkeypatch, [_http_error(404), b"unused"])
+    with pytest.raises(type(_http_error(404))) as raised:
+        inventory.download("https://example.test/x")
+    assert raised.value.code == 404
+    assert len(calls) == 1 and sleeps == []

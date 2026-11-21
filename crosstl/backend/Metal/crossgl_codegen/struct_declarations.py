@@ -526,6 +526,15 @@ class MetalStructDeclarationMixin:
                     alias.owner_qualified_name = qualified_name
             for nested in getattr(struct_node, "nested_structs", ()) or ():
                 append_struct(nested, raw_name)
+                if getattr(nested, "anonymous_member", False):
+                    # The member that holds an anonymous aggregate names it by its qualified name.
+                    for member in getattr(struct_node, "members", ()) or ():
+                        if getattr(
+                            member, "anonymous_aggregate_member", False
+                        ) and member.vtype == getattr(
+                            nested, "nested_original_name", None
+                        ):
+                            member.vtype = nested.name
             flattened.append(struct_node)
 
         for struct_node in structs or ():

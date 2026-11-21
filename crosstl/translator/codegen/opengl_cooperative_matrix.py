@@ -21,6 +21,7 @@ from .boolean_intrinsics import (
     ordered_boolean_minmax_width,
 )
 from .cooperative_matrix_diagonal import generate_glsl_cooperative_matrix_diagonal
+from .glsl_double_literals import binary64_float_literal
 from .glsl_narrow_integer_literals import narrowed_integer_literal
 from .glsl_shared_array_values import (
     allow_shared_array_value,
@@ -43,6 +44,9 @@ class OpenGLCooperativeMatrixMixin:
         narrowed = narrowed_integer_literal(self, expr, expected_type)
         if narrowed is not None:
             return narrowed
+        binary64 = binary64_float_literal(self, expr, expected_type)
+        if binary64 is not None:
+            return binary64
         interface_value = self.glsl_interface_block_value_expression(
             expr, expected_type
         )

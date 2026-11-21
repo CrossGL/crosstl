@@ -1680,9 +1680,9 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "float16 D_GGX(float16 roughness, float NoH, const vec3 h)",
+            "float D_GGX(float roughness, float NoH, const vec3 h)",
             "float oneMinusNoHSquared = 1.0 - (NoH * NoH);",
-            "float16 d = roughness;",
+            "float d = roughness;",
         ),
     ),
     ExternalFixture(
@@ -1849,10 +1849,10 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "f16vec4 uvw @ TexCoord0;",
+            "vec4 uvw @ TexCoord0;",
             "for (int ix = 0; ix < 2; ix++)",
             "rgb += i.uvw.rgb;",
-            "return f16vec4(rgb, 1.0);",
+            "return vec4(rgb, 1.0);",
         ),
     ),
 ]
@@ -1955,10 +1955,12 @@ LONG_VECTOR_TYPEDEF_FIXTURE = ExternalFixture(
 
 
 def test_codegen_dxc_block_scope_long_vector_typedef_is_refused():
+    # DXC compiles its linalg tests with -enable-16bit-types, so ``half`` keeps its binary16 width.
+    tokens = HLSLLexer(LONG_VECTOR_TYPEDEF_FIXTURE.code, enable_16bit_types=True)
     with pytest.raises(
         DirectXImportRefused, match=r"vector<half, 16> has 16 components"
     ):
-        generate_crossgl(LONG_VECTOR_TYPEDEF_FIXTURE.code)
+        HLSLToCrossGLConverter().generate(HLSLParser(tokens.tokenize()).parse())
 
 
 def test_codegen_dxc_template_value_path_is_refused():

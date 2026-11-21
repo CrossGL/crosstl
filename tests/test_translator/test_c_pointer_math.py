@@ -35,10 +35,16 @@ def kernel(body, declarations=""):
 """
 
 
+# DXC reads HLSL ``half`` as binary16 only under -enable-16bit-types; these sources test binary16 ``half``.
+HLSL_16_BIT = {"enable_16bit_types": True}
+
+
 def translate(tmp_path, source, backend, suffix=".cgl"):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend, format_output=False)
+    return crosstl.translate(
+        str(path), backend=backend, format_output=False, source_options=HLSL_16_BIT
+    )
 
 
 def bare_calls(code):

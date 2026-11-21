@@ -78,9 +78,11 @@ def test_cuda_match_all_takes_the_predicate_address():
     assert "uint r = __match_all_sync(a0, a1, &(a2));" in lines
 
 
-def test_hip_match_all_is_refused():
-    with pytest.raises(HipRefusal, match="warp match"):
-        _generate(HipCodeGen, _program(MATCH_BODY))
+def test_hip_match_all_passes_the_predicate_address_to_its_helper():
+    # HIP declares no __match_all_sync; HIP output computes it over a 32-lane segment of the wavefront.
+    code = _generate(HipCodeGen, _program(MATCH_BODY))
+    assert "unsigned int r = cgl_cuda_match_all_sync(a0, a1, &(a2));" in _lines(code)
+    assert "__match_all_sync(" not in code.replace("cgl_cuda_match_all_sync(", "")
 
 
 @pytest.mark.parametrize(

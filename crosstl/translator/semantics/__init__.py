@@ -388,7 +388,7 @@ class RuleReport:
         }
 
 
-def apply_rule_carrying(program, source, target) -> RuleReport:
+def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport:
     """Annotate ``program`` (a CrossGL ``ShaderNode``) with ``source``'s rules and lower them for ``target``.
 
     Structures declared in function bodies first move to module scope under fresh names (:mod:`.local_structs`).
@@ -526,6 +526,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     exactly, :class:`NarrowIntegerUnsupportedError` for a narrow-integer construct it cannot carry, and
     :class:`CudaWarpIntrinsicUnsupportedError` for a CUDA warp intrinsic it cannot compute with CUDA's lanes.
     The report's JSON form is also stored in ``program.annotations["rule_carrying"]``.
+    ``entry_point`` names the one entry a translation writes, when it selects one: the undeclared-name checks then
+    skip the functions no stage entry reaches, which that translation drops (:mod:`.declared_types`).
     """
     report = RuleReport(source=str(source or ""), target=str(target or ""))
     declared_families = take_declared_families(program, report.target)
@@ -541,9 +543,9 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     check_work_graph_nodes(program, report.target)
     # These three passes only read the program, so they share one computation of its unreachable functions.
     with shared_dead_functions():
-        refuse_undeclared_types(program, report.target)
-        record_undeclared_identifiers(program, report.target)
-        refuse_undeclared_functions(program, report.target)
+        refuse_undeclared_types(program, report.target, entry_point)
+        record_undeclared_identifiers(program, report.target, entry_point)
+        refuse_undeclared_functions(program, report.target, entry_point)
     lower_void_casts(program, report.target)
     refuse_void_values(program, report.target)
     refuse_tuple_fields(program, report.target)

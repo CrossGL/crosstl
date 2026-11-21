@@ -90,10 +90,16 @@ class CudaInitializerMixin:
         saved_index = self.current_index
         try:
             self.eat("LPAREN")
+            saw_integral_sign = False
             while self.current_token[0] in self.TYPE_QUALIFIER_TOKENS:
+                if self.current_token[0] in {"SIGNED", "UNSIGNED"}:
+                    saw_integral_sign = True
                 self.eat(self.current_token[0])
 
-            if self.current_token[0] in self.ELABORATED_TYPE_TOKENS:
+            if self.is_implicit_int_current_type(saw_integral_sign):
+                # `(unsigned)x`, `(signed)x`: a sign keyword alone names int (C++ [dcl.type.simple]).
+                pass
+            elif self.current_token[0] in self.ELABORATED_TYPE_TOKENS:
                 self.parse_elaborated_type_name()
             else:
                 if self.current_token[0] not in self.TYPE_TOKENS or (

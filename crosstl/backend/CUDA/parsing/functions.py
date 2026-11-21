@@ -1,10 +1,7 @@
 """Function definitions in the CUDA parser: trailing return types, post-function qualifiers, requires clauses, attributes, launch bounds and parameters."""
 
-from ..CudaAst import (
-    FunctionNode,
-    KernelNode,
-    VariableNode,
-)
+from ..CudaAst import FunctionNode, KernelNode, VariableNode
+from ..function_templates import parse_template_parameters
 from ..parameter_defaults import UnparsedParameterDefault
 
 
@@ -12,6 +9,7 @@ class CudaFunctionMixin:
     """Function members of ``CudaParser``."""
 
     def parse_function(self):
+        template_parameters = self.take_template_header(self.current_index)
         qualifiers = []
         attributes = []
         linkage = None
@@ -78,7 +76,16 @@ class CudaFunctionMixin:
 
         function = FunctionNode(return_type, name, params, body, qualifiers, attributes)
         function.linkage = linkage
+        function.template_parameters = template_parameters
         return function
+
+    def take_template_header(self, start):
+        """The parameters of the ``template <...>`` header that ends at token ``start``, else ``None``."""
+        pending = getattr(self, "pending_template_header", None)
+        self.pending_template_header = None
+        if pending is None or pending[1] != start:
+            return None
+        return parse_template_parameters(pending[0]) or None
 
     def parse_trailing_return_type(self, return_type):
         if self.current_token[0] != "ARROW":

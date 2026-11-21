@@ -249,6 +249,8 @@ class RustDeclarationMixin:
 
         code = helper_code
         code += f"    {stage_header} {{\n"
+        for mode_line in self.stage_execution_mode_lines(func, shader_type):
+            code += f"        {mode_line}\n"
         code += f"        {return_type} main({params_str}){numthreads_suffix} {{\n"
         code += pattern_binding_code
         code += body_code
@@ -524,6 +526,9 @@ class RustDeclarationMixin:
         )
         if macro_pattern is not None:
             return macro_pattern
+
+        if self.is_mutable_reference_let(stmt):
+            return self.generate_mutable_reference_let(stmt, indent)
 
         if self.is_nontrivial_let_pattern(stmt.name):
             return self.generate_pattern_let_statement(stmt, indent, loop_contexts)

@@ -18,8 +18,8 @@ pre-commit install
 
 `pre-commit` runs black, isort, ruff and the repository checks on the files
 you commit. Run `pre-commit run --all-files` before your first push if you
-installed it late. The Lint check runs the same pinned black on every Python
-file a pull request changes.
+installed it late. The Lint check runs the same pinned hooks on every file a
+pull request changes, and the merge queue runs them again.
 
 Native validators are optional. Tests that need glslang, DXC, SPIRV-Tools or
 the Metal toolchain are skipped when the tool is missing, and CI runs them on

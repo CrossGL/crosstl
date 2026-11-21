@@ -48,6 +48,9 @@ register_backend(
         name="opengl",
         codegen_class=GLSLCodeGen,
         aliases=("glsl", "ogl"),
+        # GLSL ES output for OpenGL ES 3.x (glsl_source_directives.GLSL_ES_TARGET_PROFILES).
+        target_aliases=("gles", "opengles"),
+        target_profiles=("opengl-es",),
         file_extensions=(".glsl",),
         format_backend="opengl",
     )

@@ -55,6 +55,17 @@ _RAY_DESCRIPTIONS = frozenset({"ray_desc", "RayDesc"})
 # The hit attributes a probe passes for a user-defined type outside the payload stages: those ``ReportHit`` reports
 # from an intersection shader and a hit object hands back. HLSL, Slang and CrossGL spell the triangle attributes alike.
 _HIT_ATTRIBUTES = "BuiltInTriangleIntersectionAttributes"
+# Languages whose runtime may round a float converted to a 16-bit float toward zero, where CrossGL rounds it to
+# nearest: Direct3D does ("Round-to-zero must be used during conversion to another float format", D3D11.3 functional
+# specification, section 3.2.2). Their features' probes, native and CrossGL, convert a 16-bit float argument from a
+# float input on a grid of 2^-8, which every input of magnitude below 4 keeps exact in binary16, so the probe of a
+# 16-bit operation does not depend on the rounding of the conversion that makes its argument.
+_TOWARD_ZERO = frozenset({"hlsl"})
+_HALF_GRID = ("256.0", "0.00390625")
+# Languages whose native probes declare the output as an HLSL structured buffer, whose element of 3 components is 12
+# bytes in DXIL. CrossGL's default layout, std430, makes it 16 (GLSL 4.60 section 7.6.2.2), so the CrossGL probe of a
+# feature of theirs marks a 3-component output with the layout the native probe has.
+_STRUCTURED = {"hlsl": "hlsl_structured"}
 
 
 @dataclass(frozen=True)
@@ -102,8 +113,11 @@ class _Builder:
         interpolant: str = "",
         payload: bool = False,
         tracing: bool = False,
+        half_grid: bool = False,
     ):
         self.dialect = dialect
+        # Whether a 16-bit float argument is converted from a float input on :data:`_HALF_GRID`.
+        self.half_grid = half_grid
         self.receiver = receiver
         self.interpolant = interpolant
         # Whether the probe declares a payload (:data:`_PAYLOAD_STAGES`).
@@ -136,6 +150,10 @@ class _Builder:
         read = self.dialect.read(_BUFFERS[storage], offset)
         if scalar == "bool":
             return self.dialect.positive(read)
+        if scalar == "half" and self.half_grid:
+            scale, step = _HALF_GRID
+            whole = self.dialect.cast(Type("int"), f"({read} * {scale})")
+            read = f"({self.dialect.cast(Type(storage), whole)} * {step})"
         if scalar != storage:
             return self.dialect.cast(Type(scalar), read)
         return read
@@ -461,6 +479,7 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         interpolant or "",
         feature.stage in _PAYLOAD_STAGES,
         feature.stage == _TRACING_STAGE,
+        feature.language in _TOWARD_ZERO,
     )
     signature = feature.signature
     if crossgl and feature.counterpart:
@@ -479,6 +498,8 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
     buffers.append((dialect.buffer_element(output, atomic), "outp"))
     declarations = builder.declarations
     extra = {"prelude": dialect.enable(feature.extension)} if feature.extension else {}
+    if crossgl and feature.language in _STRUCTURED and output.shape == (3,):
+        extra["layouts"] = {"outp": _STRUCTURED[feature.language]}
     if feature.stage == "fragment":
         source = dialect.fragment(
             buffers, body, declarations=declarations, inputs=builder.inputs, **extra
