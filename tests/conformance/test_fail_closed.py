@@ -4,17 +4,20 @@ from . import fail_closed
 from .fail_closed import compare, scan, scan_source, totals
 
 FAIL_OPEN = '''
-"""Module docstring mentioning a placeholder is documentation, not output."""
+"""Module docstring mentioning a placeholder or placeholders is documentation, not output."""
 
 MAP = {}
 
 
 def emit(name, out):
-    """Docstrings that say ; WARNING are skipped too."""
+    """Docstrings that say ; WARNING or placeholders are skipped too."""
     out.append("; WARNING: lowered to 0")
     out.append(f"{name} /* unsupported construct */")
     out.append(f"(/* {name} not directly supported in CrossGL */ 0)")
     out.append(f"(/* {name} lowered to atomicAdd; scope not preserved */ 0)")
+    out.append("// compile-only placeholder")
+    out.append("# CrossGL synchronization placeholders\\n")
+    out.append("// CrossGL mesh/task placeholders\\n")
     return MAP.get(name, name)
 
 
@@ -26,14 +29,16 @@ def parse(self):
 
 
 def refuse(name):
-    raise ValueError(f"; WARNING text inside a raised diagnostic is an error message: {name}")
+    raise ValueError(
+        f"; WARNING and placeholders text inside a raised diagnostic is an error message: {name}"
+    )
 '''
 
 
 def test_each_fail_open_shape_is_found_and_scoped():
     sites = scan_source(FAIL_OPEN)
     assert sites == {
-        ("emit", "fallback-text"): 4,
+        ("emit", "fallback-text"): 7,
         ("emit", "identity-fallback"): 1,
         ("parse", "empty-block-recovery"): 1,
     }
@@ -41,6 +46,9 @@ def test_each_fail_open_shape_is_found_and_scoped():
 
 def test_closed_shapes_are_not_sites():
     closed = """
+TOKEN = "HLSL_EXECUTION_BARRIER_PLACEHOLDER"
+
+
 def lookup(name, table):
     if name not in table:
         raise KeyError(name)
