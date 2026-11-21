@@ -120,7 +120,10 @@ _SYSTEM_VALUES = {
     "SV_GroupIndex": "gl_LocalInvocationIndex",
 }
 # Each node system value under its HLSL name and its CrossGL name.
-_SYSTEM_VALUE_NAMES = {**_SYSTEM_VALUES, **{value: value for value in _SYSTEM_VALUES.values()}}
+_SYSTEM_VALUE_NAMES = {
+    **_SYSTEM_VALUES,
+    **{value: value for value in _SYSTEM_VALUES.values()},
+}
 _LAUNCH_SYSTEM_VALUES = {
     "broadcasting": frozenset(_SYSTEM_VALUES.values()),
     "coalescing": frozenset({"gl_LocalInvocationID", "gl_LocalInvocationIndex"}),
