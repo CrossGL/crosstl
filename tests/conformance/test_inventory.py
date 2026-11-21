@@ -600,7 +600,9 @@ def test_download_retries_transient_failures(monkeypatch, transient):
 
 def test_download_raises_the_last_transient_failure(monkeypatch):
     last = _http_error(502)
-    calls, _ = _scripted_urlopen(monkeypatch, [_http_error(503), _http_error(500), last])
+    calls, _ = _scripted_urlopen(
+        monkeypatch, [_http_error(503), _http_error(500), last]
+    )
     with pytest.raises(type(last)) as raised:
         inventory.download("https://example.test/x")
     assert raised.value is last
