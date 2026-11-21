@@ -1,9 +1,11 @@
 """Quad operations in compute thread groups whose quads are 2x2 blocks of threads (#4840).
 
-HLSL Shader Model 6.6 forms the quads of a thread group with even x and y dimensions from 2x2 blocks of threads.
-A Metal quad-group is four consecutive SIMD-group threads, so Metal output used to read ``gi ^ 2`` for
-``QuadReadAcrossY`` in an 8x8 thread group where HLSL reads ``gi ^ 8``. ``metal_grid_quads`` remaps those reads
-to SIMD-group shuffles, or refuses thread groups whose quads the shuffles cannot reach.
+A CrossGL compute stage with ``layout(derivative_group_quadsKHR) in;`` forms its quads from 2x2 blocks of the x
+and y local invocation ids; with no derivative group or with ``derivative_group_linearKHR`` they are four
+consecutive lanes or indices. A Metal quad-group is four consecutive SIMD-group threads, so Metal output read
+``gi ^ 2`` for ``QuadReadAcrossY`` in an 8x8 thread group of 2x2 quads, where the quads read ``gi ^ 8``.
+``metal_grid_quads`` remaps those reads to SIMD-group shuffles, or refuses thread groups whose quads the
+shuffles cannot reach.
 """
 
 from __future__ import annotations
@@ -25,42 +27,48 @@ from crosstl.translator.refusals import TranslationRefusal
 ROOT = Path(__file__).resolve().parents[2]
 REQUIRE_ENV = "CROSTL_REQUIRE_METAL_GRID_QUADS"
 OUTPUTS = 8
+QUADS = "layout(derivative_group_quadsKHR) in;"
+LINEAR = "layout(derivative_group_linearKHR) in;"
 
 KERNEL = """\
-RWStructuredBuffer<uint> fin : register(u0);
-RWStructuredBuffer<uint> outp : register(u1);
-
-uint second_row(uint v) {
-    return QuadReadLaneAt(v, 2) + QuadReadAcrossY(v) * 3u;
-}
-
-[numthreads(@X@, @Y@, @Z@)]
-void main(uint gi : SV_GroupIndex) {
-    uint v = fin[gi];
-    outp[gi * 8u + 0u] = QuadReadAcrossX(v);
-    outp[gi * 8u + 1u] = QuadReadAcrossY(v);
-    outp[gi * 8u + 2u] = QuadReadAcrossDiagonal(v);
-    outp[gi * 8u + 3u] = QuadReadLaneAt(v, 0);
-    outp[gi * 8u + 4u] = QuadReadLaneAt(v, 3);
-    outp[gi * 8u + 5u] = (QuadAny(v % 7u == 0u) ? 1u : 0u) + (QuadAll(v % 3u != 0u) ? 2u : 0u);
-    uint vote = 4u;
-    if (v % 5u != 1u) {
-        vote = (QuadAny(v % 4u == 0u) ? 1u : 0u) + (QuadAll(v % 2u == 0u) ? 2u : 0u);
+shader GridQuads {
+    uint second_row(uint v) {
+        return QuadReadLaneAt(v, 2) + QuadReadAcrossY(v) * 3u;
     }
-    outp[gi * 8u + 6u] = vote;
-    outp[gi * 8u + 7u] = second_row(v);
+    compute {
+        layout(local_size_x = @X@, local_size_y = @Y@, local_size_z = @Z@) in;
+        @GROUP@
+        buffer uint* fin;
+        buffer uint* outp;
+        void main() {
+            uint gi = gl_LocalInvocationIndex;
+            uint v = fin[gi];
+            outp[gi * 8u + 0u] = QuadReadAcrossX(v);
+            outp[gi * 8u + 1u] = QuadReadAcrossY(v);
+            outp[gi * 8u + 2u] = QuadReadAcrossDiagonal(v);
+            outp[gi * 8u + 3u] = QuadReadLaneAt(v, 0);
+            outp[gi * 8u + 4u] = QuadReadLaneAt(v, 3);
+            outp[gi * 8u + 5u] = (QuadAny(v % 7u == 0u) ? 1u : 0u) + (QuadAll(v % 3u != 0u) ? 2u : 0u);
+            uint vote = 4u;
+            if (v % 5u != 1u) {
+                vote = (QuadAny(v % 4u == 0u) ? 1u : 0u) + (QuadAll(v % 2u == 0u) ? 2u : 0u);
+            }
+            outp[gi * 8u + 6u] = vote;
+            outp[gi * 8u + 7u] = second_row(v);
+        }
+    }
 }
 """
 
 
-def _kernel(size):
-    source = KERNEL
+def _kernel(size, group=QUADS):
+    source = KERNEL.replace("@GROUP@", group)
     for name, value in zip(("@X@", "@Y@", "@Z@"), size):
         source = source.replace(name, str(value))
     return source
 
 
-def _translate(tmp_path, source, suffix=".hlsl", name="kernel"):
+def _translate(tmp_path, source, suffix=".cgl", name="kernel"):
     path = tmp_path / f"{name}{suffix}"
     path.write_text(source, encoding="utf-8")
     return crosstl.translate(str(path), backend="metal")
@@ -73,19 +81,18 @@ def _translate(tmp_path, source, suffix=".hlsl", name="kernel"):
         ((4, 4, 2), 4),
         ((16, 2, 1), 16),
         ((2, 8, 1), 2),
-        ((64, 1, 1), 2),
-        ((8, 1, 1), 2),
-        ((7, 4, 1), 2),
+        ((64, 1, 1), 0),
+        ((7, 4, 1), 0),
         ((32, 2, 1), 0),
         ((6, 2, 1), 0),
         ((12, 4, 1), 0),
     ],
 )
-def test_row_width_follows_the_hlsl_quad_rule(size, width):
+def test_row_width_of_2x2_quads(size, width):
     assert grid_quad_row_width(size) == width
 
 
-def test_quad_reads_of_a_2d_thread_group_use_simd_lanes(tmp_path):
+def test_quad_reads_of_2x2_quads_use_simd_lanes(tmp_path):
     metal = _translate(tmp_path, _kernel((8, 8, 1)))
     # The thread at (x, y) reads (x ^ 1, y), (x, y ^ 1) and (x ^ 1, y ^ 1): lanes gi ^ 1, gi ^ 8 and gi ^ 9.
     assert "quad_shuffle_xor(v, ushort(1))" in metal
@@ -101,33 +108,24 @@ def test_quad_reads_of_a_2d_thread_group_use_simd_lanes(tmp_path):
     assert "quad_any" not in metal and "quad_all" not in metal
 
 
-@pytest.mark.parametrize("size", [(64, 1, 1), (2, 8, 1), (7, 4, 1)])
-def test_quads_metal_already_forms_keep_the_quad_lane_reads(tmp_path, size):
-    metal = _translate(tmp_path, _kernel(size))
+@pytest.mark.parametrize(
+    ("size", "group"),
+    [
+        ((8, 8, 1), ""),
+        ((8, 8, 1), LINEAR),
+        ((64, 1, 1), ""),
+        ((7, 4, 1), LINEAR),
+        ((2, 8, 1), QUADS),
+    ],
+)
+def test_quads_metal_already_forms_keep_the_quad_lane_reads(tmp_path, size, group):
+    metal = _translate(tmp_path, _kernel(size, group))
     assert "quad_shuffle_xor(v, ushort(2))" in metal
     assert "quad_broadcast(v, ushort(3))" in metal
     assert "simd_shuffle" not in metal
     # Votes count the active threads of the four consecutive lanes.
     assert "simd_vote::vote_t(15u) << (crossglWaveLaneIndex & ~3u)" in metal
     assert "quad_any(" not in metal and "quad_all(" not in metal
-
-
-def test_crossgl_compute_stage_follows_the_same_rule(tmp_path):
-    source = """
-shader QuadRows {
-    compute {
-        layout(local_size_x = 4, local_size_y = 2, local_size_z = 1) in;
-        buffer uint* fin;
-        buffer uint* outp;
-        void main() {
-            uint i = gl_LocalInvocationIndex;
-            outp[i] = QuadReadAcrossDiagonal(fin[i]);
-        }
-    }
-}
-"""
-    metal = _translate(tmp_path, source, suffix=".cgl")
-    assert "simd_shuffle_xor(" in metal and "ushort(5))" in metal
 
 
 def test_metal_quad_functions_are_not_remapped(tmp_path):
@@ -144,12 +142,23 @@ kernel void k(device const int* fin [[buffer(0)]], device int* outp [[buffer(1)]
 
 
 @pytest.mark.parametrize("size", [(32, 2, 1), (6, 2, 1), (12, 4, 1)])
-def test_unreachable_2d_quads_are_refused(tmp_path, size):
+def test_unreachable_2x2_quads_are_refused(tmp_path, size):
     with pytest.raises(TranslationRefusal, match="2x2 blocks of threads"):
         _translate(tmp_path, _kernel(size))
 
 
-def test_runtime_quad_lane_is_refused_in_a_2d_thread_group(tmp_path):
+@pytest.mark.parametrize("size", [(7, 4, 1), (64, 1, 1)])
+def test_2x2_quads_of_an_odd_thread_group_are_refused(tmp_path, size):
+    with pytest.raises(TranslationRefusal, match="need an even width and height"):
+        _translate(tmp_path, _kernel(size))
+
+
+def test_a_stage_with_both_derivative_groups_is_refused(tmp_path):
+    with pytest.raises(TranslationRefusal, match="can be formed only one way"):
+        _translate(tmp_path, _kernel((8, 8, 1), QUADS + "\n        " + LINEAR))
+
+
+def test_runtime_quad_lane_is_refused_in_2x2_quads(tmp_path):
     source = _kernel((8, 8, 1)).replace(
         "QuadReadLaneAt(v, 3)", "QuadReadLaneAt(v, v & 3u)"
     )
@@ -157,57 +166,50 @@ def test_runtime_quad_lane_is_refused_in_a_2d_thread_group(tmp_path):
         _translate(tmp_path, source)
 
 
+SHARED = """
+shader SharedQuads {
+    float swap(float v) {
+        return @OP@(v);
+    }
+    compute {
+        layout(local_size_x = @X@, local_size_y = @Y@, local_size_z = 1) in;
+        @GROUP@
+        buffer float* data;
+        void main() {
+            uint i = gl_LocalInvocationIndex;
+            data[i] = swap(data[i]);
+        }
+    }
+    fragment {
+        input vec4 color @ TEXCOORD0;
+        output vec4 result @ gl_FragColor;
+        void main() {
+            result = vec4(swap(color.x));
+        }
+    }
+}
+"""
+
+
+def _shared(operation, x, y, group):
+    return (
+        SHARED.replace("@OP@", operation)
+        .replace("@X@", str(x))
+        .replace("@Y@", str(y))
+        .replace("@GROUP@", group)
+    )
+
+
 def test_helper_shared_by_stages_with_different_quads_is_refused(tmp_path):
-    source = """
-shader SharedQuads {
-    float swap_rows(float v) {
-        return QuadReadAcrossY(v);
-    }
-    compute {
-        layout(local_size_x = 8, local_size_y = 8, local_size_z = 1) in;
-        buffer float* data;
-        void main() {
-            uint i = gl_LocalInvocationIndex;
-            data[i] = swap_rows(data[i]);
-        }
-    }
-    fragment {
-        input vec4 color @ TEXCOORD0;
-        output vec4 result @ gl_FragColor;
-        void main() {
-            result = vec4(swap_rows(color.x));
-        }
-    }
-}
-"""
     with pytest.raises(TranslationRefusal, match="quads are formed differently"):
-        _translate(tmp_path, source, suffix=".cgl")
+        _translate(tmp_path, _shared("QuadReadAcrossY", 8, 8, QUADS))
 
 
-def test_lane_reads_of_linear_quads_may_be_shared_with_a_fragment_stage(tmp_path):
-    source = """
-shader SharedQuads {
-    float swap_columns(float v) {
-        return QuadReadAcrossX(v);
-    }
-    compute {
-        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
-        buffer float* data;
-        void main() {
-            uint i = gl_LocalInvocationIndex;
-            data[i] = swap_columns(data[i]);
-        }
-    }
-    fragment {
-        input vec4 color @ TEXCOORD0;
-        output vec4 result @ gl_FragColor;
-        void main() {
-            result = vec4(swap_columns(color.x));
-        }
-    }
-}
-"""
-    metal = _translate(tmp_path, source, suffix=".cgl")
+@pytest.mark.parametrize(("x", "y", "group"), [(64, 1, ""), (8, 8, ""), (8, 8, LINEAR)])
+def test_lane_reads_of_linear_quads_may_be_shared_with_a_fragment_stage(
+    tmp_path, x, y, group
+):
+    metal = _translate(tmp_path, _shared("QuadReadAcrossX", x, y, group))
     assert "quad_shuffle_xor(v, ushort(1))" in metal
 
 
@@ -231,25 +233,34 @@ def _compile(tmp_path, name, source):
     return library
 
 
-SIZES = [(8, 8, 1), (4, 4, 2), (16, 2, 1), (2, 8, 1), (12, 1, 1), (64, 1, 1)]
+CASES = [
+    ((8, 8, 1), QUADS),
+    ((4, 4, 2), QUADS),
+    ((16, 2, 1), QUADS),
+    ((2, 8, 1), QUADS),
+    ((8, 8, 1), ""),
+    ((8, 8, 1), LINEAR),
+    ((12, 1, 1), ""),
+    ((64, 1, 1), LINEAR),
+]
 
 
 @pytest.mark.skipif(
     sys.platform != "darwin" or shutil.which("xcrun") is None,
     reason="the Metal compiler needs macOS and xcrun",
 )
-@pytest.mark.parametrize("size", SIZES)
-def test_translated_kernels_compile(tmp_path, size):
-    _compile(tmp_path, "kernel", _translate(tmp_path, _kernel(size)))
+@pytest.mark.parametrize(("size", "group"), CASES)
+def test_translated_kernels_compile(tmp_path, size, group):
+    _compile(tmp_path, "kernel", _translate(tmp_path, _kernel(size, group)))
 
 
-def _hlsl_quads(values, size):
-    """``outp`` of ``KERNEL`` by the HLSL rule: 2x2 quads for even x and y, otherwise four consecutive indices."""
+def _expected_quads(values, size, group):
+    """``outp`` of ``KERNEL``: 2x2 quads with ``QUADS``, otherwise four consecutive indices."""
     x_size, y_size, _z_size = size
     count = len(values)
 
     def members(gi):
-        if x_size % 2 == 0 and y_size % 2 == 0:
+        if group == QUADS:
             x, y, z = gi % x_size, gi // x_size % y_size, gi // (x_size * y_size)
             return [
                 (x & ~1) + (lane & 1) + x_size * ((y & ~1) + (lane >> 1) + y_size * z)
@@ -290,8 +301,8 @@ def _hlsl_quads(values, size):
     return expected
 
 
-@pytest.mark.parametrize("size", SIZES)
-def test_translated_quads_compute_the_hlsl_values_on_the_gpu(tmp_path, size):
+@pytest.mark.parametrize(("size", "group"), CASES)
+def test_translated_quads_compute_their_quads_on_the_gpu(tmp_path, size, group):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 to require native Metal execution")
     assert sys.platform == "darwin", "Native Metal execution requires macOS"
@@ -300,7 +311,7 @@ def test_translated_quads_compute_the_hlsl_values_on_the_gpu(tmp_path, size):
     runner = tmp_path / "readback"
     fixture = ROOT / "tests/fixtures/runtime_verification/metal_uint32_buffers.swift"
     _run(["xcrun", "swiftc", str(fixture), "-o", str(runner)], tmp_path)
-    library = _compile(tmp_path, "kernel", _translate(tmp_path, _kernel(size)))
+    library = _compile(tmp_path, "kernel", _translate(tmp_path, _kernel(size, group)))
     request = tmp_path / "request.json"
     request.write_text(
         json.dumps(
@@ -317,4 +328,4 @@ def test_translated_quads_compute_the_hlsl_values_on_the_gpu(tmp_path, size):
         _run([str(runner), str(library), "kernel_main", str(request)], tmp_path)
     )
     assert readback["threadExecutionWidth"] == 32
-    assert readback["values"] == _hlsl_quads(values, size)
+    assert readback["values"] == _expected_quads(values, size, group)

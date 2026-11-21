@@ -1,16 +1,23 @@
 """Metal lowering of quad operations in compute-like thread groups whose quads are 2x2 blocks of threads.
 
-HLSL Shader Model 6.6 forms the quads of a compute, mesh or amplification thread group from 2x2 blocks of the x
-and y dimensions when both are even, and otherwise from four consecutive ``SV_GroupIndex`` values
-(``spirv_compute_derivative_groups`` states the same rule for SPIR-V). CrossGL's ``QuadReadAcrossX``,
-``QuadReadAcrossY``, ``QuadReadAcrossDiagonal``, ``QuadReadLaneAt``, ``QuadAll`` and ``QuadAny`` follow it. In a
-2x2 quad, the thread at ``(x, y)`` has quad lane ``(x & 1) | (y & 1) << 1``.
+A CrossGL compute, mesh or task stage forms the quads of ``QuadReadAcrossX``, ``QuadReadAcrossY``,
+``QuadReadAcrossDiagonal``, ``QuadReadLaneAt``, ``QuadAll`` and ``QuadAny`` (#4840):
+
+- from four consecutive subgroup lanes when it declares no derivative group, as GLSL and SPIR-V do;
+- from four consecutive local invocation indices with ``layout(derivative_group_linearKHR) in;``;
+- from 2x2 blocks of the x and y local invocation ids with ``layout(derivative_group_quadsKHR) in;``, where the
+  thread at ``(x, y)`` has quad lane ``(x & 1) | (y & 1) << 1``. The HLSL importer writes this layout for a thread
+  group with even x and y, the Shader Model 6.6 rule.
+
+A stage that takes derivatives and declares no group derives one by that rule, but Metal output refuses
+derivatives outside fragment functions, so that case never reaches this module.
 
 A Metal quad-group is four consecutive threads of a SIMD-group, and the SIMD-groups of a threadgroup hold
-consecutive values of ``thread_index_in_threadgroup`` (x fastest). The two groupings agree when the quads are
-linear and when the thread group is two threads wide. For a width ``X`` that is a power of two from 4 to 16 and
-an even height, the two rows of a 2x2 quad lie in one 32-thread SIMD-group, the SIMD-group width of every Apple
-GPU family, and their SIMD lanes differ from the thread's lane in bit 0 and in bit ``log2(X)``:
+consecutive values of ``thread_index_in_threadgroup`` (x fastest). The first two groupings are therefore Metal's
+quad-groups, and 2x2 quads agree with them when the thread group is two threads wide. For a width ``X`` that is a
+power of two from 4 to 16 and an even height, the two rows of a 2x2 quad lie in one 32-thread SIMD-group, the
+SIMD-group width of every Apple GPU family, and their SIMD lanes differ from the thread's lane in bit 0 and in
+bit ``log2(X)``:
 
 - ``QuadReadAcrossX`` stays ``quad_shuffle_xor(v, 1)``, because the lane it reads is in the same quad-group;
 - ``QuadReadAcrossY`` and ``QuadReadAcrossDiagonal`` are ``simd_shuffle_xor`` with ``X`` and ``X + 1``;
@@ -21,9 +28,10 @@ every compute-like stage, linear quads included (row distance 2), so that only a
 and ``OpGroupNonUniformQuadAnyKHR``. On an Apple M2 Max, ``quad_any`` in a branch with no other side effects votes
 with the threads the branch excludes as well.
 
-Any other thread group with even x and y, a width or height the pipeline specializes, and a function that stages
-with different quad layouts share are refused with ``MetalRefusal``. Metal-sourced kernels whose threadgroup size
-the host chooses have linear quads, and Metal's own ``quad_*`` calls are never remapped.
+2x2 quads in any other thread group, in a thread group with an odd width or height, or in one whose size the
+pipeline specializes or the host chooses, a stage that declares both groups, and a function that stages with
+different quad layouts share are refused with ``MetalRefusal``. Metal's own ``quad_*`` calls import with no
+derivative group and are never remapped.
 """
 
 from __future__ import annotations
@@ -41,6 +49,7 @@ __all__ = [
     "metal_grid_quad_lane_move",
     "metal_grid_quad_lane_requirements",
     "metal_grid_quad_vote",
+    "stage_derivative_group",
 ]
 
 # The SIMD-group width of the Apple GPU families (Metal Feature Set Tables, "SIMD-group size").
@@ -56,6 +65,13 @@ _LANE_READING_OPERATIONS = frozenset({"QuadReadLaneAt", "QuadAll", "QuadAny"})
 _COMPUTE_LIKE_STAGES = frozenset({"compute", "mesh", "task", "object", "amplification"})
 # The row distance of quads of four consecutive threads, which Metal's quad-groups already hold.
 LINEAR_QUADS = 2
+# The derivative group layouts of GL_KHR_compute_shader_derivatives (and its NV predecessor).
+_DERIVATIVE_GROUP_LAYOUTS = {
+    "derivative_group_quadsKHR": "quads",
+    "derivative_group_quadsNV": "quads",
+    "derivative_group_linearKHR": "linear",
+    "derivative_group_linearNV": "linear",
+}
 _ACROSS_MASKS = {
     "QuadReadAcrossX": 1,
     "QuadReadAcrossY": 2,
@@ -82,23 +98,47 @@ def _direct_grid_quad_operations(codegen, func):
 
 
 def grid_quad_row_width(size):
-    """The SIMD-lane distance between the two rows of the quads of a thread group of ``size``.
+    """The SIMD-lane distance between the two rows of the 2x2 quads of a thread group of ``size``.
 
-    ``2`` means the quads are four consecutive threads, Metal's quad-groups; ``0`` means Metal's SIMD-group
-    functions cannot reach them.
+    ``2`` means the quads are four consecutive threads, Metal's quad-groups; ``0`` means the thread group has no
+    2x2 quads (an odd width or height) or Metal's SIMD-group functions cannot reach them.
     """
     x, y, _z = size
     if x % 2 or y % 2:
-        return LINEAR_QUADS
+        return 0
     if x & (x - 1) == 0 and 2 * x <= METAL_SIMD_GROUP_WIDTH:
         return x
     return 0
 
 
-def _stage_row_width(stage_name, entry_name, config):
-    config = config or {}
-    if config.get(HOST_WORKGROUP_SIZE_KEY) and not has_explicit_workgroup_size(config):
+def stage_derivative_group(stage):
+    """``"quads"``, ``"linear"`` or None: the ``layout(derivative_group_*) in;`` that ``stage`` declares."""
+    groups = set()
+    for qualifier in getattr(stage, "layout_qualifiers", None) or []:
+        if getattr(qualifier, "direction", None) not in (None, "in"):
+            continue
+        for entry in getattr(qualifier, "entries", None) or []:
+            group = _DERIVATIVE_GROUP_LAYOUTS.get(str(getattr(entry, "name", "")))
+            if group is not None:
+                groups.add(group)
+    if len(groups) > 1:
+        raise MetalRefusal(
+            "a CrossGL stage declares both layout(derivative_group_quadsKHR) and "
+            "layout(derivative_group_linearKHR); its quads can be formed only one way"
+        )
+    return next(iter(groups), None)
+
+
+def _stage_row_width(stage_name, entry_name, stage):
+    config = getattr(stage, "execution_config", None) or {}
+    if stage_derivative_group(stage) != "quads":
+        # Four consecutive subgroup lanes or local invocation indices: Metal's quad-groups.
         return LINEAR_QUADS
+    if config.get(HOST_WORKGROUP_SIZE_KEY) and not has_explicit_workgroup_size(config):
+        raise MetalRefusal(
+            f"Metal {stage_name} function '{entry_name}' reads 2x2 quads of a thread group whose size the "
+            "host chooses; the quads Metal's SIMD-group functions read depend on that size"
+        )
     if has_specialized_workgroup_size(config):
         raise MetalRefusal(
             f"Metal {stage_name} function '{entry_name}' reads 2x2 quads of a thread group whose size the "
@@ -109,11 +149,17 @@ def _stage_row_width(stage_name, entry_name, config):
     except ValueError:
         raise MetalRefusal(
             f"Metal {stage_name} function '{entry_name}' reads quads of a thread group whose size is not a "
-            "constant; Metal output needs the size to tell 2x2 quads from linear ones"
+            "constant; Metal output needs the size to find the SIMD lanes of its 2x2 quads"
         ) from None
     width = grid_quad_row_width(size)
+    x, y, z = size
+    if x % 2 or y % 2:
+        raise MetalRefusal(
+            f"Metal {stage_name} function '{entry_name}' declares layout(derivative_group_quadsKHR) for a "
+            f"{x}x{y}x{z} thread group; 2x2 quads need an even width and height "
+            "(GL_KHR_compute_shader_derivatives)"
+        )
     if width == 0:
-        x, y, z = size
         raise MetalRefusal(
             f"Metal {stage_name} function '{entry_name}': the {x}x{y}x{z} thread group forms its quads from "
             "2x2 blocks of threads, and Metal reaches them with SIMD-group shuffles only when the width is "
@@ -165,9 +211,7 @@ def collect_metal_grid_quad_widths(codegen, ast, functions):
         stage_name = normalize_stage_name(stage_type)
         width = None
         if stage_name in _COMPUTE_LIKE_STAGES:
-            width = _stage_row_width(
-                stage_name, entry_name, getattr(stage, "execution_config", None)
-            )
+            width = _stage_row_width(stage_name, entry_name, stage)
         for name in users:
             layouts.setdefault(name, set()).add(width)
 
