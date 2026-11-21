@@ -10423,7 +10423,9 @@ class TestCudaCodeGen:
             local[1].b = 2;
             struct Holder h;
             h.ps[1].a = 3.0f;
-            outp[0] = local[0].a + (float)local[1].b + h.ps[1].a;
+            struct Pair* ptrs[2];
+            ptrs[0] = &local[0];
+            outp[0] = local[0].a + (float)local[1].b + h.ps[1].a + ptrs[0]->a;
         }
         """
         lexer = CudaLexer(code, preprocess=False)
@@ -10437,10 +10439,15 @@ class TestCudaCodeGen:
         assert "array<Pair, 2> ps;" in result
         assert "var local: array<Pair, 2>;" in result
         assert "Pair_2" not in result
-        assert codegen.convert_cuda_type_to_crossgl("struct Pair[2]") == "array<Pair, 2>"
+        assert "var ptrs: array<ptr<Pair>, 2>;" in result
+        assert (
+            codegen.convert_cuda_type_to_crossgl("struct Pair[2]") == "array<Pair, 2>"
+        )
         assert (
             codegen.convert_cuda_type_to_crossgl("const struct Pair[2]")
             == "array<Pair, 2>"
         )
         assert codegen.convert_cuda_type_to_crossgl("class Pair[2]") == "array<Pair, 2>"
-        assert codegen.convert_cuda_type_to_crossgl("struct Pair[N]") == "array<Pair, N>"
+        assert (
+            codegen.convert_cuda_type_to_crossgl("struct Pair[N]") == "array<Pair, N>"
+        )
