@@ -10,8 +10,13 @@ language on each push to ``main``.
 The import graph comes from the ``import`` statements of every module under ``crosstl/``, including those inside
 functions, without running any of them, so the planner needs nothing but Python.
 
-``git diff --name-only HEAD^1 HEAD | python3 -m tools.coverage.legs`` reads the changed paths and prints one
-``<leg>=true`` or ``<leg>=false`` line per leg, in the format of ``$GITHUB_OUTPUT``.
+The Direct3D 12 leg runs the HLSL probes, which the Linux leg measures, on WARP on a Windows runner as well. A pull
+request runs it only when it touches the coverage engine, HLSL's own front end or generator modules, or the files the
+D3D12 runtime executes with. Coverage gaps never fail a check, so the merge queue leaves the leg out
+(:data:`OUTSIDE_QUEUE`) and the push to ``main`` that follows measures it.
+
+``git diff --name-only HEAD^1 HEAD | python3 -m tools.coverage.legs [--merge-group]`` reads the changed paths and prints
+one ``<leg>=true`` or ``<leg>=false`` line per leg, in the format of ``$GITHUB_OUTPUT``.
 """
 
 from __future__ import annotations
@@ -34,11 +39,16 @@ ENGINE = re.compile(
 
 @dataclass(frozen=True)
 class Leg:
-    """An optional leg: the prefixes of its generators, its front-end directories and its runtime files."""
+    """An optional leg: the prefixes of its generators, its front-end directories and its runtime files.
+
+    ``alone`` says that only this leg measures its languages. A leg that runs probes of a Linux-leg language on another
+    runtime is not alone: the modules its languages import stay shared, and it runs only for its own files.
+    """
 
     generators: tuple[str, ...]
     frontends: tuple[str, ...]
     runtime: str = r"(?!)"
+    alone: bool = True
 
     def owns(self, path: str) -> bool:
         return (
@@ -63,7 +73,17 @@ LEGS = {
         frontends=(BACKEND + "Rust/",),
         runtime=r"tests/conformance/(runner\.py|runtimes\.py|interface\.py|vkrun\.c)",
     ),
+    "d3d12": Leg(
+        generators=(CODEGEN + "directx_", CODEGEN + "hlsl_"),
+        frontends=(BACKEND + "DirectX/",),
+        runtime=r"tests/conformance/(runner|runtimes|interface|toolchains|validators|worker)\.py"
+        r"|crosstl/project/directx_(runtime|runtime_worker|toolchain)\.(py|cpp)"
+        r"|\.github/actions/install-windows-d3d12/action\.yml",
+        alone=False,
+    ),
 }
+# The legs the merge queue leaves out.
+OUTSIDE_QUEUE = frozenset({"d3d12"})
 
 
 def _module_name(path: str) -> str:
@@ -148,6 +168,7 @@ def exclusive_modules(root: Path) -> dict[str, set[str] | None]:
     own = {
         name: {path for path in languages if leg.owns(path)}
         for name, leg in LEGS.items()
+        if leg.alone
     }
     linux = languages - set().union(*own.values())
     shared = _reachable(graph, linux) | _reachable(
@@ -159,8 +180,18 @@ def exclusive_modules(root: Path) -> dict[str, set[str] | None]:
     }
 
 
-def plan(changed: Iterable[str], root: Path) -> dict[str, bool]:
-    """Whether each optional leg runs for a change to the paths ``changed``, given the tree at ``root``."""
+def plan(
+    changed: Iterable[str], root: Path, merge_group: bool = False
+) -> dict[str, bool]:
+    """Whether each optional leg runs for a change to the paths ``changed``, given the tree at ``root``, in a merge
+    group when ``merge_group``."""
+    decision = _planned(changed, root)
+    if merge_group:
+        decision.update(dict.fromkeys(OUTSIDE_QUEUE, False))
+    return decision
+
+
+def _planned(changed: Iterable[str], root: Path) -> dict[str, bool]:
     changed = [path.strip() for path in changed if path.strip()]
     if any(ENGINE.match(path) for path in changed):
         return {name: True for name in LEGS}
@@ -176,8 +207,11 @@ def plan(changed: Iterable[str], root: Path) -> dict[str, bool]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    root = Path(argv[0]) if argv else Path.cwd()
-    for name, runs in plan(sys.stdin, root).items():
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    merge_group = "--merge-group" in arguments
+    arguments = [a for a in arguments if a != "--merge-group"]
+    root = Path(arguments[0]) if arguments else Path.cwd()
+    for name, runs in plan(sys.stdin, root, merge_group).items():
         print(f"{name}={'true' if runs else 'false'}")
     return 0
 
