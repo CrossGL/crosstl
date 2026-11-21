@@ -17688,9 +17688,13 @@ class TestHipCodeGen:
 
         result = translate(str(source_path), backend="rust", format_output=False)
 
+        # The HIP importer binds the plain value as a uniform; the pointers are storage-buffer slices.
         assert (
-            "pub fn kernel(mut data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
+            "pub fn kernel(#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] data: &mut [f32], "
+            "#[spirv(storage_buffer, descriptor_set = 0, binding = 1)] indices: &[i32], "
+            "#[spirv(uniform, descriptor_set = 0, binding = 2)] value: &f32)" in result
         )
+        assert "let value: f32 = *value;" in result
         assert "data[indices[0] as usize] = value;" in result
 
     def test_native_kernel_roundtrip_to_hip_emits_native_types_and_builtins(

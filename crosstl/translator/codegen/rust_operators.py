@@ -1,5 +1,6 @@
 """Rust binary, ternary, vector and matrix operators, array literals, constructors and assignments."""
 
+from .assignment_values import is_reevaluable_place
 from ..ast import (
     ArrayAccessNode,
     BinaryOpNode,
@@ -207,12 +208,41 @@ class RustOperatorMixin:
             and not isinstance(expr.value, bool)
         )
 
+    def generate_glam_matrix_vector_product(
+        self, left_expr, right_expr, left_type, right_type, plan
+    ):
+        """``M * v`` and ``v * M`` with glam's square matrices: ``v * M`` is ``transpose(M) * v``."""
+        matrix_type = left_type if plan["matrix_on_left"] else right_type
+        vector_type = right_type if plan["matrix_on_left"] else left_type
+        matrix_info = self.matrix_type_info(matrix_type)
+        vector_info = self.vector_type_info(vector_type)
+        if matrix_info is None or vector_info is None:
+            return None
+        if matrix_info["columns"] != matrix_info["rows"]:
+            return None
+        matrix_scalar = self.normalize_scalar_type(matrix_info["component_type"])
+        if matrix_scalar != self.normalize_scalar_type(vector_info["component_type"]):
+            return None
+        left = self.generate_expression(left_expr)
+        right = self.generate_expression(right_expr)
+        if plan["matrix_on_left"]:
+            return f"({left} * {right})"
+        return f"(({right}).transpose() * {left})"
+
     def generate_matrix_multiply_expression(
         self, left_expr, right_expr, left_type, right_type, operator
     ):
         plan = self.matrix_multiply_plan(left_type, right_type, operator)
         if plan is None:
             return None
+        left_info = self.matrix_type_info(left_type)
+        right_info = self.matrix_type_info(right_type)
+        if left_info == right_info and left_info["columns"] == left_info["rows"]:
+            # glam multiplies two square matrices of one type (OpMatrixTimesMatrix).
+            return (
+                f"({self.generate_expression(left_expr)} * "
+                f"{self.generate_expression(right_expr)})"
+            )
 
         temp_bindings = []
         left_lanes = self.matrix_argument_lane_expressions(
@@ -250,6 +280,11 @@ class RustOperatorMixin:
     ):
         if not self.rust_matrix_vector_requires_lanes(plan):
             return None
+        glam_product = self.generate_glam_matrix_vector_product(
+            left_expr, right_expr, left_type, right_type, plan
+        )
+        if glam_product is not None:
+            return glam_product
 
         temp_bindings = []
         matrix_expr = left_expr if plan["matrix_on_left"] else right_expr
@@ -752,7 +787,7 @@ class RustOperatorMixin:
             if scalar_initializer is not None:
                 return scalar_initializer
             if self.is_rust_shader_pod_value_type(rust_type):
-                return "unsafe { std::mem::zeroed() }"
+                return self.rust_gpu_default_value(rust_type)
         return "Default::default()"
 
     def generate_assignment(self, node):
@@ -767,6 +802,12 @@ class RustOperatorMixin:
             target_expr = node.left
             value_expr = node.right
             op = getattr(node, "operator", "=")
+
+        padded_store = self.generate_rust_gpu_padded_slice_assignment(
+            target_expr, value_expr, op
+        )
+        if padded_store is not None:
+            return padded_store
 
         swizzle_assignment = self.generate_swizzle_assignment(
             target_expr, value_expr, op
@@ -830,6 +871,15 @@ class RustOperatorMixin:
             return None
 
         value_type = self.expression_result_type(value)
+        if binary_operator == "*" and self.matrix_type_info(value_type) is not None:
+            # v *= m is v = v * m, a row-vector product glam has no MulAssign for.
+            if not is_reevaluable_place(target):
+                return self.refuse_lowering(
+                    "vector *= matrix: the target has side effects and would be evaluated twice"
+                )
+            lhs = self.generate_assignment_target_expression(target)
+            expression = BinaryOpNode(target, "*", value)
+            return f"{lhs} = {self.generate_binary_expression(expression, target_type)}"
         if (
             self.vector_type_info(value_type) is None
             and self.normalize_scalar_type(value_type) is None

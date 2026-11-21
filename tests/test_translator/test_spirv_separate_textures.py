@@ -16,6 +16,7 @@ import subprocess
 import pytest
 
 import crosstl
+from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.codegen.spirv_separate_textures import (
     separate_texture_type_info,
 )
@@ -275,6 +276,20 @@ def _separate_texture_program(backend):
 def test_targets_declare_a_separate_texture_like_an_explicitly_sampled_one(
     tmp_path, backend
 ):
+    if backend == "rust":
+        # The rust-gpu output does not bind images and samplers yet; both declarations are refused alike.
+        messages = []
+        for texture_type in ("texture2D", "sampler2D"):
+            source = _separate_texture_program(backend).replace(
+                "TEXTURE_TYPE", texture_type
+            )
+            with pytest.raises(
+                LoweringRefused, match="is not lowered to a rust-gpu resource binding"
+            ) as info:
+                _translate(tmp_path, source, ".cgl", backend)
+            messages.append(str(info.value))
+        assert messages[0] == messages[1]
+        return
     separate = _translate(
         tmp_path,
         _separate_texture_program(backend).replace("TEXTURE_TYPE", "texture2D"),

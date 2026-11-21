@@ -1,6 +1,15 @@
 """CrossGL-to-Rust code generator."""
 
-from ..ast import ArrayNode, EnumNode, FunctionNode, StructNode
+import re
+
+from ..ast import (
+    ArrayNode,
+    EnumNode,
+    ExpressionStatementNode,
+    FunctionNode,
+    ReturnNode,
+    StructNode,
+)
 from ..explicit_specializations import explicit_specialization_refusals
 from ..refusals import RustRefusal
 from ..unhandled import UNHANDLED
@@ -10,6 +19,18 @@ from .lowering_refusals import LoweringRefusalMixin
 from .precise_evaluation import refuse_precise_evaluation
 from .rust_builtin_result_types import RustBuiltinResultTypeMixin
 from .rust_callables import RustCallableMixin
+from .rust_gpu_constants import rust_integer_constants
+from .rust_gpu_interface import RUST_GPU_PRELUDE, UNIFORM_VALUE_KIND
+from .rust_gpu_spec_constants import (
+    SPEC_CONSTANT_KIND,
+    spec_constant_infos,
+    spec_constant_local,
+)
+from .rust_gpu_spelling import glam_spelling
+from .rust_gpu_stage_io import GRAPHICS_STAGES, RustGpuStageIoMixin
+from .rust_gpu_storage import PADDED_ELEMENTS, RustGpuPaddedSliceMixin
+from .rust_gpu_entry_buffers import normalize_rust_gpu_buffers
+from .rust_gpu_subset import refuse_host_only_rust, refuse_outside_rust_gpu_subset
 from .rust_exact_lookups import (
     rust_generic_template_reason,
     rust_operator,
@@ -32,6 +53,7 @@ from .rust_result_types import RustResultTypeMixin
 from .rust_return_values import RustReturnValueMixin
 from .rust_stage_contracts import RustStageContractMixin
 from .rust_statements import RustStatementMixin
+from .rust_switch_lowering import RustSwitchLoweringMixin
 from .rust_tables import (
     RUST_FUNCTION_MAP,
     RUST_SEMANTIC_MAP,
@@ -44,6 +66,15 @@ from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import is_fragment_output_parameter, normalize_stage_name
 
 
+def tail_expression_as_return(statements):
+    """``statements`` with a trailing tail expression (``value`` without ``;``) written as ``return value;``."""
+    statements = list(statements or [])
+    if statements and isinstance(statements[-1], ExpressionStatementNode):
+        if getattr(statements[-1], "is_tail_expression", False):
+            statements[-1] = ReturnNode(statements[-1].expression)
+    return statements
+
+
 class RustCodeGen(
     RustStageContractMixin,
     RustProgramAnalysisMixin,
@@ -51,6 +82,7 @@ class RustCodeGen(
     RustGlobalDeclarationMixin,
     RustFunctionSignatureMixin,
     RustStatementMixin,
+    RustSwitchLoweringMixin,
     RustMatchMixin,
     RustReturnValueMixin,
     RustOperatorMixin,
@@ -61,10 +93,12 @@ class RustCodeGen(
     RustResultTypeMixin,
     RustResourceAttributeMixin,
     RustOutputParameterMixin,
+    RustGpuPaddedSliceMixin,
+    RustGpuStageIoMixin,
     LoweringRefusalMixin,
     RustBuiltinResultTypeMixin,
 ):
-    """Emit Rust-like GPU shader source from the shared CrossGL AST."""
+    """Emit rust-gpu shader crates from the shared CrossGL AST."""
 
     LOWERING_REFUSAL_TYPE = RustLoweringRefused
 
@@ -291,6 +325,7 @@ class RustCodeGen(
         self.rust_promoted_resource_node_ids = set()
         self.rust_referenced_names = frozenset()
         self.rust_resource_capture_params = {}
+        self.rust_spec_constant_infos = {}
         self.rust_entry_resource_infos = {}
         self.struct_member_types = {}
         self.struct_member_semantics = {}
@@ -302,6 +337,9 @@ class RustCodeGen(
         self.current_shader_type = None
         self.do_while_contexts = []
         self.for_contexts = []
+        self.switch_contexts = []
+        self.loop_labels = []
+        self.loop_label_counter = 0
         self.loop_depth = 0
         self.do_while_counter = 0
         self.user_function_names = set()
@@ -346,12 +384,17 @@ class RustCodeGen(
         refuse_cooperative_matrices(ast, label="Rust", target="rust")
         refuse_precise_evaluation(ast, label="Rust", target="rust")
         ast = canonicalize_separate_textures(ast)
-        return self.refusals.run(self.generate_program, ast)
+        return glam_spelling(self.refusals.run(self.generate_program, ast))
 
     def generate_program(self, ast):
         """Render the Rust program; refusals recorded on the way are raised by :meth:`generate`."""
         self.validate_supported_stage_types(ast)
+        normalize_rust_gpu_buffers(self, ast)
         explicit_specialization_refusals(self, ast, "Rust")
+        self.rust_referenced_names = referenced_identifier_names(ast)
+        self.struct_member_types = {}
+        self.collect_rust_gpu_struct_nodes(ast)
+        refuse_outside_rust_gpu_subset(self, ast)
         self.variable_types = {}
         self.local_variable_names = set()
         self.lazy_static_names = set()
@@ -365,6 +408,7 @@ class RustCodeGen(
         self.struct_member_types = {}
         self.struct_member_semantics = {}
         self.struct_generic_params = {}
+        self.rust_spec_constant_infos = spec_constant_infos(self, ast)
         self.static_variable_names = self.collect_static_variable_names(ast)
         self.static_symbol_names = self.build_static_symbol_names(
             self.static_variable_names
@@ -373,6 +417,9 @@ class RustCodeGen(
         self.current_return_type = None
         self.do_while_contexts = []
         self.for_contexts = []
+        self.switch_contexts = []
+        self.loop_labels = []
+        self.loop_label_counter = 0
         self.loop_depth = 0
         self.do_while_counter = 0
         self.user_function_names = self.collect_user_function_names(ast)
@@ -394,6 +441,7 @@ class RustCodeGen(
         self.enum_nodes_by_name = self.collect_enum_nodes_by_name(ast)
         self.non_copy_type_names = self.collect_non_copy_type_names(ast)
         self.register_constant_types(ast)
+        self.rust_integer_constant_values = rust_integer_constants(ast)
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
         self.required_mesh_helpers = set()
@@ -427,9 +475,7 @@ class RustCodeGen(
             name: list(params)
             for name, params in self.rust_resource_capture_params.items()
         }
-        code = "// Generated Rust GPU Shader Code\n"
-        code += "use gpu::*;\n"
-        code += "use math::*;\n\n"
+        code = RUST_GPU_PRELUDE
         if self.has_geometry_stage(ast):
             code += self.generate_rust_geometry_stream_helpers()
         if self.has_tessellation_stage(ast):
@@ -450,7 +496,12 @@ class RustCodeGen(
         emitted_static_names = set()
         global_vars = getattr(ast, "global_variables", [])
         for node in global_vars:
-            if self.is_promoted_rust_entry_resource(node):
+            if self.is_rust_gpu_interface_declaration(node):
+                self.register_variable_type(
+                    node.name, self.rust_variable_source_type(node), scope="static"
+                )
+                emitted_static_names.add(node.name)
+            elif self.is_promoted_rust_entry_resource(node):
                 var_type = self.rust_variable_source_type(node)
                 self.register_glsl_buffer_block_metadata(node)
                 self.register_variable_type(node.name, var_type, scope="static")
@@ -542,7 +593,9 @@ class RustCodeGen(
                     )
                     if variable.name in emitted_static_names:
                         continue
-                    if self.is_promoted_rust_entry_resource(variable):
+                    if self.is_rust_gpu_interface_declaration(variable):
+                        pass
+                    elif self.is_promoted_rust_entry_resource(variable):
                         var_type = self.rust_variable_source_type(variable)
                         self.register_glsl_buffer_block_metadata(variable)
                         code += self.rust_resource_metadata_comment(variable, var_type)
@@ -589,6 +642,10 @@ class RustCodeGen(
 
         code += self.generate_required_rust_mesh_helpers()
         code += self.generate_required_generic_math_traits()
+        refuse_host_only_rust(self, code)
+        if re.search(r"\bf16\b", code):
+            # f16 is a nightly primitive type, which rust-gpu's toolchain enables per crate.
+            code = code.replace("#![no_std]\n", "#![no_std]\n#![feature(f16)]\n", 1)
         return code
 
     def generate_rust_mesh_stage_comments(
@@ -720,7 +777,9 @@ class RustCodeGen(
         saved_function_generic_constraints = self.current_function_generic_constraints
         saved_mutated_names = self.current_mutated_names
         saved_output_parameters = self.current_rust_output_parameters
+        saved_stage_outputs = self.current_rust_stage_outputs
         self.current_rust_output_parameters = []
+        self.current_rust_stage_outputs = []
         self.current_generic_param_names = set(self.generic_param_names(func))
         self.current_shader_type = shader_type
         param_list = list(getattr(func, "parameters", getattr(func, "params", [])))
@@ -781,6 +840,16 @@ class RustCodeGen(
         self.validate_rust_struct_return_semantics(shader_type, return_type)
         self.validate_rust_stage_parameter_semantics(shader_type, param_list)
 
+        stage_interface = None
+        if shader_type in GRAPHICS_STAGES:
+            stage_interface = self.plan_rust_gpu_stage_interface(
+                func, shader_type, param_list, return_type, return_semantic, stage_node
+            )
+            self.current_rust_stage_outputs = stage_interface.outputs
+        elif shader_type == "compute":
+            stage_interface = self.plan_rust_gpu_compute_interface(
+                func, param_list, return_type
+            )
         param_types = [self.function_parameter_type(p) for p in param_list]
         reference_lifetime = self.function_reference_return_lifetime(
             func,
@@ -792,7 +861,12 @@ class RustCodeGen(
         local_alias_declarations = []
         emitted_param_names = set()
         parameter_names = [p.name for p in param_list if getattr(p, "name", None)]
-        for p, param_type in zip(param_list, param_types):
+        if stage_interface is not None:
+            params.extend(stage_interface.params)
+            local_alias_declarations.extend(stage_interface.prologue)
+        for p, param_type in zip(
+            param_list if stage_interface is None else [], param_types
+        ):
             self.register_glsl_buffer_block_metadata(p)
             source_param_name = p.name
             semantic = self.node_semantic(p)
@@ -842,19 +916,28 @@ class RustCodeGen(
                 f"{self.map_function_parameter_type_with_lifetime(param_type, reference_lifetime)}"
             )
             emitted_param_names.add(param_name)
-        params.extend(
-            self.generate_rust_resource_parameter(info)
-            for info in promoted_resource_params
-        )
+        for info in promoted_resource_params:
+            params.append(self.generate_rust_resource_parameter(info))
+            if info.get("kind") == UNIFORM_VALUE_KIND:
+                # A uniform is read-only, so the entry point reads it once into a local of the same name.
+                uniform_name = self.rust_identifier(info["node"].name)
+                local_alias_declarations.append(
+                    f"let {uniform_name}: {self.map_type(info['type_name'])} = *{uniform_name};"
+                )
+            elif info.get("kind") == SPEC_CONSTANT_KIND:
+                spec_name = self.rust_identifier(info["node"].name)
+                local = spec_constant_local(
+                    spec_name, info, self.map_type(info["type_name"])
+                )
+                if local is not None:
+                    local_alias_declarations.append(local)
 
         params_str = ", ".join(params) if params else ""
 
-        if shader_type == "vertex":
-            code += self.generate_rust_stage_attribute("vertex_shader")
-        elif shader_type == "fragment":
-            code += self.generate_rust_stage_attribute("fragment_shader")
+        if shader_type in GRAPHICS_STAGES:
+            code += self.rust_gpu_stage_attribute(shader_type, stage_interface)
         elif shader_type == "compute":
-            code += self.generate_rust_compute_stage_attribute(func)
+            code += self.generate_rust_compute_stage_attribute(func, stage_node)
         elif shader_type == "geometry":
             code += self.generate_rust_geometry_stage_comments(func, param_list)
         elif shader_type in {"tessellation_control", "tessellation_evaluation"}:
@@ -873,11 +956,11 @@ class RustCodeGen(
                 "// CrossGL ray stage: "
                 f"{self.rust_ray_stage_metadata_name(shader_type)}\n"
             )
-        if return_semantic:
+        if return_semantic and stage_interface is None:
             code += (
                 f"// CrossGL return semantic: {self.map_semantic(return_semantic)}\n"
             )
-        if shader_type:
+        if shader_type and stage_interface is None:
             for param in param_list:
                 param_semantic = self.node_semantic(param)
                 if param_semantic:
@@ -892,14 +975,21 @@ class RustCodeGen(
             lifetime=reference_lifetime,
         )
         emitted_name = self.rust_identifier(function_name or func.name)
+        emitted_return_type = (
+            "()"
+            if stage_interface is not None
+            else self.map_type_with_lifetime(return_type, reference_lifetime)
+        )
         code += (
             f"pub fn {emitted_name}{generic_params}({params_str}) "
-            f"-> {self.map_type_with_lifetime(return_type, reference_lifetime)} {{\n"
+            f"-> {emitted_return_type} {{\n"
         )
 
         if stage_node is not None:
             for variable in getattr(stage_node, "local_variables", []) or []:
-                if self.is_rust_shared_variable(variable):
+                if self.is_rust_shared_variable(
+                    variable
+                ) and not self.is_promoted_rust_entry_resource(variable):
                     code += self.generate_statement(variable, indent + 1)
         for declaration in local_alias_declarations:
             code += "    " * (indent + 1) + declaration + "\n"
@@ -921,12 +1011,13 @@ class RustCodeGen(
             )
         if hasattr(body, "statements"):
             body_statements = body.statements
-            for stmt in body.statements:
-                code += self.generate_statement(stmt, indent + 1)
         elif isinstance(body, list):
             body_statements = body
-            for stmt in body:
-                code += self.generate_statement(stmt, indent + 1)
+        if self.current_rust_stage_outputs:
+            # The entry's result goes to output parameters, so a trailing value expression is its return.
+            body_statements = tail_expression_as_return(body_statements)
+        for stmt in body_statements:
+            code += self.generate_statement(stmt, indent + 1)
         if self.current_rust_output_parameters and not self.statement_body_terminates(
             body_statements
         ):
@@ -935,10 +1026,13 @@ class RustCodeGen(
             body_statements
         ):
             output_param = fragment_output_info[0]
-            code += (
-                "  " * (indent + 1)
-                + f"return {self.rust_identifier(getattr(output_param, 'name', None))};\n"
-            )
+            output_name = self.rust_identifier(getattr(output_param, "name", None))
+            if stage_interface is not None:
+                code += self.generate_rust_stage_output_return(
+                    "  " * (indent + 1), output_name
+                )
+            else:
+                code += "  " * (indent + 1) + f"return {output_name};\n"
 
         code += "  " * indent + "}\n\n"
         self.variable_types = saved_variable_types
@@ -951,6 +1045,7 @@ class RustCodeGen(
         self.current_function_generic_constraints = saved_function_generic_constraints
         self.current_mutated_names = saved_mutated_names
         self.current_rust_output_parameters = saved_output_parameters
+        self.current_rust_stage_outputs = saved_stage_outputs
         return code
 
     def is_function_prototype(self, func):
@@ -1074,7 +1169,19 @@ class RustCodeGen(
         if generic_type is not None:
             return generic_type
 
-        return vtype_str
+        return self.rust_type_identifier(vtype_str)
+
+    def rust_type_identifier(self, name):
+        """A user type name; a Rust keyword (``type``, ``match``) is written as a raw identifier ``r#type``."""
+        name = str(name)
+        if name in self.rust_reserved_identifiers() and name not in {
+            "self",
+            "Self",
+            "super",
+            "crate",
+        }:
+            return f"r#{name}"
+        return name
 
     def map_type_with_lifetime(self, vtype, lifetime):
         if lifetime is None:
@@ -1118,6 +1225,20 @@ class RustCodeGen(
         type_name = str(type_name).strip()
         if type_name in {"str", "string"}:
             return "str"
+        if type_name.endswith("[]") and type_name.count("[") == 1:
+            # A reference to an unsized array is a slice: a storage buffer's runtime array, whose 3-vectors take
+            # 4-vector slots (rust_gpu_storage).
+            element = type_name[:-2].strip()
+            padded = PADDED_ELEMENTS.get(element)
+            if padded is not None:
+                return f"[{padded[0]}]"
+            if self.normalize_scalar_type(element) == "bool" or element.startswith(
+                "bvec"
+            ):
+                raise RustRefusal(
+                    "resource: a storage buffer of bool has no SPIR-V layout; rust-gpu cannot bind one"
+                )
+            return f"[{self.map_type(element)}]"
         return self.map_type(type_name)
 
     def map_function_pointer_type(self, type_name):

@@ -14,6 +14,15 @@ from ..refusals import RustRefusal
 from .array_utils import prepend_array_dimension
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .rust_exact_lookups import rust_resource_kind_of_spelling
+from .rust_gpu_spec_constants import SPEC_CONSTANT_KIND, spec_constant_parameter
+from .rust_gpu_interface import (
+    BUILTIN_INPUT_KIND,
+    STORAGE_SLICE_KIND,
+    UNIFORM_VALUE_KIND,
+    WORKGROUP_KIND,
+    is_uniform_value,
+    storage_slice_parts,
+)
 
 
 class RustResourceAttributeMixin:
@@ -394,6 +403,10 @@ class RustResourceAttributeMixin:
             return forced_kind
         if node is not None and self.is_glsl_buffer_block_variable(node):
             return "glsl_buffer_block"
+        if node is not None and storage_slice_parts(node) is not None:
+            return STORAGE_SLICE_KIND
+        if node is not None and is_uniform_value(node, self.type_name_string(type_name)):
+            return UNIFORM_VALUE_KIND
 
         base_type, _count = self.rust_resource_base_type_and_count(type_name)
         generic_base, _generic_args = self.generic_type_parts(base_type)
@@ -421,11 +434,14 @@ class RustResourceAttributeMixin:
         return rust_resource_kind_of_spelling(mapped_base)
 
     def rust_resource_binding_namespace(self, kind):
-        if kind in {"cbuffer", "glsl_buffer_block"}:
+        if kind in {"cbuffer", "glsl_buffer_block", STORAGE_SLICE_KIND, UNIFORM_VALUE_KIND}:
             return "buffer"
         return kind
 
     def rust_resource_binding_validation_count(self, node, resource_kind, count):
+        if resource_kind in {STORAGE_SLICE_KIND, UNIFORM_VALUE_KIND}:
+            # One buffer or uniform block, whatever its type's shape.
+            return 1
         if (
             resource_kind == "sampler"
             and count != 1
@@ -546,26 +562,36 @@ class RustResourceAttributeMixin:
             return ""
 
         spirv_args = []
-        if info["kind"] in {"buffer", "glsl_buffer_block"}:
+        if info["kind"] in {"buffer", "glsl_buffer_block", STORAGE_SLICE_KIND}:
             spirv_args.append("storage_buffer")
+        elif info["kind"] == UNIFORM_VALUE_KIND:
+            spirv_args.append("uniform")
         spirv_args.extend(
             [
                 f"descriptor_set = {info['set_index']}",
                 f"binding = {info['binding']}",
             ]
         )
-        return (
-            '#[cfg_attr(feature = "crossgl_gpu", ' f"spirv({', '.join(spirv_args)}))] "
-        )
+        return f"#[spirv({', '.join(spirv_args)})] "
 
     def generate_rust_resource_parameter(self, resource_info):
+        """One entry-point parameter: a bound resource, workgroup memory or a built-in input (rust_gpu_interface)."""
         node = resource_info["node"]
         type_name = resource_info["type_name"]
+        name = self.rust_identifier(node.name)
+        kind = resource_info.get("kind")
+        if kind == BUILTIN_INPUT_KIND:
+            return (
+                f"#[spirv({resource_info['builtin']})] {name}: {self.map_type(type_name)}"
+            )
+        if kind == SPEC_CONSTANT_KIND:
+            return spec_constant_parameter(name, resource_info)
+        if kind == WORKGROUP_KIND:
+            return f"#[spirv(workgroup)] {name}: {self.map_type(type_name)}"
         attribute = self.rust_resource_parameter_attribute(node, type_name)
-        return (
-            f"{attribute}{self.rust_identifier(node.name)}: "
-            f"{self.map_function_parameter_type(type_name)}"
-        )
+        if kind == UNIFORM_VALUE_KIND:
+            return f"{attribute}{name}: &{self.map_type(type_name)}"
+        return f"{attribute}{name}: {self.map_function_parameter_type(type_name)}"
 
     def reserve_explicit_rust_resource_binding(self, node, type_name, kind=None):
         name = getattr(node, "name", None)
