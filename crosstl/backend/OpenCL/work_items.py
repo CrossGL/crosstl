@@ -50,22 +50,30 @@ _GLOBAL_LINEAR_ID = (
     f" + gl_GlobalInvocationID.z * {_GLOBAL_SIZE.format(c='x')} * {_GLOBAL_SIZE.format(c='y')})"
 )
 _INTEGER_LITERAL = re.compile(r"(?P<digits>0[xX][0-9a-fA-F]+|[0-9]+)[uUlL]*")
-_INTEGER_CASTS = frozenset(
-    {
-        "uint",
-        "unsigned",
-        "unsigned int",
-        "int",
-        "size_t",
-        "ulong",
-        "long",
-        "unsigned long",
-        "ushort",
-        "short",
-        "uchar",
-        "char",
-    }
-)
+# The integer types a dimension may be cast to: (width in bits, signed). OpenCL C fixes every width (6.1.1); size_t
+# has 32 or 64 bits, which gives the same uint dimension because the narrower width is 32.
+_INTEGER_CASTS = {
+    "char": (8, True),
+    "signed char": (8, True),
+    "uchar": (8, False),
+    "unsigned char": (8, False),
+    "short": (16, True),
+    "signed short": (16, True),
+    "short int": (16, True),
+    "ushort": (16, False),
+    "unsigned short": (16, False),
+    "int": (32, True),
+    "signed int": (32, True),
+    "uint": (32, False),
+    "unsigned": (32, False),
+    "unsigned int": (32, False),
+    "long": (64, True),
+    "signed long": (64, True),
+    "long int": (64, True),
+    "ulong": (64, False),
+    "unsigned long": (64, False),
+    "size_t": (64, False),
+}
 
 
 def format_work_item_query(converter, name, args):
@@ -123,45 +131,60 @@ def _require_single_evaluation(converter, name, dimension, reads):
 
 
 def _constant_dimension(expression):
-    """The value of an integer literal, a cast of one or a negated one; ``None`` for anything else."""
-    negate = False
-    while True:
-        if type(expression).__name__ == "CastNode":
-            if (
-                str(getattr(expression, "target_type", "")).strip()
-                not in _INTEGER_CASTS
-            ):
-                return None
-            expression = getattr(expression, "expression", None)
-            continue
-        if (
-            type(expression).__name__ == "UnaryOpNode"
-            and getattr(expression, "op", None) == "-"
-        ):
-            negate = not negate
-            expression = getattr(expression, "operand", None)
-            continue
-        break
+    """The ``uint`` dimension a constant argument passes, or ``None`` when it is not a constant.
+
+    The argument is an integer literal under any number of integer casts and negations. Each cast converts to its
+    type's width as C does (C11 6.3.1.3): ``(uchar)256`` is 0 and ``(ushort)65537`` is 1. Every work-item function
+    declares its dimension ``uint``, so the result is the value modulo 2**32: ``-1`` is 4294967295, which is out of
+    range.
+    """
+    value = _constant_value(expression)
+    return None if value is None else value % (1 << 32)
+
+
+def _constant_value(expression):
+    """The mathematical value of an integer literal under casts and negations; ``None`` for anything else.
+
+    Negation needs no wrap here: a narrow operand is promoted to ``int`` first, and a wide unsigned one wraps modulo a
+    power of two that every later cast and the final ``uint`` conversion reduce by anyway.
+    """
+    if type(expression).__name__ == "CastNode":
+        target = " ".join(str(getattr(expression, "target_type", "")).split())
+        value = _constant_value(getattr(expression, "expression", None))
+        if value is None:
+            return None
+        if target == "bool":
+            return int(value != 0)
+        if target not in _INTEGER_CASTS:
+            return None
+        width, signed = _INTEGER_CASTS[target]
+        value %= 1 << width
+        if signed and value >= 1 << (width - 1):
+            value -= 1 << width
+        return value
+    if (
+        type(expression).__name__ == "UnaryOpNode"
+        and getattr(expression, "op", None) == "-"
+    ):
+        value = _constant_value(getattr(expression, "operand", None))
+        return None if value is None else -value
     if isinstance(expression, bool):
         return None
     if isinstance(expression, int):
-        value = expression
-    elif isinstance(expression, str):
-        match = _INTEGER_LITERAL.fullmatch(expression.strip())
-        if match is None:
-            return None
-        digits = match["digits"]
-        if digits[:2] in ("0x", "0X"):
-            value = int(digits, 16)
-        elif len(digits) > 1 and digits[0] == "0":
-            if not all(ch in "01234567" for ch in digits):
-                return None
-            value = int(digits, 8)
-        else:
-            value = int(digits)
-    else:
+        return expression
+    if not isinstance(expression, str):
         return None
-    return -value if negate else value
+    match = _INTEGER_LITERAL.fullmatch(expression.strip())
+    if match is None:
+        return None
+    digits = match["digits"]
+    if digits[:2] in ("0x", "0X"):
+        return int(digits, 16)
+    if len(digits) > 1 and digits[0] == "0":
+        if not all(ch in "01234567" for ch in digits):
+            return None
+        return int(digits, 8)
+    return int(digits)
 
 
 def _as_u32(rendered):
