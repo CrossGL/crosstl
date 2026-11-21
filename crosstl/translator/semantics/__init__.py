@@ -77,6 +77,10 @@ from .device_references import (
     DeviceReferenceUnsupportedError,
     lower_device_struct_references,
 )
+from .device_variables import (
+    DeviceVariableUnsupportedError,
+    refuse_device_variables,
+)
 from .dxr_ray_interfaces import (
     DxrRayInterfaceUnsupportedError,
     lower_dxr_ray_interfaces,
@@ -268,6 +272,7 @@ __all__ = [
     "DebugPrintfUnsupportedError",
     "DescriptorArrayUnsupportedError",
     "DeviceReferenceUnsupportedError",
+    "DeviceVariableUnsupportedError",
     "DxrRayInterfaceUnsupportedError",
     "FAMILIES",
     "FeedbackTextureUnsupportedError",
@@ -515,6 +520,7 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     refuse_hit_objects(program, report.target)
     refuse_shader_execution_reordering(program, report.target)
     refuse_metal_runtime_types(program, report.target)
+    refuse_device_variables(program, report.target)
     fold_constant_calls(program, report.target)
     fold_binding_constants(program, report.target)
     fold_constant_extents(program, report.target)
