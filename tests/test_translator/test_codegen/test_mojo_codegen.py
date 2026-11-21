@@ -11880,9 +11880,19 @@ def test_resource_prefixed_generic_user_types_do_not_become_resources():
         in generated_code
     )
     assert "comptime TextureMode = Int32" in generated_code
-    assert "var globalTextureBox = TextureBox[Int32](0, 0)" in generated_code
-    assert "var globalBufferBox = BufferBox[Int32](0, 0)" in generated_code
-    assert "var globalSamplerBox = SamplerBox[Float32](0.0, 0)" in generated_code
+    # Private variables, not resources: each function that uses one takes the kernel's local by reference.
+    assert (
+        "def readTextureBox(mut globalTextureBox: TextureBox[Int32], mut globalMode: TextureMode) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "def readBufferBox(mut globalBufferBox: BufferBox[Int32]) -> Int32:"
+        in generated_code
+    )
+    assert (
+        "def readSamplerBox(mut globalSamplerBox: SamplerBox[Float32]) -> Float32:"
+        in generated_code
+    )
     assert "var local: TextureBox[Int32] = TextureBox[Int32](3, 1)" in generated_code
     assert "var local: BufferBox[Int32] = BufferBox[Int32](5, 2)" in generated_code
     assert (
@@ -11907,10 +11917,8 @@ def test_generic_user_struct_specializations_emit_mojo_generic_syntax():
         Box<T> left;
         Box<T> right;
     };
-    Box<int> globalBox;
-    Pair<float> globalPair;
 
-    int readBox(Box<int> payload) {
+    int readBox(Box<int> payload, Box<int> globalBox) {
         return payload.value + globalBox.value;
     }
 
@@ -11931,11 +11939,10 @@ def test_generic_user_struct_specializations_emit_mojo_generic_syntax():
     )
     assert "var left: Box[Self.T]" in generated_code
     assert "var right: Box[Self.T]" in generated_code
-    assert "var globalBox = Box[Int32](0, 0)" in generated_code
     assert (
-        "var globalPair = Pair[Float32](Box[Float32](0.0, 0), Box[Float32](0.0, 0))"
-    ) in generated_code
-    assert "def readBox(payload: Box[Int32]) -> Int32:" in generated_code
+        "def readBox(payload: Box[Int32], globalBox: Box[Int32]) -> Int32:"
+        in generated_code
+    )
     assert "def readPair(payload: Pair[Float32]) -> Float32:" in generated_code
     assert "return (payload.value + globalBox.value)" in generated_code
     assert "return (payload.left.value + payload.right.value)" in generated_code
@@ -11943,7 +11950,12 @@ def test_generic_user_struct_specializations_emit_mojo_generic_syntax():
         "left": "Box<float>",
         "right": "Box<float>",
     }
+    codegen.register_variable_type("globalPair", "Pair<float>")
     assert codegen.expression_path_result_type("globalPair.left.value") == "float"
+    assert (
+        codegen.zero_value_for_type("Pair<float>")
+        == "Pair[Float32](Box[Float32](0.0, 0), Box[Float32](0.0, 0))"
+    )
     assert "Box<int>" not in generated_code
     assert "Pair<float>" not in generated_code
 
@@ -12009,10 +12021,8 @@ def test_generic_user_struct_specializations_compile_with_mojo(tmp_path):
         Box<T> left;
         Box<T> right;
     };
-    Box<int> globalBox;
-    Pair<float> globalPair;
 
-    int readBox(Box<int> payload) {
+    int readBox(Box<int> payload, Box<int> globalBox) {
         return payload.value + globalBox.value;
     }
 
@@ -12414,8 +12424,6 @@ def _generic_user_struct_vector_matrix_payload_ast():
         T value;
         int tag;
     };
-    Holder<vec3> globalVec;
-    Holder<mat2> globalMat;
 
     Holder<vec3> makeVecHolder(vec3 value) {}
     Holder<mat2> makeMatHolder(mat2 value) {}
@@ -12470,14 +12478,14 @@ def test_generic_user_struct_vector_matrix_payloads_emit_specialized_types():
         in generated_code
     )
     assert "struct CrossGLMatrixF32C2R2(TrivialRegisterPassable):" in generated_code
-    assert (
-        "var globalVec = Holder[SIMD[DType.float32, 4]]("
-        "SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0), 0)" in generated_code
+    assert codegen.zero_value_for_type("Holder<vec3>") == (
+        "Holder[SIMD[DType.float32, 4]]("
+        "SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0), 0)"
     )
-    assert (
-        "var globalMat = Holder[CrossGLMatrixF32C2R2]("
+    assert codegen.zero_value_for_type("Holder<mat2>") == (
+        "Holder[CrossGLMatrixF32C2R2]("
         "CrossGLMatrixF32C2R2(SIMD[DType.float32, 2](0.0, 0.0), "
-        "SIMD[DType.float32, 2](0.0, 0.0)), 0)" in generated_code
+        "SIMD[DType.float32, 2](0.0, 0.0)), 0)"
     )
     assert (
         "def makeVecHolder(value: SIMD[DType.float32, 4]) -> "
@@ -12509,6 +12517,8 @@ def test_generic_user_struct_vector_matrix_payloads_emit_specialized_types():
         "value": "mat2",
         "tag": "int",
     }
+    codegen.register_variable_type("globalVec", "Holder<vec3>")
+    codegen.register_variable_type("globalMat", "Holder<mat2>")
     assert codegen.expression_path_result_type("globalVec.value") == "vec3"
     assert codegen.expression_path_result_type("globalMat.value") == "mat2"
     assert "Holder<vec3>" not in generated_code
@@ -15391,7 +15401,14 @@ def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen():
         particles.positions[index] = value;
     }
     """
-    with pytest.raises(ValueError, match="assignment.*readonly"):
+    # Mojo has no global variables and the storage block is not a kernel argument yet (#2338), so the block is
+    # refused before its access qualifier is checked.
+    with pytest.raises(
+        MojoRefusal,
+        match=re.escape(
+            "storage block declared outside a function (particles: ParticleBlock)"
+        ),
+    ):
         generate_code(parse_code(tokenize_code(invalid_write)))
 
     overlapping_binding = """
@@ -15404,7 +15421,12 @@ def test_glsl_buffer_block_access_and_binding_diagnostics_for_mojo_codegen():
         float exposure;
     }
     """
-    with pytest.raises(ValueError, match="Conflicting Mojo resource binding"):
+    with pytest.raises(
+        MojoRefusal,
+        match=re.escape(
+            "storage block declared outside a function (particles: ParticleBlock)"
+        ),
+    ):
         generate_code(parse_code(tokenize_code(overlapping_binding)))
 
 
@@ -25429,7 +25451,7 @@ def main():
 
 def test_array_literals_emit_inlinearray_and_zero_padding():
     code = """
-    float globalWeights[4] = {1.0, 2.0};
+    const float globalWeights[4] = {1.0, 2.0};
 
     float pickScalar(int index) {
         float values[4] = {1.0, 2.0};
@@ -25456,9 +25478,9 @@ def test_array_literals_emit_inlinearray_and_zero_padding():
     generated_code = generate_code(ast)
 
     assert (
-        "var globalWeights: StaticTuple[Float32, 4] = "
-        "StaticTuple[Float32, 4](1.0, 2.0, 0.0, 0.0)"
-    ) in generated_code
+        "comptime globalWeights = StaticTuple[Float32, 4](1.0, 2.0, 0.0, 0.0)"
+        in generated_code
+    )
     assert (
         "var values: StaticTuple[Float32, 4] = "
         "StaticTuple[Float32, 4](1.0, 2.0, 0.0, 0.0)"
@@ -27475,10 +27497,10 @@ def test_mojo_comptime_keyword_bindings_escape_in_declarations_and_calls():
             "ternary condition",
         ),
         (
-            "shader P { float g = vec3(1.0, 2.0, 3.0); float f() { return g; } }",
+            "shader P { const float g = vec3(1.0, 2.0, 3.0); float f() { return g; } }",
             "vec3",
             "float",
-            "global declaration g",
+            "constant g",
         ),
         (
             "shader P { float f(vec4 v) { float s = v; return s; } }",

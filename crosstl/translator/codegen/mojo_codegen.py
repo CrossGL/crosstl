@@ -53,6 +53,7 @@ from .mojo_kernel_arguments import MojoKernelArgumentMixin
 from .mojo_match_lowering import MojoMatchMixin
 from .mojo_math_helpers import MojoMathHelperMixin
 from .mojo_pointer_expressions import MojoPointerExpressionMixin
+from .mojo_private_globals import MojoPrivateGlobalMixin
 from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
     MojoLoweringRefused,
 )
@@ -67,6 +68,7 @@ from .mojo_shared_memory import MojoSharedMemoryMixin
 from .mojo_split_builtins import MojoSplitBuiltinMixin
 from .mojo_stage_contracts import MojoStageContractMixin
 from .mojo_statements import MojoStatementMixin
+from .mojo_storage_blocks import lower_mojo_single_array_storage_blocks
 from .mojo_tables import (
     MOJO_ATOMIC_OP_ALIASES,
     MOJO_BUFFER_COUNTER_METHODS,
@@ -229,6 +231,7 @@ __all__ = [
 
 class MojoCodeGen(
     MojoKernelArgumentMixin,
+    MojoPrivateGlobalMixin,
     MojoStageContractMixin,
     MojoReturnAliasMixin,
     MojoGenericTypeMixin,
@@ -270,6 +273,7 @@ class MojoCodeGen(
         self.function_return_resource_field_aliases = {}
         self.function_return_resource_static_field_aliases = {}
         self.stage_local_function_extra_params = {}
+        self.reset_mojo_private_globals()
         self.variable_types = {}
         self.enum_types = {}
         self.enum_variant_aliases = {}
@@ -323,6 +327,7 @@ class MojoCodeGen(
         self.required_reinterpret_helpers = set()
         self.requires_bitcast_import = False
         self.requires_threadfence_import = False
+        self.requires_atomic_import = False
         self.requires_shared_memory_imports = False
         self.required_bit_imports = set()
         self.required_ray_helpers = set()
@@ -554,6 +559,8 @@ class MojoCodeGen(
         refuse_precise_evaluation(ast, label="Mojo", target="mojo")
         # A separate CrossGL texture is the same Mojo texture as a combined one sampled with explicit samplers.
         ast = canonicalize_separate_textures(ast)
+        # A storage block holding one runtime-sized array is that array: a pointer argument of the kernel.
+        lower_mojo_single_array_storage_blocks(ast)
         self.struct_types = {}
         self.function_return_types = {}
         self.function_parameter_types = {}
@@ -565,6 +572,7 @@ class MojoCodeGen(
         self.stage_local_function_extra_params = {}
         self.variable_types = {}
         self.reset_mojo_kernel_arguments()
+        self.reset_mojo_private_globals()
         self.enum_types = {}
         self.enum_variant_aliases = {}
         self.enum_variant_values = {}
@@ -619,6 +627,7 @@ class MojoCodeGen(
         self.required_reinterpret_helpers = set()
         self.requires_bitcast_import = False
         self.requires_threadfence_import = False
+        self.requires_atomic_import = False
         self.requires_shared_memory_imports = False
         self.required_bit_imports = set()
         self.required_ray_helpers = set()
@@ -706,7 +715,10 @@ class MojoCodeGen(
         # A function that reads a module-scope buffer or uniform value takes it as an extra argument.
         self.stage_local_function_extra_params = self.mojo_kernel_argument_captures(
             [*functions, *self.mojo_stage_functions(ast)],
-            self.mojo_module_kernel_arguments,
+            {
+                **self.mojo_module_kernel_arguments,
+                **self.mojo_private_global_arguments(),
+            },
         )
         for func in functions:
             if generic_function_parameters(func):
@@ -746,6 +758,7 @@ class MojoCodeGen(
                     stage_name = self.stage_type_name(stage_type)
                     self.validate_stage_type(stage_name)
                     self.mojo_stage_kernel_arguments = {}
+                    self.reset_mojo_stage_private_globals()
                     code += f"# {stage_name.title()} Shader\n"
                     code += self.generate_stage_local_declarations(
                         stage,
@@ -765,6 +778,7 @@ class MojoCodeGen(
                                 {
                                     **dict(self.mojo_entry_kernel_arguments()),
                                     **self.mojo_stage_shared_arguments(stage),
+                                    **self.mojo_private_global_arguments(),
                                 },
                             ),
                         )
@@ -792,6 +806,8 @@ class MojoCodeGen(
         if self.requires_shared_memory_imports:
             header += "from std.memory import stack_allocation\n"
             header += "from max.gpu.memory import AddressSpace\n"
+        if self.requires_atomic_import:
+            header += "from std.atomic import Atomic\n"
         if self.requires_threadfence_import:
             header += "from max.gpu.intrinsics import threadfence\n"
         if "StaticTuple[" in code:

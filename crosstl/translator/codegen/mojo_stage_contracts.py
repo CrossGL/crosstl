@@ -899,6 +899,12 @@ class MojoStageContractMixin:
             if argument_type is not None:
                 # A buffer or uniform another stage also declares is an argument of this stage's kernel too.
                 self.declare_mojo_kernel_argument(key[0], argument_type, True)
+            elif self.mojo_builtin_input_source(node) is not None:
+                self.declare_mojo_builtin_input(node, variable_type, True)
+            elif self.is_mojo_private_global(
+                node
+            ) and not self.mojo_type_holds_resource(variable_type):
+                self.declare_mojo_private_global(node, variable_type, True)
             return ""
         emitted_stage_local_variables.add(key)
         return self.generate_module_variable_declaration(node, stage_scope=True)

@@ -9,6 +9,7 @@ from ..ast import (
     UnaryOpNode,
     VariableNode,
 )
+from .mojo_kernel_arguments import mojo_referenced_names
 from .mojo_tables import (
     MOJO_GPU_BUILTIN_ALIASES,
     MOJO_GPU_BUILTIN_PARAMETER_ORDER,
@@ -59,6 +60,8 @@ class MojoFunctionMixin:
                 getattr(func, "name", None), []
             )
             if name not in {getattr(param, "name", None) for param, _ in param_infos}
+            # An entry point declares the private variables as its own locals.
+            and not (shader_type is not None and self.is_mojo_private_global_name(name))
         ]
         for name, type_name in extra_param_infos:
             self.register_variable_type(name, type_name)
@@ -192,13 +195,17 @@ class MojoFunctionMixin:
                 f"{ownership}{self.mojo_identifier(p.name)}: {self.map_type(param_type)}"
             )
         for name, param_type in extra_param_infos:
-            # Storing through a pointer argument does not change the argument itself.
-            ownership = (
-                "var "
-                if name in mutated_params
+            if self.is_mojo_private_global_name(name):
+                # A private variable is the kernel's local, which a helper reads and writes by reference.
+                ownership = "mut "
+            elif (
+                name in mutated_params
                 and self.parse_pointer_type_name(str(param_type)) is None
-                else ""
-            )
+            ):
+                ownership = "var "
+            else:
+                # Storing through a pointer argument does not change the argument itself.
+                ownership = ""
             params.append(
                 f"{ownership}{self.mojo_identifier(name)}: {self.map_type(param_type)}"
             )
@@ -246,6 +253,8 @@ class MojoFunctionMixin:
             code += self.generate_function_local_shared_declarations(
                 stage_node, indent + 1
             )
+        if shader_type is not None:
+            code += self.mojo_private_global_declarations(indent + 1)
         if fragment_output_info is not None:
             output_param, output_type, _semantic = fragment_output_info
             output_name = getattr(output_param, "name", None)
@@ -258,6 +267,9 @@ class MojoFunctionMixin:
             code += "    " * (indent + 1) + declaration + "\n"
         code += self.mojo_function_local_builtin_declarations(
             getattr(func, "body", []), indent + 1
+        )
+        code += self.mojo_builtin_input_declarations(
+            mojo_referenced_names(getattr(func, "body", [])), indent + 1
         )
 
         body = getattr(func, "body", [])

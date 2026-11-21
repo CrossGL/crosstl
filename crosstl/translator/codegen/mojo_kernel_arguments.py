@@ -8,14 +8,14 @@ argument that its callers pass on.
 The GPU index built-ins need no argument: every device function can read Mojo's ``global_idx``, ``thread_idx``,
 ``block_idx``, ``block_dim`` and ``grid_dim``, so a function that reads one declares it as a local.
 
-Any other module-scope variable, such as a private mutable global or a texture, has no Mojo spelling, and the
-generator refuses the program instead of declaring it.
+A private variable of each invocation becomes a local of the kernel (``mojo_private_globals``). A storage block or
+any other host-visible variable declared outside a function has no Mojo spelling yet, and the generator refuses the
+program instead of declaring it.
 """
 
 from __future__ import annotations
 
 from ..ast import (
-    ArrayLiteralNode,
     ArrayNode,
     FunctionCallNode,
     IdentifierNode,
@@ -166,8 +166,8 @@ class MojoKernelArgumentMixin:
         described = f"{name}: {self.type_name(type_name)}" if type_name else name
         raise MojoRefusal(
             f"Mojo has no global variables, so {what} declared outside a function ({described}) has no Mojo "
-            "spelling; only storage buffers and uniform values, which become kernel arguments, can be declared "
-            "there"
+            "spelling; only uniform values and storage buffers of a runtime-sized array, which become kernel "
+            "arguments, private variables, which become kernel locals, and constants can be declared there"
         )
 
     def is_mojo_constant_declaration(self, node):
@@ -180,23 +180,41 @@ class MojoKernelArgumentMixin:
     def generate_module_variable_declaration(self, node, stage_scope=False):
         """Declare a module- or stage-scope variable as a kernel argument or a constant.
 
-        Buffers and uniform values become kernel arguments and constants become ``comptime`` values. Every other
-        declaration keeps the module-scope ``var`` the generator wrote before Mojo dropped global variables.
+        Buffers and uniform values become kernel arguments and constants become ``comptime`` values. Mojo has no
+        global variables: a private variable of each invocation becomes a local of the kernel (mojo_private_globals),
+        a GPU index input variable becomes a local of each function that reads it, and a storage block or any
+        other host-visible variable raises a typed refusal. Textures, images, samplers, HLSL buffer objects and
+        structures holding them still keep the module-scope ``var`` the generator wrote before Mojo dropped global
+        variables (#2338).
         """
         name = getattr(node, "name", None)
         if isinstance(node, ArrayNode):
             array_type = self.mojo_array_kernel_argument_type(node)
             if array_type is not None:
                 return self.declare_mojo_kernel_argument(name, array_type, stage_scope)
-            self.register_variable_type(name, self.array_declared_type(node))
-            return self.generate_array_declaration(node)
+            array_type = self.array_declared_type(node)
+            if self.is_mojo_private_global(node) and not self.mojo_type_holds_resource(
+                array_type
+            ):
+                return self.declare_mojo_private_global(node, array_type, stage_scope)
+            self.refuse_mojo_module_variable(name, "an array", array_type)
         variable_type = self.variable_declared_type(node)
+        if self.mojo_builtin_input_source(node) is not None:
+            return self.declare_mojo_builtin_input(node, variable_type, stage_scope)
         initial_value = getattr(node, "initial_value", None)
         if initial_value is not None:
             variable_type = variable_type or self.expression_result_type(initial_value)
             if self.is_mojo_constant_declaration(node):
                 return self.generate_module_constant_declaration(node, variable_type)
-            return self.generate_legacy_initialized_declaration(node, variable_type)
+            if self.is_mojo_private_global(node) and not self.mojo_type_holds_resource(
+                variable_type
+            ):
+                return self.declare_mojo_private_global(
+                    node, variable_type, stage_scope
+                )
+            self.refuse_mojo_module_variable(
+                name, "a writable initialized variable", variable_type
+            )
         variable_type = variable_type or "float"
         self.register_resource_access_metadata(node, variable_type)
         argument_type = self.mojo_kernel_argument_type(node, variable_type)
@@ -206,35 +224,44 @@ class MojoKernelArgumentMixin:
             return comment + self.declare_mojo_kernel_argument(
                 name, argument_type, stage_scope
             )
+        if not self.mojo_type_holds_resource(variable_type):
+            if self.is_mojo_private_global(node):
+                return self.declare_mojo_private_global(
+                    node, variable_type, stage_scope
+                )
+            what = (
+                "a structure variable or storage block"
+                if self.is_struct_type_name(variable_type)
+                else "a variable"
+            )
+            self.refuse_mojo_module_variable(name, what, variable_type)
         return self.generate_legacy_module_variable(node, variable_type, stage_scope)
 
-    def generate_legacy_initialized_declaration(self, node, variable_type):
-        self.register_variable_type(node.name, variable_type)
-        context = f"global declaration {node.name}"
-        if isinstance(node.initial_value, ArrayLiteralNode) and (
-            variable_type is not None and self.is_array_type_name(variable_type)
-        ):
-            value = self.generate_array_literal_expression(
-                node.initial_value, variable_type
+    def mojo_type_holds_resource(self, type_name, seen=None):
+        """Whether ``type_name`` is a resource, an array of resources or a structure with a resource member."""
+        if type_name is None:
+            return False
+        if self.is_resource_type_name(type_name):
+            return True
+        if self.is_array_type_name(type_name):
+            return self.mojo_type_holds_resource(
+                self.parse_array_type_name(type_name)[0], seen
             )
-        else:
-            self.validate_expression_target_shape(
-                node.initial_value, variable_type, context
-            )
-            value = self.generate_expression(node.initial_value, variable_type, context)
-            self.validate_scalar_target_conversion(
-                node.initial_value, variable_type, context
-            )
-        name = self.mojo_identifier(node.name)
-        if variable_type is None:
-            return f"var {name} = {value}\n"
-        return (
-            f"{self.generate_resource_metadata_comment(node, variable_type)}"
-            f"var {name}: {self.map_type(variable_type)} = {value}\n"
+        struct_name, fields = self.struct_type_name_and_fields(type_name)
+        if struct_name is None:
+            return False
+        seen = set() if seen is None else seen
+        if struct_name in seen:
+            return False
+        seen.add(struct_name)
+        return any(
+            self.mojo_type_holds_resource(field_type, seen)
+            for field_type in fields.values()
         )
 
     def generate_legacy_module_variable(self, node, variable_type, stage_scope):
-        """The module-scope ``var`` still written for a texture, image, HLSL buffer object or private global."""
+        """The module-scope ``var`` still written for a texture, image, sampler, HLSL buffer object or a structure
+        holding one."""
         self.register_variable_type(node.name, variable_type)
         resource_comment = self.generate_resource_metadata_comment(node, variable_type)
         name = self.mojo_identifier(node.name)
@@ -245,20 +272,15 @@ class MojoKernelArgumentMixin:
             )
         if self.is_struct_type_name(variable_type):
             return f"{resource_comment}var {name} = {self.zero_value_for_type(variable_type)}\n"
-        if self.is_resource_type_name(variable_type):
-            mapped_type = self.map_type(variable_type)
-            init_value = (
-                self.zero_value_for_type(variable_type)
-                if stage_scope
-                else self.resource_binding_initial_value(
-                    node.name, mapped_type, variable_type
-                )
+        mapped_type = self.map_type(variable_type)
+        init_value = (
+            self.zero_value_for_type(variable_type)
+            if stage_scope
+            else self.resource_binding_initial_value(
+                node.name, mapped_type, variable_type
             )
-            return f"{resource_comment}var {name}: {mapped_type} = {init_value}\n"
-        return (
-            f"var {name}: {self.map_type(variable_type)} = "
-            f"{self.zero_value_for_type(variable_type)}\n"
         )
+        return f"{resource_comment}var {name}: {mapped_type} = {init_value}\n"
 
     def generate_module_constant_declaration(self, node, variable_type):
         """A compile-time ``comptime`` value for a constant declared outside a function."""
