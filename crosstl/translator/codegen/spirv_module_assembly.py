@@ -27,7 +27,10 @@ from .generic_function_utils import (
 from .relational_builtins import lower_relational_builtins
 from .resource_aggregates import lower_resource_aggregates
 from .spirv_builtin_overloads import separate_builtin_overloads
-from .spirv_compute_derivative_groups import emit_compute_derivative_group
+from .spirv_compute_derivative_groups import (
+    emit_compute_derivative_group,
+    entry_derivative_group_purpose,
+)
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_entry_interfaces import complete_entry_point_interfaces
 from .spirv_entry_workgroup_sizes import emit_entry_local_size_id
@@ -105,12 +108,13 @@ class SpirvModuleAssemblyMixin:
         elif execution_model in {"TessellationControl", "TessellationEvaluation"}:
             self.emit_tessellation_execution_modes(execution_model, function_id, stage)
         elif execution_model in {"GLCompute", "MeshEXT", "TaskEXT"}:
-            if not emit_entry_local_size_id(self, function_id, stage):
-                declare_specialized_workgroup_size(self, stage)
+            purpose = entry_derivative_group_purpose(self, function_id.id)
+            if not emit_entry_local_size_id(self, function_id, stage, purpose):
+                declare_specialized_workgroup_size(self, stage, purpose)
                 x, y, z = self.compute_local_size(stage)
                 self.emit(f"OpExecutionMode %{function_id.id} LocalSize {x} {y} {z}")
-                if self.requires_compute_derivatives:
-                    emit_compute_derivative_group(self, function_id, (x, y, z))
+                if purpose is not None:
+                    emit_compute_derivative_group(self, function_id, (x, y, z), purpose)
             if execution_model in {"MeshEXT", "TaskEXT"}:
                 self.require_capability("MeshShadingEXT")
                 self.require_extension("SPV_EXT_mesh_shader")

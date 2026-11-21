@@ -89,14 +89,21 @@ def module_compute_stage_config(generator, ast):
     return dict(configs[0]) if len(configs) == 1 else None
 
 
-def declare_specialized_workgroup_size(generator, stage) -> None:
-    """Declare the ``WorkgroupSize`` composite of a stage whose size the pipeline specializes."""
+def declare_specialized_workgroup_size(
+    generator, stage, derivative_group_purpose=None
+) -> None:
+    """Declare the ``WorkgroupSize`` composite of a stage whose size the pipeline specializes.
+
+    ``derivative_group_purpose`` names why the stage needs a derivative group (its derivatives or quad
+    operations), which a specialized size cannot choose.
+    """
     if not stage_has_specialized_workgroup_size(generator, stage):
         return
-    if generator.requires_compute_derivatives:
+    if derivative_group_purpose is not None:
         generator.refuse_lowering(
-            "SPIR-V compute derivatives need even workgroup x and y dimensions, which a workgroup size "
-            "the pipeline specializes (local_size_x_id, local_size_y_id) does not guarantee"
+            f"SPIR-V {derivative_group_purpose} need even workgroup x and y dimensions, which a "
+            "workgroup size the pipeline specializes (local_size_x_id, local_size_y_id) does not "
+            "guarantee"
         )
         return
     # The built-in takes its size from the current stage; the entry point's stage owns these execution modes.

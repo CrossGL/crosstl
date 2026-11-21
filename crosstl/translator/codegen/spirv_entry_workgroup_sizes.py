@@ -157,17 +157,23 @@ def entry_workgroup_size_value(generator, name: str, type_id):
     return value
 
 
-def emit_entry_local_size_id(generator, function_id, metadata) -> bool:
-    """Size a specialized entry of a module of several sizes with ``LocalSizeId``; whether it did."""
+def emit_entry_local_size_id(
+    generator, function_id, metadata, derivative_group_purpose=None
+) -> bool:
+    """Size a specialized entry of a module of several sizes with ``LocalSizeId``; whether it did.
+
+    ``derivative_group_purpose`` names why the entry needs a derivative group (its derivatives or quad
+    operations), which a specialized size cannot choose.
+    """
     if generator.module_has_one_workgroup_size:
         return False
     config = effective_workgroup_config(generator, _raw_config(generator, metadata))
     if not has_specialized_workgroup_size(config):
         return False
-    if generator.requires_compute_derivatives:
+    if derivative_group_purpose is not None:
         generator.refuse_lowering(
-            "SPIR-V compute derivatives need even workgroup x and y dimensions, which a workgroup size "
-            "the pipeline specializes does not guarantee"
+            f"SPIR-V {derivative_group_purpose} need even workgroup x and y dimensions, which a "
+            "workgroup size the pipeline specializes does not guarantee"
         )
         return True
     components, _ = _components(generator, metadata)

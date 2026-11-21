@@ -230,6 +230,10 @@ class SpirvTypeConstantMixin:
         self.glsl_std450_id = None
         self.main_fn_id = None
         self.requires_compute_derivatives = False
+        # Functions that use a quad operation, and the functions each function calls: an entry that reaches a
+        # quad operation declares its derivative group (spirv_compute_derivative_groups).
+        self.quad_operation_function_ids = set()
+        self.function_callee_ids = {}
 
         self.current_label = None
         self.loop_merge_labels = []
