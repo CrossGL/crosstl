@@ -204,6 +204,21 @@ class FunctionNode(CommonFunctionNode):
         # ordinary function declaration qualifiers as implicit-object state.
         self.receiver_qualifiers = list(self.method_qualifiers)
 
+    def __repr__(self):
+        return (
+            "FunctionNode("
+            f"return_type={self.return_type}, name={self.name}, "
+            f"params={self.params}, body={self.body}, "
+            f"return_qualifiers={self.return_qualifiers}, "
+            f"method_qualifiers={self.method_qualifiers})"
+        )
+
+    def emit(self):
+        # Override to handle __-prefixed functions
+        if self.name.startswith("__"):
+            return f"{self.name}()"  # Call verbatim
+        return super().emit()  # Call the original emit method
+
 
 _COMMON_NODES = (
     ASTNode,
