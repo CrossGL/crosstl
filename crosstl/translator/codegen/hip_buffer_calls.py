@@ -338,8 +338,11 @@ class HipBufferCallMixin:
         # compare-and-swap loop on atomicCAS_system performs them
         # (HIP_SYSTEM_WRAPPING_ATOMICS).
         for intrinsic, arg_count, kinds, kinds_label in list(operations.values()):
-            system_intrinsic = HIP_SYSTEM_WRAPPING_ATOMICS.get(
-                f"{intrinsic}_system", f"{intrinsic}_system"
+            system_name = f"{intrinsic}_system"
+            system_intrinsic = (
+                HIP_SYSTEM_WRAPPING_ATOMICS[system_name]
+                if system_name in HIP_SYSTEM_WRAPPING_ATOMICS
+                else system_name
             )
             operations.setdefault(
                 f"{intrinsic}_system",
