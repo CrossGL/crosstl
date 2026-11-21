@@ -33,6 +33,7 @@ from .conversions import format_conversion, is_conversion_name
 from .global_variables import refuse_writable_global_variable
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 from .sizeof_scopes import OpenCLSizeofScopeMixin
+from .work_items import format_work_item_query
 
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
 _OPENCL_WORK_ITEM_QUERIES = frozenset(
@@ -1811,13 +1812,11 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
         if func_name in self.OPENCL_LINEAR_ID_MAP and not args:
             return self.OPENCL_LINEAR_ID_MAP[func_name]
         base = self.OPENCL_BUILTIN_ID_MAP.get(func_name)
-        if base is None or len(args) != 1:
-            return None
-        component = self.opencl_dimension_component(args[0])
-        if component is None:
-            rendered = self.visit(args[0])
-            return f"{func_name}({rendered})"
-        return f"{base}.{component}"
+        if base is not None and len(args) == 1:
+            component = self.opencl_dimension_component(args[0])
+            if component is not None:
+                return f"{base}.{component}"
+        return format_work_item_query(self, func_name, args)
 
     def opencl_dimension_component(self, arg):
         if isinstance(arg, int):
