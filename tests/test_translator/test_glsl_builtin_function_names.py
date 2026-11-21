@@ -229,12 +229,12 @@ def test_user_overload_that_differs_by_qualifiers_is_renamed(tmp_path):
 
 
 def test_rendering_again_reserves_only_called_names():
-    from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
     from crosstl.translator.codegen.glsl_builtin_functions import (
         called_builtin_spellings,
         glsl_builtin_name_reserved,
         reset_builtin_spellings,
     )
+    from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
 
     codegen = GLSLCodeGen()
     reset_builtin_spellings(codegen)
