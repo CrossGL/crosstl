@@ -54,7 +54,8 @@ def test_slang_scalar_operation_with_an_int_literal_is_an_int_operation(tmp_path
     # ``a = 100`` gives 200 and 101, not the 8-bit -56 and 101; a narrow operand pair still wraps at 8 bits.
     assert "outp[0] = float(a * 2);" in metal
     assert "outp[1] = float(a + 1);" in metal
-    assert "char(int(uint(a) * uint(int(char(int(3))))))" in metal
+    # The Slang importer (#4971) writes the 8-bit product as an int product converted back to int8_t.
+    assert "char(int(a * int(char(int(3)))))" in metal
 
 
 @pytest.mark.parametrize("backend", ["metal", "directx"])
