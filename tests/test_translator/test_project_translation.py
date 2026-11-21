@@ -36349,7 +36349,7 @@ def test_translate_project_drops_mlx_metal_system_includes_for_opengl(tmp_path):
     artifact = payload["artifacts"][0]
     generated = (repo / artifact["path"]).read_text(encoding="utf-8")
     assert artifact["status"] == "translated"
-    assert "#version 450 core" in generated
+    assert "#version 430 core" in generated
     assert "#include <metal_math>" not in generated
     assert "#include <metal_stdlib>" not in generated
     assert "#include" not in generated
@@ -59001,7 +59001,7 @@ def test_translate_project_reports_unrepresentable_floating_remainder(
         "operation": "fmod",
         "operandTypes": [left, right],
         "reason": reason,
-        "targetProfile": "#version 450 core",
+        "targetProfile": "#version 330 core",
     }
     report_path = tmp_path / "report.json"
     report.write_json(report_path)
