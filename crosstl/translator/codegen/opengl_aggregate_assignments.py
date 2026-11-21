@@ -25,6 +25,7 @@ from .builtin_variable_types import crossgl_builtin_variable_type
 from .glsl_draw_parameters import DRAW_PARAMETERS
 from .glsl_hlsl_matrix import emulated_matrix_shape
 from .glsl_instance_index import INSTANCE_INDEX
+from .glsl_mesh_builtin_values import glsl_mesh_builtin_value
 from .glsl_narrow_integer_literals import widened_integer_literal
 from .opengl_values import OpenGLTemplateTypeError
 
@@ -774,9 +775,9 @@ class OpenGLAggregateAssignmentMixin:
 
         target = self.mesh_output_assignment_target(left_node)
         if target is not None:
-            right = self.generate_expression_with_expected(
-                right_node, self.expression_result_type(left_node)
-            )
+            value_type = self.expression_result_type(left_node)
+            right = self.generate_expression_with_expected(right_node, value_type)
+            right = glsl_mesh_builtin_value(self, target, right, value_type)
             return f"{indent_str}{target} {op} {right};\n"
 
         expanded_targets = self.mesh_output_whole_assignment_targets(left_node)
@@ -805,6 +806,7 @@ class OpenGLAggregateAssignmentMixin:
                 value = f"{right}.{member_name}"
             else:
                 value = self.generate_expression_with_expected(value_expr, member_type)
+            value = glsl_mesh_builtin_value(self, target, value, member_type)
             code += f"{indent_str}{target} = {value};\n"
         return code
 
