@@ -375,7 +375,9 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "void node_1_0(NodeOutputArray<RECORD1> OutputArray_1_0) @ stage_entry",
+            "node {",
+            "void node_1_0(@allow_sparse_nodes @node_array_size(129) @max_records(31) "
+            "NodeOutputArray<RECORD1> OutputArray_1_0) @ stage_entry",
             "ThreadNodeOutputRecords<RECORD1> outRec = OutputArray_1_0[1].GetThreadNodeOutputRecords(2);",
             "outRec.OutputComplete();",
         ),

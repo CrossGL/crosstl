@@ -1197,7 +1197,7 @@ complex64_t __crossgl_complex64_wave_shuffle_and_fill_up(
         payload = (
             "[raypayload] "
             if self.hlsl_union_attribute(node, RAY_PAYLOAD_ATTRIBUTE)
-            else ""
+            else self.hlsl_work_graph_record_prefix(node)
         )
         code = f"struct {payload}{node.name} {{\n"
         members = [

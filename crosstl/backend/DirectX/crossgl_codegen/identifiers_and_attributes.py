@@ -16,6 +16,7 @@ from ..DirectxAst import (
     TypeAliasNode,
     VariableNode,
 )
+from ..work_graph_import import crossgl_work_graph_parameter_attributes
 
 
 class IdentifierAttributeMixin:
@@ -445,6 +446,9 @@ class IdentifierAttributeMixin:
         attributes = self.format_inline_parameter_attributes(parameter)
         if attributes:
             prefixes.append(attributes)
+        work_graph_attributes = crossgl_work_graph_parameter_attributes(self, parameter)
+        if work_graph_attributes:
+            prefixes.append(work_graph_attributes)
         resource_attributes = self.format_inline_resource_qualifier_attributes(
             parameter
         )
