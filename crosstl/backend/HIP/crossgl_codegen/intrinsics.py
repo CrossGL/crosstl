@@ -2,7 +2,7 @@
 
 import re
 
-from ...CUDA.directed_rounding import refuse_directed_rounding
+from ...CUDA.directed_rounding import directed_rounding_call, refuse_directed_rounding
 from ...CUDA.pointer_math_import import format_pointer_output_call
 from ..HipAst import (
     FunctionCallNode,
@@ -204,6 +204,12 @@ class HipIntrinsicMixin:
         return last_scope
 
     def format_hip_intrinsic_call(self, function_name, args):
+        if not self.is_user_defined_function(function_name):
+            directed_rounding = directed_rounding_call(
+                self.directed_rounding, function_name, args
+            )
+            if directed_rounding is not None:
+                return directed_rounding
         refuse_directed_rounding(function_name)
         fp16_intrinsic = self.format_hip_fp16_intrinsic_call(function_name, args)
         if fp16_intrinsic is not None:
