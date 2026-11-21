@@ -58,6 +58,7 @@ from .metal_buffer_component_stores import (
     metal_glsl_buffer_component_refusal,
 )
 from .metal_exact_lookups import METAL_MATRIX_ORDER_ATTRIBUTES
+from .metal_raster_order_groups import RASTERIZER_ORDERED
 
 
 class MetalGLSLBufferBlockMixin:
@@ -144,6 +145,8 @@ class MetalGLSLBufferBlockMixin:
                 in METAL_MATRIX_ORDER_ATTRIBUTES
                 # DXR payload access qualifiers; a Metal payload is a ray_data reference every stage may access.
                 or str(getattr(attr, "name", "")).lower() in PAYLOAD_ACCESS_ATTRIBUTES
+                # Access ordering, written as [[raster_order_group(0)]] (metal_raster_order_groups.py).
+                or str(getattr(attr, "name", "")).lower() == RASTERIZER_ORDERED
             ):
                 continue
             if hasattr(attr, "name"):

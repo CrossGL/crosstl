@@ -70,6 +70,7 @@ from ..templates.portability import (
     intrinsic_names,
 )
 from ..templates.primitives import CROSSGL as PRIMITIVES
+from ..templates.promotion import CROSSGL as PROMOTION
 from ..templates.qualifiers import CROSSGL as QUALIFIERS
 from ..templates.rasterization import CROSSGL as RASTERIZATION
 from ..templates.rays import CROSSGL as RAYS
@@ -94,6 +95,15 @@ from .dialect import POINTS_IN_AND_OUT
 
 def _scalar(spelling: str, source: str = "iin") -> Template:
     return Template(f"{spelling} v = {spelling}({source}[i]);\noutp[i] = float(v * v);")
+
+
+def _narrow(spelling: str) -> Template:
+    """An 8- or 16-bit integer type's probe. CrossGL promotes the operands to int, so the product converts back to
+    the type, and every target computes the wrapped product (:func:`..templates.base.narrow_scalar`).
+    """
+    return Template(
+        f"{spelling} v = {spelling}(iin[i]);\noutp[i] = float({spelling}(v * v));"
+    )
 
 
 _FRAGMENT = (
@@ -172,7 +182,8 @@ _TESSELLATION_STAGES = {
         + "    struct DomainOutput {\n        vec4 position @ SV_Position;\n    }\n"
         "    tessellation_evaluation {\n"
         "        DomainOutput main(PatchConstants constants, vec3 coord @ SV_DomainLocation,\n"
-        "                          OutputPatch<ControlPoint, 3> patch) @domain(tri) {\n"
+        "                          OutputPatch<ControlPoint, 3> patch) @domain(tri)\n"
+        "            @partitioning(integer) @outputtopology(triangle_ccw) {\n"
         "            DomainOutput output;\n"
         "            output.position = patch[0].position * coord.x + patch[1].position * coord.y"
         " + patch[2].position * coord.z;\n            return output;\n        }\n    }\n}\n"
@@ -294,6 +305,7 @@ CONSTRUCTS: dict[str, Template] = {
     **POINTERS,
     **MEMORY,
     **UNIONS,
+    **PROMOTION,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,
@@ -333,10 +345,10 @@ CONSTRUCTS: dict[str, Template] = {
     "runtime-array-length": Template("outp[i] = float(outp.length());"),
     "half": _scalar("half", "fin"),
     "double": _scalar("double", "fin"),
-    "int8": _scalar("int8_t"),
-    "uint8": _scalar("uint8_t"),
-    "int16": _scalar("int16_t"),
-    "uint16": _scalar("uint16_t"),
+    "int8": _narrow("int8_t"),
+    "uint8": _narrow("uint8_t"),
+    "int16": _narrow("int16_t"),
+    "uint16": _narrow("uint16_t"),
     "int64": _scalar("int64_t"),
     "uint64": _scalar("uint64_t"),
     "shared-memory": Template(

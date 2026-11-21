@@ -59,7 +59,11 @@ def _hip(offline: bool) -> list[Feature]:
 
 
 def _hlsl(offline: bool) -> list[Feature]:
-    return hlsl.parse(fetch("hlsl", offline=offline), _glsl_names(offline))
+    return hlsl.parse(
+        fetch("hlsl", offline=offline),
+        _glsl_names(offline),
+        fetch("hlsl-preview", offline=offline),
+    )
 
 
 def _metal(offline: bool) -> list[Feature]:

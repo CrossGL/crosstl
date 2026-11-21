@@ -206,4 +206,5 @@ def test_a_program_function_named_printf_is_an_ordinary_call(tmp_path):
         prelude="float printf(float value) { return value * 2.0; }",
     )
     hlsl = _translate(tmp_path, "print.cgl", source, "directx")
-    assert "printf(v.x)" in hlsl
+    # HLSL output renames the helper apart from the printf intrinsic.
+    assert "printf_fn(v.x)" in hlsl

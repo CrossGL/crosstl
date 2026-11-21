@@ -50,6 +50,8 @@ jobs:
     outputs:
       heavy: ${{ steps.plan.outputs.heavy }}
       smoke: ${{ steps.plan.outputs.smoke }}
+      # The heavy jobs and parity groups a change can affect (JSON list).
+      legs: ${{ steps.plan.outputs.legs }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -58,6 +60,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
+      - run: python -m pip install "PyYAML>=6,<7"
       - name: Select validation tier
         id: plan
         env:

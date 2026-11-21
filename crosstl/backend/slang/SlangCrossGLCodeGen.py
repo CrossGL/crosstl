@@ -2281,6 +2281,17 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 value = self.generate_expression(expr.args[0], is_main)
                 value = self.maybe_parenthesize_expression(expr.args[0], value)
                 return f"(1.0 / {value})"
+            if (
+                function_name == "select"
+                and len(expr.args) == 3
+                and (
+                    is_hlsl_namespace_builtin
+                    or expr.name not in self.user_function_names
+                )
+            ):
+                # Slang select(cond, t, f) is HLSL's; CrossGL select(f, t, cond) is MSL's.
+                condition, true_value, false_value = rendered_args
+                return f"select({false_value}, {true_value}, {condition})"
             generic_type_name = self.map_generic_vector_or_matrix_type(function_name)
             if not is_hlsl_namespace_builtin and expr.name in self.user_function_names:
                 name = self.format_function_name(expr.name)

@@ -73,7 +73,10 @@ class SlangWaveMeshOpsMixin:
         self.helper_functions.setdefault(
             name, render_slang_wave_shuffle_helper(operation, value_type)
         )
-        rendered = [self.generate_expression(argument) for argument in arguments]
+        rendered = [
+            self.generate_expression_without_expected(argument)
+            for argument in arguments
+        ]
         if operation == "WaveShuffleAndFillUp":
             modulo = (
                 f"uint({rendered[3]})" if len(rendered) == 4 else "WaveGetLaneCount()"

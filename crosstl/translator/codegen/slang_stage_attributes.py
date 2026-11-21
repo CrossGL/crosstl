@@ -366,7 +366,9 @@ class SlangStageAttributesMixin:
                 "partitioning",
                 "patchconstantfunc",
             },
-            "domain": {"domain"},
+            # A CrossGL domain stage may state the partitioning and output topology it expects.
+            # Slang, like HLSL, takes both from the hull, so they are validated and not written.
+            "domain": {"domain", "outputtopology", "partitioning"},
             "mesh": {"numthreads", "outputtopology"},
             "amplification": {"numthreads"},
         }
@@ -403,7 +405,7 @@ class SlangStageAttributesMixin:
             )
 
     def validate_slang_tessellation_output_topology(self, func, stage_name):
-        if self.slang_shader_stage_name(stage_name) != "hull":
+        if self.slang_shader_stage_name(stage_name) not in {"hull", "domain"}:
             return
 
         topology = self.normalized_slang_stage_attribute_argument(
@@ -421,12 +423,12 @@ class SlangStageAttributesMixin:
         if topology not in valid_topologies:
             valid_values = ", ".join(sorted(valid_topologies))
             raise SlangRefusal(
-                "Slang tessellation_control stage outputtopology "
+                f"Slang {stage_name} stage outputtopology "
                 f"'{topology}' must be one of: {valid_values}"
             )
 
     def validate_slang_tessellation_domain_topology(self, func, stage_name):
-        if self.slang_shader_stage_name(stage_name) != "hull":
+        if self.slang_shader_stage_name(stage_name) not in {"hull", "domain"}:
             return
 
         domain = self.normalized_slang_stage_attribute_argument(func, "domain")
@@ -439,12 +441,12 @@ class SlangStageAttributesMixin:
         domain = self.canonical_slang_tessellation_domain(domain)
         if domain in {"tri", "quad"} and topology == "line":
             raise SlangRefusal(
-                "Slang tessellation_control stage domain "
+                f"Slang {stage_name} stage domain "
                 f"'{domain}' requires outputtopology triangle_cw or triangle_ccw"
             )
         if domain == "isoline" and topology in {"triangle_cw", "triangle_ccw"}:
             raise SlangRefusal(
-                "Slang tessellation_control stage domain 'isoline' requires "
+                f"Slang {stage_name} stage domain 'isoline' requires "
                 "outputtopology line"
             )
 
@@ -467,7 +469,7 @@ class SlangStageAttributesMixin:
             )
 
     def validate_slang_tessellation_partitioning(self, func, stage_name):
-        if self.slang_shader_stage_name(stage_name) != "hull":
+        if self.slang_shader_stage_name(stage_name) not in {"hull", "domain"}:
             return
 
         partitioning = self.normalized_slang_stage_attribute_argument(
@@ -485,7 +487,7 @@ class SlangStageAttributesMixin:
         if partitioning not in valid_partitioning:
             valid_values = ", ".join(sorted(valid_partitioning))
             raise SlangRefusal(
-                "Slang tessellation_control stage partitioning "
+                f"Slang {stage_name} stage partitioning "
                 f"'{partitioning}' must be one of: {valid_values}"
             )
 
