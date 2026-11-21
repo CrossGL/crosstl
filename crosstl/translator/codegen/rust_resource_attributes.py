@@ -544,7 +544,9 @@ class RustResourceAttributeMixin:
             self.rust_emitted_binding_cursors.get(set_index, 0), binding + count
         )
 
-    def assign_rust_emitted_descriptor_bindings(self, exact_bindings, deferred_registers):
+    def assign_rust_emitted_descriptor_bindings(
+        self, exact_bindings, deferred_registers
+    ):
         """Assign unique rust-gpu ``binding = N`` values within each descriptor set.
 
         Class-scoped reservations still allow ``register(b0)`` next to ``register(u0)``.
@@ -565,7 +567,15 @@ class RustResourceAttributeMixin:
                 entry[6],
             ),
         )
-        for node, _register_class, register_index, set_index, count, _name, _order in ordered:
+        for (
+            node,
+            _register_class,
+            register_index,
+            set_index,
+            count,
+            _name,
+            _order,
+        ) in ordered:
             binding = self.next_free_emitted_rust_binding(
                 set_index, register_index, count
             )
