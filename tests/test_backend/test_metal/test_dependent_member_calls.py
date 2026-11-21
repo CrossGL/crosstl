@@ -121,3 +121,35 @@ def test_explicit_template_arguments_call_the_member(tmp_path):
     metal = _translate(tmp_path, EXPLICIT, "metal")
     assert "Plus__add(d, a);" in metal, metal
     assert " add(d, a);" not in metal
+
+
+UNCALLED = PLUS + """
+template <class F>
+METAL_FUNC void apply(F f, thread float& d, thread float& a) {
+  F::add(d, a);
+}
+
+kernel void k(device float* out [[buffer(0)]], uint tid [[thread_position_in_grid]]) {
+  float a = float(tid);
+  float b = 2.0f;
+  Plus::add(a, b);
+  out[tid] = a;
+}
+"""
+
+
+@pytest.mark.parametrize("backend", ["metal", "cgl", "opengl"])
+def test_an_uninstantiated_template_with_a_dependent_call_is_left_out(
+    tmp_path, backend
+):
+    # Nothing instantiates `apply`, so it contributes no code ([temp.inst]/4) and is not refused.
+    code = _translate(tmp_path, UNCALLED, backend)
+    assert "apply" not in code
+    assert re.search(r"Plus_+add\(", code), code
+
+
+def test_a_named_template_with_a_dependent_call_is_still_refused(tmp_path):
+    # A mention keeps the template: here a call that Metal output keeps generic.
+    source = UNCALLED.replace("Plus::add(a, b);", "Plus p;\n  apply(p, a, b);")
+    with pytest.raises(MetalDependentMemberCallRefusal):
+        _translate(tmp_path, source, "cgl")
