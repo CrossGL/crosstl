@@ -5,6 +5,10 @@ import re
 from ...translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ...translator.semantics.warp import ORDERED_WORKGROUP_BARRIER
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
+from ..CUDA.directed_rounding import (
+    DirectedRoundingLibrary,
+    insert_directed_rounding_functions,
+)
 from ..CUDA.keyword_renames import source_identifier_names
 from ..CUDA.reference_parameters import ReferenceParameters
 from ..import_refusals import HipImportRefused, ImportRefusalMixin
@@ -617,6 +621,7 @@ class HipToCrossGLConverter(
         self.generated_matrix_helper_types = set()
         self.namespace_aliases = {}
         self.source_identifier_names = frozenset()
+        self.directed_rounding = None
         self.anonymous_enum_count = 0
         self.global_resource_bindings = {}
         self.global_resource_binding_count = 0
@@ -685,8 +690,12 @@ class HipToCrossGLConverter(
         self.prepare_global_resource_bindings(ast_node)
         self.reference_parameters = ReferenceParameters(ast_node)
         self.emitted_buffer_layouts = EmittedBufferLayouts("HIP")
+        self.directed_rounding = DirectedRoundingLibrary(self.source_identifier_names)
         self.visit(ast_node)
         self.emitted_buffer_layouts.apply(self.output)
+        insert_directed_rounding_functions(
+            self.output, self.directed_rounding, "// HIP to CrossGL conversion"
+        )
         return "\n".join(self.output)
 
     def refuse_incomplete_record_values(self, ast_node):

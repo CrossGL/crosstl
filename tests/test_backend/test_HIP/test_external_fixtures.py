@@ -2444,8 +2444,8 @@ def test_hip_scalar_brace_initializer_scoped_call_codegen_reparse():
 def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
     # HIP math API documents CUDA-compatible single-precision intrinsics such
     # as __fdividef, rounded arithmetic aliases, and __saturatef.
-    # The round-to-nearest aliases are the plain operations; the directed ones (_rd, _ru, _rz) have no CrossGL
-    # form and are refused (crosstl/backend/CUDA/directed_rounding.py).
+    # The round-to-nearest aliases are the plain operations; the directed ones (_rd, _ru, _rz) call CrossGL
+    # functions that compute the directed result exactly (crosstl/backend/CUDA/directed_rounding.py).
     source = """
     __device__ float normalized_weight(float weight, float normalizer, float bias) {
         float scaled = __fdividef(weight, normalizer);
@@ -2492,10 +2492,18 @@ def test_rocm_math_api_fast_float_intrinsics_codegen_reparse():
         "__fmul_ru(a, b)",
         "__fadd_rz(a, b)",
     ):
-        with pytest.raises(DirectedRoundingUnsupportedError):
-            assert_crossgl_reparses(
-                f"__device__ float f(float a, float b) {{ return {directed}; }}"
-            )
+        _ast, crossgl = assert_crossgl_reparses(
+            f"__device__ float f(float a, float b) {{ return {directed}; }}"
+        )
+        wrapper = directed.split("(")[0][2:]
+        assert f"return {wrapper}(f32(a), f32(b));" in crossgl
+        assert directed.split("(")[0] not in crossgl
+
+    with pytest.raises(DirectedRoundingUnsupportedError):
+        assert_crossgl_reparses(
+            "#include <hip/hip_fp16.h>\n"
+            "__device__ __half f(float a) { return __float2half_rd(a); }"
+        )
 
 
 def test_external_hip_fp16_scalar_conversion_codegen_reparse():
