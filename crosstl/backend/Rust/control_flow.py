@@ -416,7 +416,7 @@ class RustControlFlowMixin:
         code = collection_setup
         code += (
             f"{indent_str}for (int {index_name} = 0; "
-            f"{index_name} < {collection_expr}.length; {index_name}++) {{\n"
+            f"{index_name} < {collection_expr}.length(); {index_name}++) {{\n"
         )
         code += self.generate_enumerate_value_binding(
             value_pattern,
