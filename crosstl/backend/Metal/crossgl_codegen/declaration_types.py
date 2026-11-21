@@ -417,7 +417,8 @@ class MetalDeclarationTypeMixin:
         base_name, generic_args = self.access_qualified_texture_parts(metal_type)
         return bool(
             generic_args
-            and base_name in {
+            and base_name
+            in {
                 "texture1d",
                 "texture1d_array",
                 "texture2d",

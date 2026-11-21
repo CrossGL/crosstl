@@ -300,7 +300,8 @@ class MetalStaticAggregateMixin:
         candidates = [
             template
             for template in template_structs
-            if requested_name in {
+            if requested_name
+            in {
                 template.name,
                 (
                     f"{template.namespace}::{template.name}"
@@ -1169,7 +1170,9 @@ class MetalStaticAggregateMixin:
                 ]
                 # Concrete static assertions are emitted and lowered too.
                 + concrete_static_assertion_conditions(self, code, template_spans)
-            ) if concrete_functions else None
+            )
+            if concrete_functions
+            else None
         )
         source_aliases = self._collect_local_type_alias_bindings(
             code,

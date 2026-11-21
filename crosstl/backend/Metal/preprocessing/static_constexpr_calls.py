@@ -881,7 +881,8 @@ class MetalStaticConstexprCallMixin:
         candidates = [
             template
             for template in template_structs
-            if requested_name in {
+            if requested_name
+            in {
                 template.name,
                 (
                     f"{template.namespace}::{template.name}"
@@ -1046,7 +1047,8 @@ class MetalStaticConstexprCallMixin:
         candidates = [
             struct
             for struct in structs
-            if normalized in {
+            if normalized
+            in {
                 struct.name,
                 struct.qualified_name.lstrip(":"),
             }

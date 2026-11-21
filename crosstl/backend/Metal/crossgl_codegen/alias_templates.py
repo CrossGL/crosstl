@@ -1095,7 +1095,8 @@ class MetalAliasTemplateMixin:
         qualifiers = tuple(
             qualifier
             for qualifier in self.metal_source_overload_type_qualifiers
-            if qualifier in {
+            if qualifier
+            in {
                 *(str(value).lower() for value in nested_qualifiers),
                 *(
                     str(value).lower()

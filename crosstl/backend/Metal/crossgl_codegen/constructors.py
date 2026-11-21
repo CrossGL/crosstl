@@ -331,7 +331,8 @@ class MetalConstructorMixin:
             == receiver_address_space
             and (
                 allow_explicit
-                or "explicit" not in {
+                or "explicit"
+                not in {
                     str(qualifier).lower()
                     for qualifier in getattr(constructor, "qualifiers", []) or []
                 }
@@ -989,7 +990,8 @@ class MetalConstructorMixin:
             member
             for member in getattr(struct_node, "members", []) or []
             if isinstance(member, VariableNode)
-            and "static" not in {
+            and "static"
+            not in {
                 str(qualifier).lower()
                 for qualifier in getattr(member, "qualifiers", []) or []
             }
