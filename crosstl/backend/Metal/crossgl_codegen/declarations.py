@@ -877,9 +877,11 @@ class MetalDeclarationMixin:
         )
 
     def format_parameter_decl(self, var, index, semantic_context=None):
-        mesh_declaration = self.metal_mesh_parameter_declaration(
-            var
-        ) or self.metal_object_parameter_declaration(var)
+        mesh_declaration = (
+            self.metal_mesh_parameter_declaration(var)
+            or self.metal_object_parameter_declaration(var)
+            or self.metal_post_tessellation_parameter_declaration(var)
+        )
         if mesh_declaration is not None:
             return mesh_declaration
         if getattr(var, "name", None):

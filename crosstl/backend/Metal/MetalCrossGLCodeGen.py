@@ -101,6 +101,7 @@ from .explicit_specialization_annotations import explicit_specialization_annotat
 from .external_functions import refuse_external_function_calls
 from .library_structs import declare_referenced_library_structs
 from .mesh_import import MetalMeshImport
+from .post_tessellation_import import MetalPostTessellationImport
 from .MetalAst import *
 from .MetalLexer import *
 from .MetalParser import *
@@ -194,6 +195,7 @@ class MetalToCrossGLConverter(
     MetalAlignmentSpecifiers,
     MetalBufferLayoutImport,
     MetalMeshImport,
+    MetalPostTessellationImport,
     MetalProgramRenderingMixin,
     MetalConverterSetupMixin,
     MetalFunctionDefinitionMixin,
@@ -478,6 +480,7 @@ class MetalToCrossGLConverter(
             "    // __crossgl_metal_function_local_aggregates__\n"
         )
         self.reset_program_render_state()
+        self.plan_metal_post_tessellation_functions(ast)
         typedefs, functions = self.prepare_program_declarations(ast)
         code = self.render_program_header(ast, wide_vector_support_marker)
         structs, enums, code = self.render_program_type_declarations(

@@ -44,6 +44,7 @@ from .metal_global_emission import (
 from .metal_hlsl_matrix import (
     metal_hlsl_matrix_prelude,
 )
+from .metal_post_tessellation import post_tessellation_plan
 from .metal_safe_math import (
     METAL_SAFE_MATH_PRAGMA,
 )
@@ -307,7 +308,12 @@ class MetalProgramSectionMixin:
                     functions_code += f"// {stage_name.title()} Shader\n"
                     functions_code += self.generate_function(
                         stage.entry_point,
-                        shader_type=stage_name,
+                        # A planned domain entry is a post-tessellation vertex function.
+                        shader_type=(
+                            "vertex"
+                            if post_tessellation_plan(stage.entry_point)
+                            else stage_name
+                        ),
                         execution_config=getattr(stage, "execution_config", None),
                         entry_name=stage_entry_names.get(id(stage.entry_point)),
                         stage_local_variables=self.metal_stage_local_variables_with_lowered_program_groupshared(
