@@ -1721,9 +1721,8 @@ def test_codegen_writable_c_array_parameter_preserves_aliasing():
         in TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
     )
     assert (
-        "void fill(inout float values[4], float source[4])" in GLSLCodeGen().generate(
-            parse_crossgl(crossgl)
-        )
+        "void fill(inout float values[4], float source[4])"
+        in GLSLCodeGen().generate(parse_crossgl(crossgl))
     )
     assert (
         "void fill(thread float values[4], thread float source[4])"
@@ -6709,7 +6708,7 @@ def test_codegen_raytracing_qualifiers_output():
         )
 
 
-def test_codegen_msl_intersection_function_with_tags_is_refused():
+def test_codegen_msl_intersection_function_tags_import_as_entry_attributes():
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -6731,14 +6730,15 @@ def test_codegen_msl_intersection_function_with_tags_is_refused():
         return hit;
     }
     """
+    crossgl = convert(code)
+
+    assert "@bounding_box @triangle_data @instancing {" in crossgl
+
     with pytest.raises(
         MetalImportRefused,
-        match=(
-            "Metal intersection function 'sphere' names intersection tags "
-            "triangle_data, instancing; CrossGL has no spelling for intersection tags"
-        ),
+        match="Metal intersection function 'sphere' names intersection tag 'not_a_tag'",
     ):
-        convert(code)
+        convert(code.replace("instancing)]]", "not_a_tag)]]"))
 
 
 def test_codegen_raytracing_namespace_alias_resolves_to_crossgl_type():
@@ -12276,9 +12276,8 @@ def test_codegen_keeps_metal_stdlib_wrappers_as_non_emitted_builtin_metadata():
     )
     assert (
         "uint simd_result = __crossgl_bfloat16_from_float("
-        "float(WaveActiveMax(__crossgl_bfloat16_to_float(uint(value)))));" in normalize(
-            generated_targets["directx"]
-        )
+        "float(WaveActiveMax(__crossgl_bfloat16_to_float(uint(value)))));"
+        in normalize(generated_targets["directx"])
     )
     assert (
         "float simd_result = crossgl_round_bfloat1(float(subgroupMax(float(value))));"
