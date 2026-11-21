@@ -18,6 +18,10 @@ from .metal_entry_return import (
     metal_entry_return_semantic_key,
     refuse_unreturnable_metal_entry_semantic,
 )
+from .metal_post_tessellation import (
+    MetalPostTessellationError,
+    post_tessellation_plan,
+)
 from .metal_raster_order_groups import metal_raster_order_group_attribute
 from .metal_varyings import (
     metal_varying_attribute,
@@ -650,6 +654,25 @@ class MetalFunctionPartsMixin:
         """Write the stage attribute and the signature of the entry point or function."""
         if shader_type == "vertex":
             function_name = entry_name or f"vertex_{func.name}"
+            patch_attribute = ""
+            if post_tessellation_plan(func) is not None:
+                if vertex_stage_input_parameters:
+                    raise MetalPostTessellationError(
+                        function_name,
+                        "it reads stage inputs besides its patch, and a Metal post-tessellation vertex "
+                        "function has one [[stage_in]] structure",
+                    )
+                structures, patch_parameters, patch_attribute, preamble = (
+                    self.metal_post_tessellation_interface(
+                        func, function_name, reserved_parameter_names
+                    )
+                )
+                code += structures
+                for declaration in reversed(patch_parameters):
+                    params_str = (
+                        f"{declaration}, {params_str}" if params_str else declaration
+                    )
+                vertex_stage_input_alias_declarations = preamble
             if vertex_stage_input_parameters:
                 stage_input_struct_name = self.unique_vertex_stage_input_struct_name(
                     function_name
@@ -698,7 +721,7 @@ class MetalFunctionPartsMixin:
                     code += self.generate_return_wrapper_struct(return_wrapper)
                     return_type = return_wrapper["struct_name"]
                 self.current_function_return_wrapper = return_wrapper
-            code += f"vertex {return_type} {function_name}({params_str}) {{\n"
+            code += f"{patch_attribute}vertex {return_type} {function_name}({params_str}) {{\n"
         elif shader_type == "fragment":
             function_name = entry_name or f"fragment_{func.name}"
             if fragment_stage_input_parameters:

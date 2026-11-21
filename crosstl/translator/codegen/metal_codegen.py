@@ -107,6 +107,7 @@ from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_mesh_outputs import MetalMeshOutputMixin
 from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_parameter_address_spaces import MetalParameterAddressSpaceMixin
+from .metal_post_tessellation import MetalPostTessellationMixin
 from .metal_program_entries import MetalProgramEntryMixin
 from .metal_program_scope_variables import MetalProgramScopeVariableMixin
 from .metal_program_sections import MetalProgramSectionMixin
@@ -237,6 +238,7 @@ class MetalCodeGen(
     MetalProgramStateMixin,
     MetalProgramSectionMixin,
     MetalFunctionPartsMixin,
+    MetalPostTessellationMixin,
     MetalExpressionFormMixin,
     MetalCallExpressionMixin,
     MetalResultTypeMixin,
