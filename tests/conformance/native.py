@@ -89,7 +89,8 @@ def _metal_function(Metal, library, entry):
     function = library.newFunctionWithName_(entry)
     if function is None:
         raise RuntimeError(f"Missing Metal entry {entry}")
-    if not function.functionConstantsDictionary():
+    constants = function.functionConstantsDictionary()
+    if constants is None or not len(constants):
         return function
     function, error = library.newFunctionWithName_constantValues_error_(
         entry, Metal.MTLFunctionConstantValues.new(), None
