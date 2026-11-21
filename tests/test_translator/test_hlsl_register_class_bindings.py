@@ -18,6 +18,7 @@ import pytest
 import crosstl
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.codegen.hip_codegen import HipCodeGen
+from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
 from crosstl.translator.codegen.rust_codegen import RustCodeGen
 from crosstl.translator.lexer import Lexer
@@ -69,6 +70,11 @@ def test_hlsl_b0_and_u0_translate(backend_name, tmp_path):
         outp[tid.x] = outp[tid.x] * scale;
     }
     """
+    if backend_name == "rust":
+        _expect_rust_constant_buffer_refusal(
+            lambda: _write_and_translate(tmp_path, hlsl, backend_name)
+        )
+        return
     code = _write_and_translate(tmp_path, hlsl, backend_name)
     assert "Params" in code
     assert "outp" in code
@@ -104,6 +110,11 @@ def test_hlsl_b0_t0_and_u1_translate(backend_name, tmp_path):
         outp[tid.x] = inp[tid.x] * scale;
     }
     """
+    if backend_name == "rust":
+        _expect_rust_constant_buffer_refusal(
+            lambda: _write_and_translate(tmp_path, hlsl, backend_name)
+        )
+        return
     code = _write_and_translate(tmp_path, hlsl, backend_name)
     assert "Params" in code
     assert "inp" in code
@@ -142,6 +153,11 @@ def test_crossgl_register_class_is_classified(backend_name, codegen_cls):
         }
     }
     """
+    if backend_name == "rust":
+        _expect_rust_constant_buffer_refusal(
+            lambda: _translate_crossgl(source, codegen_cls)
+        )
+        return
     code = _translate_crossgl(source, codegen_cls)
     assert "Params" in code
     assert "outp" in code
@@ -159,6 +175,10 @@ def test_hlsl_auto_resource_skips_register_t0(backend_name, tmp_path):
     }
     """
     code = _write_and_translate(tmp_path, hlsl, backend_name)
+    if backend_name == "rust":
+        assert _rust_entry_parameter_binding(code, "a") == 0
+        assert _rust_entry_parameter_binding(code, "b") == 1
+        return
     assert "name=a kind=buffer set=0 binding=0" in code
     assert "name=b kind=buffer set=0 binding=1" in code
 
@@ -180,6 +200,21 @@ def test_crossgl_binding_zero_conflicts_with_register_t0(backend_name, codegen_c
     """
     with pytest.raises(Exception, match="Conflicting .* resource binding"):
         _translate_crossgl(source, codegen_cls)
+
+
+def _rust_entry_parameter_binding(code, name):
+    """Return the rust-gpu ``binding = N`` on entry parameter ``name``, or None."""
+    match = re.search(
+        rf"binding\s*=\s*(\d+)\)\]\s*{re.escape(name)}\s*:",
+        code,
+    )
+    return int(match.group(1)) if match else None
+
+
+def _expect_rust_constant_buffer_refusal(action):
+    """Rust-gpu does not lower constant buffers to uniform blocks (#4895)."""
+    with pytest.raises(LoweringRefused, match="constant buffers are not lowered"):
+        action()
 
 
 def _rust_entry_descriptor_pairs(code):
@@ -207,12 +242,9 @@ def test_rust_shared_register_classes_emit_unique_descriptor_bindings(tmp_path):
     pairs = _rust_entry_descriptor_pairs(code)
     assert len(pairs) == 3
     assert len(pairs) == len(set(pairs))
-    assert "binding = 0))] inp:" in code
-    assert "binding = 1))] outp:" in code
-    assert "binding = 2))] extra:" in code
-    assert "name=inp kind=buffer set=0 binding=0" in code
-    assert "name=outp kind=buffer set=0 binding=1" in code
-    assert "name=extra kind=buffer set=0 binding=2" in code
+    assert _rust_entry_parameter_binding(code, "inp") == 0
+    assert _rust_entry_parameter_binding(code, "outp") == 1
+    assert _rust_entry_parameter_binding(code, "extra") == 2
 
 
 def test_rust_register_remap_follows_class_order_not_declaration_order(tmp_path):
@@ -228,8 +260,8 @@ def test_rust_register_remap_follows_class_order_not_declaration_order(tmp_path)
     code = _write_and_translate(tmp_path, hlsl, "rust")
     pairs = _rust_entry_descriptor_pairs(code)
     assert len(pairs) == len(set(pairs))
-    assert "binding = 0))] inp:" in code
-    assert "binding = 1))] outp:" in code
+    assert _rust_entry_parameter_binding(code, "inp") == 0
+    assert _rust_entry_parameter_binding(code, "outp") == 1
 
 
 def test_rust_four_register_program_emits_unique_descriptor_bindings(tmp_path):
@@ -248,7 +280,7 @@ def test_rust_four_register_program_emits_unique_descriptor_bindings(tmp_path):
     pairs = _rust_entry_descriptor_pairs(code)
     assert len(pairs) == 4
     assert len(pairs) == len(set(pairs))
-    assert "binding = 0))] inp:" in code
-    assert "binding = 1))] bias:" in code
-    assert "binding = 2))] outp:" in code
-    assert "binding = 3))] cnt:" in code
+    assert _rust_entry_parameter_binding(code, "inp") == 0
+    assert _rust_entry_parameter_binding(code, "bias") == 1
+    assert _rust_entry_parameter_binding(code, "outp") == 2
+    assert _rust_entry_parameter_binding(code, "cnt") == 3
