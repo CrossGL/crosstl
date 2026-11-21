@@ -15,6 +15,7 @@ from demos.integrations.mlx.portable_host import (
     runtime,
     verify_integer64,
 )
+from demos.integrations.mlx.tests.upstream_checkouts import upstream_fetches
 from tests.ci_helpers import assert_paths_covered
 
 
@@ -530,8 +531,9 @@ def test_integer64_ci_requires_all_three_native_targets():
     }
     steps = {step.get("name"): step for step in job["steps"]}
     prepare_step = steps["Prepare pinned MLX"]["run"]
-    assert prepare_step.index("config core.autocrlf false") < prepare_step.index(
-        "checkout --detach"
+    assert upstream_fetches(prepare_step) == [("mlx-upstream", "$MLX_COMMIT", ())]
+    assert prepare_step.index("fetch_upstream") < prepare_step.index(
+        "portable_host.prepare"
     )
     build = steps["Translate integer64 host packages"]["run"]
     assert "--family integer64" in build and "--target" in build
