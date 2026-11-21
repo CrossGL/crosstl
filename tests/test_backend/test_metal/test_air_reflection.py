@@ -81,7 +81,7 @@ def test_each_entry_point_has_its_kind_results_and_host_arguments():
 
 def test_argument_buffer_members_keep_their_offsets_types_and_indices():
     vertex, _fragment = reflection.interfaces(AIR)
-    (indirect,) = [a for a in vertex.arguments if a[0] == "air.indirect_buffer"]
+    (indirect,) = (a for a in vertex.arguments if a[0] == "air.indirect_buffer")
     layout = next(value for value in indirect if isinstance(value, tuple) and value)
     offsets = [member[0] for member in layout]
     assert offsets == [0, 8, 16]
@@ -245,3 +245,14 @@ def test_a_metal_round_trip_that_keeps_the_host_interface_is_supported(monkeypat
     runner, feature, checked = _round_trip(monkeypatch, "float r = sin(a0);", "")
     assert runner.run_input(feature, "metal").outcome == "supported"
     assert len(checked) == 1
+
+
+@pytest.mark.parametrize("compiled", [("", "!air.vertex = !{}"), (AIR, "")])
+def test_the_check_is_skipped_without_air_for_either_source(monkeypatch, compiled):
+    # Without the Metal compiler (or when it rejects a source) there is no metadata to compare, so the round trip
+    # keeps the verdict its validator gives it instead of failing.
+    from tools.coverage import validators
+
+    sources = dict(zip(("native", "translated"), compiled))
+    monkeypatch.setattr(validators, "air", lambda source: sources[source])
+    assert reflection.round_trip_difference("native", "translated") == ""
