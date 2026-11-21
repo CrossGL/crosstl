@@ -2430,7 +2430,6 @@ def test_scan_project_skips_known_unsupported_source_artifacts(
 
     expected_skipped = [
         {"path": "future.wesl", "reason": "unsupported-extension"},
-        {"path": "future.wgsl", "reason": "unsupported-extension"},
         {"path": "generated.webgl.glsl", "reason": "unsupported-extension"},
         {"path": "generated.webgl.glsl.json", "reason": "unsupported-extension"},
     ]
@@ -2443,12 +2442,12 @@ def test_scan_project_skips_known_unsupported_source_artifacts(
         ".webgl.glsl": 1,
         ".webgl.glsl.json": 1,
         ".wesl": 1,
-        ".wgsl": 1,
     }
     if explicit_include:
         expected_skipped_by_extension[".spv"] = 1
 
-    assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
+    # The WGSL front end reads .wgsl modules; WESL modules stay refused.
+    assert [unit.relative_path for unit in scan.units] == ["future.wgsl", "simple.cgl"]
     assert scan.skipped == expected_skipped
     assert payload["summary"]["skippedByReason"] == {
         "unsupported-extension": len(expected_skipped),
@@ -2465,10 +2464,11 @@ def test_scan_project_skips_known_unsupported_source_artifacts(
         assert (
             "Binary SPIR-V input files" in diagnostics_by_file["compiled.spv"].message
         )
-    assert diagnostics_by_file["future.wgsl"].code == "project.scan.unsupported-source"
-    assert "WGSL/WebGPU source files" in diagnostics_by_file["future.wgsl"].message
+    assert "future.wgsl" not in diagnostics_by_file
     assert diagnostics_by_file["future.wesl"].code == "project.scan.unsupported-source"
-    assert "WGSL/WebGPU source files" in diagnostics_by_file["future.wesl"].message
+    assert (
+        "provide the WGSL module (.wgsl)" in diagnostics_by_file["future.wesl"].message
+    )
     assert (
         diagnostics_by_file["generated.webgl.glsl"].code
         == "project.scan.unsupported-source"
@@ -2522,14 +2522,9 @@ def test_scan_project_reports_wgsl_unsupported_macro_forms_with_variant_context(
     }
 
     assert validation["success"] is True
-    assert payload["skipped"] == [
-        {"path": "shaders/native.wgsl", "reason": "unsupported-extension"}
-    ]
-    assert set(diagnostics_by_code) == {
-        "project.scan.empty",
-        "project.scan.unsupported-source",
-        "project.scan.unsupported-macro-form",
-    }
+    # The WGSL front end reads the module; its preprocessor lines are not WGSL and are reported.
+    assert payload["skipped"] == []
+    assert set(diagnostics_by_code) == {"project.scan.unsupported-macro-form"}
     macro_diagnostic = diagnostics_by_code["project.scan.unsupported-macro-form"]
     assert macro_diagnostic["sourceBackend"] == "wgsl"
     assert macro_diagnostic["variant"] == "debug"
@@ -2540,17 +2535,11 @@ def test_scan_project_reports_wgsl_unsupported_macro_forms_with_variant_context(
         macro_diagnostic["message"]
     )
     assert payload["summary"]["diagnosticsByCode"] == {
-        "project.scan.empty": 1,
         "project.scan.unsupported-macro-form": 1,
-        "project.scan.unsupported-source": 1,
     }
     assert payload["summary"]["diagnosticsBySourceBackend"] == {"wgsl": 1}
     assert payload["summary"]["diagnosticsByVariant"] == {"debug": 1}
-    assert payload["summary"]["missingCapabilityCounts"] == {
-        "macro.native": 1,
-        "repo.scan": 1,
-        "source.discovery": 1,
-    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"macro.native": 1}
 
 
 def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units(tmp_path):

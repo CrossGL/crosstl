@@ -205,14 +205,16 @@
     {
       "id": "wgsl",
       "name": "WebGPU / WGSL",
-      "source_kind": "target-only",
+      "source_kind": "native",
       "aliases": [
         "webgpu"
       ],
       "target_extension": ".wgsl",
       "translator_codegen": "crosstl/translator/codegen/wgsl_codegen.py",
+      "native_backend": "crosstl/backend/WGSL",
       "tests": [
-        "tests/test_translator/test_codegen/test_wgsl_codegen.py"
+        "tests/test_translator/test_codegen/test_wgsl_codegen.py",
+        "tests/test_backend/test_WGSL"
       ],
       "docs": [
         {
