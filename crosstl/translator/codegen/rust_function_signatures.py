@@ -603,6 +603,7 @@ class RustFunctionSignatureMixin:
                     operand_type,
                     f"std::ops::Neg<Output = {operand_type}>",
                 )
+                self.add_generic_constraint(constraints, operand_type, "Copy")
             return
 
         if isinstance(node, TernaryOpNode):
@@ -627,6 +628,7 @@ class RustFunctionSignatureMixin:
                 )
             self.add_builtin_function_call_constraints(node, generic_names, constraints)
             self.add_user_function_call_constraints(node, generic_names, constraints)
+            self.check_generic_concrete_function_call(node, generic_names)
             return
 
         if isinstance(node, MemberAccessNode):
@@ -698,6 +700,35 @@ class RustFunctionSignatureMixin:
                     caller_type,
                     self.substitute_generic_bound(bound, callee_param, caller_type),
                 )
+
+    def check_generic_concrete_function_call(self, call_node, generic_names):
+        """Refuse a generic function body that calls a concrete function with a generic argument.
+
+        Rust type-checks a generic body once for every type parameter, not once per call site,
+        so a call such as ``combine(x, x)`` where ``combine`` expects ``float`` cannot compile
+        unless the generic function is monomorphized for each concrete caller. Rust output
+        emits native generics, so it refuses the program instead of writing a generic that
+        rustc would reject.
+        """
+        if not generic_names:
+            return
+        func_name = self.function_call_name(getattr(call_node, "function", None))
+        if not isinstance(func_name, str) or not self.is_user_defined_function(
+            func_name
+        ):
+            return
+        callee = self.user_function_nodes.get(func_name)
+        if callee is None or getattr(callee, "generic_params", None):
+            return
+        for argument in getattr(call_node, "arguments", []) or []:
+            arg_type = self.expression_result_type(argument)
+            if arg_type in generic_names:
+                self.refuse_lowering(
+                    f"Rust generic function calls concrete function '{func_name}' "
+                    f"with generic argument of type '{arg_type}'; the body only "
+                    "type-checks for the concrete call sites"
+                )
+                return
 
     def function_call_name(self, function_expr):
         if isinstance(function_expr, IdentifierNode):
@@ -779,6 +810,8 @@ class RustFunctionSignatureMixin:
             bound = self.generic_operator_bound(operator, generic_type)
             if bound is not None:
                 self.add_generic_constraint(constraints, generic_type, bound)
+            if operator in {"+", "-", "*", "/", "%"}:
+                self.add_generic_constraint(constraints, generic_type, "Copy")
 
     def generic_operator_bound(self, operator, generic_name):
         if operator in {"==", "!="}:
