@@ -28,6 +28,7 @@ from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_invariant_position import metal_invariant_attribute_suffix
 from .metal_raster_order_groups import metal_raster_order_group_attribute
 from .metal_signed_builtins import metal_signed_builtin_parameter_name
+from .metal_stage_input_merge import nested_stage_input_attribute_indices
 from .metal_varyings import (
     is_metal_varying_builtin,
     metal_varying_attribute,
@@ -554,6 +555,14 @@ class MetalStageInterfaceMixin:
             ]
             if attribute_index is not None
         }
+        for parameter in parameters:
+            if parameter.get("nested_struct") is not None:
+                # A structure parameter merged into the stage input keeps its members' attributes.
+                used_attributes.update(
+                    nested_stage_input_attribute_indices(
+                        self, parameter["nested_struct"]
+                    )
+                )
         next_attribute = 0
         for parameter in parameters:
             attribute = parameter.get("attribute")
