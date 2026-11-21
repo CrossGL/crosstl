@@ -30,6 +30,7 @@ from ..ast import (
     WaveOpNode,
 )
 from .ast_walk import walk_ast_values
+from .rust_gpu_interface import COMPUTE_BUILTIN_INPUTS
 from .stage_utils import normalize_stage_name
 
 # Entry-point stages the generator writes for rust-gpu.
@@ -140,6 +141,10 @@ def refuse_outside_rust_gpu_subset(generator, ast) -> None:
             f"parameter: '{parameter}' of '{function}' points into a storage buffer; the rust-gpu output passes "
             "storage buffers only as entry-point slices"
         )
+    for name in _undeclared_builtin_names(ast):
+        generator.refuse_lowering(
+            f"built-in: '{name}' is used by name, and the rust-gpu output binds no entry-point parameter for it"
+        )
     if getattr(ast, "cbuffers", None):
         generator.refuse_lowering(
             "resource: constant buffers are not lowered to rust-gpu uniform blocks"
@@ -152,6 +157,40 @@ def refuse_outside_rust_gpu_subset(generator, ast) -> None:
                 generator.refuse_lowering(
                     f"{reason}: not lowered to rust-gpu's spirv_std"
                 )
+
+
+def _declared_names(ast) -> set[str]:
+    names = set()
+    for value in walk_ast_values(ast):
+        if isinstance(value, VariableNode) or hasattr(value, "param_type"):
+            name = getattr(value, "name", None)
+            if isinstance(name, str):
+                names.add(name)
+    return names
+
+
+def _undeclared_builtin_names(ast):
+    """The ``gl_`` built-ins ``ast`` still names that nothing declares, sorted.
+
+    The shared passes pass the vertex and fragment built-ins a stage reads or writes by name as entry-point
+    parameters and outputs (:mod:`~crosstl.translator.semantics.builtin_input_reads`,
+    :mod:`~crosstl.translator.semantics.builtin_output_writes`), and the compute ones become built-in parameters
+    (:func:`.rust_gpu_interface.builtin_input_infos`). Any other would be written as an undeclared Rust name.
+    """
+    declared = _declared_names(ast)
+    names = set()
+    for value in walk_ast_values(ast):
+        if not isinstance(value, IdentifierNode):
+            continue
+        name = value.name
+        if (
+            isinstance(name, str)
+            and name.startswith("gl_")
+            and name not in declared
+            and COMPUTE_BUILTIN_INPUTS.get(name) is None
+        ):
+            names.add(name)
+    return sorted(names)
 
 
 def _buffer_pointer_parameters(ast):

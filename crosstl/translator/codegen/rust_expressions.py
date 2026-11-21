@@ -138,7 +138,9 @@ class RustExpressionMixin:
                 if self.assignment_lhs_depth > 0:
                     return f"(*{array}.col_mut({index}))"
                 return f"{array}.col({index})"
-            array_vector = self.vector_type_info(self.expression_result_type(array_expr))
+            array_vector = self.vector_type_info(
+                self.expression_result_type(array_expr)
+            )
             if array_vector is not None and array_vector["component_type"] == "bool":
                 # glam's BVecN has no Index impl; test(i) reads one lane, and no place expression names one.
                 if self.assignment_lhs_depth > 0:
@@ -197,9 +199,10 @@ class RustExpressionMixin:
             if func_name == "lambda":
                 return self.generate_lambda_expression(args)
 
-            if self.is_user_defined_function(func_name):
+            user_function = self.rust_user_function_of_call(func_name)
+            if user_function is not None:
                 args_str = ", ".join(
-                    self.generate_user_function_call_args(func_name, args)
+                    self.generate_user_function_call_args(user_function, args)
                 )
                 return f"{self.rust_callable_name(callee)}({args_str})"
 
@@ -343,9 +346,20 @@ class RustExpressionMixin:
         else:
             return str(expr)
 
+    def rust_user_function_of_call(self, func_name):
+        """The program function a call names, also when it carries explicit type arguments (``pick<mat4>``)."""
+        if self.is_user_defined_function(func_name):
+            return func_name
+        if isinstance(func_name, str) and func_name.endswith(">"):
+            head = func_name.partition("<")[0]
+            if head and self.is_user_defined_function(head):
+                return head
+        return None
+
     def is_rust_program_callable(self, callee):
         """Whether ``callee`` names something the program defines: a local closure or a callable parameter, or an
-        associated function of a generic parameter or of a trait, struct or enum the program declares."""
+        associated function of a generic parameter or of a trait, struct or enum the program declares.
+        """
         if not isinstance(callee, str) or not callee:
             return False
         if callee in self.variable_types or callee in self.local_variable_names:
@@ -359,7 +373,8 @@ class RustExpressionMixin:
 
     def is_rust_gpu_constructor_call(self, func_name, args):
         """Whether ``func_name(args)`` builds a value: a scalar conversion, a glam vector or matrix, a struct or an
-        enum variant. Any other call that is neither a program function nor a rust-gpu built-in is refused."""
+        enum variant. Any other call that is neither a program function nor a rust-gpu built-in is refused.
+        """
         if not isinstance(func_name, str):
             return False
         if self.enum_variant_call_info(func_name) is not None:

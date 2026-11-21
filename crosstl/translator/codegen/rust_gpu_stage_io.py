@@ -121,7 +121,7 @@ _DEPTH_MODES = {
 }
 _DISTANCE_BUILTINS = frozenset({"clip_distance", "cull_distance"})
 _RESERVED_PREFIXES = ("gl_", "sv_")
-_FRAGMENT_TARGET = re.compile(r"(?:sv_target|gl_fragcolor|out_color)(\d*)")
+_FRAGMENT_TARGET = re.compile(r"(?:sv_target|gl_fragcolor|gl_fragdata|out_color)(\d*)")
 _FRAGMENT_COLOR = re.compile(r"color(\d*)")
 _LOCATION_SEMANTIC = re.compile(r"location\s*\(\s*(\d+)\s*\)")
 _FLAT = frozenset({"flat", "nointerpolation"})
@@ -149,7 +149,9 @@ class _Value:
     builtin: dict | None = None
     location: int | None = None
     path: str = ""  # ``.member`` of the CrossGL value, or empty for the whole value.
-    derived_name: str | None = None  # the parameter of the second built-in a derived value subtracts
+    derived_name: str | None = (
+        None  # the parameter of the second built-in a derived value subtracts
+    )
 
 
 @dataclass
@@ -204,7 +206,11 @@ class RustGpuStageIoMixin:
 
     def rust_gpu_stage_attribute(self, shader_type, interface):
         modes = ", ".join(interface.modes)
-        return f"#[spirv({shader_type}({modes}))]\n" if modes else f"#[spirv({shader_type})]\n"
+        return (
+            f"#[spirv({shader_type}({modes}))]\n"
+            if modes
+            else f"#[spirv({shader_type})]\n"
+        )
 
     # -- planning -------------------------------------------------------------------------------------------
 
@@ -243,7 +249,9 @@ class RustGpuStageIoMixin:
                     f"{semantic} is a {builtin_type}"
                 )
                 continue
-            interface.params.append(f"#[spirv({attribute})] {native}: {self.map_type(builtin_type)}")
+            interface.params.append(
+                f"#[spirv({attribute})] {native}: {self.map_type(builtin_type)}"
+            )
             interface.prologue.append(
                 f"{self.rust_stage_io_let(param.name)} {name}: {self.map_type(type_name)} = {value};"
             )
@@ -273,27 +281,39 @@ class RustGpuStageIoMixin:
         used = self.rust_stage_io_used_names(func, param_list)
         inputs = []
         for param in param_list:
-            qualifiers = {str(q).lower() for q in getattr(param, "qualifiers", None) or []}
+            qualifiers = {
+                str(q).lower() for q in getattr(param, "qualifiers", None) or []
+            }
             if qualifiers & {"out", "inout"}:
                 self.refuse_lowering(
                     f"stage: {shader_type} entry parameter '{param.name}' is an output parameter; rust-gpu output "
                     "is written for returned values only"
                 )
                 continue
-            inputs.append(self.rust_stage_io_param_values(param, shader_type, used, interface))
+            inputs.append(
+                self.rust_stage_io_param_values(param, shader_type, used, interface)
+            )
         flat_inputs = [value for values in inputs for value in values]
         self.assign_rust_stage_io_locations(flat_inputs, shader_type, _IN)
         for value in flat_inputs:
-            interface.params.append(self.rust_stage_io_parameter(value, shader_type, _IN, used))
+            interface.params.append(
+                self.rust_stage_io_parameter(value, shader_type, _IN, used)
+            )
         outputs = self.rust_stage_io_return_values(
             func, shader_type, return_type, return_semantic, used
         )
         self.assign_rust_stage_io_locations(outputs, shader_type, _OUT)
         for value in outputs:
-            interface.params.append(self.rust_stage_io_parameter(value, shader_type, _OUT, used))
-            interface.outputs.append((value.name, value.path, value.builtin, value.type_name))
+            interface.params.append(
+                self.rust_stage_io_parameter(value, shader_type, _OUT, used)
+            )
+            interface.outputs.append(
+                (value.name, value.path, value.builtin, value.type_name)
+            )
         if shader_type == "fragment":
-            interface.modes = self.rust_stage_io_fragment_modes(func, outputs, stage_node)
+            interface.modes = self.rust_stage_io_fragment_modes(
+                func, outputs, stage_node
+            )
         return interface
 
     def rust_stage_io_used_names(self, func, param_list):
@@ -322,12 +342,20 @@ class RustGpuStageIoMixin:
                     getattr(member, "element_type", getattr(member, "vtype", "float"))
                 )
                 size = self.format_array_size(getattr(member, "size", None))
-                members.append((member.name, f"{element}[{size}]" if size else f"{element}[]", member))
+                members.append(
+                    (
+                        member.name,
+                        f"{element}[{size}]" if size else f"{element}[]",
+                        member,
+                    )
+                )
                 continue
             member_type = getattr(member, "member_type", getattr(member, "vtype", None))
             if member_type is None:
                 continue
-            members.append((member.name, self.convert_type_node_to_string(member_type), member))
+            members.append(
+                (member.name, self.convert_type_node_to_string(member_type), member)
+            )
         return members
 
     def rust_stage_io_param_values(self, param, shader_type, used, interface):
@@ -363,7 +391,9 @@ class RustGpuStageIoMixin:
             )
             self.classify_rust_stage_io_input(value, shader_type, used)
             values.append(value)
-            fields.append(f"{self.rust_identifier(member_name)}: {self.rust_stage_io_input_value(value)}")
+            fields.append(
+                f"{self.rust_identifier(member_name)}: {self.rust_stage_io_input_value(value)}"
+            )
         struct_name = self.rust_type_identifier(str(type_name))
         interface.prologue.append(
             f"{self.rust_stage_io_let(param.name)} {name}: {struct_name} = {struct_name} {{ "
@@ -390,17 +420,31 @@ class RustGpuStageIoMixin:
     def rust_stage_io_let(self, source_name):
         return "let mut" if source_name in self.current_mutated_names else "let"
 
-    def rust_stage_io_return_values(self, func, shader_type, return_type, semantic, used):
+    def rust_stage_io_return_values(
+        self, func, shader_type, return_type, semantic, used
+    ):
         if self.map_type(return_type) == "()":
             return []
         members = self.rust_stage_io_members(return_type)
         if members is None:
+            if (
+                semantic is None
+                and shader_type == "vertex"
+                and str(return_type).strip() == "vec4"
+            ):
+                # GLSL, HLSL and Metal output write an unannotated vec4 vertex result to the position.
+                semantic = "gl_Position"
             if semantic is None and shader_type == "vertex":
                 self.refuse_lowering(
                     f"stage: the vertex entry point '{func.name}' returns a {return_type} without a semantic"
                 )
                 return []
-            value = _Value(self.rust_stage_io_unique("out_value", used), return_type, semantic, func)
+            value = _Value(
+                self.rust_stage_io_unique("out_value", used),
+                return_type,
+                semantic,
+                func,
+            )
             self.classify_rust_stage_io_value(value, shader_type, _OUT)
             return [value]
         values = []
@@ -428,8 +472,10 @@ class RustGpuStageIoMixin:
         """Set ``value.builtin``, or check that it is a user varying rust-gpu can declare."""
         key = _key(value.semantic)
         builtin = _BUILTINS[(shader_type, direction)].get(key)
-        if builtin is None and key.startswith(_RESERVED_PREFIXES) and not self.is_rust_stage_io_user_semantic(
-            key, shader_type, direction
+        if (
+            builtin is None
+            and key.startswith(_RESERVED_PREFIXES)
+            and not self.is_rust_stage_io_user_semantic(key, shader_type, direction)
         ):
             self.refuse_lowering(
                 f"stage: built-in {value.semantic} is not a rust-gpu {shader_type} "
@@ -452,7 +498,11 @@ class RustGpuStageIoMixin:
 
     def is_rust_stage_io_user_semantic(self, key, shader_type, direction):
         """Whether a reserved-looking semantic names a fragment colour attachment, a user varying."""
-        return shader_type == "fragment" and direction == _OUT and _FRAGMENT_TARGET.fullmatch(key) is not None
+        return (
+            shader_type == "fragment"
+            and direction == _OUT
+            and _FRAGMENT_TARGET.fullmatch(key) is not None
+        )
 
     def rust_stage_io_array_parts(self, type_name):
         text = str(type_name)
@@ -482,9 +532,13 @@ class RustGpuStageIoMixin:
     def check_rust_stage_io_varying(self, value, shader_type, direction):
         base, size = self.rust_stage_io_array_parts(value.type_name)
         shape = self.rust_stage_io_scalar(base)
-        what = f"{shader_type} {'input' if direction == _IN else 'output'} '{value.name}'"
+        what = (
+            f"{shader_type} {'input' if direction == _IN else 'output'} '{value.name}'"
+        )
         if size == 0:
-            self.refuse_lowering(f"stage: {what} is a runtime-sized array; rust-gpu interface arrays have a size")
+            self.refuse_lowering(
+                f"stage: {what} is a runtime-sized array; rust-gpu interface arrays have a size"
+            )
         elif shape is None or shape[0] not in _VARYING_SCALARS:
             self.refuse_lowering(
                 f"stage: {what} has type {value.type_name}; rust-gpu user varyings are 32- or 64-bit scalars "
@@ -504,7 +558,9 @@ class RustGpuStageIoMixin:
             base, size = self.rust_stage_io_array_parts(value.type_name)
             shape = self.rust_stage_io_scalar(base)
             span = (shape[2] if shape else 1) * max(size or 1, 1)
-            entries.append((self.rust_stage_io_fixed_location(value, shader_type, direction), span))
+            entries.append(
+                (self.rust_stage_io_fixed_location(value, shader_type, direction), span)
+            )
         for value, location in zip(varyings, allocate_locations(entries)):
             value.location = location
 
@@ -512,12 +568,16 @@ class RustGpuStageIoMixin:
         for attr in getattr(value.node, "attributes", None) or []:
             if str(getattr(attr, "name", "")).lower() != "location":
                 continue
-            arguments = getattr(attr, "arguments", None) or getattr(attr, "args", None) or []
+            arguments = (
+                getattr(attr, "arguments", None) or getattr(attr, "args", None) or []
+            )
             if arguments:
                 location = self.literal_int_value(arguments[0])
                 if location is None:
                     try:
-                        location = int(str(getattr(arguments[0], "value", arguments[0])), 0)
+                        location = int(
+                            str(getattr(arguments[0], "value", arguments[0])), 0
+                        )
                     except ValueError:
                         location = None
                 if location is not None:
@@ -550,12 +610,14 @@ class RustGpuStageIoMixin:
                 _base, size = self.rust_stage_io_array_parts(value.type_name)
                 rust_type = f"[f32; {size or 1}]"
             if value.derived_name:
-                derived_param = (
-                    f", #[spirv({value.builtin['derived']})] {value.derived_name}: {rust_type}"
-                )
+                derived_param = f", #[spirv({value.builtin['derived']})] {value.derived_name}: {rust_type}"
             if "invariant" in _attribute_names(value.node) and direction == _OUT:
                 attributes.append("invariant")
-            if shader_type == "fragment" and direction == _IN and value.builtin["types"] == _INDEX:
+            if (
+                shader_type == "fragment"
+                and direction == _IN
+                and value.builtin["types"] == _INDEX
+            ):
                 # VUID-StandaloneSpirv-Flat-04744 covers built-in integer inputs as well.
                 attributes.append("flat")
         else:
@@ -592,7 +654,11 @@ class RustGpuStageIoMixin:
             if attribute == "frag_depth":
                 modes.append("depth_replacing")
                 names = _attribute_names(value.node) | {_key(value.semantic)}
-                modes.extend(sorted({_DEPTH_MODES[name] for name in names if name in _DEPTH_MODES}))
+                modes.extend(
+                    sorted(
+                        {_DEPTH_MODES[name] for name in names if name in _DEPTH_MODES}
+                    )
+                )
             elif attribute == "frag_stencil_ref_ext":
                 modes.append("stencil_ref_replacing_ext")
         return modes
@@ -608,7 +674,11 @@ class RustGpuStageIoMixin:
         for name, path, builtin, _type_name in self.current_rust_stage_outputs:
             source = f"{temporary}{path}"
             _base, size = self.rust_stage_io_array_parts(_type_name)
-            if builtin is not None and builtin["attribute"] in _DISTANCE_BUILTINS and size is None:
+            if (
+                builtin is not None
+                and builtin["attribute"] in _DISTANCE_BUILTINS
+                and size is None
+            ):
                 lines.append(f"{indent_str}*{name} = [{source}];\n")
             else:
                 lines.append(f"{indent_str}*{name} = {source};\n")

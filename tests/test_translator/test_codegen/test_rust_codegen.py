@@ -11257,8 +11257,16 @@ def test_generated_rust_lazy_lock_statics_are_refused():
 """,
             r"resource: 'volumeMap' \(sampler3D\) is not lowered",
         ),
-        (
-            """
+    ]
+    for shader, refusal in shaders:
+        with pytest.raises(RustLoweringRefused, match=refusal):
+            generate_code(parse_code(tokenize_code(shader)))
+
+
+def test_vertex_uniform_matrix_binds_as_a_uniform_reference(tmp_path):
+    # The stage uniform is a #[spirv(uniform)] reference, not a LazyLock static, and the unannotated vec4 result is
+    # the position, as in the GLSL, HLSL and Metal output.
+    generated = generate_code(parse_code(tokenize_code("""
         shader MatrixUse {
             vertex {
                 uniform mat4 transform;
@@ -11268,13 +11276,19 @@ def test_generated_rust_lazy_lock_statics_are_refused():
                 }
             }
         }
-""",
-            "the vertex entry point 'main' returns a vec4 without a semantic",
-        ),
-    ]
-    for shader, refusal in shaders:
-        with pytest.raises(RustLoweringRefused, match=refusal):
-            generate_code(parse_code(tokenize_code(shader)))
+""")))
+    assert (
+        "#[spirv(uniform, descriptor_set = 0, binding = 0)] transform: &Mat4"
+        in generated
+    )
+    assert "#[spirv(position)] out_value: &mut Vec4" in generated
+    assert "LazyLock" not in generated
+    assert (
+        "let return_value = (transform * Vec4::new(position.x, position.y, position.z, 1.0));"
+        in generated
+    )
+    assert "*out_value = return_value;" in generated
+    assert_generated_rust_smoke_compiles(generated, tmp_path)
 
 
 def test_generated_rust_match_expressions_smoke_compile_with_rustc(tmp_path):
@@ -11410,11 +11424,18 @@ def test_generated_rust_duplicate_stage_main_names_smoke_compile_with_rustc(tmp_
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused,
-        match="stage: the vertex entry point 'main' returns a vec4 without a semantic",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated = generate_code(parse_code(tokenize_code(code)))
+    # Each stage's main gets a stage-qualified name, and each tail expression is the stage result.
+    assert (
+        "pub fn vertex_main(#[spirv(location = 0)] position: Vec3, #[spirv(position)] out_value: &mut Vec4)"
+        in generated
+    )
+    assert (
+        "pub fn fragment_main(#[spirv(location = 0)] color: Vec4, #[spirv(location = 0)] out_value: &mut Vec4)"
+        in generated
+    )
+    assert "let return_value = color;" in generated
+    assert_generated_rust_smoke_compiles(generated, tmp_path)
 
 
 def test_generated_rust_stage_attrs_are_host_compatible_for_rustc(tmp_path):
@@ -11440,11 +11461,16 @@ def test_generated_rust_stage_attrs_are_host_compatible_for_rustc(tmp_path):
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused,
-        match="stage: the vertex entry point 'main' returns a vec4 without a semantic",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert_rust_stage_attr(generated, "vertex")
+    assert_rust_stage_attr(generated, "fragment")
+    assert_rust_stage_attr(generated, "compute")
+    assert_no_bare_rust_stage_attrs(generated)
+    assert (
+        "#[spirv(global_invocation_id)] globalId_global_invocation_id: UVec3"
+        in generated
+    )
+    assert_generated_rust_smoke_compiles(generated, tmp_path)
 
 
 def test_initialized_vector_and_dynamic_array_statics_use_lazy_lock(tmp_path):
@@ -12423,11 +12449,48 @@ def test_resource_memory_qualifiers_map_rust_buffer_access_and_compile(tmp_path)
     }
     """
 
+    # Byte-address buffers and storage images have no rust-gpu binding yet; each is refused by name.
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'readOnlyValues' \(StructuredBuffer<int>\) is not lowered",
+        match=r"resource: 'rawInput' \(ByteAddressBuffer\) is not lowered",
     ):
         generate_code(parse_code(tokenize_code(code)))
+
+    structured = """
+    shader RustResourceMemoryQualifiers {
+        readonly RWStructuredBuffer<int> readOnlyValues;
+        writeonly StructuredBuffer<int> writeOnlyValues;
+        readwrite StructuredBuffer<float> readWriteValues;
+        RWStructuredBuffer<int> attrReadValues @access(read);
+        StructuredBuffer<int> attrWriteValues @access(write);
+
+        compute {
+            void main() {
+                uint index = gl_GlobalInvocationID.x;
+                int value = readOnlyValues[index];
+                int attrValue = attrReadValues[index];
+                writeOnlyValues[index] = value + attrValue;
+                readWriteValues[index] = float(value) + readWriteValues[index];
+                attrWriteValues[index] = attrValue;
+            }
+        }
+    }
+    """
+    generated = generate_code(parse_code(tokenize_code(structured)))
+    # An explicit memory qualifier or @access attribute decides the slice's mutability over the buffer type.
+    for name, slice_type in (
+        ("readOnlyValues", "&[i32]"),
+        ("writeOnlyValues", "&mut [i32]"),
+        ("readWriteValues", "&mut [f32]"),
+        ("attrReadValues", "&[i32]"),
+        ("attrWriteValues", "&mut [i32]"),
+    ):
+        assert f"{name}: {slice_type}" in generated, generated
+    assert (
+        "readWriteValues[index as usize] = ((value as f32) + readWriteValues[index as usize]);"
+        in generated
+    )
+    assert_generated_rust_smoke_compiles(generated, tmp_path)
 
 
 def test_glsl_buffer_array_declarations_map_to_rust_resources_and_compile(tmp_path):
@@ -16816,10 +16879,24 @@ def test_stage_local_structs_and_uniforms_infer_normalized_matrix_vector_types(
     }
     """
 
+    # std140 gives each mat3 column a 16-byte stride; glam's Mat3 packs its columns 12 bytes apart.
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"uniform 'normal_matrix': 'mat3 column 1' is at std140 offset 16, "
+        r"rust-gpu lays it out at offset 12",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
+
+    # With a mat4 normal matrix the uniforms bind, and the generic Vec3<T> structure is what rust-gpu refuses.
+    mat4_code = code.replace(
+        "uniform mat3 normal_matrix;", "uniform mat4 normal_matrix;"
+    ).replace(
+        "normal_matrix * input.normal", "(normal_matrix * vec4(input.normal, 0.0)).xyz"
+    )
     with pytest.raises(
         RustRefusal, match=r"spirv-std's glam has no vector of T \(Vec3<T>\)"
     ):
-        generate_code(parse_code(tokenize_code(code)))
+        generate_code(parse_code(tokenize_code(mat4_code)))
 
 
 def test_stage_local_uniform_statics_are_emitted_once(tmp_path):
@@ -18092,13 +18169,23 @@ def test_rust_structured_buffer_type_mapping():
         }
     }
     """
-    tokens = tokenize_code(code)
-    ast = parse_code(tokens)
+    # Unreferenced buffers are not bound, so only the structure is written.
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "pub struct Particle {" in generated
+    assert "pub fn main() -> ()" in generated
+
+    # std430 places each vec3 member on a 16-byte boundary, glam's 12-byte Vec3 does not: refused, not misread.
+    used = code.replace(
+        "void main() {\n            }",
+        "void main() {\n                outputParticles[0] = inputParticles[0];\n            }",
+    )
+    assert used != code
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'inputParticles' \(StructuredBuffer<Particle>\) is not lowered",
+        match=r"storage buffer 'inputParticles': 'Particle.velocity' is at std430 offset 16, "
+        r"rust-gpu lays it out at offset 12",
     ):
-        generate_code(ast)
+        generate_code(parse_code(tokenize_code(used)))
 
 
 def test_rust_struct_semantic_fragment_outputs():
@@ -20148,7 +20235,7 @@ def test_rust_generic_call_keeps_turbofish():
         generate_code(parse_code(tokenize_code(code)))
 
 
-def test_rust_turbofish_spells_type_arguments_as_rust_types():
+def test_rust_turbofish_spells_type_arguments_as_rust_types(tmp_path):
     """Explicit type arguments are written as Rust types, ``pick::<f32>`` (#3585).
 
     Rust has no type ``float``, so ``pick::<float>(2.0)`` does not compile.
@@ -20167,13 +20254,15 @@ def test_rust_turbofish_spells_type_arguments_as_rust_types():
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused, match="function: 'pick<float>' has no rust-gpu lowering"
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "pub fn pick<T: Copy>(x: T) -> T {" in generated
+    assert "outp[0] = pick::<f32>(2.0);" in generated
+    assert "let v: Vec3 = pick::<Vec3>(Vec3::new(1.0, 1.0, 1.0));" in generated
+    assert "pick::<float>" not in generated
+    assert_generated_rust_smoke_compiles(generated, tmp_path)
 
 
-def test_rust_turbofish_spells_nested_and_several_type_arguments():
+def test_rust_turbofish_spells_nested_and_several_type_arguments(tmp_path):
     """Each of several type arguments, nested ones included, is a Rust type (#3585).
 
     ``vec2<int>`` is ``Vec2<i32>``, as in the declarations; it used to be
@@ -20190,11 +20279,12 @@ def test_rust_turbofish_spells_nested_and_several_type_arguments():
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused,
-        match="function: 'second<vec2, ivec2>' has no rust-gpu lowering",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "pub fn second<T: Copy, U: Copy>(a: T, b: U) -> U {" in generated
+    assert "return second::<Vec2, IVec2>(x, m);" in generated
+    assert "return second::<f32, i32>(x, i);" in generated
+    assert "ivec2" not in generated.split("// Compute Shader")[0].replace("IVec2", "")
+    assert_generated_rust_smoke_compiles(generated, tmp_path)
 
 
 def test_shader_clock_builtins_are_refused_for_rust():

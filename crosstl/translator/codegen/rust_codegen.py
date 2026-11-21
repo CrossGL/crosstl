@@ -2,7 +2,14 @@
 
 import re
 
-from ..ast import ArrayNode, EnumNode, FunctionNode, StructNode
+from ..ast import (
+    ArrayNode,
+    EnumNode,
+    ExpressionStatementNode,
+    FunctionNode,
+    ReturnNode,
+    StructNode,
+)
 from ..explicit_specializations import explicit_specialization_refusals
 from ..refusals import RustRefusal
 from ..unhandled import UNHANDLED
@@ -22,6 +29,7 @@ from .rust_gpu_spec_constants import (
 from .rust_gpu_spelling import glam_spelling
 from .rust_gpu_stage_io import GRAPHICS_STAGES, RustGpuStageIoMixin
 from .rust_gpu_storage import PADDED_ELEMENTS, RustGpuPaddedSliceMixin
+from .rust_gpu_entry_buffers import normalize_rust_gpu_buffers
 from .rust_gpu_subset import refuse_host_only_rust, refuse_outside_rust_gpu_subset
 from .rust_exact_lookups import (
     rust_generic_template_reason,
@@ -56,6 +64,15 @@ from .rust_type_definitions import RustTypeDefinitionMixin
 from .rust_values import RustValueMixin
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import is_fragment_output_parameter, normalize_stage_name
+
+
+def tail_expression_as_return(statements):
+    """``statements`` with a trailing tail expression (``value`` without ``;``) written as ``return value;``."""
+    statements = list(statements or [])
+    if statements and isinstance(statements[-1], ExpressionStatementNode):
+        if getattr(statements[-1], "is_tail_expression", False):
+            statements[-1] = ReturnNode(statements[-1].expression)
+    return statements
 
 
 class RustCodeGen(
@@ -372,6 +389,7 @@ class RustCodeGen(
     def generate_program(self, ast):
         """Render the Rust program; refusals recorded on the way are raised by :meth:`generate`."""
         self.validate_supported_stage_types(ast)
+        normalize_rust_gpu_buffers(self, ast)
         explicit_specialization_refusals(self, ast, "Rust")
         self.rust_referenced_names = referenced_identifier_names(ast)
         self.struct_member_types = {}
@@ -993,12 +1011,13 @@ class RustCodeGen(
             )
         if hasattr(body, "statements"):
             body_statements = body.statements
-            for stmt in body.statements:
-                code += self.generate_statement(stmt, indent + 1)
         elif isinstance(body, list):
             body_statements = body
-            for stmt in body:
-                code += self.generate_statement(stmt, indent + 1)
+        if self.current_rust_stage_outputs:
+            # The entry's result goes to output parameters, so a trailing value expression is its return.
+            body_statements = tail_expression_as_return(body_statements)
+        for stmt in body_statements:
+            code += self.generate_statement(stmt, indent + 1)
         if self.current_rust_output_parameters and not self.statement_body_terminates(
             body_statements
         ):
@@ -1014,7 +1033,6 @@ class RustCodeGen(
                 )
             else:
                 code += "  " * (indent + 1) + f"return {output_name};\n"
-
 
         code += "  " * indent + "}\n\n"
         self.variable_types = saved_variable_types
@@ -1214,7 +1232,9 @@ class RustCodeGen(
             padded = PADDED_ELEMENTS.get(element)
             if padded is not None:
                 return f"[{padded[0]}]"
-            if self.normalize_scalar_type(element) == "bool" or element.startswith("bvec"):
+            if self.normalize_scalar_type(element) == "bool" or element.startswith(
+                "bvec"
+            ):
                 raise RustRefusal(
                     "resource: a storage buffer of bool has no SPIR-V layout; rust-gpu cannot bind one"
                 )

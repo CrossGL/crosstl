@@ -49,6 +49,8 @@ from .rust_gpu_interface import (
     storage_slice_parts,
     workgroup_type_name,
 )
+from .rust_gpu_layouts import STD140, STD430, layout_mismatch
+from .rust_gpu_storage import PADDED_ELEMENTS
 from .stage_utils import normalize_stage_name
 
 
@@ -234,6 +236,10 @@ class RustProgramAnalysisMixin:
         if slice_parts is not None:
             pointee, writable = slice_parts
             element = self.convert_type_node_to_string(pointee)
+            if element not in PADDED_ELEMENTS:
+                self.refuse_rust_gpu_layout(
+                    node, element, STD430, element_of_slice=True
+                )
             return {
                 "node": node,
                 "type_name": slice_type_name(element, writable),
@@ -246,8 +252,22 @@ class RustProgramAnalysisMixin:
                 "kind": WORKGROUP_KIND,
             }
         if is_uniform_value(node, self.type_name_string(type_name)):
+            self.refuse_rust_gpu_layout(
+                node, self.type_name_string(type_name), STD140, element_of_slice=False
+            )
             return {"node": node, "type_name": type_name, "kind": UNIFORM_VALUE_KIND}
         return None
+
+    def refuse_rust_gpu_layout(self, node, type_name, rule, element_of_slice):
+        """Refuse a buffer binding whose rust-gpu layout is not the CrossGL ``rule`` layout (:mod:`.rust_gpu_layouts`)."""
+        reason = layout_mismatch(self, type_name, rule, element_of_slice)
+        if reason is not None and getattr(node, "name", None) in getattr(
+            self, "rust_referenced_names", ()
+        ):
+            kind = "storage buffer" if element_of_slice else "uniform"
+            self.refuse_lowering(
+                f"resource: {kind} '{getattr(node, 'name', '?')}': {reason}"
+            )
 
     def can_promote_rust_entry_resource(self, node, type_name):
         """Return whether a resource can be an entry parameter, with its explicit or assigned binding.
@@ -328,10 +348,13 @@ class RustProgramAnalysisMixin:
 
     def is_rust_gpu_interface_declaration(self, node):
         """Whether ``node`` is a buffer pointer, uniform value, workgroup variable or specialization constant, which
-        only entry-point parameters declare: a module-level declaration of one would be a mutable or defaulted static."""
+        only entry-point parameters declare: a module-level declaration of one would be a mutable or defaulted static.
+        """
         if getattr(node, "name", None) is None:
             return False
-        if node.name in self.rust_spec_constant_infos and declares_specialization_id(node):
+        if node.name in self.rust_spec_constant_infos and declares_specialization_id(
+            node
+        ):
             return True
         type_name = self.rust_variable_source_type(node)
         if self.rust_gpu_interface_info(node, type_name) is None:

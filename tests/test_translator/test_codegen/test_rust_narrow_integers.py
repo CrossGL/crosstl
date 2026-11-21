@@ -97,9 +97,10 @@ def test_imported_byte_kernels_are_refused(tmp_path, source, name):
     path = tmp_path / name
     path.write_text(source, encoding="utf-8")
 
-    # The imported kernel takes its buffers as WGSL-style entry parameters (array<u8>), which the rust-gpu output
-    # does not bind as storage-buffer slices yet.
+    # The imported kernel's buffers bind as storage slices, but its plain-value parameter ``n`` has no rust-gpu
+    # binding yet (a compute entry point takes only built-in inputs), so it is refused by name.
     with pytest.raises(
-        RustLoweringRefused, match=r"dynamic array \(Vec\) needs an allocator"
+        RustLoweringRefused,
+        match=r"compute entry parameter 'n' is not a compute built-in input",
     ):
         crosstl.translate(str(path), backend="rust", format_output=False)

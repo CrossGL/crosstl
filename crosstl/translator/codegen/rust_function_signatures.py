@@ -26,6 +26,7 @@ from ..ast import (
     WhileNode,
 )
 from ..refusals import RustRefusal
+from ..host_workgroup_size import function_entry_execution_config
 from .host_workgroup_size_ids import is_host_sized_workgroup
 from .specialized_workgroup_size import require_fixed_workgroup_size
 from .stage_utils import compute_local_size
@@ -52,6 +53,9 @@ class RustFunctionSignatureMixin:
         numthreads = self.rust_compute_stage_numthreads(func)
         if numthreads is None:
             config = getattr(stage_node, "execution_config", None)
+            if stage_node is None:
+                # A top-level ``@ compute fn``: the parser records its @workgroup_size or host sizing.
+                config = function_entry_execution_config(func) or None
             require_fixed_workgroup_size(
                 config, "Rust", "rust-gpu takes the workgroup size as literals"
             )

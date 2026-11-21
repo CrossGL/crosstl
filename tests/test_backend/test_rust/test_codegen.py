@@ -20,6 +20,7 @@ from crosstl.backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
 from crosstl.backend.Rust.RustLexer import RustLexer
 from crosstl.backend.Rust.RustParser import RustParser
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -640,8 +641,13 @@ def test_translate_api_accepts_rust_source_preserves_stage_entry(tmp_path):
     assert "vec4(vertex_.x, vertex_.y, vertex_.z, 1.0)" in cgl_result
 
     rust_result = crosstl.translate(str(rust_file), backend="rust", format_output=False)
-    assert "pub fn vertex_main(vertex_: Vec3<f32>) -> Vec4<f32>" in rust_result
-    assert "Vec4::<f32>::new(vertex_.x, vertex_.y, vertex_.z, 1.0)" in rust_result
+    # An unannotated vec4 vertex result is the position, as in GLSL, HLSL and Metal output.
+    assert "#[spirv(vertex)]" in rust_result
+    assert (
+        "pub fn vertex_main(#[spirv(location = 0)] vertex_: Vec3, "
+        "#[spirv(position)] out_value: &mut Vec4) -> ()" in rust_result
+    )
+    assert "Vec4::new(vertex_.x, vertex_.y, vertex_.z, 1.0)" in rust_result
     assert "pub fn main() -> ()" not in rust_result
 
 
@@ -2599,21 +2605,35 @@ def test_rust_shader_stage_local_aliases_shadow_parameter_after_initializer(tmp_
     assert "vec4 fragment_ = vertex_1;" in cgl_result
     assert "return fragment_;" in cgl_result
 
-    rust_result = crosstl.translate(str(rust_file), backend="rust", format_output=False)
+    # Vulkan forbids Boolean interface variables, so rust-gpu output refuses the bool vertex input by name.
+    with pytest.raises(
+        RustLoweringRefused, match=r"vertex input 'condition' has type bool"
+    ):
+        crosstl.translate(str(rust_file), backend="rust", format_output=False)
+
+    float_file = tmp_path / "float_shader.rs"
+    float_file.write_text(
+        code.replace("condition: bool", "condition: f32").replace(
+            "if condition {", "if condition > 0.0 {"
+        ),
+        encoding="utf-8",
+    )
+    rust_result = crosstl.translate(
+        str(float_file), backend="rust", format_output=False
+    )
     assert (
-        "pub fn vertex_main(vertex_: Vec3<f32>, condition: bool) -> Vec4<f32>"
+        "pub fn vertex_main(#[spirv(location = 0)] vertex_: Vec3, "
+        "#[spirv(location = 1)] condition: f32, "
+        "#[spirv(position)] out_value: &mut Vec4) -> ()" in rust_result
+    )
+    assert (
+        "let vertex_1: Vec4 = Vec4::new(vertex_.x, vertex_.y, vertex_.z, 1.0);"
         in rust_result
     )
-    assert (
-        "let vertex_1: Vec4<f32> = "
-        "Vec4::<f32>::new(vertex_.x, vertex_.y, vertex_.z, 1.0);" in rust_result
-    )
-    assert (
-        "let vertex_2: Vec4<f32> = "
-        "Vec4::<f32>::new(0.0, 0.0, 0.0, 1.0);" in rust_result
-    )
-    assert "let fragment_: Vec4<f32> = vertex_1;" in rust_result
-    assert "return fragment_;" in rust_result
+    assert "let vertex_2: Vec4 = Vec4::new(0.0, 0.0, 0.0, 1.0);" in rust_result
+    assert "let fragment_: Vec4 = vertex_1;" in rust_result
+    assert "let return_value = fragment_;" in rust_result
+    assert "*out_value = return_value;" in rust_result
 
 
 def test_fragment_shader_conversion():

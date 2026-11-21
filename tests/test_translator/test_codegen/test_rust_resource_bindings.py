@@ -3,7 +3,8 @@
 The generator wrote every resource except a directly used, explicitly bound texture or sampler as a module-level
 ``static`` with ``Default::default()`` (or an empty ``Vec``) under a "compile-only placeholder" comment, so every
 read returned a default value instead of the bound data. The rust-gpu output binds storage buffers as entry-point
-slices; textures, images, samplers and HLSL buffer objects are not lowered yet, so each is refused by name.
+slices, structured buffers included; textures, images, samplers and byte-address buffers are not lowered yet, so
+each is refused by name.
 """
 
 import pytest
@@ -56,10 +57,34 @@ def test_stage_local_buffer_object_and_image_are_refused_by_name():
         }
     }
     """)
-    assert refused.value.reasons[:2] == (
-        "resource: 'values' (RWStructuredBuffer<int>) is not lowered to a rust-gpu resource binding",
+    # The structured buffer binds as a storage slice; the image and the plain-value parameters are refused.
+    assert refused.value.reasons == (
         "resource: 'target' (image2D) is not lowered to a rust-gpu resource binding",
+        "stage: compute entry parameter 'index' is not a compute built-in input",
+        "stage: compute entry parameter 'pixel' is not a compute built-in input",
+        "function: 'imageStore' has no rust-gpu lowering for these operands",
     )
+
+
+def test_stage_local_structured_buffer_binds_as_a_storage_slice():
+    code = rust("""
+    shader StageLocal {
+        compute {
+            RWStructuredBuffer<int> values @binding(1);
+            void main() {
+                uint index = gl_GlobalInvocationID.x;
+                int value = buffer_load(values, index);
+                buffer_store(values, index, value + 1);
+            }
+        }
+    }
+    """)
+    assert (
+        "#[spirv(storage_buffer, descriptor_set = 0, binding = 1)] values: &mut [i32]"
+        in code
+    )
+    assert "let value: i32 = values[index as usize];" in code
+    assert "values[index as usize] = (value + 1);" in code
 
 
 def test_texture_arrays_are_refused_by_name():
