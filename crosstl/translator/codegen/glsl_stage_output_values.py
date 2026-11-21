@@ -15,11 +15,13 @@ constructor of the output structure.
 from __future__ import annotations
 
 from ..ast import AssignmentNode, IdentifierNode
+from ..refusals import OpenGLRefusal
 from .glsl_stage_builtin_members import note_builtin_store
 
 __all__ = [
     "builtin_output_value",
     "flattened_stage_output_assignment",
+    "refuse_unwritten_entry_return",
     "render_flattened_stage_output_store",
     "render_stage_struct_value_return",
 ]
@@ -160,6 +162,26 @@ def render_stage_struct_value_return(codegen, value, indent):
         )
         code += f"{indent_str}{output_name} = {stored};\n"
     return code
+
+
+def refuse_unwritten_entry_return(codegen, value):
+    """Refuse a value a stage entry returns when no GLSL output receives it.
+
+    A GLSL entry is ``void main()``, so a value the CrossGL entry returns reaches the pipeline only through the
+    stage outputs its return type maps to. When none does (a ray intersection result whose members say whether
+    and where the ray hit, or an output structure with a member that has no GLSL output), the value would be
+    evaluated as a statement and discarded, and the shader would compute something other than the source.
+    """
+    return_type = codegen.current_stage_return_type
+    if not return_type or return_type == "void":
+        return
+    stage = codegen.current_stage_entry_type or "stage"
+    location = getattr(value, "source_location", None)
+    where = f" at {location}" if location is not None else ""
+    raise OpenGLRefusal(
+        f"OpenGL {stage} entry point returns '{return_type}'{where}, and GLSL has no "
+        f"stage output that receives the value"
+    )
 
 
 def _reads_flattened_local(codegen, expression):
