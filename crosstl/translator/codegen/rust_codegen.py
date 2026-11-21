@@ -40,6 +40,7 @@ from .rust_gpu_spec_constants import (
 from .rust_gpu_spelling import glam_spelling
 from .rust_gpu_stage_io import GRAPHICS_STAGES, RustGpuStageIoMixin
 from .rust_gpu_storage import PADDED_ELEMENTS, RustGpuPaddedSliceMixin
+from .rust_gpu_subgroups import rewrite_rust_gpu_lane_queries
 from .rust_gpu_subset import refuse_host_only_rust, refuse_outside_rust_gpu_subset
 from .rust_match_lowering import RustMatchMixin
 from .rust_memory_atomics import rust_memory_atomic_result_type
@@ -392,6 +393,8 @@ class RustCodeGen(
         refuse_cooperative_matrices(ast, label="Rust", target="rust")
         refuse_precise_evaluation(ast, label="Rust", target="rust")
         ast = canonicalize_separate_textures(ast)
+        rewrite_rust_gpu_lane_queries(ast)
+        self.rust_current_program = ast
         return glam_spelling(self.refusals.run(self.generate_program, ast))
 
     def generate_program(self, ast):
