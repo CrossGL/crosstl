@@ -18,7 +18,8 @@ Order and timing:
 * A value held by one node under two attribute names (an alias such as ``FunctionCallNode.args`` of
   ``arguments``) is followed once, under the first name. A value reached along several other paths is produced once
   per path. A value that contains itself has no finite walk; the recursive form ran out of frames on it, and this
-  walk raises ``RecursionError`` as soon as a value recurs inside itself. Nesting deeper than the interpreter's recursion limit is walked normally.
+  walk raises ``RecursionError`` as soon as a value recurs inside itself. Nesting deeper than the interpreter's
+  recursion limit is walked normally.
 """
 
 from __future__ import annotations
