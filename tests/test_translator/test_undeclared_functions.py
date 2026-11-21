@@ -18,6 +18,7 @@ from crosstl.translator.semantics.builtin_function_names import (
     GLSL_EXTENSION_FUNCTION_NAMES,
     GLSL_FUNCTION_NAMES,
     HLSL_FUNCTION_NAMES,
+    HLSL_PREVIEW_FUNCTION_NAMES,
     METAL_FUNCTION_NAMES,
 )
 from crosstl.translator.semantics.declared_functions import (
@@ -236,7 +237,8 @@ INVENTORIES = Path(__file__).resolve().parents[1] / "conformance" / "inventory" 
     ("language", "group"),
     [
         ("glsl", GLSL_FUNCTION_NAMES),
-        ("hlsl", HLSL_FUNCTION_NAMES),
+        # The DXC 1.9 inventory predates the Shader Model 6.10 preview intrinsics.
+        ("hlsl", HLSL_FUNCTION_NAMES - HLSL_PREVIEW_FUNCTION_NAMES),
         ("metal", METAL_FUNCTION_NAMES),
     ],
 )
