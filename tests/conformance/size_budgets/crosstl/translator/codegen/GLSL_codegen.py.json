@@ -1,9 +1,6 @@
 {
  "functions": {
   "GLSLCodeGen.__init__": 770,
-  "GLSLCodeGen._generate_program_attempt": 1805,
-  "GLSLCodeGen.annotate_glsl_control_flow_intervals": 1660,
-  "GLSLCodeGen.annotate_glsl_control_flow_intervals.<locals>.visit": 682,
   "GLSLCodeGen.collect_private_pointer_array_size_hints": 420,
   "GLSLCodeGen.ensure_glsl_resource_function_specialization": 327,
   "GLSLCodeGen.expression_result_type": 435,
@@ -17,9 +14,7 @@
   "GLSLCodeGen.glsl_collect_private_pointer_view_calls.<locals>.visit": 385,
   "GLSLCodeGen.glsl_resource_function_specialization_key": 532,
   "GLSLCodeGen.glsl_storage_to_workgroup_byte_array_copy_contract": 317,
-  "GLSLCodeGen.glsl_workgroup_pointer_direct_access_intervals": 1155,
-  "GLSLCodeGen.glsl_workgroup_pointer_direct_access_intervals.<locals>.visit": 837,
-  "GLSLCodeGen.validate_glsl_software_subgroup_helpers": 516
+  "GLSLCodeGen.validate_glsl_software_subgroup_helpers": 501
  },
- "module": 13349
+ "module": 9062
 }

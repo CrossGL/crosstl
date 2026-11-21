@@ -12,7 +12,7 @@ import subprocess
 import pytest
 
 from crosstl import translate
-from crosstl.translator.codegen import directx_codegen
+from crosstl.translator.codegen import directx_program_preparation
 from tests.test_translator.test_codegen.test_directx_codegen import (
     assert_directx_native_16_bit_compute_validates_if_available,
 )
@@ -291,7 +291,9 @@ def test_uses_without_a_bit_rewrite_keep_every_group_typed(tmp_path, case, monke
     generated = _hlsl(tmp_path, source)
     assert _arrays(generated) == {"k_tile": "float16_t", "staged": "float16_t"}
     monkeypatch.setattr(
-        directx_codegen, "lower_half_private_storage", lambda ast, map_type: ast
+        directx_program_preparation,
+        "lower_half_private_storage",
+        lambda ast, map_type: ast,
     )
     assert generated == _hlsl(tmp_path, source)
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
@@ -343,7 +345,9 @@ def test_private_copies_into_member_pointer_storage_stay_typed(tmp_path, monkeyp
     assert "uint16_t staged[" not in generated
     assert "float16_t staged[4];" in generated
     monkeypatch.setattr(
-        directx_codegen, "lower_half_private_storage", lambda ast, map_type: ast
+        directx_program_preparation,
+        "lower_half_private_storage",
+        lambda ast, map_type: ast,
     )
     assert generated == _hlsl(tmp_path, MEMBER_POINTER_LOADER)
     assert_directx_native_16_bit_compute_validates_if_available(generated, tmp_path)
@@ -356,7 +360,9 @@ def test_typed_groups_are_emitted_as_without_the_lowering(tmp_path, monkeypatch)
     )
     lowered = _hlsl(tmp_path, source)
     monkeypatch.setattr(
-        directx_codegen, "lower_half_private_storage", lambda ast, map_type: ast
+        directx_program_preparation,
+        "lower_half_private_storage",
+        lambda ast, map_type: ast,
     )
     assert lowered == _hlsl(tmp_path, source)
 
@@ -366,6 +372,8 @@ def test_other_element_types_are_unchanged(tmp_path, scalar, monkeypatch):
     source = TILE_COPY.replace("half(NAN)", f"{scalar}(0)").replace("half", scalar)
     lowered = _hlsl(tmp_path, source)
     monkeypatch.setattr(
-        directx_codegen, "lower_half_private_storage", lambda ast, map_type: ast
+        directx_program_preparation,
+        "lower_half_private_storage",
+        lambda ast, map_type: ast,
     )
     assert lowered == _hlsl(tmp_path, source)

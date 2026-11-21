@@ -1,17 +1,13 @@
 {
  "functions": {
   "HLSLCodeGen.__init__": 644,
-  "HLSLCodeGen._generate_program_attempt": 1676,
   "HLSLCodeGen.collect_private_pointer_array_size_hints": 356,
-  "HLSLCodeGen.expression_result_type": 839,
-  "HLSLCodeGen.generate_function": 1213,
   "HLSLCodeGen.generate_statement": 577,
   "HLSLCodeGen.generate_texture_call": 329,
   "HLSLCodeGen.hlsl_analyze_private_pointer_function": 503,
   "HLSLCodeGen.hlsl_analyze_workgroup_pointer_function": 518,
   "HLSLCodeGen.hlsl_analyze_workgroup_pointer_function.<locals>.visit": 418,
-  "HLSLCodeGen.prepare_hlsl_software_subgroup_contract": 681,
   "HLSLCodeGen.validate_hlsl_software_subgroup_control_flow": 606
  },
- "module": 9030
+ "module": 5240
 }
