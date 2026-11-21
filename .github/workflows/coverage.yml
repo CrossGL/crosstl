@@ -22,6 +22,7 @@ name: Coverage
 # the native probes of every source language straight to its own languages, as the published rows define the cells.
 # The publish job writes the matrix to coverage.json (its features in features/pairs/<source>-to-<target>.json), to
 # COVERAGE.md and to one pairs/<source>-to-<target>.md page of gaps per cell; a push to main keeps the last matrix.
+# It also writes one languages/<language>.md page per language, linked from the README (tools/coverage/docs.py).
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
 # only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the Metal,
@@ -750,7 +751,7 @@ jobs:
           git init --quiet --initial-branch=coverage
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add coverage.json features coverage.svg COVERAGE.md history.csv trend.svg
+          git add coverage.json features coverage.svg COVERAGE.md history.csv trend.svg languages
           if [ -d pairs ]; then git add pairs; fi
           git commit --quiet -m "Coverage for ${GITHUB_SHA::12}"
           # The branch is one commit by design, so each publication replaces it.

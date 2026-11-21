@@ -93,7 +93,9 @@ name whose extension names no language CrossTL writes is refused. `python -m cro
 | Mojo | `mojo` | measured | measured |
 | OpenCL C | | not offered | measured |
 
-A measured direction has a row in [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md).
+A measured direction has a row in [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md), and
+each language has [a page of its own](https://github.com/CrossGL/crosstl/blob/coverage/languages/index.md) with its
+scores by category, the language pairs it translates to and from, and every gap.
 CrossTL has no OpenCL C generator, so the OpenCL C input row checks the HLSL that CrossTL writes from each OpenCL C
 probe. The language names `glsl`, `hlsl`, `msl` and `spirv` work as backend names too, and `cgl` writes the CrossGL a
 native source imports to. CrossGL has its own coverage row, CrossGL IR, which measures how many of the features of
