@@ -21,6 +21,7 @@ import pytest
 import crosstl
 from crosstl.backend.SPIRV.ray_tracing_import import SpirvInstructionUnsupportedError
 from crosstl.backend.SPIRV.type_declaration_names import declarable_struct_name
+from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
 
 POINTER_ARITHMETIC = """; SPIR-V
                OpCapability VariablePointersStorageBuffer
@@ -174,3 +175,54 @@ def test_array_sample_mask_output_compiles_to_spirv(tmp_path):
     assert "BuiltIn SampleMask" in assembly
     assert re.search(r"OpTypeArray %int %(int|uint)_1\b", assembly)
     _validate(tmp_path, assembly)
+
+
+POINTER_LOCALS = """shader Probe {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* fin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            BODY
+        }
+    }
+}
+"""
+
+
+def _emit(tmp_path, body):
+    source = POINTER_LOCALS.replace("BODY", body)
+    return crosstl.translate(_write(tmp_path, source, "probe.cgl"), backend="vulkan")
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        # Subtracting from a pointer, and re-binding a pointer to a moved copy of itself.
+        "float* p = outp + i; *p = fin[i]; float* q = p - i;"
+        " q[i] = *(q + i) * 4.0; q = q + i; *q += 1.0;",
+        # Re-binding to another pointer into the same buffer.
+        "float* p = outp + i; float* q = outp; q = p; *q = 1.0;",
+        # Moving a pointer back inside a loop.
+        "float* q = outp + 4u; for (uint k = 0u; k < 2u; k++) { q = q - 1u; *q = 2.0; }",
+    ],
+)
+def test_storage_pointer_locals_move_and_rebind(tmp_path, body):
+    _validate(tmp_path, _emit(tmp_path, body))
+
+
+def test_rebinding_moves_only_the_offset_cell(tmp_path):
+    assembly = _emit(
+        tmp_path,
+        "float* q = outp + 4u; for (uint k = 0u; k < 2u; k++) { q = q - 1u; *q = 2.0; }",
+    )
+    # Inside the loop q's offset is decremented and the store goes through outp at that offset.
+    loop = assembly.split("OpLoopMerge", 1)[1]
+    assert re.search(r"OpISub %uint %\w+ %uint_1", loop)
+    assert re.search(r"OpAccessChain %_ptr_\w+_float %outp %int_0 %\w+", loop)
+
+
+def test_rebinding_a_pointer_into_another_buffer_is_refused(tmp_path):
+    with pytest.raises(SpirvLoweringRefused, match="into another resource"):
+        _emit(tmp_path, "float* q = outp; q = fin; *q = 1.0;")

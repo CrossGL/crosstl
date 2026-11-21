@@ -7,3 +7,7 @@ array's, is refused. A struct whose `OpName` is a built-in type name, such as
 the `RWStructuredBuffer` block slangc writes, is declared as
 `RWStructuredBuffer_` instead of shadowing the built-in type. SPIR-V output
 accepts the GLSL declaration `int gl_SampleMask[1]` as a fragment output.
+SPIR-V output also lowers `p - n` on a buffer pointer and re-binds a pointer
+local with `q = p`, `q = q + n` or `q = q - n` when the new value points into
+the same buffer, by updating the pointer's element offset; a pointer re-bound
+to another buffer is refused.
