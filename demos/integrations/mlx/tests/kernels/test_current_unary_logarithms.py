@@ -49,6 +49,19 @@ REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_UNARY_LOGARITHMS"
 OPERATIONS = ("Log", "Log2", "Log10")
 PROFILE = {"binary32_atan2_profile": "flush-subnormals"}
 LOG_PROFILE = {"binary32_log_profile": "flush-subnormals"}
+LOG2_PROFILE = {
+    "binary32_log2_operand_profile": "flush-subnormals",
+    "binary32_log2_accuracy_profile": "portable-finite",
+}
+# The real entries' profiles by operation. The Metal round trip keeps
+# precise::log2 and precise::log10, which already match the source word for
+# word; only the portable host selects the profiled base-two helper for them.
+REAL_PROFILES = {"Log": LOG_PROFILE, "Log2": {}, "Log10": {}}
+PROVENANCE = {
+    "binary32_log_profile": "binary32LogProfile",
+    "binary32_log2_operand_profile": "binary32Log2OperandProfile",
+    "binary32_log2_accuracy_profile": "binary32Log2AccuracyProfile",
+}
 # The pinned logarithm tests use numpy.allclose without overriding these.
 RTOL, ATOL = 1e-5, 1e-8
 
@@ -208,6 +221,8 @@ def test_complex_logarithm_contracts_record_entry_policy(path):
     assert unary.COMPLEX_ATAN2_SOURCE_OPTIONS == PROFILE
     assert contract["sourceOptionsByOperator"]["Log"] == LOG_PROFILE
     assert unary.LOG_SOURCE_OPTIONS == LOG_PROFILE
+    for operation in ("Log2", "Log10"):
+        assert operation not in contract["sourceOptionsByOperator"]
 
 
 @pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
@@ -237,6 +252,7 @@ def test_complex_logarithm_policy_is_scoped_to_metal_complex_entries(
     assert {key: options[key] for key in LOG_PROFILE if key in options} == (
         LOG_PROFILE if target == "metal" and operation == "Log" else {}
     )
+    assert not [key for key in LOG2_PROFILE if key in options]
 
 
 def test_ci_requires_complex_logarithm_source_comparison():
@@ -640,13 +656,15 @@ def test_real_logarithm_inputs_cover_storage_domain(dtype):
         assert words == list(range(65536))
 
 
+@pytest.mark.parametrize("operation", OPERATIONS)
 @pytest.mark.parametrize("dtype", ("float16", "bfloat16", "float32"))
 def test_current_real_logarithm_native_comparison(
-    logarithm_source, logarithm_reference, tmp_path, dtype
+    logarithm_source, logarithm_reference, tmp_path, dtype, operation
 ):
     root = logarithm_source
     runner, original = logarithm_reference
-    entry = f"v_Log{dtype}{dtype}"
+    entry = f"v_{operation}{dtype}{dtype}"
+    profile = REAL_PROFILES[operation]
     workload = next(
         row for row in unary.UNARY_METAL_WORKLOADS if row.entry_point == entry
     )
@@ -678,7 +696,10 @@ def test_current_real_logarithm_native_comparison(
             assert artifact["templateMaterialization"][
                 "specializations"
             ] == unary._expected_unary_materializations(workload)
-            assert artifact["provenance"]["binary32LogProfile"] == "flush-subnormals"
+            for option, value in profile.items():
+                assert artifact["provenance"][PROVENANCE[option]] == value
+            for option in set(PROVENANCE) - set(profile):
+                assert PROVENANCE[option] not in artifact["provenance"]
             assert "binary32Atan2Profile" not in artifact["provenance"]
             source = root / artifact["path"]
             assert (
@@ -733,7 +754,7 @@ def test_current_real_logarithm_native_comparison(
                         "outputsPerInitialization": len(values),
                         "initializations": 2,
                         "guardWordsPerPath": len(guards) * 2,
-                        "sourceOptions": LOG_PROFILE,
+                        "sourceOptions": profile,
                         "comparison": (
                             "source-tolerance"
                             if dtype == "float32"

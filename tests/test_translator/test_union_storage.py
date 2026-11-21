@@ -164,6 +164,12 @@ CASES = {
         ],
         [0x3C003800, 8, 2],
     ),
+    # Quiet NaN lanes keep their sign and payload when copied through half values.
+    "half_lane_nan_payloads": (
+        "Lanes value; value.word = 0x7E01FE55u; Lanes copy; copy.word = 0u; copy.floats[0] = value.floats[1]; copy.floats[1] = value.floats[0];",
+        ["copy.word", "uint(copy.halves[1])"],
+        [0xFE557E01, 0xFE55],
+    ),
     "bfloat_lanes": (
         "BfLanes value; value.word = 0x3F80C000u; uint count = 0u; value.floats[next_index(count)] = bfloat(0.5f); uint before = uint(float(value.floats[count]) * 4.0f); value.floats[count] = value.floats[0] + bfloat(0.25f);",
         ["value.word", "before", "count"],

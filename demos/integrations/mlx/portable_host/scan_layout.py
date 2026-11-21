@@ -12,6 +12,9 @@ TYPES = {
     "uint32": ctypes.c_uint32,
     "int64": ctypes.c_int64,
     "uint64": ctypes.c_uint64,
+    # One 64-bit storage word: the real part's float32 bits low, the imaginary
+    # part's high (element_storage).
+    "complex64": ctypes.c_uint64,
 }
 ENTRY_PREFIXES = ("contig_scan_", "strided_scan_")
 SIGNATURES = {
@@ -29,7 +32,8 @@ SIGNATURES = {
     for destination in (
         ("int32", "uint32") if source == "bool_" and operation == "sum" else (source,)
     )
-    if operation != "logaddexp" or source in {"float16", "bfloat16", "float32"}
+    if operation != "logaddexp"
+    or source in {"float16", "bfloat16", "float32", "complex64"}
 }
 
 

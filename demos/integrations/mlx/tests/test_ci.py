@@ -7,7 +7,6 @@ import shlex
 import shutil
 import subprocess
 import sys
-import textwrap
 import zipfile
 from fnmatch import fnmatchcase
 from pathlib import Path
@@ -28,6 +27,76 @@ from tests.test_translator.test_storage_word_views import REQUIRE_ENV as WORD_VI
 
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW_DIR = ROOT / ".github/workflows"
+
+
+FRONTIER_ACCOUNTING = ROOT / "demos" / "integrations" / "mlx" / "frontier_accounting.py"
+DIRECTX_TOOLS = ROOT / "demos" / "integrations" / "mlx" / "install_directx_tools.ps1"
+DIRECTX_TOOLS_STEP = "./demos/integrations/mlx/install_directx_tools.ps1"
+REFERENCE_WARP = ROOT / "demos" / "integrations" / "mlx" / "select_reference_warp.ps1"
+REFERENCE_WARP_STEP = "./demos/integrations/mlx/select_reference_warp.ps1"
+
+
+def _frontier_accounting_script(workflow):
+    """The frontier accounting script, after checking that the porting job runs it."""
+    step = workflow_text.workflow_step_section(
+        _workflow_job_section(workflow, "mlx-metal-porting"),
+        "Verify MLX frontier accounting",
+    )
+    assert "run: python -m demos.integrations.mlx.frontier_accounting" in step
+    return FRONTIER_ACCOUNTING.read_text(encoding="utf-8")
+
+
+def test_mlx_workflow_stays_below_the_size_github_accepts():
+    """GitHub rejects an oversized workflow file without running any of its jobs.
+
+    The run fails as a "workflow file issue" with no jobs, so ``MLX validation result``
+    never reports. A 505,212-byte file ran and a 532,712-byte one was rejected; long
+    checks belong in modules the steps run, not in inline scripts.
+    """
+    size = (WORKFLOW_DIR / "demo-project-testing.yml").stat().st_size
+    assert size < 500_000, size
+
+
+def test_every_pinned_directx_tools_step_runs_the_one_checked_installer():
+    """The Windows legs share one installer, so its pins cannot drift per job."""
+
+    workflow = yaml.safe_load((WORKFLOW_DIR / "demo-project-testing.yml").read_text())
+    steps = [
+        (name, step)
+        for name, job in workflow["jobs"].items()
+        for step in job.get("steps", ())
+        if step.get("name") == "Install pinned DirectX tools"
+    ]
+    assert len(steps) == 12
+    for name, step in steps:
+        assert step["shell"] == "pwsh", name
+        assert step["run"] == DIRECTX_TOOLS_STEP, name
+        assert step.get("if", "runner.os == 'Windows'") == "runner.os == 'Windows'"
+        job_steps = workflow["jobs"][name]["steps"]
+        assert job_steps.index(step) > next(
+            index
+            for index, item in enumerate(job_steps)
+            if str(item.get("uses", "")).startswith("actions/checkout@")
+        ), name
+    script = DIRECTX_TOOLS.read_text(encoding="utf-8")
+    assert script.splitlines()[4] == '$ErrorActionPreference = "Stop"'
+    for archive, digest in (
+        (
+            "DirectXShaderCompiler/releases/download/v1.9.2602.24/dxc_2026_05_27.zip",
+            "cf658aacf070d3045e31b8f1f8a696c2945f37c1095019481ef7c513368db3b4",
+        ),
+        (
+            "microsoft.direct3d.warp/1.0.21/microsoft.direct3d.warp.1.0.21.nupkg",
+            "ea44b77eb30eec14427193e20f40cdb2e4c31ed11ab39cb880538fdf4bac2681",
+        ),
+    ):
+        assert archive in script
+        # Each archive is checked before anything is expanded from it.
+        assert script.index(archive) < script.index(digest)
+        assert script.index(digest) < script.index(
+            "Expand-Archive", script.index(digest)
+        )
+    assert script.index("ea44b77eb30e") < script.index("Copy-Item")
 
 
 def test_host_package_downloads_unpack_outside_the_artifact_stream():
@@ -53,12 +122,14 @@ def test_host_package_downloads_unpack_outside_the_artifact_stream():
             consumers[name] = with_["path"]
     assert consumers == {
         "small-row-reductions": ".mlx-portable-small-rows/base",
+        "upstream-ops-host": ".mlx-portable-upstream-ops/base",
         "half-host": ".mlx-portable-half/base",
         "quantized-host": ".mlx-portable-quantized/base",
         "quantized-upstream-host": ".mlx-portable-quantized/base",
         "integer64-host": ".mlx-portable-integer64/base",
         "slice-update-host": ".mlx-portable-slice-update/base",
         "scatter-host": ".mlx-portable-scatter/base",
+        "conv-host": ".mlx-portable-conv/base",
         "reductions": ".mlx-portable-reductions/base",
     }
 
@@ -290,7 +361,10 @@ def test_windows_host_qualification_preserves_required_workloads():
     steps = {step.get("name"): step for step in job["steps"]}
     install = steps["Install pinned DirectX tools"]
     assert install["if"] == "runner.os == 'Windows'"
-    assert "microsoft.direct3d.warp/1.0.21/" in install["run"]
+    assert install["run"] == DIRECTX_TOOLS_STEP
+    assert "microsoft.direct3d.warp/1.0.21/" in DIRECTX_TOOLS.read_text(
+        encoding="utf-8"
+    )
     selection = steps["Select isolated WARP qualification runtime"]
     assert selection["if"] == (
         "runner.os == 'Windows' && matrix.warp_qualification == '1.0.13'"
@@ -945,7 +1019,7 @@ def test_project_demo_has_no_parent_cancellation_or_serialization():
 def test_project_demo_queues_each_job_and_matrix_leg_independently():
     workflow = _workflow_texts()["demo-project-testing.yml"]
     jobs = workflow_text.workflow_job_names(workflow)
-    assert len(jobs) == 46
+    assert len(jobs) == 48
     groups = set()
     for name in jobs:
         job = _workflow_job_section(workflow, name)
@@ -959,6 +1033,38 @@ def test_project_demo_queues_each_job_and_matrix_leg_independently():
         ]
         assert expected not in groups
         groups.add(expected)
+
+
+def test_current_tree_parity_jobs_share_one_target_mapping():
+    """Every current-tree parity step inherits the jobs' one environment, so
+    each runner proves exactly its own target and no step chooses another."""
+    from tests.ci_helpers import (
+        CURRENT_PARITY_JOBS,
+        CURRENT_PARITY_TARGET,
+        current_parity_env,
+    )
+
+    workflow = _workflow_texts()["demo-project-testing.yml"]
+    env = current_parity_env(workflow)
+    for line in (
+        f"CROSTL_MLX_CURRENT_TARGET: {CURRENT_PARITY_TARGET}",
+        "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
+        "EGL_PLATFORM: surfaceless",
+        'LIBGL_ALWAYS_SOFTWARE: "1"',
+        "PYOPENGL_PLATFORM: egl",
+        'PYTHONUNBUFFERED: "1"',
+    ):
+        assert line in env, line
+    jobs = yaml.safe_load(workflow)["jobs"]
+    for name in CURRENT_PARITY_JOBS:
+        job = jobs[name]
+        assert job["strategy"]["matrix"]["os"] == [
+            "ubuntu-latest",
+            "windows-latest",
+            "macOS-latest",
+        ]
+        for step in job["steps"]:
+            assert "CROSTL_MLX_CURRENT_TARGET" not in json.dumps(step), step["name"]
 
 
 def test_current_tree_native_parity_job_runs_each_family_group_once():
@@ -1044,6 +1150,11 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         "reduce-9",
         "reduce-10",
         "reduce-11",
+        "fft-0",
+        "fft-1",
+        "fft-2",
+        "fft-3",
+        "fft-4",
         "quantized",
         "quantized-qmv-0",
         "quantized-qmv-1",
@@ -1092,9 +1203,22 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         "quantized-gather-qmm-4",
         "quantized-gather-qmm-5",
         "quantized-gather-qmm-6",
+        "quantized-gather-qmm-rhs-0",
+        "quantized-gather-qmm-rhs-1",
+        "quantized-gather-qmm-rhs-2",
+        "quantized-gather-qmm-rhs-3",
+        "quantized-gather-qmm-rhs-4",
+        "quantized-gather-qmm-rhs-5",
+        "quantized-gather-qmm-rhs-6",
         "quantized-qmv-quad-0",
         "quantized-qmv-quad-1",
         "quantized-qmv-quad-2",
+        "fp-quantized-qmv-0",
+        "fp-quantized-qmv-1",
+        "fp-quantized-qmm-0",
+        "fp-quantized-qmm-1",
+        "fp-quantized-qmm-rhs-0",
+        "fp-quantized-qmm-rhs-1",
         "gemm-family-0",
         "gemm-family-1",
         "gemm-family-2",
@@ -1414,6 +1538,7 @@ def test_mlx_float_atomic_reference_uses_fixed_metal_toolchain():
 def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     workflows = _workflow_texts()
     mlx_porting = workflows.get("demo-project-testing.yml", "")
+    frontier = _frontier_accounting_script(mlx_porting)
     harness = (ROOT / "demos" / "integrations" / "mlx" / "run_porting.py").read_text(
         encoding="utf-8"
     )
@@ -1852,120 +1977,110 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
         mlx_porting, "tests/test_translator/test_project_translation.py"
     )
     assert "Verify MLX frontier accounting" in mlx_porting
-    assert "expected the exact 11-source non-fence MLX frontier" in mlx_porting
-    assert 'scope["nonFenceFrontierSources"]' in mlx_porting
-    assert "cleanFrontierSources" not in mlx_porting
-    assert "MLX summary identity or status is incorrect" in mlx_porting
-    assert "MLX summary check names must be unique" in mlx_porting
-    assert "MLX checkout proof does not match the pinned revision" in mlx_porting
+    assert "expected the exact 11-source non-fence MLX frontier" in frontier
+    assert 'scope["nonFenceFrontierSources"]' in frontier
+    assert "cleanFrontierSources" not in (mlx_porting + frontier)
+    assert "MLX summary identity or status is incorrect" in frontier
+    assert "MLX summary check names must be unique" in frontier
+    assert "MLX checkout proof does not match the pinned revision" in frontier
     assert (
         "fence contract accounting must refuse every fence artifact and emit none"
-        in mlx_porting
+        in frontier
     )
-    assert (
-        'fence["failedArtifactCount"] != MLX_FENCE_FAILED_ARTIFACT_COUNT' in mlx_porting
-    )
-    assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
-    assert "MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT" in mlx_porting
-    assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in mlx_porting
-    assert "MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE" in mlx_porting
-    assert "MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE" in mlx_porting
-    assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS" in mlx_porting
-    assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in mlx_porting
-    assert "MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE" in mlx_porting
-    assert "MLX_LAYER_NORM_DISPATCH_VARIANTS" in mlx_porting
-    assert "MLX_LOGSUMEXP_DISPATCH_VARIANTS" in mlx_porting
-    assert "MLX_RMS_NORM_DISPATCH_VARIANTS" in mlx_porting
-    assert 'checks["directx-frontier"]' in mlx_porting
-    assert 'checks["vulkan-frontier"]' in mlx_porting
-    assert 'directx["directxToolchainArtifactCount"]' in mlx_porting
-    assert 'directx["directxToolchainValidatedArtifactCount"]' in mlx_porting
-    assert 'directx["directxToolchainValidatedEntryPointCounts"]' in mlx_porting
-    assert 'directx["directxToolchainValidatedEntryPointCount"]' in mlx_porting
-    assert 'directx["toolchainRuns"] != directx_entry_point_count' in mlx_porting
-    assert "DirectX frontier accounting is incomplete" in mlx_porting
-    assert 'directx["bfloat16LoweringEvidence"]' in mlx_porting
-    assert "DirectX bfloat16 lowering evidence is incomplete" in mlx_porting
-    assert "DirectX workgroup blocker evidence changed" in mlx_porting
-    assert "expected 76 fail-closed DirectX compute entries" in mlx_porting
-    assert "LayerNorm dispatch frontier evidence is incomplete" in mlx_porting
-    assert "LogSumExp dispatch frontier evidence is incomplete" in mlx_porting
-    assert "RMSNorm dispatch frontier evidence is incomplete" in mlx_porting
-    assert "matched-materialized-host-names" in mlx_porting
-    assert "DirectX frontier toolchain must validate every configured" in mlx_porting
-    assert "source artifact and compute entry" in mlx_porting
-    assert "Vulkan frontier accounting is incomplete" in mlx_porting
-    assert "Vulkan frontier toolchain validation is incomplete" in mlx_porting
-    assert 'checks["gemv-directx-compiler-frontier"]' in mlx_porting
-    assert "GEMV_DIRECTX_EXPECTED_ENTRY_POINTS" in mlx_porting
-    assert "GEMV_WORKGROUP_SIZE_RULE" in mlx_porting
-    assert "GEMV_REPORT_WORKGROUP_SIZE_RULE" in mlx_porting
-    assert "GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES" in mlx_porting
-    assert 'gemv_directx["entryProfile"] != "cs_6_2"' in mlx_porting
-    assert 'gemv_directx["compilerArguments"]' in mlx_porting
-    assert 'gemv_directx["minimumShaderModel"] != "6.2"' in mlx_porting
-    assert 'run["profile"] != "cs_6_2"' in mlx_porting
-    assert 'run["compilerArguments"] != ["-enable-16bit-types"]' in mlx_porting
-    assert 'run["minimumShaderModel"] != "6.2"' in mlx_porting
-    assert 'gemv_directx["artifactPackaging"]' in mlx_porting
-    assert 'gemv_directx["hostNamedMaterializationCount"] != 224' in mlx_porting
-    assert 'gemv_directx["reportExecutionEntryCount"] != 224' in mlx_porting
-    assert 'gemv_directx["executionIdentityJoinCount"] != 224' in mlx_porting
-    assert 'gemv_directx["generatedTargetEntryIdentityCount"] != 224' in mlx_porting
-    assert 'gemv_directx["generatedNumthreadsContractCount"] != 224' in mlx_porting
-    assert 'gemv_directx["bareValueDiscardCount"] != 0' in mlx_porting
-    assert 'gemv_directx["entryProfileDiagnosticCount"] != 0' in mlx_porting
-    assert 'gemv_directx["entryProfileUnusedValueWarningCount"] != 0' in mlx_porting
-    assert 'library_run["unusedValueWarningCount"] != 0' in mlx_porting
-    assert 'gemv_directx["libraryProfile"] != "lib_6_6"' in mlx_porting
-    assert 'library_run["profile"] != "lib_6_6"' in mlx_porting
-    assert 'library_run["compilerArguments"]' in mlx_porting
-    assert 'library_run["minimumShaderModel"] != "6.2"' in mlx_porting
-    assert 'gemv_directx["libraryExportCount"] != 224' in mlx_porting
-    assert 'gemv_directx["compilerCoveredEntryPointCount"] != 224' in mlx_porting
-    assert "DirectX GEMV resolved workgroup-size evidence is incomplete" in (
-        mlx_porting
-    )
-    assert "library-profile-numthreads-ignored" in mlx_porting
-    assert "DirectX GEMV compiler warning classification changed" in mlx_porting
-    assert "DirectX GEMV compiler warning evidence changed" in mlx_porting
-    assert "DirectX GEMV execution non-claims changed" in mlx_porting
-    assert "GEMV_OPENGL_WORKGROUP_SIZE_ISSUE" not in mlx_porting
-    assert 'gemv_directx["numthreadsContractEstablished"] is not True' in mlx_porting
-    assert 'gemv_directx["exactWorkgroupSizeEstablished"] is not True' in mlx_porting
-    assert 'checks["gemv-opengl-toolchain"]' in mlx_porting
-    assert 'scope["openglGemvToolchainRequired"]' in mlx_porting
-    assert 'gemv_opengl["workgroupSizeRuleConfigured"] is not True' in mlx_porting
-    assert 'gemv_opengl["runnableArtifactClaimed"] is not False' in mlx_porting
-    assert 'gemv_opengl["toolchainValidatedArtifactCount"]' in mlx_porting
-    assert 'gemv_opengl["compilerValidatedArtifactClaimed"] is not True' in (
-        mlx_porting
-    )
-    assert "OpenGL GEMV toolchain evidence is incomplete" in mlx_porting
-    assert 'checks["reference-accessor-lvalue-identity"]' in mlx_porting
-    assert "reference accessor proof accounting is incomplete" in mlx_porting
-    assert "reference accessor {target} storage evidence is incomplete" in mlx_porting
-    assert (
-        "reference accessor {target} const-read evidence is incomplete" in mlx_porting
-    )
-    assert "reference accessor {target} native validation must be" in mlx_porting
-    assert "MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES" in mlx_porting
-    assert "MLX_OPENGL_INDEX_RANGE_ASSERTIONS" in mlx_porting
-    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS" in mlx_porting
-    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM" in mlx_porting
-    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM" in mlx_porting
-    assert "MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in mlx_porting
-    assert "expected 8 OpenGL attempted frontier sources" in mlx_porting
-    assert "expected 3 OpenGL toolchain frontier sources" in mlx_porting
-    assert "OpenGL target-split frontier accounting is incomplete" in mlx_porting
-    assert "OpenGL workgroup blocker evidence changed" in mlx_porting
-    assert "OpenGL frontier toolchain must validate every emitted source" in (
-        mlx_porting
-    )
-    assert 'opengl["indexRangeAssertionEvidence"]' in mlx_porting
-    assert "OpenGL index-range portability evidence is incomplete" in mlx_porting
-    assert 'opengl["runtimeIntegrationIncluded"] is not False' in mlx_porting
-    assert "mlx/backend/metal/kernels/binary_two.metal" in mlx_porting
+    assert 'fence["failedArtifactCount"] != MLX_FENCE_FAILED_ARTIFACT_COUNT' in frontier
+    assert "MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES" in frontier
+    assert "MLX_DIRECTX_TOOLCHAIN_ARTIFACT_COUNT" in frontier
+    assert "MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS" in frontier
+    assert "MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE" in frontier
+    assert "MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE" in frontier
+    assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS" in frontier
+    assert "MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in frontier
+    assert "MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE" in frontier
+    assert "MLX_LAYER_NORM_DISPATCH_VARIANTS" in frontier
+    assert "MLX_LOGSUMEXP_DISPATCH_VARIANTS" in frontier
+    assert "MLX_RMS_NORM_DISPATCH_VARIANTS" in frontier
+    assert 'checks["directx-frontier"]' in frontier
+    assert 'checks["vulkan-frontier"]' in frontier
+    assert 'directx["directxToolchainArtifactCount"]' in frontier
+    assert 'directx["directxToolchainValidatedArtifactCount"]' in frontier
+    assert 'directx["directxToolchainValidatedEntryPointCounts"]' in frontier
+    assert 'directx["directxToolchainValidatedEntryPointCount"]' in frontier
+    assert 'directx["toolchainRuns"] != directx_entry_point_count' in frontier
+    assert "DirectX frontier accounting is incomplete" in frontier
+    assert 'directx["bfloat16LoweringEvidence"]' in frontier
+    assert "DirectX bfloat16 lowering evidence is incomplete" in frontier
+    assert "DirectX workgroup blocker evidence changed" in frontier
+    assert "expected 76 fail-closed DirectX compute entries" in frontier
+    assert "LayerNorm dispatch frontier evidence is incomplete" in frontier
+    assert "LogSumExp dispatch frontier evidence is incomplete" in frontier
+    assert "RMSNorm dispatch frontier evidence is incomplete" in frontier
+    assert "matched-materialized-host-names" in frontier
+    assert "DirectX frontier toolchain must validate every configured" in frontier
+    assert "source artifact and compute entry" in frontier
+    assert "Vulkan frontier accounting is incomplete" in frontier
+    assert "Vulkan frontier toolchain validation is incomplete" in frontier
+    assert 'checks["gemv-directx-compiler-frontier"]' in frontier
+    assert "GEMV_DIRECTX_EXPECTED_ENTRY_POINTS" in frontier
+    assert "GEMV_WORKGROUP_SIZE_RULE" in frontier
+    assert "GEMV_REPORT_WORKGROUP_SIZE_RULE" in frontier
+    assert "GEMV_EXPECTED_RESOLVED_WORKGROUP_SIZES" in frontier
+    assert 'gemv_directx["entryProfile"] != "cs_6_2"' in frontier
+    assert 'gemv_directx["compilerArguments"]' in frontier
+    assert 'gemv_directx["minimumShaderModel"] != "6.2"' in frontier
+    assert 'run["profile"] != "cs_6_2"' in frontier
+    assert 'run["compilerArguments"] != ["-enable-16bit-types"]' in frontier
+    assert 'run["minimumShaderModel"] != "6.2"' in frontier
+    assert 'gemv_directx["artifactPackaging"]' in frontier
+    assert 'gemv_directx["hostNamedMaterializationCount"] != 224' in frontier
+    assert 'gemv_directx["reportExecutionEntryCount"] != 224' in frontier
+    assert 'gemv_directx["executionIdentityJoinCount"] != 224' in frontier
+    assert 'gemv_directx["generatedTargetEntryIdentityCount"] != 224' in frontier
+    assert 'gemv_directx["generatedNumthreadsContractCount"] != 224' in frontier
+    assert 'gemv_directx["bareValueDiscardCount"] != 0' in frontier
+    assert 'gemv_directx["entryProfileDiagnosticCount"] != 0' in frontier
+    assert 'gemv_directx["entryProfileUnusedValueWarningCount"] != 0' in frontier
+    assert 'library_run["unusedValueWarningCount"] != 0' in frontier
+    assert 'gemv_directx["libraryProfile"] != "lib_6_6"' in frontier
+    assert 'library_run["profile"] != "lib_6_6"' in frontier
+    assert 'library_run["compilerArguments"]' in frontier
+    assert 'library_run["minimumShaderModel"] != "6.2"' in frontier
+    assert 'gemv_directx["libraryExportCount"] != 224' in frontier
+    assert 'gemv_directx["compilerCoveredEntryPointCount"] != 224' in frontier
+    assert "DirectX GEMV resolved workgroup-size evidence is incomplete" in (frontier)
+    assert "library-profile-numthreads-ignored" in frontier
+    assert "DirectX GEMV compiler warning classification changed" in frontier
+    assert "DirectX GEMV compiler warning evidence changed" in frontier
+    assert "DirectX GEMV execution non-claims changed" in frontier
+    assert "GEMV_OPENGL_WORKGROUP_SIZE_ISSUE" not in (mlx_porting + frontier)
+    assert 'gemv_directx["numthreadsContractEstablished"] is not True' in frontier
+    assert 'gemv_directx["exactWorkgroupSizeEstablished"] is not True' in frontier
+    assert 'checks["gemv-opengl-toolchain"]' in frontier
+    assert 'scope["openglGemvToolchainRequired"]' in frontier
+    assert 'gemv_opengl["workgroupSizeRuleConfigured"] is not True' in frontier
+    assert 'gemv_opengl["runnableArtifactClaimed"] is not False' in frontier
+    assert 'gemv_opengl["toolchainValidatedArtifactCount"]' in frontier
+    assert 'gemv_opengl["compilerValidatedArtifactClaimed"] is not True' in (frontier)
+    assert "OpenGL GEMV toolchain evidence is incomplete" in frontier
+    assert 'checks["reference-accessor-lvalue-identity"]' in frontier
+    assert "reference accessor proof accounting is incomplete" in frontier
+    assert "reference accessor {target} storage evidence is incomplete" in frontier
+    assert "reference accessor {target} const-read evidence is incomplete" in frontier
+    assert "reference accessor {target} native validation must be" in frontier
+    assert "MLX_OPENGL_TOOLCHAIN_FRONTIER_SOURCES" in frontier
+    assert "MLX_OPENGL_INDEX_RANGE_ASSERTIONS" in frontier
+    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS" in frontier
+    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_MINIMUM" in frontier
+    assert "MLX_OPENGL_INDEX_RANGE_ASSERTION_MAXIMUM" in frontier
+    assert "MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES" in frontier
+    assert "expected 8 OpenGL attempted frontier sources" in frontier
+    assert "expected 3 OpenGL toolchain frontier sources" in frontier
+    assert "OpenGL target-split frontier accounting is incomplete" in frontier
+    assert "OpenGL workgroup blocker evidence changed" in frontier
+    assert "OpenGL frontier toolchain must validate every emitted source" in (frontier)
+    assert 'opengl["indexRangeAssertionEvidence"]' in frontier
+    assert "OpenGL index-range portability evidence is incomplete" in frontier
+    assert 'opengl["runtimeIntegrationIncluded"] is not False' in frontier
+    assert "mlx/backend/metal/kernels/binary_two.metal" in frontier
     assert "mesa-vulkan-drivers" in mlx_porting
     assert "vulkan==1.3.275.1" in mlx_porting
     assert "vulkaninfo --summary" in mlx_porting
@@ -2110,12 +2225,7 @@ def test_mlx_platform_runtime_workflow_preserves_pinned_checkout():
 
 
 def test_mlx_frontier_accounting_workflow_imports_available_harness_symbols():
-    workflow = _workflow_texts()["demo-project-testing.yml"]
-    step_start = workflow.index("- name: Verify MLX frontier accounting")
-    command_marker = "          python - <<'PY'\n"
-    script_start = workflow.index(command_marker, step_start) + len(command_marker)
-    script_end = workflow.index("\n          PY", script_start)
-    script = textwrap.dedent(workflow[script_start:script_end])
+    script = _frontier_accounting_script(_workflow_texts()["demo-project-testing.yml"])
     tree = ast.parse(script)
     harness_import = next(
         node
@@ -2138,13 +2248,7 @@ def test_mlx_frontier_accounting_counts_refused_vulkan_sources_separately():
     """Refused Vulkan frontier sources are verified by run_porting, not counted as translated."""
     from demos.integrations.mlx import run_porting
 
-    workflow = _workflow_texts()["demo-project-testing.yml"]
-    step_start = workflow.index("- name: Verify MLX frontier accounting")
-    command_marker = "          python - <<'PY'\n"
-    script_start = workflow.index(command_marker, step_start) + len(command_marker)
-    script = textwrap.dedent(
-        workflow[script_start : workflow.index("\n          PY", script_start)]
-    )
+    script = _frontier_accounting_script(_workflow_texts()["demo-project-testing.yml"])
     assert set(run_porting.MLX_VULKAN_FRONTIER_SOURCES) == set(
         run_porting.MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     ) - set(run_porting.MLX_VULKAN_FRONTIER_REFUSALS) - set(
@@ -3061,6 +3165,62 @@ def test_mlx_project_porting_workflow_runs_pinned_attention_native_loader_proof(
     )
 
 
+def _assert_dot_runs_on_reference_warp(workflow):
+    """The multi-wave dot reduction executes on the WARP conformance reference.
+
+    WARP 1.0.21 returns wrong WaveActiveSum results for partially active waves
+    in 512-invocation groups (#2120), which is the dot kernel's final step, and
+    WARP 1.0.19 passes the matrix's fixed HLSL controls for that case. The
+    script must pin the very libraries the conformance matrix names, and the
+    required library must come back even after a failure.
+    """
+
+    dot = "Prove pinned MLX dot Direct3D native-loader execution"
+    select = workflow_text.workflow_step_section(
+        workflow, "Select the reference WARP 1.0.19 for the multi-wave dot"
+    )
+    assert "id: dot-warp" in select
+    assert "if: runner.os == 'Windows'" in select
+    assert "shell: pwsh" in select
+    assert f"run: {REFERENCE_WARP_STEP}\n" in select + "\n"
+    restore = workflow_text.workflow_step_section(
+        workflow, "Restore the required WARP 1.0.21"
+    )
+    assert (
+        "if: always() && runner.os == 'Windows' && "
+        "steps.dot-warp.outcome != 'skipped'"
+    ) in restore
+    assert f"run: {REFERENCE_WARP_STEP} -Restore" in restore
+    assert workflow_text.workflow_step_after(
+        workflow, dot, "Select the reference WARP 1.0.19 for the multi-wave dot"
+    )
+    assert workflow_text.workflow_step_after(
+        workflow, "Restore the required WARP 1.0.21", dot
+    )
+    assert workflow_text.workflow_step_after(
+        workflow, "Upload dot Direct3D evidence", "Restore the required WARP 1.0.21"
+    )
+
+    script = REFERENCE_WARP.read_text(encoding="utf-8")
+    matrix = {
+        match.group(1): (match.group(2), match.group(3))
+        for match in re.finditer(
+            r'version = "([0-9.]+)"; archiveSHA256 = "([0-9a-f]{64})"; '
+            r'dllSHA256 = "([0-9a-f]{64})"',
+            workflow,
+        )
+    }
+    reference_archive, reference_dll = matrix["1.0.19"]
+    assert f'$reference = "{reference_dll}"' in script
+    assert f'(Get-Digest $archive) -ne "{reference_archive}"' in script
+    assert "microsoft.direct3d.warp/1.0.19/microsoft.direct3d.warp.1.0.19.nupkg" in (
+        script
+    )
+    assert f'$required = "{matrix["1.0.21"][1]}"' in script
+    assert "--require 1.0.19" in workflow
+    assert script.count("(Get-Digest $installed) -ne") == 3
+
+
 def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
     mlx_porting = _workflow_texts().get("demo-project-testing.yml", "")
     test_path = "demos/integrations/mlx/tests/kernels/test_dot_native_loader.py"
@@ -3103,6 +3263,7 @@ def test_mlx_project_porting_workflow_runs_pinned_dot_proofs():
         "Upload dot Direct3D evidence",
         "Prove pinned MLX dot Direct3D native-loader execution",
     )
+    _assert_dot_runs_on_reference_warp(mlx_porting)
 
     metal_step = workflow_text.workflow_step_section(
         mlx_porting,

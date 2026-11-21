@@ -14,14 +14,15 @@ from demos.integrations.mlx.portable_host.verify_rows import verify_artifacts
 
 NEGATIVE_CHECKS = {
     "missing": "No translated package for vv_BitwiseAndint32",
-    "int64": "supported dtype",
-    "uint8": "supported dtype",
+    # Without the pinned source no package serves the other integer widths.
+    "int64": "No translated package for vv_BitwiseAndint64",
+    "uint8": "No translated package for vv_BitwiseAnduint8",
     "last-large-shift": "counts in [0, 31]",
     "negative-shift": "counts in [0, 31]",
     "large-shift": "counts in [0, 31]",
     "invert-missing": "No translated package for v_BitwiseInvertint32int32",
-    "invert-int64": "requires matching int32 or uint32",
-    "invert-uint8": "requires matching int32 or uint32",
+    "invert-int64": "No translated package for v_BitwiseInvertint64int64",
+    "invert-uint8": "No translated package for v_BitwiseInvertuint8uint8",
     "invert-large-allocation": "exceeds its allocation",
 }
 

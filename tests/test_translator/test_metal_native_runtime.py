@@ -218,7 +218,9 @@ def test_metal_explicit_struct_layout_is_not_inferred(tmp_path, attribute):
         "device Pair& values",
         "constant Pair& values",
         "device float** values",
-        "volatile device int* values",
+        # volatile keeps the device layout (test_metal_buffer_references);
+        # coherence narrower than the device does not.
+        "coherent(threadgroup) device int* values",
         "device atomic_uint* values",
         "device float values[4]",
     ],

@@ -120,6 +120,40 @@ def test_directx_gathers_binary16_lanes(tmp_path):
     _compile(generated, "directx", tmp_path)
 
 
+@pytest.mark.parametrize("alias", ["half", "float16"])
+def test_directx_gathers_binary16_lanes_through_typedef_pointer_arrays(tmp_path, alias):
+    # Pointers kept in an array declared through a typedef of half: each
+    # element's vector view gathers four binary16 lanes of the buffer.
+    source = HEADER + f"""typedef half element_t;
+typedef {"half" if alias == "half" else "element_t"} {alias}_alias_t;
+
+kernel void gather(const device half* values [[buffer(0)]],
+                   device float* results [[buffer(1)]],
+                   uint tid [[thread_position_in_grid]]) {{
+    const device {alias}_alias_t* rows[2];
+    for (int row = 0; row < 2; row++) {{
+        rows[row] = values + (tid * 2u + uint(row)) * 8u;
+    }}
+    float total = 0.0f;
+    for (int row = 0; row < 2; row++) {{
+        const device vec<{alias}_alias_t, 4>* lanes =
+            (const device vec<{alias}_alias_t, 4>*)(rows[row] + 4);
+        total += dot(float4(lanes[0]), float4(1.0f, 2.0f, 4.0f, 8.0f));
+    }}
+    results[tid] = total;
+}}
+"""
+    generated = _translate(tmp_path, source, "directx")
+    assert "StructuredBuffer<uint16_t> values" in generated
+    assert "rows_offsets" in generated
+    assert generated.count("asfloat16(values[uint(") == 4
+    _compile(generated, "directx", tmp_path)
+
+
+def test_crossgl_float_scalars_have_storage_layouts():
+    assert scalar_storage_layout("f16") == scalar_storage_layout("half")
+
+
 def test_directx_decodes_bfloat16_lanes_exactly(tmp_path):
     generated = _translate(
         tmp_path, _gather_source("bfloat16_t", "metal::vec<bfloat16_t, 4>"), "directx"

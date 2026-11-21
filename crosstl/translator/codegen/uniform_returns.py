@@ -70,15 +70,25 @@ class UniformReturnAnalysis:
     Storage dependencies must resolve to immutable bindings at each caller.
     A read-only storage view alone is not immutable storage. Unknown statements,
     global reads, escapes and recursion fail closed.
+
+    ``reachable(body)``, when given, yields the nodes of a function body that
+    can run, so that the target's proven-dead code, whose calls it never
+    resolves, cannot defeat a storage-use proof; by default every node counts.
     """
 
     def __init__(
-        self, resolved_calls, pure_builtin_calls, structs=None, storage_loads=()
+        self,
+        resolved_calls,
+        pure_builtin_calls,
+        structs=None,
+        storage_loads=(),
+        reachable=None,
     ):
         self.resolved_calls = resolved_calls
         self.pure_builtin_calls = pure_builtin_calls
         self.structs = structs or {}
         self.storage_loads = frozenset(storage_loads)
+        self.reachable = reachable
         self.summaries = {}
         self.visiting = set()
         self.resource_effects = {}
@@ -300,10 +310,18 @@ class UniformReturnAnalysis:
                     return False
             return True
 
+        # A use in code that cannot run neither reads nor writes its storage.
+        live = (
+            None
+            if self.reachable is None
+            else {id(node) for node in self.reachable(function.body)}
+        )
         return all(
             read_use(node, True)
             for node in nodes
-            if isinstance(node, IdentifierNode) and node.name == parameter.name
+            if isinstance(node, IdentifierNode)
+            and node.name == parameter.name
+            and (live is None or id(node) in live)
         )
 
     @staticmethod

@@ -98,7 +98,11 @@ def test_runner_preserves_failed_evidence_and_requires_complete_trace(
         output_dir=tmp_path / "evidence",
     )
     monkeypatch.setattr(
-        proof, "make_host", lambda *args: SimpleNamespace(target="opengl")
+        proof,
+        "make_host",
+        lambda *args: SimpleNamespace(
+            target="opengl", descriptors={"all_reduce_maxfloat32": {}}
+        ),
     )
     snapshots = iter(
         [
@@ -115,6 +119,15 @@ def test_runner_preserves_failed_evidence_and_requires_complete_trace(
     monkeypatch.setattr(
         proof, "audit_event", lambda event, *args, **kwargs: audited.append(event)
     )
+    lazy = []
+
+    def audit_lazy(trace, mlx_root, packages, target, installed):
+        assert (mlx_root, packages, target) == (args.mlx_root, args.packages, "opengl")
+        assert installed == {"all_reduce_maxfloat32"}
+        lazy.extend(event for event in trace if event["entry"].startswith("vs_"))
+        return list(lazy)
+
+    monkeypatch.setattr(proof.elementwise_evidence, "audit_lazy_events", audit_lazy)
     commands = []
 
     def execute(command, **kwargs):
@@ -124,7 +137,7 @@ def test_runner_preserves_failed_evidence_and_requires_complete_trace(
         output.mkdir(parents=True)
         result = records(mode == "native")
         if mode == "native":
-            result[-1]["dispatchCount"] = 2
+            result[-1]["dispatchCount"] = 3
             if fault == "skip":
                 result[0]["skipped"] = ["not executed"]
             trace = [
@@ -137,6 +150,8 @@ def test_runner_preserves_failed_evidence_and_requires_complete_trace(
                     "row_reduce_small_1_reduce_maxfloat32",
                 )
             ]
+            # A scalar-operand dispatch the lazy elementwise cache serves.
+            trace.insert(2, {"entry": "vs_Dividefloat32"})
             if fault == "empty-trace":
                 trace.clear()
             elif fault == "missing-trace":
@@ -170,7 +185,9 @@ def test_runner_preserves_failed_evidence_and_requires_complete_trace(
             "1800" if mode == "native" else "180"
         )
     if fault is None:
-        assert evidence["nativeDispatches"] == len(audited) == 5
+        assert evidence["nativeDispatches"] == len(audited) + len(lazy) == 6
+        assert [event["entry"] for event in lazy] == ["vs_Dividefloat32"]
+        assert "vs_Dividefloat32" not in {event["entry"] for event in audited}
 
 
 @pytest.mark.parametrize("native", [False, True])

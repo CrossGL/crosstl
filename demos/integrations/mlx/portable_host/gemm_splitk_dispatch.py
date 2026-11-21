@@ -1,6 +1,6 @@
 """Execute split-K steel GEMM packages and commit guarded MLX outputs.
 
-``gemm_splitk`` writes the float32 ``C_split`` temporary and
+``gemm_splitk`` writes the float32 or complex64 ``C_split`` temporary and
 ``gemm_splitk_accum`` reads it into the MLX output; each dispatch commits its
 output only after the native result and its guards check out.
 """
@@ -12,18 +12,17 @@ import struct
 from crosstl.project import build_native_loader_dispatch_request, pack_storage_records
 from demos.integrations.mlx.portable_host import gemm_splitk_layout as layout
 from demos.integrations.mlx.portable_host.gather_dispatch import execute
+from demos.integrations.mlx.portable_host.gemv_dispatch import (
+    FORMATS,
+    _decode,
+    _guard,
+    _matrix_words,
+    _poison,
+)
 from demos.integrations.mlx.portable_host.matmul_dispatch import (
     GUARD_COUNT,
-    POISON,
-    _words,
     encode_binding,
 )
-from demos.integrations.mlx.portable_host.quantization_dispatch import (
-    GUARDS,
-    WORD_FORMATS,
-    decode,
-)
-from demos.integrations.mlx.portable_host.quantization_layout import ITEM_SIZES
 from demos.integrations.mlx.portable_host.trace_records import write_trace
 
 # GEMMSpiltKParams holds thirteen 32-bit ints.
@@ -64,13 +63,17 @@ def _storage(entry, supplied, counts, parameters):
     for name, count in counts.items():
         dtype = layout.parameter_type(entry, name)
         if name == output:
-            storage[name] = [GUARDS[dtype]] * (count + GUARD_COUNT)
+            storage[name] = [_guard(dtype)] * (count + GUARD_COUNT)
         else:
-            storage[name] = (
-                _words(supplied[name], dtype) + [POISON[dtype]] * GUARD_COUNT
+            storage[name] = _matrix_words(supplied[name], dtype) + (
+                [_poison(dtype)] * GUARD_COUNT
             )
-    for name in layout.SCALARS:
-        if name in parameters:
+    for name in layout.SCALARS + layout.AXBPY_SCALARS:
+        if name in layout.FLOAT_SCALARS and name in parameters:
+            storage[name] = [
+                struct.unpack("<I", struct.pack("<f", parameters[name]))[0]
+            ]
+        elif name in parameters:
             storage[name] = [parameters[name]]
     return storage
 
@@ -127,7 +130,7 @@ def _supplied(buffers, count):
 
 def _hash(buffer, dtype):
     return hashlib.sha256(
-        ctypes.string_at(buffer.data, buffer.count * ITEM_SIZES[dtype])
+        ctypes.string_at(buffer.data, buffer.count * layout.ELEMENT_SIZES[dtype])
     ).hexdigest()
 
 
@@ -174,16 +177,15 @@ def dispatch(host, entry, buffers, count, threads, launch):
         key: item for key, item in initial.items() if key != "values"
     }:
         raise RuntimeError("Native split-K GEMM output layout differs")
-    words = decode(value, dtype, initial["dtype"])
+    words = _decode(value, dtype, host.target, initial["dtype"])
     size = counts[output_name]
     if (
         len(words) != size + GUARD_COUNT
-        or words[size:] != [GUARDS[dtype]] * GUARD_COUNT
+        or words[size:] != [_guard(dtype)] * GUARD_COUNT
     ):
         raise RuntimeError("Native split-K GEMM output guard differs")
-    payload = struct.pack(
-        "<" + str(size) + WORD_FORMATS[ITEM_SIZES[dtype]], *words[:size]
-    )
+    itemsize = layout.ELEMENT_SIZES[dtype]
+    payload = struct.pack("<" + str(size) + FORMATS[itemsize], *words[:size])
     event = {
         "entry": entry,
         "target": host.target,

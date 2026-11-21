@@ -205,7 +205,8 @@ def _mma(context, accumulator, mutation):
         w_columns = [[ws[k * ld + column] for k in range(BK)] for column in range(BN)]
     else:
         w_columns = [ws[column * ld : column * ld + BK] for column in range(BN)]
-    check = _checked if context["strict"] else _f32
+    # ``check`` overrides the affine inputs' float32 exactness check.
+    check = context.get("check", _checked) if context["strict"] else _f32
     for row, values in enumerate(x_rows):
         line = accumulator[row]
         for column, weights in enumerate(w_columns):

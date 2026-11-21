@@ -19,6 +19,17 @@ from demos.integrations.mlx.tests.kernels import steel_conv_model as conv_model
 SOURCE = "mlx/backend/metal/kernels/steel/conv/kernels/steel_conv_general.metal"
 ALIGN_C_ID = 200
 BK = 16
+# Single records the kernel reads through constant pointers, by GLSL helper
+# name; the residue tables are arrays.
+RECORD_HELPERS = (
+    "ImplicitGemmConv2DParams",
+    "MLXConvParams",
+    "MLXConvParams<2>",
+    "MLXConvParams_2",
+    "MLXConvParams_int_2",
+    "Conv2DGeneralJumpParams",
+)
+TABLE_HELPERS = ("Conv2DGeneralBaseInfo",)
 
 
 @dataclass(frozen=True)
@@ -157,3 +168,39 @@ def host_entry(conv, dtype):
     bm = 64 if adj_m >= 8192 and conv.channels >= 64 else 32
     bn = 64 if bm == 64 and conv.outputs >= 64 else 32
     return BY_NAME[f"implicit_gemm_conv_2d_general_{dtype}_bm{bm}_bn{bn}_bk16_wm2_wn2"]
+
+
+def index_assertions(entry):
+    """GLSL index ranges: MLX buffers stay below 2^31 elements.
+
+    The parameter records are single elements. The threadgroup tiles reach
+    only the slots their loaders write and ``BlockMMA`` reads.
+    """
+    element = conv_model.HELPER_ELEMENTS[entry.dtype]
+    device = [
+        {
+            "expression": "reference.offset + index",
+            "function": f"crosstl_resource_{access}_{scalar}",
+            "maximum": conv_model.SIGNED_MAX,
+        }
+        for access in ("load", "store")
+        for scalar in sorted({element, "int", "int64_t", "uint"})
+    ] + [
+        {
+            "expression": "reference.offset + index",
+            "function": f"crosstl_resource_load_{record}",
+            "maximum": 0 if record in RECORD_HELPERS else conv_model.SIGNED_MAX,
+        }
+        for record in RECORD_HELPERS + TABLE_HELPERS
+    ]
+    workgroup = [
+        {
+            "expression": "reference.offset + index",
+            "indexed": f"crosstl_workgroup_{tile}",
+            "maximum": maximum,
+        }
+        for tile, maximum in zip(("As", "Bs"), conv_model.tile_maxima(entry))
+    ]
+    return tuple(
+        {"source": SOURCE, **item, "minimum": 0} for item in device + workgroup
+    )

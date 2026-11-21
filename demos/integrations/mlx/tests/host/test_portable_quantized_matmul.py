@@ -754,9 +754,9 @@ def test_preparation_replaces_the_quantized_matmul_stub(monkeypatch):
         return text
 
     monkeypatch.setattr(prepare, "replace_once", record)
-    prepare.adapted_sources("", "", "")
+    prepare.adapted_sources("", "", "", "")
     assert "NO_GPU(QuantizedMatmul)" in replaced
-    assert "NO_GPU(GatherQMM)" not in replaced
+    assert "NO_GPU(GatherQMM)" in replaced
     backend = (HOST / "backend.cpp").read_text(encoding="utf-8")
     assert "void QuantizedMatmul::eval_gpu(" in backend
     for text in (
@@ -909,7 +909,40 @@ def test_ci_runs_the_routing_on_every_quantized_host_platform():
         for item in job["steps"]
         for value in re.findall(r"--timeout-seconds (\d+)", item.get("run", ""))
     ]
-    assert deadlines == [1800, 3600, 1800, 900, 900, 1800, 1200, 1200, 2400, 1800, 1200]
+    assert deadlines == [
+        1800,
+        # The matrix-vector translation; its slowest observed run took 233 s.
+        1200,
+        # The matrix-matrix translation; its slowest observed run took 318 s.
+        1200,
+        900,
+        900,
+        1200,
+        1200,
+        # GatherQMM translation and verification, affine then block-scaled.
+        900,
+        300,
+        900,
+        300,
+        1200,
+        600,
+        # On-demand reduction packages only record their configuration.
+        120,
+        # Steel GEMM translation; its slowest observed run took 212 s.
+        1200,
+        # Split-K GEMM translation; its slowest observed run took 114 s.
+        1200,
+        1200,
+        # AddMM and GatherMM verification.
+        600,
+        600,
+        # SegmentedMM translation and verification.
+        600,
+        600,
+        # BlockMaskedMM translation and verification.
+        1200,
+        600,
+    ]
     # Split-K products sum their partitions with translated column kernels.
     sums = steps["Translate split-K partition sums"]
     assert "if" not in sums and "set -euo pipefail" in sums["run"]

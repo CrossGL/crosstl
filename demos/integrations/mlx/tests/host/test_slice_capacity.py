@@ -149,7 +149,7 @@ def test_large_slice_evidence_rejects_incomplete_or_changed_batches(fault):
 def test_capacity_workloads_cover_all_storage_types_and_operations():
     cases = list(proof.cases())
     assert len(cases) == 16
-    assert {case["dtype"] for case in cases} == set(proof.small.copies.DTYPES)
+    assert {case["dtype"] for case in cases} == set(proof.small.copies.STORAGE_DTYPES)
     assert {case["operation"] for case in cases} == {*proof.small.METHODS, "replace"}
     assert {case["count"] for case in cases if "count" in case} == {65535, 65536, 65537}
 

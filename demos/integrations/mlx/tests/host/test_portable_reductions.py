@@ -49,6 +49,9 @@ def test_invalid_all_reduce_stage_is_rejected(count):
         ("bool_", 1),
         ("bfloat16", 2),
         ("float16", 2),
+        ("int64", 8),
+        ("uint64", 8),
+        ("complex64", 8),
     ],
 )
 @pytest.mark.parametrize(
@@ -73,7 +76,7 @@ def test_large_reduction_stage_uses_logical_bytes(dtype, itemsize, boundary):
     assert final["workgroupSize"] == [32 if rows == 128 else 1024, 1, 1]
 
 
-@pytest.mark.parametrize("dtype", [None, [], "bool", "half", "int16", "uint64", 4])
+@pytest.mark.parametrize("dtype", [None, [], "bool", "half", "int4", "float64", 4])
 def test_reduction_plan_rejects_unsupported_logical_dtype(dtype):
     with pytest.raises(ValueError, match="dtype"):
         reduction_layout.stage(65536, dtype)
@@ -629,18 +632,13 @@ def test_reduction_host_ci_requires_every_variant_and_retains_failures():
     config = yaml.safe_load(workflow)["jobs"]["reductions"]
     assert "if: matrix.family != 'row'" in translation and "if:" not in execution
     for case in config["strategy"]["matrix"]["include"]:
-        steps = [
-            step
-            for step in config["steps"]
-            if step.get("if")
-            not in (
-                (
-                    "matrix.family != 'row'"
-                    if case["family"] == "row"
-                    else "matrix.family == 'row'"
-                ),
-            )
-        ]
+        family = case["family"]
+        # A step conditioned on another family does not run in this leg.
+        skipped = {
+            f"matrix.family == '{other}'"
+            for other in {"all", "row", "column"} - {family}
+        } | ({"matrix.family != 'row'"} if family == "row" else set())
+        steps = [step for step in config["steps"] if step.get("if") not in skipped]
         deadline = sum(
             int(value)
             for step in steps

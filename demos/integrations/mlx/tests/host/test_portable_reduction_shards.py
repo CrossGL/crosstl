@@ -26,7 +26,7 @@ def test_partition_keeps_all_entries_and_widths_without_overlap():
     assert max(map(len, parts)) == 4
     assert sum(len(part) * len(ROW_ENTRIES) for part in parts) == 1456
     cases = list(row_workloads.cases(ROW_WIDTHS))
-    assert len(cases) == 1870
+    assert len(cases) == 1876
     assert len({(case["entry"], case["width"]) for case in cases}) == 896
 
 
