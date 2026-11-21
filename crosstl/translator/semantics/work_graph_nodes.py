@@ -119,6 +119,8 @@ _SYSTEM_VALUES = {
     "SV_DispatchThreadID": "gl_GlobalInvocationID",
     "SV_GroupIndex": "gl_LocalInvocationIndex",
 }
+# Each node system value under its HLSL name and its CrossGL name.
+_SYSTEM_VALUE_NAMES = {**_SYSTEM_VALUES, **{value: value for value in _SYSTEM_VALUES.values()}}
 _LAUNCH_SYSTEM_VALUES = {
     "broadcasting": frozenset(_SYSTEM_VALUES.values()),
     "coalescing": frozenset({"gl_LocalInvocationID", "gl_LocalInvocationIndex"}),
@@ -369,11 +371,8 @@ class _NodeChecker:
 
     def check_system_value(self, launch, parameter, names):
         for name in names:
-            value = _SYSTEM_VALUES.get(name, name)
-            if (
-                value in _SYSTEM_VALUES.values()
-                and value not in _LAUNCH_SYSTEM_VALUES[launch]
-            ):
+            value = _SYSTEM_VALUE_NAMES.get(name)
+            if value is not None and value not in _LAUNCH_SYSTEM_VALUES[launch]:
                 provided = sorted(_LAUNCH_SYSTEM_VALUES[launch]) or ["none"]
                 self.refuse(
                     "system-value",

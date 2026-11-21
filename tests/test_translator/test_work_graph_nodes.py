@@ -179,10 +179,10 @@ def test_node_block_is_a_node_stage():
 @pytest.mark.parametrize("name", sorted(PROBES))
 def test_crossgl_output_keeps_the_node(name, tmp_path):
     path = tmp_path / "probe.cgl"
-    path.write_text(PROBES[name])
+    path.write_text(PROBES[name], newline="")
     first = crosstl.translate(str(path), backend="cgl")
     assert "node {" in first
-    path.write_text(first)
+    path.write_text(first, newline="")
     assert crosstl.translate(str(path), backend="cgl") == first
 
 
