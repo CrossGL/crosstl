@@ -5,6 +5,7 @@ from ..common_ast import InitializerListNode
 from .buffer_memory_qualifiers import storage_buffer_memory_attribute_suffix
 from .depth_layout_import import fragment_depth_layout_attribute
 from .import_exact_lookups import SpirvBuiltinUnsupportedError
+from .matrix_order_import import row_major_field_suffix
 from .ray_tracing_import import BUILTIN_VARIABLE_NAMES
 from .statement_import import (
     EXPRESSION_STATEMENT_TYPES,
@@ -88,6 +89,8 @@ class VulkanToCrossGLConverter:
         "taskpayloadsharedext": "taskPayloadSharedEXT",
         "taskpayloadsharednv": "taskPayloadSharedNV",
     }
+    # A prefix operator before an operand that starts with one of these is parenthesized.
+    PREFIX_OPERATOR_CHARACTERS = frozenset("-+!~")
 
     def __init__(self):
         self.type_map = {
@@ -95,31 +98,32 @@ class VulkanToCrossGLConverter:
             "vec2": "float2",
             "vec3": "float3",
             "vec4": "float4",
-            "mat2": "float2x2",
-            "mat3": "float3x3",
-            "mat4": "float4x4",
-            # Non-square matrices keep CrossGL's matCxR spelling: floatCxR is CxR in MSL but RxC in HLSL.
-            "mat2x2": "float2x2",
+            # CrossGL spells matrices matCxR (ADR 0004), as the other importers write them. The square floatNxN
+            # aliases parse as plain type names, which the matrix passes of the semantics layer do not recognize.
+            "mat2": "mat2",
+            "mat3": "mat3",
+            "mat4": "mat4",
+            "mat2x2": "mat2",
             "mat2x3": "mat2x3",
             "mat2x4": "mat2x4",
             "mat3x2": "mat3x2",
-            "mat3x3": "float3x3",
+            "mat3x3": "mat3",
             "mat3x4": "mat3x4",
             "mat4x2": "mat4x2",
             "mat4x3": "mat4x3",
-            "mat4x4": "float4x4",
-            "dmat2": "double2x2",
-            "dmat3": "double3x3",
-            "dmat4": "double4x4",
-            "dmat2x2": "double2x2",
+            "mat4x4": "mat4",
+            "dmat2": "dmat2",
+            "dmat3": "dmat3",
+            "dmat4": "dmat4",
+            "dmat2x2": "dmat2",
             "dmat2x3": "dmat2x3",
             "dmat2x4": "dmat2x4",
             "dmat3x2": "dmat3x2",
-            "dmat3x3": "double3x3",
+            "dmat3x3": "dmat3",
             "dmat3x4": "dmat3x4",
             "dmat4x2": "dmat4x2",
             "dmat4x3": "dmat4x3",
-            "dmat4x4": "double4x4",
+            "dmat4x4": "dmat4",
             "int": "int",
             "ivec2": "int2",
             "ivec3": "int3",
@@ -1001,6 +1005,7 @@ class VulkanToCrossGLConverter:
                         member_offsets[index] if index < len(member_offsets) else None
                     )
                     placement = "" if offset is None else f" @offset({offset})"
+                    placement += row_major_field_suffix(node, index)
                     code += (
                         f"        {self.map_type(field_type)} "
                         f"{generated_field_name}{placement};\n"
@@ -1028,8 +1033,13 @@ class VulkanToCrossGLConverter:
                 ) + storage_buffer_memory_attribute_suffix(node)
                 if block_name not in self.emitted_storage_buffer_type_names:
                     code += f"    struct {block_name} {{\n"
-                    for field_type, field_name in node.struct_fields:
-                        code += f"        {self.map_type(field_type)} {field_name};\n"
+                    for index, (field_type, field_name) in enumerate(
+                        node.struct_fields
+                    ):
+                        code += (
+                            f"        {self.map_type(field_type)} {field_name}"
+                            f"{row_major_field_suffix(node, index)};\n"
+                        )
                     code += "    };\n\n"
                     self.emitted_storage_buffer_type_names.add(block_name)
                 instance_suffix = getattr(node, "instance_array_suffix", "")
@@ -1737,6 +1747,9 @@ class VulkanToCrossGLConverter:
                 return f"++{operand}"
             if expr.op == "PRE_DECREMENT":
                 return f"--{operand}"
+            if operand[:1] in self.PREFIX_OPERATOR_CHARACTERS:
+                # -(-x) written as --x would be a decrement, and +(+x) an increment.
+                operand = f"({operand})"
             return f"{expr.op}{operand}"
         elif isinstance(expr, TernaryOpNode):
             condition = self.generate_nested_expression(expr.condition)

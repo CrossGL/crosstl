@@ -648,10 +648,10 @@ class SpirvGlobalDeclarationMixin:
                 if attribute_name == "sample":
                     self.require_capability("SampleRateShading")
                 self.decorations.append(f"OpDecorate %{var_id.id} {decoration_name}")
-        if "patch" in {
+        if self.has_attribute(node, "patch") or "patch" in {
             str(qualifier).lower() for qualifier in getattr(node, "qualifiers", ())
         }:
-            # GLSL `patch in`/`patch out`: one value per patch, not per control point.
+            # GLSL `patch in`/`patch out` and CrossGL `@patch`: one value per patch, not per control point.
             self.decorations.append(f"OpDecorate %{var_id.id} Patch")
         if self.declaration_metadata_names(node) & {
             "pervertex",
