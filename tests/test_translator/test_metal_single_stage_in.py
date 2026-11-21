@@ -90,7 +90,7 @@ VSOut main(VertexIn v, InstanceIn inst, uint iid : SV_InstanceID) {
 def _metal(tmp_path, source, suffix=".cgl"):
     path = tmp_path / f"shader{suffix}"
     path.write_text(source, encoding="utf-8")
-    return crosstl.translate(str(path), backend="metal")
+    return crosstl.translate(str(path), backend="metal", format_output=False)
 
 
 def _compile(tmp_path, metal):
@@ -111,7 +111,9 @@ def _compile(tmp_path, metal):
 
 
 def _signature(metal, stage):
-    match = re.search(rf"^{stage} \w+ {stage}_main\((.*?)\) {{", metal, re.MULTILINE | re.DOTALL)
+    match = re.search(
+        rf"^{stage} \w+ {stage}_main\((.*?)\) {{", metal, re.MULTILINE | re.DOTALL
+    )
     assert match is not None, metal
     return match.group(1)
 
