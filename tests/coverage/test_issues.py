@@ -25,6 +25,19 @@ def test_keys_are_marker_safe_and_round_trip():
     assert issues.marker_key(None) == ""
 
 
+def test_gles_issues_carry_the_glsl_backend_label():
+    # The GLSL generator writes GLSL ES, and the label taxonomy has no backend:gles.
+    row = backend_row("gles", "output", [feature_entry("x", "wrong")])
+    assert issues.bug_labels(row) == (
+        "bug",
+        issues.LABEL,
+        "backend:glsl",
+        "direction:output",
+        "area:codegen",
+    )
+    assert "backend:webgl" in issues.tracking_labels(backend_row("webgl", "output", []))
+
+
 def test_first_run_files_tracking_and_bug_issues():
     report = coverage_report(
         hlsl_row(), backend_row("glsl", "output", [feature_entry("x", "supported")])
@@ -206,9 +219,8 @@ def test_wrong_results_with_one_cause_are_one_bug_issue():
         'CUDA output: identifier "erff" is undefined',
     ]
     assert (
-        "The coverage probes for 2 CUDA output features give a wrong result" in bugs[
-            0
-        ].body
+        "The coverage probes for 2 CUDA output features give a wrong result"
+        in bugs[0].body
     )
     assert "Affected features: `atomicAdd`, `sinf`." in bugs[0].body
     assert "--feature atomicAdd" in bugs[0].body
