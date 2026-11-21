@@ -11,6 +11,7 @@ from .c_family_operands import (
 )
 from .cuda_builtin_components import compute_builtin_subscript
 from .cuda_refusals import CudaLoweringRefused
+from .cuda_subscripts import vector_matrix_subscript, visit_as_reference
 from .cuda_tables import CUDA_SCALAR_CONSTRUCTOR_TYPE_ALIASES
 
 
@@ -37,7 +38,7 @@ class CudaExpressionMixin:
         if result_info is None:
             return None
 
-        object_expr = self.visit(object_node)
+        object_expr = visit_as_reference(self, object_node)
         value_expr = self.visit(value_node)
         value_info = self.swizzle_result_vector_info(
             self.expression_result_type(value_node)
@@ -335,6 +336,9 @@ class CudaExpressionMixin:
         builtin_component = self.cuda_compute_builtin_index_component(node)
         if builtin_component is not None:
             return builtin_component
+        subscript = vector_matrix_subscript(self, node, CudaLoweringRefused, "CUDA")
+        if subscript is not None:
+            return subscript
         if hasattr(node, "array_expr"):
             array = self.visit(node.array_expr)
         else:
