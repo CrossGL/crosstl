@@ -184,7 +184,9 @@ def build(feature: Feature) -> probes.Probe:
         glsl = dataclasses.replace(glsl, spelling=spelling)
     assembly, probe = _lowered(glsl, "glsl")
     if instruction and is_core(feature):
-        if not _calls(feature, assembly):
+        # The probe must contain the instruction itself, not an instruction of the same meaning (semantic._ALIASES),
+        # so that each encoding the importer reads has a probe of its own.
+        if not _calls(feature, assembly, exact=True):
             raise ProbeError(f"glslang does not lower {glsl.spelling} to {instruction}")
         if _STREAMS.search(assembly) and "OpCapability GeometryStreams" not in assembly:
             assembly = _GEOMETRY.sub(
@@ -248,11 +250,15 @@ def _tests_nan_bits(assembly: str) -> bool:
     )
 
 
-def _calls(feature: Feature, assembly: str) -> bool:
+def _calls(feature: Feature, assembly: str, exact: bool = False) -> bool:
+    """Whether ``assembly`` calls ``feature``'s instruction. Unless ``exact``, a core instruction is also called by an
+    instruction of the same meaning, so a round trip may write OpSubgroupAllKHR as OpGroupNonUniformAll.
+    """
     if is_core(feature):
         # Semantic tokens carry constant operands and group operations after the opcode: OpControlBarrier(2,2,264).
-        tokens = semantic.instructions(assembly)
-        return any(re.match(rf"{feature.name}\b", token) for token in tokens)
+        tokens = semantic.instructions(assembly, aliases=not exact)
+        name = feature.name if exact else semantic.canonical(feature.name)
+        return any(re.match(rf"{name}\b", token) for token in tokens)
     called = {match[2] for match in _EXTENDED.finditer(assembly)}
     return any(
         encoding <= called

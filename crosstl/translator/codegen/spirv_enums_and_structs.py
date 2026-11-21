@@ -13,6 +13,7 @@ from ..ast import (
     FunctionCallNode,
     IdentifierNode,
     LiteralNode,
+    MemberAccessNode,
     NamedType,
     StructNode,
     UnaryOpNode,
@@ -41,6 +42,14 @@ from .spirv_values import (
 class SpirvEnumStructMixin:
     """Enum struct members of ``VulkanSPIRVCodeGen``."""
 
+    # CrossGL operation -> SPIR-V opcode per component kind (float, integer).
+    COOPERATIVE_MATRIX_ELEMENTWISE_OPCODES = {
+        "elementwise_add": ("OpFAdd", "OpIAdd"),
+        "elementwise_subtract": ("OpFSub", "OpISub"),
+        "elementwise_multiply": ("OpFMul", "OpIMul"),
+        "negate": ("OpFNegate", "OpSNegate"),
+    }
+
     def process_cooperative_matrix_operation(self, expr):
         if expr.operation == "element":
             return self.process_cooperative_matrix_element(expr)
@@ -48,15 +57,21 @@ class SpirvEnumStructMixin:
             return self.process_cooperative_matrix_load(expr)
         if expr.operation == "store":
             return self.process_cooperative_matrix_store(expr)
-        if expr.operation != "multiply":
-            raise self.cooperative_matrix_operation_error(
-                expr,
-                "cooperative-matrix-operation-lowering",
-                "SPIR-V KHR cooperative-matrix type support is enabled, but "
-                f"operation '{expr.operation}' is not implemented",
-                "spirv.cooperative_matrix.operation-lowering",
-            )
-        return self.process_cooperative_matrix_multiply(expr)
+        if expr.operation == "multiply":
+            return self.process_cooperative_matrix_multiply(expr)
+        if expr.operation == "multiply_accumulate":
+            return self.process_cooperative_matrix_multiply_accumulate(expr)
+        if expr.operation == "fill":
+            return self.process_cooperative_matrix_fill(expr)
+        if expr.operation in self.COOPERATIVE_MATRIX_ELEMENTWISE_OPCODES:
+            return self.process_cooperative_matrix_elementwise(expr)
+        raise self.cooperative_matrix_operation_error(
+            expr,
+            "cooperative-matrix-operation-lowering",
+            "SPIR-V KHR cooperative-matrix type support is enabled, but "
+            f"operation '{expr.operation}' is not implemented",
+            "spirv.cooperative_matrix.operation-lowering",
+        )
 
     def cooperative_matrix_memory_control_flow(self, expr, operation: str):
         if self.current_function_node is not None and not self.function_is_entry_point(
@@ -99,7 +114,9 @@ class SpirvEnumStructMixin:
         finally:
             self.cooperative_matrix_loop_control_depth -= 1
 
-    def cooperative_matrix_memory_layout(self, expr, contract, operation: str):
+    def cooperative_matrix_memory_layout(
+        self, expr, contract, operation: str, column_major: bool = False
+    ):
         layout_name = str(contract.get("layout") or "unspecified")
         layout_name = layout_name.strip().lower().replace("-", "_")
         if layout_name not in {"row_major", "rowmajor", "unspecified"}:
@@ -111,11 +128,79 @@ class SpirvEnumStructMixin:
                 f"spirv.cooperative_matrix.{operation}-row-major-layout",
             )
         uint_type = self.register_primitive_type("uint")
-        return self.register_constant(0, uint_type)
+        # CooperativeMatrixLayout: RowMajorKHR = 0, ColumnMajorKHR = 1.
+        return self.register_constant(1 if column_major else 0, uint_type)
 
-    def cooperative_matrix_memory_alignment(self, contract) -> int:
+    def cooperative_matrix_memory_alignment(
+        self, contract, column_major: bool = False
+    ) -> int:
         component_size = self.uniform_scalar_size(contract["component_type"])
-        return min(16, contract["cols"] * component_size)
+        contiguous = contract["rows"] if column_major else contract["cols"]
+        return min(16, contiguous * component_size)
+
+    def cooperative_matrix_memory_flags(self, expr, operation: str):
+        """Return ``(column_major,)`` for the optional origin and transpose operands.
+
+        The transfer is ``(matrix, pointer, stride[, origin[, transpose]])``,
+        with the pointer and matrix swapped for a store. Only a zero origin and
+        a literal transpose flag have a SPIR-V encoding.
+        """
+        extra = expr.arguments[3:]
+        if len(expr.arguments) < 3 or len(expr.arguments) > 5:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-memory-contract",
+                f"SPIR-V cooperative-matrix {operation} supports the form with "
+                "matrix and pointer operands, a stride, an optional zero origin "
+                f"and an optional literal transpose flag; got {len(expr.arguments)} "
+                "operands",
+                f"spirv.cooperative_matrix.{operation}-memory-contract",
+            )
+        if extra:
+            origin = extra[0]
+            origin_components = getattr(origin, "args", None)
+            if origin_components is None:
+                origin_components = getattr(origin, "arguments", None)
+            origin_values = (
+                list(origin_components)
+                if origin_components is not None and not isinstance(origin, LiteralNode)
+                else [origin]
+            )
+            if not origin_values or any(
+                evaluate_literal_int_expression(
+                    value, self.active_literal_int_constants()
+                )
+                != 0
+                for value in origin_values
+            ):
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    f"cooperative-matrix-{operation}-memory-contract",
+                    f"SPIR-V cooperative-matrix {operation} requires a zero "
+                    "origin operand",
+                    f"spirv.cooperative_matrix.{operation}-memory-contract",
+                )
+        column_major = False
+        if len(extra) > 1:
+            flag = extra[1]
+            if isinstance(flag, LiteralNode) and isinstance(flag.value, bool):
+                column_major = flag.value
+            else:
+                flag_name = (
+                    flag.value
+                    if isinstance(flag, LiteralNode)
+                    else getattr(flag, "name", None)
+                )
+                if flag_name not in {"true", "false"}:
+                    raise self.cooperative_matrix_operation_error(
+                        expr,
+                        f"cooperative-matrix-{operation}-layout",
+                        f"SPIR-V cooperative-matrix {operation} requires a "
+                        "literal true or false transpose operand",
+                        f"spirv.cooperative_matrix.{operation}-transpose",
+                    )
+                column_major = flag_name == "true"
+        return column_major
 
     def cooperative_matrix_memory_operand_alignment(
         self, required_alignment: int
@@ -176,6 +261,84 @@ class SpirvEnumStructMixin:
                     return offset
         return None
 
+    def cooperative_matrix_member_byte_offset(
+        self, pointer_source, pointer
+    ) -> Optional[int]:
+        """Return the byte offset of ``block[k].member[j]...`` from its variable.
+
+        The importer writes element pointers into a storage block as
+        ``buf[0].member[k]``. The offset is the sum of the ``Offset`` of each
+        member and ``ArrayStride`` times each index the access chain applies,
+        and it is static only when every index is a literal.
+        """
+        root = pointer_source
+        while isinstance(root, (ArrayAccessNode, MemberAccessNode)):
+            if isinstance(root, ArrayAccessNode):
+                if (
+                    evaluate_literal_int_expression(
+                        root.index, self.active_literal_int_constants()
+                    )
+                    is None
+                ):
+                    return None
+                root = root.array
+            else:
+                root = root.object
+        if self.cooperative_matrix_direct_identifier_name(
+            root
+        ) is None or not self.cooperative_matrix_memory_base_has_static_offset(root):
+            return None
+
+        chains = {}
+        for line in self.code_lines:
+            match = re.match(r"%(\d+) = OpAccessChain %\d+ %(\d+)((?: %\d+)+)$", line)
+            if match is not None:
+                chains[int(match.group(1))] = (
+                    int(match.group(2)),
+                    [int(item) for item in re.findall(r"%(\d+)", match.group(3))],
+                )
+
+        total = 0
+        current_id = pointer.id
+        while current_id in chains:
+            base_id, index_ids = chains[current_id]
+            current_type = self.variable_value_types.get(base_id)
+            for index_id in index_ids:
+                if current_type is None:
+                    return None
+                index = self.constant_values_by_id.get(index_id)
+                if isinstance(index, bool) or not isinstance(index, int) or index < 0:
+                    return None
+                array_info = self.array_type_info_from_type(current_type)
+                members = self.current_struct_members.get(current_type.type.base_type)
+                if array_info is not None:
+                    stride = self.decoration_value(
+                        rf"OpDecorate %{current_type.id} ArrayStride (\d+)"
+                    )
+                    if stride is None:
+                        return None
+                    total += index * stride
+                    current_type = array_info[0]
+                elif members is not None and index < len(members):
+                    offset = self.decoration_value(
+                        rf"OpMemberDecorate %{current_type.id} {index} Offset (\d+)"
+                    )
+                    if offset is None:
+                        return None
+                    total += offset
+                    current_type = members[index][0]
+                else:
+                    return None
+            current_id = base_id
+        return total
+
+    def decoration_value(self, pattern: str) -> Optional[int]:
+        for decoration in self.decorations:
+            match = re.fullmatch(pattern, decoration)
+            if match is not None:
+                return int(match.group(1))
+        return None
+
     def cooperative_matrix_memory_stride(
         self,
         expr,
@@ -216,7 +379,12 @@ class SpirvEnumStructMixin:
         return self.register_constant(stride, uint_type)
 
     def cooperative_matrix_memory_pointer(
-        self, expr, pointer_source, contract, operation: str
+        self,
+        expr,
+        pointer_source,
+        contract,
+        operation: str,
+        column_major: bool = False,
     ):
         static_offset = self.cooperative_matrix_memory_static_offset(pointer_source)
         pointer = self.variable_pointer_from_expression(pointer_source)
@@ -313,7 +481,13 @@ class SpirvEnumStructMixin:
                     f"spirv.cooperative_matrix.{operation}-memory-operands",
                 )
 
-        if static_offset is None:
+        if static_offset is not None:
+            pointer_byte_offset = static_offset * pointee_size
+        else:
+            pointer_byte_offset = self.cooperative_matrix_member_byte_offset(
+                pointer_source, pointer
+            )
+        if pointer_byte_offset is None:
             raise self.cooperative_matrix_operation_error(
                 expr,
                 f"cooperative-matrix-{operation}-uniformity",
@@ -329,8 +503,9 @@ class SpirvEnumStructMixin:
                 "dynamically uniform within the subgroup",
                 f"spirv.cooperative_matrix.{operation}-uniformity",
             )
-        required_alignment = self.cooperative_matrix_memory_alignment(contract)
-        pointer_byte_offset = static_offset * pointee_size
+        required_alignment = self.cooperative_matrix_memory_alignment(
+            contract, column_major
+        )
         if pointer_byte_offset % required_alignment != 0:
             raise self.cooperative_matrix_operation_error(
                 expr,
@@ -347,17 +522,8 @@ class SpirvEnumStructMixin:
 
     def process_cooperative_matrix_load(self, expr):
         self.cooperative_matrix_memory_control_flow(expr, "load")
-        if len(expr.arguments) != 3:
-            raise self.cooperative_matrix_operation_error(
-                expr,
-                "cooperative-matrix-load-memory-contract",
-                "SPIR-V cooperative-matrix load currently supports the default "
-                "row-major form with destination, pointer, and stride operands; "
-                f"got {len(expr.arguments)} operands",
-                "spirv.cooperative_matrix.load-memory-contract",
-            )
-
-        destination_source, pointer_source, stride_source = expr.arguments
+        column_major = self.cooperative_matrix_memory_flags(expr, "load")
+        destination_source, pointer_source, stride_source = expr.arguments[:3]
         if self.cooperative_matrix_direct_identifier_name(destination_source) is None:
             raise self.cooperative_matrix_operation_error(
                 expr,
@@ -384,10 +550,12 @@ class SpirvEnumStructMixin:
                 "spirv.cooperative_matrix.load-destination",
             )
 
-        layout = self.cooperative_matrix_memory_layout(expr, contract, "load")
+        layout = self.cooperative_matrix_memory_layout(
+            expr, contract, "load", column_major
+        )
         pointer, pointee_size, required_alignment, memory_operand_alignment = (
             self.cooperative_matrix_memory_pointer(
-                expr, pointer_source, contract, "load"
+                expr, pointer_source, contract, "load", column_major
             )
         )
         stride = self.cooperative_matrix_memory_stride(
@@ -410,24 +578,17 @@ class SpirvEnumStructMixin:
 
     def process_cooperative_matrix_store(self, expr):
         self.cooperative_matrix_memory_control_flow(expr, "store")
-        if len(expr.arguments) != 3:
-            raise self.cooperative_matrix_operation_error(
-                expr,
-                "cooperative-matrix-store-memory-contract",
-                "SPIR-V cooperative-matrix store currently supports the default "
-                "row-major form with pointer, matrix, and stride operands; got "
-                f"{len(expr.arguments)} operands",
-                "spirv.cooperative_matrix.store-memory-contract",
-            )
-
-        pointer_source, matrix_source, stride_source = expr.arguments
+        column_major = self.cooperative_matrix_memory_flags(expr, "store")
+        pointer_source, matrix_source, stride_source = expr.arguments[:3]
         matrix, contract = self.cooperative_matrix_operation_value(
             expr, matrix_source, "stored"
         )
-        layout = self.cooperative_matrix_memory_layout(expr, contract, "store")
+        layout = self.cooperative_matrix_memory_layout(
+            expr, contract, "store", column_major
+        )
         pointer, pointee_size, required_alignment, memory_operand_alignment = (
             self.cooperative_matrix_memory_pointer(
-                expr, pointer_source, contract, "store"
+                expr, pointer_source, contract, "store", column_major
             )
         )
         stride = self.cooperative_matrix_memory_stride(
@@ -452,10 +613,79 @@ class SpirvEnumStructMixin:
                 f"got {len(expr.arguments)}",
                 "spirv.cooperative_matrix.multiply-arity",
             )
+        return self.lower_cooperative_matrix_mul_add(
+            expr, "multiply", expr.arguments[0], expr.arguments[1], None
+        )
 
+    def process_cooperative_matrix_multiply_accumulate(self, expr):
+        if len(expr.arguments) not in (3, 4):
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-multiply-arity",
+                "SPIR-V cooperative-matrix multiply_accumulate requires three "
+                "operands, or a destination and three operands; got "
+                f"{len(expr.arguments)}",
+                "spirv.cooperative_matrix.multiply-arity",
+            )
+        destination_source = expr.arguments[0] if len(expr.arguments) == 4 else None
+        left_source, right_source, accumulator_source = expr.arguments[-3:]
+        destination = None
+        destination_type = None
+        if destination_source is not None:
+            if (
+                self.cooperative_matrix_direct_identifier_name(destination_source)
+                is None
+            ):
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    "cooperative-matrix-multiply-destination",
+                    "SPIR-V cooperative-matrix multiply_accumulate requires a "
+                    "direct local matrix destination",
+                    "spirv.cooperative_matrix.multiply-destination",
+                )
+            destination = self.variable_pointer_from_expression(destination_source)
+            destination_type = (
+                self.pointer_pointee_type(destination)
+                if destination is not None
+                else None
+            )
+            if (
+                destination is None
+                or destination.type.storage_class != "Function"
+                or self.cooperative_matrix_type_info(destination_type) is None
+            ):
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    "cooperative-matrix-multiply-destination",
+                    "SPIR-V cooperative-matrix multiply_accumulate requires a "
+                    "function-local cooperative-matrix destination",
+                    "spirv.cooperative_matrix.multiply-destination",
+                )
+        result = self.lower_cooperative_matrix_mul_add(
+            expr,
+            "multiply_accumulate",
+            left_source,
+            right_source,
+            accumulator_source,
+            destination_type,
+        )
+        if destination is not None:
+            self.store_to_variable(destination, result)
+        return result
+
+    def lower_cooperative_matrix_mul_add(
+        self,
+        expr,
+        operation: str,
+        left_source,
+        right_source,
+        accumulator_source,
+        result_override=None,
+    ):
+        """Emit ``OpCooperativeMatrixMulAddKHR``; no accumulator means +0.0."""
         for label, operand, required_use in (
-            ("left", expr.arguments[0], "matrix_a"),
-            ("right", expr.arguments[1], "matrix_b"),
+            ("left", left_source, "matrix_a"),
+            ("right", right_source, "matrix_b"),
         ):
             if (
                 isinstance(operand, CooperativeMatrixOpNode)
@@ -472,20 +702,31 @@ class SpirvEnumStructMixin:
                 )
 
         left, left_contract = self.cooperative_matrix_operation_value(
-            expr, expr.arguments[0], "left"
+            expr, left_source, "left"
         )
         right, right_contract = self.cooperative_matrix_operation_value(
-            expr, expr.arguments[1], "right"
+            expr, right_source, "right"
         )
-        result_type, result_contract = self.cooperative_matrix_operation_result_type(
-            expr
-        )
+        accumulator = accumulator_contract = None
+        if accumulator_source is not None:
+            accumulator, accumulator_contract = self.cooperative_matrix_operation_value(
+                expr, accumulator_source, "accumulator"
+            )
+        if result_override is not None:
+            result_type = result_override
+            result_contract = self.cooperative_matrix_type_info(result_type)
+        else:
+            result_type, result_contract = (
+                self.cooperative_matrix_operation_result_type(expr)
+            )
 
-        required_uses = (
+        required_uses = [
             ("left", left_contract, "matrix_a"),
             ("right", right_contract, "matrix_b"),
             ("result", result_contract, "accumulator"),
-        )
+        ]
+        if accumulator_contract is not None:
+            required_uses.append(("accumulator", accumulator_contract, "accumulator"))
         for label, contract, required_use in required_uses:
             if contract["use"] != required_use:
                 raise self.cooperative_matrix_operation_error(
@@ -497,7 +738,7 @@ class SpirvEnumStructMixin:
                     "spirv.cooperative_matrix.multiply-use-role",
                 )
 
-        contracts = (left_contract, right_contract, result_contract)
+        contracts = [contract for _, contract, _ in required_uses]
         if len({contract["scope_value"] for contract in contracts}) != 1:
             raise self.cooperative_matrix_operation_error(
                 expr,
@@ -508,18 +749,19 @@ class SpirvEnumStructMixin:
             )
 
         expected_shape = (left_contract["rows"], right_contract["cols"])
-        if (
-            left_contract["cols"] != right_contract["rows"]
-            or (result_contract["rows"], result_contract["cols"]) != expected_shape
+        if left_contract["cols"] != right_contract["rows"] or any(
+            (contract["rows"], contract["cols"]) != expected_shape
+            for contract in (result_contract, accumulator_contract)
+            if contract is not None
         ):
+            shapes = ", ".join(
+                f"{contract['rows']}x{contract['cols']}" for contract in contracts
+            )
             raise self.cooperative_matrix_operation_error(
                 expr,
                 "cooperative-matrix-multiply-shape",
                 "SPIR-V cooperative-matrix multiply requires compatible MxK and "
-                "KxN operands and an MxN result; got "
-                f"{left_contract['rows']}x{left_contract['cols']}, "
-                f"{right_contract['rows']}x{right_contract['cols']}, and "
-                f"{result_contract['rows']}x{result_contract['cols']}",
+                "KxN operands and an MxN result and accumulator; got " + shapes,
                 "spirv.cooperative_matrix.multiply-shape",
             )
 
@@ -533,15 +775,117 @@ class SpirvEnumStructMixin:
                 "spirv.cooperative_matrix.multiply-component-type",
             )
 
-        zero_scalar = self.register_constant(0.0, result_contract["component_type"])
-        zero_accumulator = self.register_composite_constant(result_type, [zero_scalar])
+        if accumulator is None:
+            zero_scalar = self.register_constant(0.0, result_contract["component_type"])
+            accumulator = self.register_composite_constant(result_type, [zero_scalar])
         result_id = self.get_id()
         self.emit(
             f"%{result_id} = OpCooperativeMatrixMulAddKHR %{result_type.id} "
-            f"%{left.id} %{right.id} %{zero_accumulator.id}"
+            f"%{left.id} %{right.id} %{accumulator.id}"
         )
         result = SpirvId(result_id, result_type.type)
         self.value_types[result_id] = result_type
+        return result
+
+    def process_cooperative_matrix_fill(self, expr):
+        if len(expr.arguments) != 1:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-fill-arity",
+                "SPIR-V cooperative-matrix fill requires exactly one value; got "
+                f"{len(expr.arguments)}",
+                "spirv.cooperative_matrix.fill-arity",
+            )
+        result_type, result_contract = self.cooperative_matrix_operation_result_type(
+            expr
+        )
+        component_type = result_contract["component_type"]
+        if result_contract["component_name"] not in {"float", "int", "uint"}:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-fill-component-type",
+                "SPIR-V cooperative-matrix fill currently supports 32-bit float, "
+                "int, and uint components",
+                "spirv.cooperative_matrix.fill-component-type",
+            )
+        value = self.process_expression(expr.arguments[0])
+        if value is None:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                "cooperative-matrix-fill-value",
+                "SPIR-V cooperative-matrix fill could not evaluate its value",
+                "spirv.cooperative_matrix.fill-value",
+            )
+        value = self.coerce_scalar_constant_to_type(value, component_type)
+        value = self.convert_scalar_to_type(value, component_type)
+        result_id = self.get_id()
+        self.emit(f"%{result_id} = OpCompositeConstruct %{result_type.id} %{value.id}")
+        result = SpirvId(result_id, result_type.type)
+        self.value_types[result_id] = result_type
+        return result
+
+    def process_cooperative_matrix_elementwise(self, expr):
+        operation = expr.operation
+        expected_arity = 1 if operation == "negate" else 2
+        if len(expr.arguments) != expected_arity:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-arity",
+                f"SPIR-V cooperative-matrix {operation} requires exactly "
+                f"{expected_arity} operand(s); got {len(expr.arguments)}",
+                f"spirv.cooperative_matrix.{operation}-arity",
+            )
+        values = []
+        for index, argument in enumerate(expr.arguments):
+            values.append(
+                self.cooperative_matrix_operation_value(
+                    expr,
+                    argument,
+                    "matrix" if expected_arity == 1 else f"operand {index + 1}",
+                )
+            )
+        first_value, contract = values[0]
+        first_type = self.registered_value_type(first_value) or (
+            self.ensure_registered_type(first_value.type)
+        )
+        for value, _ in values[1:]:
+            value_type = self.registered_value_type(value) or (
+                self.ensure_registered_type(value.type)
+            )
+            if value_type.id != first_type.id:
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    f"cooperative-matrix-{operation}-operand-type",
+                    f"SPIR-V cooperative-matrix {operation} requires operands "
+                    "of identical matrix type, including use role and scope",
+                    f"spirv.cooperative_matrix.{operation}-operand-type",
+                )
+        component_name = contract["component_name"]
+        if component_name == "float":
+            opcode = self.COOPERATIVE_MATRIX_ELEMENTWISE_OPCODES[operation][0]
+        elif component_name in {"int", "uint"}:
+            opcode = self.COOPERATIVE_MATRIX_ELEMENTWISE_OPCODES[operation][1]
+            if operation == "negate" and component_name == "uint":
+                raise self.cooperative_matrix_operation_error(
+                    expr,
+                    "cooperative-matrix-negate-component-type",
+                    "SPIR-V cooperative-matrix negate does not support unsigned "
+                    "components",
+                    "spirv.cooperative_matrix.negate-component-type",
+                )
+        else:
+            raise self.cooperative_matrix_operation_error(
+                expr,
+                f"cooperative-matrix-{operation}-component-type",
+                f"SPIR-V cooperative-matrix {operation} currently supports "
+                "32-bit float, int, and uint components",
+                f"spirv.cooperative_matrix.{operation}-component-type",
+            )
+        operands = " ".join(f"%{value.id}" for value, _ in values)
+        result_id = self.get_id()
+        self.emit(f"%{result_id} = {opcode} %{first_type.id} {operands}")
+        result = SpirvId(result_id, first_type.type)
+        self.value_types[result_id] = first_type
         return result
 
     def is_cooperative_matrix_type_name(self, type_name: str) -> bool:

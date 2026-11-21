@@ -640,9 +640,11 @@ def test_backend_codegen_smoke(backend):
 # Backends that refuse ADVANCED_SMOKE_SHADER's call through a Metal visible
 # function table: Vulkan SPIR-V has no function pointers (SPV_INTEL_function_pointers
 # requires the Kernel execution model).
-# HLSL, GLSL, CUDA and HIP have no function tables, so `visible_function_table vft;` must not be copied into their output.
+# HLSL, GLSL, CUDA, HIP and Mojo have no function tables, so `visible_function_table vft;` must not be copied into their output.
 ADVANCED_SMOKE_REFUSALS = {
     "vulkan": (SPIRVBuiltinLoweringError, "no function pointers"),
+    # rust-gpu has no function tables or indirect command buffers: the calls through them are refused by name.
+    "rust": (LoweringRefused, r"'vft\[0\]' has no rust-gpu lowering"),
     **{
         backend: (
             LoweringRefused,
@@ -654,6 +656,7 @@ ADVANCED_SMOKE_REFUSALS = {
             ("webgl", "WebGL"),
             ("cuda", "CUDA"),
             ("hip", "HIP"),
+            ("mojo", "Mojo"),
         )
     },
 }

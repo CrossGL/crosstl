@@ -241,17 +241,21 @@ class OpenGLStageFunctionMixin:
 
         topology_name = str(topology).strip().strip('"').lower()
         if topology_name in {"triangle_cw", "triangles_cw"}:
-            if domain != "triangles":
+            # Triangle and quad patches both tessellate into triangles, whose winding cw and ccw set (GLSL 4.60
+            # section 4.4.1.2); an isoline patch tessellates into lines.
+            if domain not in ("triangles", "quads"):
                 raise OpenGLRefusal(
                     "GLSL tessellation outputtopology triangle_cw requires "
-                    "triangles domain"
+                    "a triangles or quads domain"
                 )
             return "cw", False
         if topology_name in {"triangle_ccw", "triangles_ccw"}:
-            if domain != "triangles":
+            # Triangle and quad patches both tessellate into triangles, whose winding cw and ccw set (GLSL 4.60
+            # section 4.4.1.2); an isoline patch tessellates into lines.
+            if domain not in ("triangles", "quads"):
                 raise OpenGLRefusal(
                     "GLSL tessellation outputtopology triangle_ccw requires "
-                    "triangles domain"
+                    "a triangles or quads domain"
                 )
             return "ccw", False
         if topology_name in {"line", "lines"}:
@@ -885,7 +889,10 @@ class OpenGLStageFunctionMixin:
                 return True
 
         for stage in getattr(ast, "stages", {}).values():
-            for func in getattr(stage, "functions", []) or []:
+            # A helper declared inside the stage block is a local function of the stage.
+            stage_helpers = list(getattr(stage, "functions", []) or [])
+            stage_helpers.extend(getattr(stage, "local_functions", []) or [])
+            for func in stage_helpers:
                 if id(func) in stage_entry_ids:
                     if id(func) not in seen_entries and entry_declares_parameter_struct(
                         func
@@ -1247,6 +1254,9 @@ class OpenGLStageFunctionMixin:
             type_names=type_names,
             reserved_names=self.glsl_preprocessor_identifier_names(ast),
         )
+        for name in sorted(self.glsl_builtin_redeclaration_names(ast)):
+            self.glsl_module_identifier_names[name] = name
+            self.glsl_module_used_identifier_names.add(name)
 
     def prepare_glsl_trailing_zero_helper_names(self, functions):
         reserved_names = set()

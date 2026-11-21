@@ -11,6 +11,8 @@ from ..import_exact_lookups import (
     builtin_variable_name,
     constant_or_literal,
 )
+from ..matrix_order_import import member_is_row_major
+from ..type_declaration_names import declarable_struct_name
 from ..VulkanAst import LayoutNode
 
 
@@ -79,6 +81,7 @@ class VulkanLayoutMixin:
 
         struct_fields = []
         struct_field_indices = []
+        row_major_fields = set()
         for member_index, member_type_id in enumerate(
             struct_type.get("member_types", [])
         ):
@@ -95,6 +98,8 @@ class VulkanLayoutMixin:
             ) or member_names.get(struct_type_id, {}).get(
                 member_key, f"member{member_key}"
             )
+            if member_is_row_major(member_decorations, struct_type_id, member_key):
+                row_major_fields.add(len(struct_fields))
             struct_fields.append((data_type, f"{field_name}{array_suffix}"))
 
         if not struct_fields:
@@ -103,10 +108,11 @@ class VulkanLayoutMixin:
         variable_name = self.spirv_assembly_value_name(variable_id, names, decorations)
         # A storage block is declared as a struct type plus a variable of it, so an unnamed block type takes a name
         # of its own: the variable's name would make each use of the variable also read as a use of the type.
-        block_name = (
+        block_name = declarable_struct_name(
             names.get(struct_type_id)
             or (None if layout_type == "BUFFER" else variable_name)
-            or self.spirv_fallback_identifier(struct_type_id, "block")
+            or self.spirv_fallback_identifier(struct_type_id, "block"),
+            frozenset(names.values()),
         )
         qualifiers = []
         if storage_class in {"StorageBuffer", "Uniform"}:
@@ -142,6 +148,7 @@ class VulkanLayoutMixin:
             spirv_storage_class=storage_class,
         )
         node.instance_array_suffix = instance_suffix
+        node.row_major_fields = frozenset(row_major_fields)
         if storage_class in {"Uniform", "PushConstant"} and layout_type == "UNIFORM":
             block_layout = spirv_block_layout(
                 block_name,

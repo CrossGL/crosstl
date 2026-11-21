@@ -12,6 +12,7 @@ from .glsl_wave_extended import (
     GLSL_EXTENDED_WAVE_ARITIES,
     GLSL_EXTENDED_WAVE_DIRECT_MAPPINGS,
     GLSL_EXTENDED_WAVE_EXTENSIONS,
+    GLSL_QUAD_VOTE_FUNCTIONS,
 )
 from .index_range_contracts import OPENGL_INDEX_PROFILE
 from .opengl_values import (
@@ -29,6 +30,9 @@ class OpenGLTableMixin:
     """Table members of ``GLSLCodeGen``."""
 
     GLSL_TARGET_DISPLAY_NAME = "OpenGL"
+    # Separate samplers and runtime texture arrays keep their own declarations under ``#ifdef VULKAN``
+    # (glsl_vulkan_resources).
+    GLSL_VULKAN_RESOURCE_FORMS = True
     # One compilation unit holds one entry per stage, main (glsl_stage_entries.refuse_repeated_stage_entries).
     one_entry_per_stage = True
 
@@ -472,6 +476,8 @@ class OpenGLTableMixin:
         | GLSL_TYPE_KEYWORDS
     )
     GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_",)
+    # GLSL ES rejects a global or a function that spells a built-in function; desktop GLSL only a call it hides.
+    GLSL_RESERVES_BUILTIN_FUNCTION_NAMES = False
     GLSL_BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     COMPOUND_ASSIGNMENT_BINARY_OPERATORS = {
         "+=": "+",
@@ -1034,6 +1040,7 @@ class OpenGLTableMixin:
         "WaveActiveBallot",
         "WaveActiveCountBits",
         "WavePrefixCountBits",
+        *GLSL_QUAD_VOTE_FUNCTIONS,
     }
     GLSL_WAVE_SCALAR_OR_VECTOR_OPERATIONS = {
         "WaveActiveAllEqual",

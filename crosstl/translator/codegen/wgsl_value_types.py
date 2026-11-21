@@ -248,16 +248,39 @@ class WGSLValueTypeMixin:
     def is_bool_type(self, vtype):
         return self.scalar_type_name(vtype) == "bool"
 
-    def is_uniform_bool_member_access(self, expr):
+    def uniform_bool_member_type(self, expr):
+        """The ``bool`` or ``vecN<bool>`` type of a uniform block member that ``expr`` accesses, else ``None``."""
         if not isinstance(expr, MemberAccessNode):
-            return False
+            return None
         object_type = self.array_element_type(self.expression_type(expr.object_expr))
         struct_name = self.struct_type_name(object_type)
         if struct_name not in self._uniform_buffer_struct_names:
-            return False
-        return self.is_bool_type(
-            self._struct_member_types.get((struct_name, expr.member))
-        )
+            return None
+        member_type = self._struct_member_types.get((struct_name, expr.member))
+        return member_type if self.uniform_bool_lanes(member_type) is not None else None
+
+    def uniform_bool_lanes(self, vtype):
+        """The lane count of a ``bool`` or ``vecN<bool>`` type, which a uniform block stores as ``u32`` lanes.
+
+        WGSL's ``bool`` is not host-shareable (WGSL section 6.2.1), so a uniform block member of a boolean type
+        is a ``u32`` or ``vecN<u32>``, as std140 lays out GLSL's ``bool`` and ``bvecN``. Returns ``None`` for
+        any other type.
+        """
+        if self.is_bool_type(vtype):
+            return 1
+        shape = self.vector_shape(vtype)
+        if shape is not None and shape[0] == "bool":
+            return shape[1]
+        return None
+
+    def uniform_bool_value(self, access, vtype):
+        """The boolean value of uniform member ``access``, which holds ``u32`` lanes, or ``None``."""
+        lanes = self.uniform_bool_lanes(vtype)
+        if lanes is None:
+            return None
+        if lanes == 1:
+            return f"({access} != 0u)"
+        return f"vec{lanes}<bool>({access})"
 
     def vector_shape(self, vtype):
         try:
@@ -318,7 +341,7 @@ class WGSLValueTypeMixin:
         return self.type_name_string(vtype)
 
     def is_vector_member(self, member):
-        return bool(member) and all(component in "xyzwrgba" for component in member)
+        return bool(member) and all(component in "xyzwrgbastpq" for component in member)
 
     def value_type(self, name):
         for scope in reversed(self._value_type_scopes):

@@ -51,10 +51,10 @@ fn second(@group(0) @binding({binding}) var<storage, read_write> data: array<f32
 """
 
 
-def _translate(tmp_path, source, suffix="cgl"):
+def _translate(tmp_path, source, suffix="cgl", backend="slang"):
     path = tmp_path / f"kernel.{suffix}"
     path.write_text(source)
-    return crosstl.translate(str(path), backend="slang", format_output=False)
+    return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
 def _slangc():
@@ -105,15 +105,17 @@ def test_entries_share_an_identical_resource(tmp_path):
     )
 
 
-def test_entries_binding_one_name_differently_are_refused(tmp_path):
+@pytest.mark.parametrize("backend", ["slang", "wgsl"])
+def test_entries_binding_one_name_differently_are_refused(tmp_path, backend):
     with pytest.raises(ComputeEntryResourceError, match="differently"):
-        _translate(tmp_path, TWO_ENTRIES.replace("{binding}", "1"))
+        _translate(tmp_path, TWO_ENTRIES.replace("{binding}", "1"), backend=backend)
 
 
-def test_a_parameter_binding_a_taken_slot_is_refused(tmp_path):
+@pytest.mark.parametrize("backend", ["slang", "wgsl"])
+def test_a_parameter_binding_a_taken_slot_is_refused(tmp_path, backend):
     source = "RWStructuredBuffer<float> other @binding(0);\n" + KERNEL
     with pytest.raises(ComputeEntryResourceError, match="already uses"):
-        _translate(tmp_path, source)
+        _translate(tmp_path, source, backend=backend)
 
 
 def test_bound_storage_that_is_no_array_is_a_one_element_buffer(tmp_path):

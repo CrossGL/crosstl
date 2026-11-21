@@ -1,0 +1,1 @@
+A CrossGL `@stage_entry` function named `main` is renamed in Metal output (`kernel_main`, `vertex_main`, `fragment_main`), as an entry without the attribute already is. The Metal compiler rejects a kernel, vertex or fragment function called `main`, so the output used to fail to compile (#4637).

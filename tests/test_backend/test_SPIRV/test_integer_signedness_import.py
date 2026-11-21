@@ -164,9 +164,87 @@ def test_a_uint_constant_above_int_max_keeps_its_type(tmp_path):
 
 def test_signed_modulus_takes_the_sign_of_the_divisor(tmp_path):
     crossgl = _crossgl(tmp_path)
-    remainder = "(asint(X) % 3)"
+    # The truncated remainder is read four times, so it is declared once where OpSMod is defined.
+    assert "int value_31_remainder = (asint(X) % 3);" in crossgl
+    remainder = "value_31_remainder"
     mask = f"((({remainder} ^ 3) & ({remainder} | -{remainder})) >> 31)"
     assert f"buf[0].v[4] = asuint(({remainder} + (3 & {mask})));" in crossgl
+
+
+NESTED_SMOD = """               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+               OpName %main "main"
+               OpName %Buf "Buf"
+               OpMemberName %Buf 0 "v"
+               OpName %buf "buf"
+               OpDecorate %_rt ArrayStride 4
+               OpMemberDecorate %Buf 0 Offset 0
+               OpDecorate %Buf Block
+               OpDecorate %buf DescriptorSet 0
+               OpDecorate %buf Binding 0
+       %void = OpTypeVoid
+     %void_f = OpTypeFunction %void
+        %int = OpTypeInt 32 1
+      %int_0 = OpConstant %int 0
+      %int_1 = OpConstant %int 1
+      %int_2 = OpConstant %int 2
+        %_rt = OpTypeRuntimeArray %int
+        %Buf = OpTypeStruct %_rt
+    %ptr_Buf = OpTypePointer StorageBuffer %Buf
+    %ptr_int = OpTypePointer StorageBuffer %int
+        %buf = OpVariable %ptr_Buf StorageBuffer
+       %main = OpFunction %void None %void_f
+      %entry = OpLabel
+         %pa = OpAccessChain %ptr_int %buf %int_0 %int_0
+          %a = OpLoad %int %pa
+         %pb = OpAccessChain %ptr_int %buf %int_0 %int_1
+          %b = OpLoad %int %pb
+        %m_0 = OpSMod %int %b %int_2
+DEPTH_LINES
+         %po = OpAccessChain %ptr_int %buf %int_0 %int_2
+               OpStore %po %LAST
+               OpReturn
+               OpFunctionEnd
+"""
+
+
+def _nested_smod(depth):
+    lines = []
+    for level in range(1, depth + 1):
+        lines.append(f"        %s_{level} = OpIAdd %int %a %m_{level - 1}")
+        lines.append(f"        %m_{level} = OpSMod %int %s_{level} %m_{level - 1}")
+    source = NESTED_SMOD.replace("DEPTH_LINES", "\n".join(lines))
+    return source.replace("%LAST", f"%m_{depth}")
+
+
+def test_nested_signed_modulus_grows_linearly_with_its_depth(tmp_path):
+    # ((a + m) % m) nested: an inline lowering repeats the inner OpSMod in both operands, once per read.
+    sizes = []
+    for depth in (4, 8):
+        path = _write(tmp_path, _nested_smod(depth), f"nested_{depth}.spvasm")
+        crossgl = crosstl.translate(path, backend="cgl", format_output=False)
+        body = crossgl[crossgl.index("void main") :]
+        sizes.append(len(body))
+        for level in range(depth + 1):
+            assert body.count(f"int m_{level}_remainder = ") == 1
+        for level in range(1, depth + 1):
+            assert body.count(f"int m_{level}_divisor = ") == 1
+    assert sizes[1] < 2.5 * sizes[0]
+
+
+def test_nested_signed_modulus_validates_as_spirv(tmp_path):
+    if not (shutil.which("spirv-as") and shutil.which("spirv-val")):
+        pytest.skip("SPIRV-Tools are not on PATH")
+    source = _write(tmp_path, _nested_smod(3))
+    binary = tmp_path / "source.spv"
+    _run(["spirv-as", "--target-env", "vulkan1.1", source, "-o", str(binary)])
+    _run(["spirv-val", "--target-env", "vulkan1.1", str(binary)])
+    assembly = crosstl.translate(source, backend="vulkan", format_output=False)
+    path = _write(tmp_path, assembly, "round_trip.spvasm")
+    _run(["spirv-as", "--target-env", "vulkan1.1", path, "-o", str(binary)])
+    _run(["spirv-val", "--target-env", "vulkan1.1", str(binary)])
 
 
 def test_float_to_signed_conversion_into_a_uint_converts_to_int(tmp_path):

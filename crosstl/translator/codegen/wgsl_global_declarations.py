@@ -3,6 +3,7 @@
 import re
 
 from ..refusals import WGSLRefusal
+from .wgsl_uniform_registers import wgsl_register_block_lines
 from .wgsl_workgroup_locals import WORKGROUP_QUALIFIERS
 
 
@@ -10,6 +11,9 @@ class WGSLGlobalDeclarationMixin:
     """Global declaration members of ``WGSLCodeGen``."""
 
     def generate_cbuffer(self, node):
+        register_lines = wgsl_register_block_lines(self, node)
+        if register_lines is not None:
+            return self.declare_uniform_block(node, register_lines)
         lines = [f"struct {self.type_identifier_name(node.name)} {{"]
         for member in getattr(node, "members", []) or []:
             self.validate_cbuffer_member(node, member)
@@ -25,11 +29,14 @@ class WGSLGlobalDeclarationMixin:
                 f"{self.uniform_buffer_member_type_name(member.member_type)},"
             )
         lines.append("};")
+        return self.declare_uniform_block(node, lines)
 
+    def declare_uniform_block(self, node, struct_lines):
         attributes = (
             self.explicit_binding_attributes(node) or self.next_binding_attributes()
         )
         instance_name = self.cbuffer_instance_name(node)
+        lines = list(struct_lines)
         lines.append(
             f"{attributes}\nvar<uniform> {instance_name}: "
             f"{self.type_identifier_name(node.name)};"
@@ -69,6 +76,11 @@ class WGSLGlobalDeclarationMixin:
         if sampled_texture_type is not None:
             return self.generate_sampled_texture_global_variable(
                 node, sampled_texture_type
+            )
+        multisampled_texture_type = self.multisampled_texture_type(node.var_type)
+        if multisampled_texture_type is not None:
+            return self.generate_multisampled_texture_global_variable(
+                node, multisampled_texture_type
             )
         if self.is_sampler_type(node.var_type):
             return self.generate_sampler_global_variable(node)
@@ -368,10 +380,12 @@ class WGSLGlobalDeclarationMixin:
         attributes = (
             self.explicit_binding_attributes(node) or self.next_binding_attributes()
         )
+        # An atomic built-in on the buffer's elements makes them atomic<T> (wgsl_buffer_atomics).
+        storage_type = self.atomic_declaration_type(None, node.name, node.var_type)
         return (
             f"{attributes}\nvar<storage, read_write> "
             f"{self.module_identifier_name(node.name)}: "
-            f"{self.buffer_pointer_storage_type(node.var_type)};"
+            f"{self.buffer_pointer_storage_type(storage_type)};"
         )
 
     def generate_glsl_buffer_block_global_variable(self, node):

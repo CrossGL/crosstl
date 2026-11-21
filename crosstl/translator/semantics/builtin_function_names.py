@@ -332,7 +332,7 @@ CUDA_FUNCTION_NAMES = (
 _CROSSGL_OPERATION_NAMES = _names("""
 atomicLoad atomicStore atomicCompareExchange atomicCompareExchangeWeak atomicThreadFence workgroupBarrier
 workgroupExecutionBarrier subgroupExecutionBarrier deviceMemoryBarrier allMemoryBarrier textureResidency
-textureResident textureGatherCompareOffsets write_sampler_feedback write_sampler_feedback_bias
+textureResident textureGatherCompareOffsets textureSamplePosition write_sampler_feedback write_sampler_feedback_bias
 write_sampler_feedback_grad write_sampler_feedback_level fwidth_fine fwidth_coarse doubleBitsToLong longBitsToDouble
 printf discard inverseSqrt alignof lambda assert raise Some is_Some is_None unwrap_Some
 """) | frozenset(SIZEOF_LAYOUTS)

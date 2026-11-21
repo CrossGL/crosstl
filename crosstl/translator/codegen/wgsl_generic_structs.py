@@ -21,13 +21,14 @@ from ..ast import (
 )
 from ..refusals import WGSLRefusal
 from .enum_utils import sanitize_type_name
-from .wgsl_primitive_index import (
-    binds_primitive_index,
-    primitive_index_member_type,
-)
+from .wgsl_primitive_index import binds_primitive_index
 from .wgsl_stage_io import (
     member_interpolation,
     with_interpolation,
+)
+from .wgsl_unsigned_builtin_members import (
+    scalar_builtin_of,
+    unsigned_builtin_member_type,
 )
 
 
@@ -84,8 +85,13 @@ class WGSLGenericStructMixin:
                 )
             member_name = self.struct_member_identifier_name(node.name, member.name)
             member_type = member.member_type
-            if binds_primitive_index(attributes):
-                member_type = primitive_index_member_type(self, node.name, member)
+            unsigned_builtin = scalar_builtin_of(attributes)
+            if unsigned_builtin is not None:
+                member_type = unsigned_builtin_member_type(
+                    self, node.name, member, unsigned_builtin
+                )
+                if binds_primitive_index(attributes):
+                    self._uses_primitive_index = True
             stage_array = self.stage_interface_array_member_info_for_type(member_type)
             base_location = (
                 implicit_location

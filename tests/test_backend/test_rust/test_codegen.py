@@ -20,6 +20,7 @@ from crosstl.backend.Rust.RustCrossGLCodeGen import RustToCrossGLConverter
 from crosstl.backend.Rust.RustLexer import RustLexer
 from crosstl.backend.Rust.RustParser import RustParser
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 
@@ -364,7 +365,7 @@ def test_wgpu_underscore_separated_integer_suffix_codegen_reparse():
 
     assert "0_u32" not in result
     assert "1_u32" not in result
-    assert "{0, 0, 0, 0}" in result
+    assert "{0u, 0u, 0u, 0u}" in result
     crosstl.translator.parse(result)
 
 
@@ -640,8 +641,13 @@ def test_translate_api_accepts_rust_source_preserves_stage_entry(tmp_path):
     assert "vec4(vertex_.x, vertex_.y, vertex_.z, 1.0)" in cgl_result
 
     rust_result = crosstl.translate(str(rust_file), backend="rust", format_output=False)
-    assert "pub fn vertex_main(vertex_: Vec3<f32>) -> Vec4<f32>" in rust_result
-    assert "Vec4::<f32>::new(vertex_.x, vertex_.y, vertex_.z, 1.0)" in rust_result
+    # An unannotated vec4 vertex result is the position, as in GLSL, HLSL and Metal output.
+    assert "#[spirv(vertex)]" in rust_result
+    assert (
+        "pub fn vertex_main(#[spirv(location = 0)] vertex_: Vec3, "
+        "#[spirv(position)] out_value: &mut Vec4) -> ()" in rust_result
+    )
+    assert "Vec4::new(vertex_.x, vertex_.y, vertex_.z, 1.0)" in rust_result
     assert "pub fn main() -> ()" not in rust_result
 
 
@@ -2599,21 +2605,35 @@ def test_rust_shader_stage_local_aliases_shadow_parameter_after_initializer(tmp_
     assert "vec4 fragment_ = vertex_1;" in cgl_result
     assert "return fragment_;" in cgl_result
 
-    rust_result = crosstl.translate(str(rust_file), backend="rust", format_output=False)
+    # Vulkan forbids Boolean interface variables, so rust-gpu output refuses the bool vertex input by name.
+    with pytest.raises(
+        RustLoweringRefused, match=r"vertex input 'condition' has type bool"
+    ):
+        crosstl.translate(str(rust_file), backend="rust", format_output=False)
+
+    float_file = tmp_path / "float_shader.rs"
+    float_file.write_text(
+        code.replace("condition: bool", "condition: f32").replace(
+            "if condition {", "if condition > 0.0 {"
+        ),
+        encoding="utf-8",
+    )
+    rust_result = crosstl.translate(
+        str(float_file), backend="rust", format_output=False
+    )
     assert (
-        "pub fn vertex_main(vertex_: Vec3<f32>, condition: bool) -> Vec4<f32>"
+        "pub fn vertex_main(#[spirv(location = 0)] vertex_: Vec3, "
+        "#[spirv(location = 1)] condition: f32, "
+        "#[spirv(position)] out_value: &mut Vec4) -> ()" in rust_result
+    )
+    assert (
+        "let vertex_1: Vec4 = Vec4::new(vertex_.x, vertex_.y, vertex_.z, 1.0);"
         in rust_result
     )
-    assert (
-        "let vertex_1: Vec4<f32> = "
-        "Vec4::<f32>::new(vertex_.x, vertex_.y, vertex_.z, 1.0);" in rust_result
-    )
-    assert (
-        "let vertex_2: Vec4<f32> = "
-        "Vec4::<f32>::new(0.0, 0.0, 0.0, 1.0);" in rust_result
-    )
-    assert "let fragment_: Vec4<f32> = vertex_1;" in rust_result
-    assert "return fragment_;" in rust_result
+    assert "let vertex_2: Vec4 = Vec4::new(0.0, 0.0, 0.0, 1.0);" in rust_result
+    assert "let fragment_: Vec4 = vertex_1;" in rust_result
+    assert "let return_value = fragment_;" in rust_result
+    assert "*out_value = return_value;" in rust_result
 
 
 def test_fragment_shader_conversion():
@@ -3003,7 +3023,7 @@ def test_for_loop_enumerate_iter_tuple_pattern_conversion():
     try:
         result = parse_and_generate(code)
 
-        assert "for (int i = 0; i < values.length; i++)" in result
+        assert "for (int i = 0; i < values.length(); i++)" in result
         assert "auto value = values[i];" in result
         assert "consume(i, value);" in result
         assert "values.iter().enumerate()" not in result
@@ -3026,7 +3046,7 @@ def test_for_loop_enumerate_iter_side_effect_source_conversion():
         assert "auto _for_iterable_0 = next_values();" in result
         assert (
             "for (int _for_index_0 = 0; "
-            "_for_index_0 < _for_iterable_0.length; _for_index_0++)"
+            "_for_index_0 < _for_iterable_0.length(); _for_index_0++)"
         ) in result
         assert "auto value = _for_iterable_0[_for_index_0];" in result
         assert "consume(value);" in result
@@ -3207,10 +3227,10 @@ def test_len_method_conversion():
     try:
         result = parse_and_generate(code)
 
-        assert "n = values.length;" in result
-        assert "for (int i = 0; i < values.length; i++)" in result
-        assert "for (int j = 0; j < values.length; j++)" in result
-        assert "int _for_bound_0 = next_values().length;" in result
+        assert "n = values.length();" in result
+        assert "for (int i = 0; i < values.length(); i++)" in result
+        assert "for (int j = 0; j < values.length(); j++)" in result
+        assert "int _for_bound_0 = next_values().length();" in result
         assert "for (int k = 0; k < _for_bound_0; k++)" in result
         assert result.count("next_values()") == 1
         assert ".len()" not in result
@@ -3286,7 +3306,8 @@ def test_scalar_math_method_conversion():
         assert "e = degrees(angle);" in result
         assert "f = pow(x, y);" in result
         assert "g = pow(x, n);" in result
-        assert "h = fract(x);" in result
+        # Rust's fract truncates: x - x.trunc().
+        assert "h = (x - trunc(x));" in result
         assert "i = clamp(x, 0.0, 1.0);" in result
         assert "j = clamp(x, y, angle);" in result
         assert "k = min(x, y);" in result
@@ -3404,7 +3425,7 @@ def test_unary_math_intrinsic_calls_convert_to_crossgl_intrinsics():
     assert "trunc(value)" in result
     assert "roundEven(value)" in result
     assert "scalar_root = sqrt(scalar);" in result
-    assert "scalar_fraction = fract(scalar);" in result
+    assert "scalar_fraction = (scalar - trunc(scalar));" in result
     assert "crate::math::sqrt" not in result
     assert "rsqrt(value)" not in result
     assert "crate::math::fract" not in result
@@ -3636,10 +3657,17 @@ def test_rust_gpu_shadertoy_step_and_rem_euclid_methods_codegen():
     result = parse_and_generate(code)
 
     assert "vec3 repeat_tile(vec3 point, float face_blend, float delta)" in result
-    assert "repeated = (mod(point, vec3(6.0)) - vec3(3.0));" in result
+    # rem_euclid is never negative: fmod, plus the divisor's magnitude when the remainder is negative.
     assert (
-        "angle = (mod((face_blend + (delta * 22.5)), (delta * 45.0)) "
-        "- (delta * 22.5));" in result
+        "repeated = (vec3(((fmod(point.x, vec3(6.0).x) < 0.0) ? "
+        "(fmod(point.x, vec3(6.0).x) + abs(vec3(6.0).x)) : fmod(point.x, vec3(6.0).x)), "
+        in result
+    )
+    assert (
+        "angle = (((fmod((face_blend + (delta * 22.5)), (delta * 45.0)) < 0.0) ? "
+        "(fmod((face_blend + (delta * 22.5)), (delta * 45.0)) + abs((delta * 45.0))) : "
+        "fmod((face_blend + (delta * 22.5)), (delta * 45.0))) - (delta * 22.5));"
+        in result
     )
     assert "scalar_gate = step(0.5, face_blend);" in result
     assert "vector_gate = step(vec3(0.0, 0.0, 0.0), point);" in result
@@ -4214,7 +4242,7 @@ def test_inferred_struct_local_impl_method_named_like_scalar_builtin_does_not_lo
     result = parse_and_generate(code)
 
     assert "float Wave_sin(" in result
-    assert "let w = Wave { value: x };" in result
+    assert "Wave w = Wave { value: x };" in result
     assert "return Wave_sin(w);" in result
     assert "return sin(w);" not in result
 
@@ -5585,7 +5613,8 @@ def test_unary_operations_conversion():
         assert "(-5)" in result
         assert "(!true)" in result
         assert "shared_ = value;" in result
-        assert "writable = value;" in result
+        # A mutable reference local names the place it borrows: no copy is declared.
+        assert "writable" not in result
         assert "pointed = ptr;" in result
         assert "&value" not in result
         assert "&mut value" not in result
@@ -9177,21 +9206,21 @@ def test_numeric_literal_suffix_conversion():
         result = parse_and_generate(code)
 
         assert "signed = 42;" in result
-        assert "unsigned = 10;" in result
+        assert "unsigned = 10u;" in result
         assert "sized = 7;" in result
         assert "float32 = 1.5;" in result
         assert "float64 = 2.0;" in result
-        assert "casted = int(1);" in result
+        assert "casted = int(1u);" in result
         assert "int repeated[3] = {4, 4, 4};" in result
-        assert "grouped = 1000;" in result
-        assert "hexed = 255;" in result
-        assert "binary = 10;" in result
+        assert "grouped = 1000u;" in result
+        assert "hexed = 255u;" in result
+        assert "binary = 10u;" in result
         assert "octal = 63;" in result
         assert "grouped_float = 1000.5;" in result
         assert "exponent = 1.0e-3;" in result
         assert "trailing_dot = 1.;" in result
-        assert "case 1:" in result
-        assert "case 255:" in result
+        assert "case 1u:" in result
+        assert "case 255u:" in result
         assert "i32" not in result
         assert "u32" not in result
         assert "usize" not in result

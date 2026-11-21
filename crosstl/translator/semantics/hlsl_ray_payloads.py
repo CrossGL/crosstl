@@ -74,7 +74,7 @@ def annotate_hlsl_ray_payloads(program, target) -> int:
             for parameter in getattr(function, "parameters", None) or []:
                 if _has_attribute(parameter, "payload"):
                     names.append(_struct_name(_declared_type(parameter)))
-        for call in _trace_ray_calls(function):
+        for call in _trace_ray_calls(program, stage, function):
             names.append(_payload_struct_name(program, stage, function, call))
     marked = 0
     for name in dict.fromkeys(name for name in names if name is not None):
@@ -113,6 +113,7 @@ def _walk(node):
         yield from _walk(get_child(node, field, key))
 
 
+_HIT_OBJECT_TYPE = "dx::HitObject"
 # Calls whose last argument is a ray payload, with their DXR argument counts.
 _PAYLOAD_CALL_ARITY = {
     "TraceRay": 8,
@@ -121,31 +122,41 @@ _PAYLOAD_CALL_ARITY = {
 }
 
 
-def _trace_ray_calls(function):
+def _trace_ray_calls(program, stage, function):
     for node in _walk(function):
         if isinstance(node, A.RayTracingOpNode) and node.operation == "TraceRay":
             yield node
         elif (
             isinstance(node, A.FunctionCallNode)
-            and _callee_name(node) in _PAYLOAD_CALL_ARITY
+            and _callee_name(node, program, stage, function) in _PAYLOAD_CALL_ARITY
             and len(getattr(node, "arguments", None) or [])
-            == _PAYLOAD_CALL_ARITY[_callee_name(node)]
+            == _PAYLOAD_CALL_ARITY[_callee_name(node, program, stage, function)]
         ):
             yield node
 
 
-def _callee_name(call):
-    function = getattr(call, "function", None)
-    if isinstance(function, A.IdentifierNode):
-        return function.name
-    return function if isinstance(function, str) else None
+def _callee_name(call, program=None, stage=None, function=None):
+    callee = getattr(call, "function", None)
+    if isinstance(callee, A.IdentifierNode):
+        return callee.name
+    if (
+        isinstance(callee, A.MemberAccessNode)
+        and isinstance(callee.object, A.IdentifierNode)
+        and function is not None
+    ):
+        # ``hit.TraceRay(...)`` and ``hit.Invoke(...)`` call HLSL's static HitObject methods through a variable.
+        declared = _variable_type(program, stage, function, callee.object.name)
+        if _struct_name(declared) == _HIT_OBJECT_TYPE:
+            return f"{_HIT_OBJECT_TYPE}::{callee.member}"
+    return callee if isinstance(callee, str) else None
 
 
 def _payload_struct_name(program, stage, function, call):
     arguments = list(getattr(call, "arguments", None) or [])
     if len(arguments) != 8 and not (
         isinstance(call, A.FunctionCallNode)
-        and len(arguments) == _PAYLOAD_CALL_ARITY.get(_callee_name(call))
+        and len(arguments)
+        == _PAYLOAD_CALL_ARITY.get(_callee_name(call, program, stage, function))
     ):
         # The GLSL form names the payload by location; lower_glsl_ray_interfaces rewrote every such call earlier.
         raise HlslRayPayloadUnsupportedError(

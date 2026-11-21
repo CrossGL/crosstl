@@ -206,6 +206,13 @@ def test_non_uniform_instructions_are_probed_with_the_function_that_compiles_to_
     assert quad.note == "no function of a GLSL subgroup extension compiles to it"
 
 
+def test_the_core_table_leaves_every_non_uniform_instruction_to_the_subgroup_specifications():
+    # GLSL 4.60's vote functions compile to SPV_KHR_subgroup_vote, so the core table probes those instructions with
+    # them, and OpGroupNonUniformAll and its siblings take the GL_KHR_shader_subgroup_vote functions.
+    assert [name for name in spirv.CORE if name.startswith(spirv.NON_UNIFORM)] == []
+    assert spirv.CORE["OpSubgroupAllKHR"] == ("allInvocations", "")
+
+
 # Excerpts of GL_KHR_shader_subgroup_rotate.txt, GLSL_EXT_shader_quad_control.txt and
 # GL_NV_shader_subgroup_partitioned.txt, keeping their layout. The rotate specification puts each instruction on the
 # line after its function, the quad votes need two extensions, and the partitioned specification names

@@ -174,9 +174,14 @@ def test_matrix_retains_explicit_policy_and_stage_contracts():
             parse(_source().replace("compute {", "fragment {")), "fragment"
         )
     assert error.value.reason == "entry-point-contract-invalid"
+    # A WaveSize equal to the software subgroup width holds by construction; any other width conflicts.
+    assert _codegen().generate_stage(
+        parse(_source().replace("@numthreads", "@WaveSize(32) @numthreads")),
+        "compute",
+    ) == _codegen().generate_stage(parse(_source()), "compute")
     with pytest.raises(OpenGLSoftwareSubgroupError) as error:
         _codegen().generate_stage(
-            parse(_source().replace("@numthreads", "@WaveSize(32) @numthreads")),
+            parse(_source().replace("@numthreads", "@WaveSize(16) @numthreads")),
             "compute",
         )
     assert error.value.reason == "hardware-contract-conflict"

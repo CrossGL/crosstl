@@ -390,7 +390,7 @@ class CudaBindingMixin:
             return "acceleration_structure"
         if canonical in {"sampler", "SamplerState"}:
             return "sampler"
-        if canonical.startswith("sampler"):
+        if canonical.startswith(("sampler", "isampler", "usampler")):
             return "texture"
         if canonical.startswith(("image", "iimage", "uimage")):
             return "image"

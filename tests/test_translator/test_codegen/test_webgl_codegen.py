@@ -81,13 +81,13 @@ def assert_webgl_stage_validates_if_available(generated, tmp_path, name, stage="
     assert result.returncode == 0, result.stdout
 
 
-def test_webgl_backend_is_target_only():
+def test_webgl_backend_reads_its_source_with_the_glsl_frontend():
     spec = codegen.get_backend("webgl2")
 
     assert spec is not None
     assert spec.name == "webgl"
-    assert spec.source_registry_name is None
-    assert "webgl" not in codegen.source_backend_names()
+    assert spec.source_registry_name == "opengl"
+    assert "webgl" in codegen.source_backend_names()
     assert codegen.normalize_backend_name("target.webgl.glsl") == "webgl"
     assert codegen.get_backend_extension("glsl-es") == ".webgl.glsl"
     assert isinstance(codegen.get_codegen("essl"), WebGLCodeGen)
@@ -249,9 +249,9 @@ def _assert_webgl_boolean_arithmetic_compound_assignments(tmp_path):
 
     generated = WebGLCodeGen().generate_stage(parse_shader(shader), "fragment")
 
-    assert "if (((int(exp) & 1) != 0))" in generated
+    assert "if (((int(exp_) & 1) != 0))" in generated
     assert "result = ((int(result) * int(base)) != 0);" in generated
-    assert "exp = ((int(exp) >> 1) != 0);" in generated
+    assert "exp_ = ((int(exp_) >> 1) != 0);" in generated
     assert "base = ((int(base) * int(base)) != 0);" in generated
     assert "value = notEqual((ivec3(value) * ivec3(factor)), ivec3(0));" in generated
     assert "value = notEqual((ivec3(value) >> 1), ivec3(0));" in generated

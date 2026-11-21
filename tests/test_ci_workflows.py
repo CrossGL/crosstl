@@ -19,6 +19,7 @@ import pytest
 import yaml
 
 from tests.fake_commands import write_python_command
+from tests.workflow_text import expand_item_aliases
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
@@ -36,7 +37,6 @@ GATING_WORKFLOWS = {
 # The job that decides whether a push to main repeats a commit the merge queue
 # already tested, per workflow.
 QUEUE_TESTED_WORKFLOWS = {
-    "computesharp.yml": "plan",
     "backend-tests.yml": "python-versions",
     "translator-tests.yml": "python-versions",
     "full-tests.yml": "plan",
@@ -89,6 +89,23 @@ def test_gating_workflows_report_one_result_for_pull_requests_and_the_merge_queu
     assert step["env"]["RESULTS"] == "${{ join(needs.*.result, ' ') }}"
     assert "success|skipped) ;;" in step["run"]
     assert "exit 1" in step["run"]
+
+
+# GitHub does not start a workflow whose file is larger than this. It reports
+# "a workflow file issue" without jobs, so a gating workflow's result check never
+# arrives and a merge group waits for the check timeout. A merged
+# demo-project-testing.yml of 512,046 bytes failed this way (#4829), while
+# 511,879 bytes started.
+WORKFLOW_SIZE_LIMIT = 512_000
+
+
+def test_every_workflow_file_fits_the_size_github_starts():
+    for path in sorted(WORKFLOW_DIR.glob("*.yml")):
+        size = path.stat().st_size
+        assert size <= WORKFLOW_SIZE_LIMIT, (
+            f"{path.name} is {size:,} bytes, over the {WORKFLOW_SIZE_LIMIT:,} bytes"
+            " GitHub starts; move repeated steps into a composite action"
+        )
 
 
 def test_every_job_has_a_timeout():
@@ -237,160 +254,23 @@ def test_pushes_to_main_skip_a_commit_the_merge_queue_already_passed(filename, p
     workflow = yaml.safe_load((WORKFLOW_DIR / filename).read_text(encoding="utf-8"))
     jobs = workflow["jobs"]
     planner = jobs[plan]
-    assert planner["permissions"] == (
-        {"actions": "read", "contents": "read"}
-        if filename == "computesharp.yml"
-        else {"actions": "read"}
-    )
+    assert planner["permissions"] == {"actions": "read"}
     assert planner["outputs"]["tested"] == "${{ steps.queue.outputs.tested }}"
     (step,) = (step for step in planner["steps"] if step.get("id") == "queue")
     assert step["if"] == "github.event_name == 'push'"
     # A failed lookup must run the tests rather than skip them.
     assert "|| echo 0)" in step["run"]
-    if filename == "computesharp.yml":
-        # Each merge group selects the port's jobs from its own change, so a push
-        # that lands several groups checks every pushed commit (after checkout).
-        assert "head_sha=$sha&event=merge_group&status=success" in step["run"]
-        assert 'git rev-list "$BEFORE..$GITHUB_SHA"' in step["run"]
-        assert planner["steps"][0]["with"]["fetch-depth"] == 0
-    else:
-        assert "head_sha=$GITHUB_SHA&event=merge_group&status=success" in step["run"]
-        reference = yaml.safe_load(
-            (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
-        )["jobs"]["python-versions"]["steps"][0]
-        assert step == reference
+    assert "head_sha=$GITHUB_SHA&event=merge_group&status=success" in step["run"]
+    reference = yaml.safe_load(
+        (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
+    )["jobs"]["python-versions"]["steps"][0]
+    assert step == reference
     for name, job in jobs.items():
         if name in {plan, "result"}:
             continue
         needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
         assert plan in needs, (filename, name)
-        guard = f"needs.{plan}.outputs.tested != 'true'"
-        if filename == "computesharp.yml":
-            # Keep the port's independent run/execute filters and cancellation rule.
-            assert job["if"].startswith("${{ " + guard + " && "), (filename, name)
-        else:
-            assert job["if"] == guard, (filename, name)
-
-
-@pytest.mark.skipif(
-    sys.platform == "win32" or not (shutil.which("bash") and shutil.which("git")),
-    reason="Bash and Git required",
-)
-@pytest.mark.parametrize(
-    "old_tip,passed,api_error,expected",
-    [
-        # One merge group landed, and its run passed.
-        (2, {3}, False, "true"),
-        # One push landed three merge groups, and every run passed.
-        (0, {1, 2, 3}, False, "true"),
-        # Only the newest group passed; an earlier one failed, was cancelled or is
-        # still running, and the newest run may have skipped the port.
-        (0, {3}, False, "false"),
-        # No group passed this commit: an admin merge that bypassed the queue, a
-        # failed or cancelled run, or a group that tested a different commit.
-        (2, set(), False, "false"),
-        # The API fails: gh prints the error body and exits non-zero.
-        (2, {3}, True, "false"),
-        # The old tip is not in the clone.
-        (None, {1, 2, 3}, False, "false"),
-    ],
-)
-def test_computesharp_queue_lookup_requires_every_pushed_commit_to_pass(
-    tmp_path, old_tip, passed, api_error, expected
-):
-    workflow = yaml.safe_load(
-        (WORKFLOW_DIR / "computesharp.yml").read_text(encoding="utf-8")
-    )
-    step = next(
-        step for step in workflow["jobs"]["plan"]["steps"] if step.get("id") == "queue"
-    )
-    env = {
-        **os.environ,
-        "GIT_AUTHOR_NAME": "t",
-        "GIT_AUTHOR_EMAIL": "t@example.com",
-        "GIT_COMMITTER_NAME": "t",
-        "GIT_COMMITTER_EMAIL": "t@example.com",
-    }
-
-    def git(*arguments):
-        return subprocess.run(
-            ["git", "-C", str(tmp_path), *arguments],
-            check=True,
-            capture_output=True,
-            text=True,
-            env=env,
-        ).stdout.strip()
-
-    git("init", "-q")
-    commits = []
-    for index in range(4):
-        git("commit", "-q", "--allow-empty", "-m", f"merge group {index}")
-        commits.append(git("rev-parse", "HEAD"))
-    output = tmp_path / "output"
-    args = tmp_path / "args"
-    # Run the actual workflow shell with a local API substitute, without network access.
-    stub = textwrap.dedent("""\
-        gh() {
-          printf '%s\\n' "$*" >> "$LOOKUP_ARGS"
-          if [ -n "$API_ERROR" ]; then
-            printf '%s' '{"message":"Not Found","status":"404"}'
-            return 1
-          fi
-          local sha="${2#*head_sha=}"
-          case " $PASSED " in *" ${sha%%&*} "*) printf 1 ;; *) printf 0 ;; esac
-        }
-        """)
-    subprocess.run(
-        ["bash", "-e", "-c", stub + step["run"]],
-        check=True,
-        cwd=tmp_path,
-        env={
-            **env,
-            "API_ERROR": "1" if api_error else "",
-            "PASSED": " ".join(commits[index] for index in passed),
-            "BEFORE": "0" * 40 if old_tip is None else commits[old_tip],
-            "GITHUB_OUTPUT": str(output),
-            "LOOKUP_ARGS": str(args),
-            "GITHUB_REPOSITORY": "CrossGL/crosstl",
-            "GITHUB_SHA": commits[-1],
-            "GITHUB_WORKFLOW_REF": (
-                "CrossGL/crosstl/.github/workflows/computesharp.yml@refs/heads/main"
-            ),
-        },
-    )
-    assert output.read_text().strip() == f"tested={expected}"
-    if expected == "true":
-        assert args.read_text().splitlines() == [
-            "api repos/CrossGL/crosstl/actions/workflows/computesharp.yml/runs"
-            f"?head_sha={sha}&event=merge_group&status=success --jq .total_count"
-            for sha in reversed(commits[old_tip + 1 :])
-        ]
-
-
-def test_conformance_pushes_skip_a_commit_the_merge_queue_already_passed():
-    # Every conformance job already waits for the leg selection, so the planner
-    # skips that step instead and leaves `run` empty.
-    workflow = yaml.safe_load(
-        (WORKFLOW_DIR / "conformance.yml").read_text(encoding="utf-8")
-    )
-    jobs = workflow["jobs"]
-    planner = jobs["legs"]
-    assert planner["permissions"] == {"actions": "read", "contents": "read"}
-    assert planner["outputs"]["tested"] == "${{ steps.queue.outputs.tested }}"
-    assert planner["outputs"]["run"] == "${{ steps.select.outputs.run }}"
-    steps = {step.get("id"): index for index, step in enumerate(planner["steps"])}
-    reference = yaml.safe_load(
-        (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
-    )["jobs"]["python-versions"]["steps"][0]
-    assert planner["steps"][steps["queue"]] == reference
-    select = planner["steps"][steps["select"]]
-    assert steps["queue"] < steps["select"]
-    assert select["if"] == "steps.queue.outputs.tested != 'true'"
-    for name, job in jobs.items():
-        if name in {"legs", "result"}:
-            continue
-        assert job["needs"] == "legs", name
-        assert job["if"] == "needs.legs.outputs.run == 'true'", name
+        assert job["if"] == f"needs.{plan}.outputs.tested != 'true'", (filename, name)
 
 
 @pytest.mark.skipif(
@@ -521,7 +401,8 @@ def test_upstream_source_caches_fall_back_to_an_older_cache():
         prefix = key.split("${{ hashFiles(")[0]
         assert cache.get("restore-keys") == prefix, (name, key)
         keys.append(key)
-    assert len(keys) == 3
+    # Linux, the compute matrix, Rust and Direct3D 12.
+    assert len(keys) == 4
 
 
 def _local_action_text(name):
@@ -759,9 +640,10 @@ def test_apt_installer_saves_only_new_downloads():
 
 
 def _workflow_job_section(workflow, job_id):
+    # A step shared through a YAML anchor is written out in every job that reuses it.
     match = re.search(
         rf"^  {re.escape(job_id)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
-        workflow,
+        expand_item_aliases(workflow),
         flags=re.MULTILINE | re.DOTALL,
     )
     assert match is not None, f"workflow job {job_id!r} is missing"

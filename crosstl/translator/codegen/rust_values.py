@@ -10,7 +10,9 @@ from ..ast import (
     MemberAccessNode,
     VariableNode,
 )
+from ..float_limit_constants import float_limit_constant
 from ..refusals import RustRefusal
+from ..standard_constants import standard_math_constant
 from .char_literals import char_literal_code
 from .rust_narrow_integers import (
     RUST_EXACT_WIDTH_INTEGER_TYPES,
@@ -131,10 +133,42 @@ class RustValueMixin:
         builtin_value = self.rust_builtin_value_expression(name)
         if builtin_value is not None and name not in self.variable_types:
             return builtin_value
+        constant_value = self.rust_predefined_constant_expression(name)
+        if constant_value is not None:
+            return constant_value
         value = self.lazy_static_identifier_expression(name)
         if self.should_clone_identifier_value(name):
             return self.clone_value_expression(value)
         return value
+
+    def rust_predefined_constant_expression(self, name):
+        """C and Metal predefined constants (INFINITY, FLT_MAX, M_PI_F, ...) that the program does not declare.
+
+        Rust spells the binary32 limits as associated constants of f32, which are exact, and the math constants as
+        suffixed decimal literals with the source's own digits.
+        """
+        if not isinstance(name, str) or name in self.variable_types:
+            return None
+        if name in getattr(self, "global_variable_types", {}) or name in getattr(
+            self, "local_variable_names", ()
+        ):
+            return None
+        limit = float_limit_constant(name)
+        if limit is not None:
+            return {
+                "INFINITY": "f32::INFINITY",
+                "HUGE_VALF": "f32::INFINITY",
+                "NAN": "f32::NAN",
+                "MAXFLOAT": "f32::MAX",
+                "FLT_MAX": "f32::MAX",
+                "FLT_MIN": "f32::MIN_POSITIVE",
+                "FLT_EPSILON": "f32::EPSILON",
+            }.get(name)
+        constant = standard_math_constant(name)
+        if constant is not None:
+            suffix = "f64" if constant.scalar_type == "double" else "f32"
+            return f"{constant.decimal}{suffix}"
+        return None
 
     def rust_builtin_value_expression(self, name):
         return {
@@ -841,6 +875,8 @@ class RustValueMixin:
                 return f"({generated_expr} as f16)"
             return generated_expr
 
+        if source_type == "bool" and target_type in {"f16", "f32", "f64"}:
+            return f"(({generated_expr} as u32) as {target_type})"
         return f"({generated_expr} as {target_type})"
 
     def is_integer_literal_expression(self, expr):
@@ -904,6 +940,21 @@ class RustValueMixin:
         if isinstance(value, str):
             escaped = self.escape_literal(value, quote='"')
             return f'"{escaped}"'
+        if isinstance(value, int) and not -(2**31) <= value < 2**31:
+            # An unsuffixed integer literal defaults to i32 where context does not fix its type, as in a cast
+            # operand, and rustc rejects one out of i32 range (overflowing_literals).
+            suffix = {
+                "uint": "u32",
+                "int64": "i64",
+                "int64_t": "i64",
+                "uint64": "u64",
+                "uint64_t": "u64",
+            }.get(str(literal_type))
+            if suffix is None:
+                suffix = (
+                    "u32" if 0 <= value < 2**32 else ("i64" if value < 2**63 else "u64")
+                )
+            return f"{value}{suffix}"
         return str(value)
 
     def register_variable_type(self, name, type_name, scope="local"):
@@ -921,7 +972,7 @@ class RustValueMixin:
         if self.is_static_reference(name):
             symbol = self.static_symbol_name(name)
             if self.is_lazy_static_reference(name):
-                return f"*{symbol}"
+                return f"{symbol}()"
             pointer_parts = self.pointer_type_parts(
                 self.map_type(self.variable_types.get(name))
             )

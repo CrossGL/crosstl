@@ -8,6 +8,7 @@ from ..ast import (
 )
 from ..refusals import SlangRefusal
 from .array_utils import split_array_type_suffix
+from .slang_cull_distance import slang_cull_distance_argument
 from .slang_exact_lookups import (
     SLANG_BITCAST_INTRINSICS,
     slang_foreign_call_reason,
@@ -41,7 +42,18 @@ class SlangExpressionPartsMixin:
 
     def generate_struct_constructor_arguments(self, struct_name, args):
         expected_types = self.struct_constructor_argument_types(struct_name)
-        return self.generate_call_arguments(args, expected_types)
+        rendered = self.generate_call_argument_list(args, expected_types)
+        member_names = list(self.struct_member_types.get(struct_name) or {})
+        return ", ".join(
+            (
+                slang_cull_distance_argument(
+                    self, struct_name, member_names[index], argument
+                )
+                if index < len(member_names)
+                else argument
+            )
+            for index, argument in enumerate(rendered)
+        )
 
     def user_function_argument_types(self, function_name):
         return self.user_function_parameter_types.get(function_name) or []

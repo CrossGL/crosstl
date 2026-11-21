@@ -222,14 +222,23 @@ class MojoCallExpressionMixin:
             and not expr.args
             and not self.is_user_defined_function(func_name)
         ):
-            helper_name = MOJO_SYNC_BUILTINS[func_name]
-            self.required_sync_helpers.add(helper_name)
-            return f"{helper_name}()"
+            return self.mojo_sync_call(MOJO_SYNC_BUILTINS[func_name])
         if func_name == "__shfl_down_sync":
             return self.generate_cuda_shuffle_down_call(expr.args)
+        if not self.is_user_defined_function(func_name):
+            if func_name == "__match_any_sync":
+                return self.generate_cuda_match_any_call(expr.args)
+            barrier = None if expr.args else self.mojo_subgroup_barrier_call(func_name)
+            if barrier is not None:
+                return barrier
         bit_function = generate_mojo_bit_function_call(self, func_name, expr.args)
         if bit_function is not None:
             return bit_function
+        split_builtin = self.generate_mojo_split_builtin_call(func_name, expr.args)
+        if split_builtin is not None:
+            return split_builtin
+        if isinstance(func_name, str) and self.is_array_type_name(func_name):
+            return self.generate_mojo_array_constructor_call(func_name, expr.args)
 
         if func_name in self.function_map:
             func_name = self.function_map[func_name]
@@ -272,3 +281,24 @@ class MojoCallExpressionMixin:
         args = ", ".join(self.generate_expression(arg) for arg in expr.args)
         call_name = self.mojo_identifier(func_name) if func_name is not None else callee
         return f"{call_name}({args})"
+
+    def generate_mojo_array_constructor_call(self, type_name, args):
+        """``float[3](a, b, c)`` as a StaticTuple of the element type, one argument per element."""
+        element_type, size = self.parse_array_type_name(type_name)
+        size = self.format_array_size(size)
+        try:
+            element_count = int(size) if size is not None else len(args)
+        except (TypeError, ValueError):
+            element_count = None
+        if element_count != len(args):
+            raise MojoRefusal(
+                f"Mojo array constructor {type_name} has {len(args)} arguments, and Mojo needs one per element"
+            )
+        elements = [
+            self.generate_array_literal_element(
+                arg, element_type, f"array constructor element {index}"
+            )
+            for index, arg in enumerate(args, start=1)
+        ]
+        array_type = self.array_storage_type(element_type, element_count)
+        return f"{array_type}({', '.join(elements)})"

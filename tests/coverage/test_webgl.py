@@ -125,11 +125,11 @@ def test_webgl_has_no_double_or_explicit_width_types():
         probes.build(_function("abs", Type("double"), Type("double")), "webgl")
 
 
-def test_webgl_output_uses_the_crossgl_es_dialect_and_has_no_input():
+def test_webgl_output_uses_the_crossgl_es_dialect_and_input_reads_glsl_es():
     assert runner.CROSSGL_DIALECTS["webgl"] == "crossgl-es"
     assert runner.OUTPUT_BACKENDS["webgl"] == "webgl"
-    assert "webgl" not in runner.INPUT_BACKENDS
-    assert ("webgl", "input") in report.NOT_OFFERED
+    assert runner.INPUT_BACKENDS["webgl"] == "webgl"
+    assert ("webgl", "input") not in report.NOT_OFFERED
 
 
 def test_webgl_validator_requires_glsl_es_300():

@@ -379,6 +379,11 @@ class CudaExpressionMixin:
         suffix = self.parse_template_suffix()
         if isinstance(base, str):
             return f"{base}{suffix}"
+        if isinstance(base, MemberAccessNode):
+            # ``x.f<T>`` names member ``f<T>`` of ``x``.
+            return MemberAccessNode(
+                base.object, f"{base.member}{suffix}", base.is_pointer
+            )
         return f"{self.expression_to_text(base)}{suffix}"
 
     def parse_template_suffix(self):
@@ -422,8 +427,10 @@ class CudaExpressionMixin:
     def parse_template_declaration(self):
         self.eat("TEMPLATE")
         if self.current_token[0] == "LESS_THAN":
-            self.parse_template_suffix()
+            header = self.parse_template_suffix()
             self.skip_leading_requires_clause()
+            # The function that starts here takes the header (``take_template_header``).
+            self.pending_template_header = (header, self.current_index)
             return
 
         self.collect_balanced_tokens_until("SEMICOLON")
@@ -592,6 +599,21 @@ class CudaExpressionMixin:
             value = self.current_token[1]
             self.eat(self.current_token[0])
             return value
+        elif (
+            self.current_token[0] in {"SIGNED", "UNSIGNED"}
+            and self.current_index + 1 < len(self.tokens)
+            and self.tokens[self.current_index + 1][0] == "LPAREN"
+        ):
+            # `unsigned(x)`: a lone sign keyword is a simple-type-specifier naming
+            # int, so it can start a functional cast (C++ [expr.type.conv]).
+            target_type = (
+                "unsigned int" if self.current_token[0] == "UNSIGNED" else "int"
+            )
+            self.eat(self.current_token[0])
+            self.eat("LPAREN")
+            expr = self.parse_expression()
+            self.eat("RPAREN")
+            return CastNode(target_type, expr)
         elif self.current_token[0] == "IDENTIFIER":
             if self.is_requires_expression_start():
                 return self.parse_requires_expression()

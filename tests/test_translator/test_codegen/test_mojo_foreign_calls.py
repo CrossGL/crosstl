@@ -73,9 +73,9 @@ def test_mojo_library_and_program_calls_are_written(expression, written):
 
 def test_mojo_comments_keywords_and_declarations_are_not_foreign_calls():
     code = (
-        "fn sign(x: Float32) -> Float32:\n"
+        "def sign(x: Float32) -> Float32:\n"
         "    return (x)  # lit(x) in a comment\n"
-        "fn main():\n"
+        "def main():\n"
         '    var s = "fwidth(x)"\n'
         "    var c = a and (b) or not (d)\n"
         "    var t = sign(1.0)\n"
@@ -88,7 +88,7 @@ def test_mojo_comments_keywords_and_declarations_are_not_foreign_calls():
 
 
 def test_undeclared_foreign_call_is_found_in_mojo_text():
-    code = "fn main():\n    var t = sign(1.0) + fwidth(2.0)\n"
+    code = "def main():\n    var t = sign(1.0) + fwidth(2.0)\n"
 
     assert written_foreign_call_names(
         code, MOJO_CALLABLE_FUNCTION_NAMES, MOJO_NON_CALLS

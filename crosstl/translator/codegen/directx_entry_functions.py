@@ -25,6 +25,7 @@ from .stage_utils import (
     normalize_stage_name,
     stage_matches,
 )
+from .type_query_memo import scoped_type_query
 
 
 class DirectXEntryFunctionMixin:
@@ -649,6 +650,7 @@ class DirectXEntryFunctionMixin:
             return 1
         return None
 
+    @scoped_type_query
     def hlsl_source_expression_type(self, expression):
         if expression is None:
             return None

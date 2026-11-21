@@ -33,7 +33,13 @@ from .cuda_expression_types import CudaExpressionTypeMixin
 from .cuda_expressions import CudaExpressionMixin
 from .cuda_function_calls import CudaFunctionCallMixin
 from .cuda_function_parts import CudaFunctionPartsMixin
+from .cuda_function_prototypes import (
+    emission_order,
+    late_called_functions,
+    prototype_of,
+)
 from .cuda_gather import CudaGatherMixin
+from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_math_calls import CudaMathCallMixin
 from .cuda_query_metadata import CudaQueryMetadataMixin
@@ -42,6 +48,7 @@ from .cuda_refusals import CudaLoweringRefused
 from .cuda_resource_access import CudaResourceAccessMixin
 from .cuda_resource_calls import CudaResourceCallMixin
 from .cuda_semantics import CudaSemanticMixin
+from .cuda_shared_memory import helper_shared_variables
 from .cuda_stage_attributes import CudaStageAttributeMixin
 from .cuda_stage_checks import CudaStageCheckMixin
 from .cuda_statements import CudaStatementMixin
@@ -58,8 +65,10 @@ from .cuda_tables import (
     CUDA_WAVE_UINT_RESULT_OPS,
     CUDA_WAVE_UVEC4_RESULT_OPS,
 )
+from .cuda_texel_buffers import CudaTexelBufferMixin
 from .cuda_textures import CudaTextureMixin
 from .cuda_types import CudaTypeMixin
+from .cuda_unions import NativeUnions
 from .cuda_vector_types import CudaVectorTypeMixin
 from .cuda_visitor import CudaVisitorMixin
 from .cuda_wave_ops import CudaWaveOpMixin
@@ -73,7 +82,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
 )
 from .generic_global_types import collect_constant_and_cbuffer_member_types
-from .gpu_device_globals import is_constant_value_declaration
+from .gpu_device_globals import at_file_scope, is_constant_value_declaration
 from .lowering_refusals import LoweringRefusalMixin
 from .precise_evaluation import PreciseEvaluationMixin
 from .relational_builtins import lower_relational_builtins
@@ -137,6 +146,7 @@ class CudaCodeGen(
     CudaResourceAccessMixin,
     CudaVectorTypeMixin,
     CudaTextureMixin,
+    CudaTexelBufferMixin,
     CudaGatherMixin,
     LoweringRefusalMixin,
     PreciseEvaluationMixin,
@@ -215,6 +225,7 @@ class CudaCodeGen(
         self.cuda_used_resource_bindings = {}
         self.struct_member_types = {}
         self.structs_by_name = {}
+        self.native_unions = NativeUnions(self, CudaRefusal, "CUDA")
         self.struct_member_semantics = {}
         self.struct_member_image_accesses = {}
         self.function_return_types = {}
@@ -364,6 +375,7 @@ class CudaCodeGen(
         self.cuda_resource_binding_cursors = {}
         self.cuda_used_resource_bindings = {}
         self.structs_by_name = self.collect_structs_by_name(ast_node)
+        self.native_unions = NativeUnions(self, CudaRefusal, "CUDA")
         (
             self.struct_member_types,
             self.struct_member_image_accesses,
@@ -393,6 +405,10 @@ class CudaCodeGen(
         )
         self.reject_unsupported_generic_functions(ast_node)
         self.helper_functions = {}
+        # File-scope constants already folded, by name (cuda_constant_folding).
+        self.folded_constants = {}
+        # Workgroup variables declared at file scope because a stage function uses them (cuda_shared_memory).
+        self.file_scope_shared_variable_ids = set()
         self.query_metadata_aliases = {}
         self.query_return_sources = self.collect_simple_query_return_sources(ast_node)
         self.query_local_resource_names_by_function = {}
@@ -532,8 +548,15 @@ class CudaCodeGen(
                 if hasattr(stage_type, "name")
                 else str(stage_type).lower()
             )
+            self.file_scope_shared_variable_ids.update(
+                id(var)
+                for var in helper_shared_variables(stage, self.is_cuda_shared_variable)
+            )
             for var in getattr(stage, "local_variables", []) or []:
-                if self.is_cuda_shared_variable(var):
+                if (
+                    self.is_cuda_shared_variable(var)
+                    and id(var) not in self.file_scope_shared_variable_ids
+                ):
                     continue
                 if self.cuda_stage_local_builtin_role(stage_name, var) is not None:
                     # A stage-local input that names a compute built-in is the
@@ -557,6 +580,7 @@ class CudaCodeGen(
                 emitted_stage_local_variables[var_name] = var_type
 
         functions = getattr(node, "functions", [])
+        self.emit_late_function_prototypes(functions)
         for func in functions:
             if generic_function_parameters(func):
                 for specialized_func in generic_function_emission_list(self, func):
@@ -599,6 +623,11 @@ class CudaCodeGen(
                     )
                     try:
                         self.current_stage_name = saved_stage_name
+                        self.emit_late_function_prototypes(
+                            func
+                            for func in getattr(stage, "local_functions", [])
+                            if id(func) not in emitted_local_functions
+                        )
                         for func in getattr(stage, "local_functions", []):
                             if id(func) in emitted_local_functions:
                                 continue
@@ -632,6 +661,20 @@ class CudaCodeGen(
                         for captured_name in local_captures:
                             self.cuda_function_capture_params.pop(captured_name, None)
                     self.emit("")
+
+    def emit_late_function_prototypes(self, functions):
+        """Declare each function of ``functions`` that an earlier one calls (:mod:`.cuda_function_prototypes`)."""
+        late = late_called_functions(
+            *emission_order(
+                functions,
+                generic_function_parameters,
+                lambda func: generic_function_emission_list(self, func),
+            )
+        )
+        for func in late:
+            self.visit(prototype_of(func))
+        if late:
+            self.emit("")
 
     def visit_FunctionNode(self, node):
         """Render a CrossGL function or compute entry point as CUDA code."""
@@ -841,6 +884,9 @@ class CudaCodeGen(
                         qualifiers.append("__shared__")
                     elif "uniform" in qualifier:
                         qualifiers.append("__constant__")
+                    elif qualifier == "device" and at_file_scope(self):
+                        # A program-scope variable in device memory, which every thread reads and writes.
+                        qualifiers.append("__device__")
 
             qualifier_str = " ".join(qualifiers)
             if qualifier_str:
@@ -855,6 +901,13 @@ class CudaCodeGen(
                 declaration, node.name, node
             )
             if initial_value is not None:
+                array_initializer = generate_cpp_array_initializer(
+                    self, initial_value, var_type
+                )
+                if array_initializer is not None:
+                    if array_initializer.strip():
+                        declaration += f" = {array_initializer}"
+                    return declaration
                 declaration += f" = {self.visit(initial_value)}"
             return declaration
 
@@ -952,6 +1005,13 @@ class CudaCodeGen(
         raw_args = list(getattr(node, "arguments", []) or [])
         args = [self.visit(arg) for arg in raw_args]
 
+        union_constructor = self.native_unions.constructor(
+            constructor_type,
+            raw_args,
+            getattr(node, "named_arguments", None),
+        )
+        if union_constructor is not None:
+            return union_constructor
         if constructor_type in self.structs_by_name:
             args = self.cuda_struct_constructor_brace_arguments(node, constructor_type)
             mapped_type = self.convert_crossgl_type_to_cuda(constructor_type)
@@ -1208,6 +1268,10 @@ class CudaCodeGen(
             "usamplerCubeArray": "cudaTextureObject_t",
             "usampler2DMS": "cudaTextureObject_t",
             "usampler2DMSArray": "cudaTextureObject_t",
+            # A texel buffer is a texture object bound to linear memory (cudaResourceTypeLinear).
+            "samplerBuffer": "cudaTextureObject_t",
+            "isamplerBuffer": "cudaTextureObject_t",
+            "usamplerBuffer": "cudaTextureObject_t",
             "image1D": "cudaSurfaceObject_t",
             "image1DArray": "cudaSurfaceObject_t",
             "image2D": "cudaSurfaceObject_t",
@@ -1500,6 +1564,10 @@ class CudaCodeGen(
         return super().vector_type_for_components(component_type, component_count)
 
     def generate_resource_call(self, func_name, raw_args, args):
+        handled = self.texel_buffer_call(func_name, raw_args, args)
+        if handled is not UNHANDLED:
+            return handled
+
         handled = self.cuda_texture_query_call(func_name, raw_args, args)
         if handled is not UNHANDLED:
             return handled
@@ -1543,5 +1611,7 @@ class CudaCodeGen(
                 member_type = member.member_type
             else:
                 member_type = member.vtype
+            # Kernels name the member directly, and vector arithmetic on it needs its type.
+            self.register_variable_type(member.name, member_type, member)
             declaration = self.format_typed_declarator(member_type, member.name)
             self.emit(f"__constant__ {declaration};")

@@ -1,10 +1,8 @@
 """Declarations in the CUDA to CrossGL converter: shaders, preprocessor lines, structs, enums, functions, kernels, variables, scoped name registries, packed launch arguments and shared and constant memory."""
 
-from ...device_globals import (
-    device_memory_declaration,
-    is_device_memory,
-)
+from ...device_globals import device_memory_declaration, is_device_memory
 from ...namespace_constants import is_c_family_namespace_constant
+from ..array_extents import declare_enumerators, integral_constant_declaration_value
 from ..CudaAst import (
     CastNode,
     DesignatedInitializerNode,
@@ -13,7 +11,9 @@ from ..CudaAst import (
     UnaryOpNode,
 )
 from ..local_memory_spaces import crossgl_zero_value
+from ..parameter_defaults import merge_declared_defaults
 from ..reference_parameters import ReferenceParameters
+from ..union_layout_import import anonymous_union_members
 
 
 class CudaImportDeclarationMixin:
@@ -50,6 +50,7 @@ class CudaImportDeclarationMixin:
                 self.emit("")
 
         self.reference_parameters = ReferenceParameters(node)
+        merge_declared_defaults(getattr(node, "functions", None))
         if hasattr(node, "functions") and node.functions:
             for func in node.functions:
                 if getattr(func, "body", None) is None:
@@ -93,6 +94,7 @@ class CudaImportDeclarationMixin:
                 getattr(node, "attributes", None),
                 getattr(node, "is_union", False),
             )
+        union = self.cuda_union_layout_record(node, struct_name)
         self.emit(f"struct {struct_name} {{")
         self.indent_level += 1
 
@@ -104,10 +106,34 @@ class CudaImportDeclarationMixin:
             if layouts is not None:
                 # CUDA stores a three-component vector member at its scalar alignment; see buffer_layout_import.
                 layouts.member(struct_name, member_type, member_name, len(self.output))
+            if union is not None:
+                union.member(member_type, member_name, len(self.output), member)
             self.emit(f"{member_type} {member_name};")
 
         self.indent_level -= 1
         self.emit("};")
+
+    def cuda_union_layout_record(self, node, struct_name):
+        """The record that marks union ``node`` with its layout contract once the program is rendered.
+
+        Returns ``None`` for a struct, and refuses a struct whose anonymous union members it would write one after
+        another; see :mod:`crosstl.backend.CUDA.union_layout_import`.
+        """
+        contracts = getattr(self, "union_layout_contracts", None)
+        if not getattr(node, "is_union", False):
+            overlapping = anonymous_union_members(node)
+            if overlapping:
+                self.refuse_import(
+                    f"CUDA struct '{struct_name}' has anonymous union members "
+                    f"{', '.join(repr(name) for name in overlapping)}, which share storage that CrossGL does not "
+                    "keep in a struct"
+                )
+            return None
+        if contracts is None:
+            return None
+        return contracts.union(
+            struct_name, getattr(node, "attributes", None), len(self.output)
+        )
 
     def visit_EnumNode(self, node):
         # An enum named ``let`` is declared as ``let_``, the name its uses get.
@@ -121,6 +147,8 @@ class CudaImportDeclarationMixin:
         self.emit(f"enum {name}{suffix} {{")
         self.indent_level += 1
 
+        # An enumerator is a constant an array extent can name (``float s[TILE * 2]``).
+        declare_enumerators(self.integer_constants, node)
         members = getattr(node, "members", None) or getattr(node, "variants", [])
         for member in members:
             if isinstance(member, tuple):
@@ -166,6 +194,10 @@ class CudaImportDeclarationMixin:
 
     def visit_VariableNode(self, node):
         self.register_variable_type(node.name, node.vtype)
+        self.integer_constants.declare(
+            node.name,
+            integral_constant_declaration_value(node, self.integer_constants),
+        )
 
         cuda_async_sync = self.cuda_async_sync_declaration_metadata(node)
         if cuda_async_sync is not None:
@@ -312,10 +344,12 @@ class CudaImportDeclarationMixin:
 
     def push_variable_type_scope(self):
         self.variable_type_scopes.append({})
+        self.integer_constants.push()
 
     def pop_variable_type_scope(self):
         if len(self.variable_type_scopes) > 1:
             self.variable_type_scopes.pop()
+            self.integer_constants.pop()
 
     def push_warp_mask_value_scope(self):
         self.warp_mask_value_scopes.append({})
@@ -381,6 +415,8 @@ class CudaImportDeclarationMixin:
     def register_variable_type(self, name, type_name):
         if name:
             self.variable_type_scopes[-1][name] = type_name
+            # A declaration hides an integral constant of its name from array extents.
+            self.integer_constants.declare(name)
 
     def lookup_variable_type(self, name):
         for scope in reversed(self.variable_type_scopes):

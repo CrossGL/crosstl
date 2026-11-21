@@ -15,6 +15,11 @@ from ..wave_operations import (
     wave_extended_result_type,
 )
 from .array_utils import split_array_type_suffix
+from .metal_grid_quads import (
+    GRID_QUAD_OPERATIONS,
+    metal_grid_quad_lane_move,
+    metal_grid_quad_vote,
+)
 from .metal_wave_extended import metal_wave_extension_call
 
 
@@ -511,10 +516,17 @@ class MetalWaveOperationMixin:
                     f"{self.diagnostic_zero_value_for_type(mapped_type)})"
                 )
             return result
+        if operation in GRID_QUAD_OPERATIONS:
+            grid_quad = metal_grid_quad_vote(
+                self, operation, arguments
+            ) or metal_grid_quad_lane_move(
+                self, operation, arguments, self.generate_expression(arguments[0])
+            )
+            if grid_quad is not None:
+                return grid_quad
         if operation == "QuadReadLaneAt":
             value = self.generate_expression(arguments[0])
-            lane = self.generate_expression(arguments[1])
-            return f"quad_broadcast({value}, ushort({lane}))"
+            return self.metal_quad_lane_read(value, arguments[1])
         if operation == "QuadReadAcrossX":
             value = self.generate_expression(arguments[0])
             return f"quad_shuffle_xor({value}, ushort(1))"
@@ -613,16 +625,16 @@ class MetalWaveOperationMixin:
                 )
             if diagnostic is not None:
                 return diagnostic
-            lane = self.generate_expression(arguments[1])
             if operation == "QuadReadLaneAt":
-                intrinsic = "quad_broadcast"
+                inner = self.metal_quad_lane_read(bits(arguments[0]), arguments[1])
             else:
+                lane = self.generate_expression(arguments[1])
                 intrinsic = (
                     "simd_broadcast"
                     if self.literal_int_value(arguments[1]) is not None
                     else "simd_shuffle"
                 )
-            inner = f"{intrinsic}({bits(arguments[0])}, ushort({lane}))"
+                inner = f"{intrinsic}({bits(arguments[0])}, ushort({lane}))"
         elif operation.startswith("QuadReadAcross"):
             mask = {"X": 1, "Y": 2, "Diagonal": 3}[operation[len("QuadReadAcross") :]]
             inner = f"quad_shuffle_xor({bits(arguments[0])}, ushort({mask}))"
@@ -639,6 +651,11 @@ class MetalWaveOperationMixin:
                 f"{intrinsic}({bits(arguments[0])}, "
                 f"ushort({self.generate_expression(arguments[1])}))"
             )
+        # A refused quad read records its refusal, so the program is not returned with it.
+        inner = (
+            metal_grid_quad_lane_move(self, operation, arguments, bits(arguments[0]))
+            or inner
+        )
         return f"as_type<{mapped_type}>({inner})"
 
     def metal_wave_result_type(self, operation, arguments):
@@ -768,6 +785,22 @@ class MetalWaveOperationMixin:
                 f"mask argument must be uint4, got {mapped_type}",
             )
         return None
+
+    def metal_quad_lane_read(self, value, lane_argument):
+        """``QuadReadLaneAt`` of the generated ``value``: ``quad_broadcast`` for a constant lane, ``quad_shuffle``
+        otherwise.
+
+        ``quad_broadcast``'s lane must be the same for every thread of the quad-group, while ``quad_shuffle`` reads
+        a lane each thread chooses (MSL 4.1, section 6.10.3). A run-time lane keeps its low two bits, the quad lane
+        that GLSL, CUDA and HIP output select as well.
+        """
+        lane = self.generate_expression(lane_argument)
+        if (
+            self.literal_int_value(lane_argument, self.literal_int_constants)
+            is not None
+        ):
+            return f"quad_broadcast({value}, ushort({lane}))"
+        return f"quad_shuffle({value}, ushort(({lane}) & 3u))"
 
     def metal_wave_validate_quad_lane_range(self, operation, argument):
         lane_index = self.literal_int_value(argument, self.literal_int_constants)

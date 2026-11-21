@@ -99,15 +99,28 @@ def test_matrix_rounding_default_and_generation_state():
 
 @pytest.mark.parametrize("name", ["asuint", "asfloat"])
 def test_matrix_rounding_rejects_captured_bitcasts(name):
+    source = _source(helpers=f"uint {name} = 1u;")
+    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as error:
+        _codegen(cooperative_matrix_mma_profile="rne-gradual").generate(parse(source))
+    assert error.value.reason == "rounding-builtin-shadowed"
+
+
+@pytest.mark.parametrize("name", ["asuint", "asfloat"])
+def test_matrix_rounding_beside_bitcast_named_helpers_compiles(name, tmp_path):
+    # The helpers are renamed, so the rounding code's asuint/asfloat calls reach the intrinsics.
     result_type, argument_type = (
         ("float", "uint") if name == "asfloat" else ("uint", "float")
     )
     source = _source(
         helpers=f"{result_type} {name}({argument_type} value) {{ return {result_type}(0); }}"
     )
-    with pytest.raises(DirectXCooperativeMatrixUnsupportedError) as error:
-        _codegen(cooperative_matrix_mma_profile="rne-gradual").generate(parse(source))
-    assert error.value.reason == "rounding-builtin-shadowed"
+    generated = _codegen(cooperative_matrix_mma_profile="rne-gradual").generate(
+        parse(source)
+    )
+    assert f"{result_type} {name}_fn({argument_type} value)" in generated
+    assert "uint2 result = asuint(accumulator);" in generated
+    assert "return asfloat(result);" in generated
+    _compile(generated, tmp_path)
 
 
 def test_matrix_rounding_helpers_avoid_user_names(tmp_path):

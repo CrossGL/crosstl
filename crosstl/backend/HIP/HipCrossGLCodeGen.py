@@ -4,8 +4,21 @@ import re
 
 from ...translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ...translator.semantics.warp import ORDERED_WORKGROUP_BARRIER
+from ..CUDA.array_extents import IntegerConstants
+from ..CUDA.block_votes import BlockVoteLibrary, insert_block_vote_functions
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
+from ..CUDA.directed_rounding import (
+    DirectedRoundingLibrary,
+    insert_directed_rounding_functions,
+)
+from ..CUDA.function_templates import (
+    collect_function_templates,
+    generic_prefix,
+    template_parameters,
+)
 from ..CUDA.keyword_renames import source_identifier_names
+from ..CUDA.parameter_defaults import merge_declared_defaults, parameter_default_suffix
+from ..CUDA.pointer_math_import import sine_cosine_statements
 from ..CUDA.reference_parameters import ReferenceParameters
 from ..import_refusals import HipImportRefused, ImportRefusalMixin
 from ..no_contraction import (
@@ -29,12 +42,14 @@ from .crossgl_codegen.records import HipRecordMixin
 from .crossgl_codegen.resource_hints import HipResourceHintMixin
 from .crossgl_codegen.runtime_calls import HipRuntimeCallMixin
 from .crossgl_codegen.runtime_execution_calls import HipRuntimeExecutionCallMixin
+from .crossgl_codegen.runtime_graph_calls import HipRuntimeGraphCallMixin
 from .crossgl_codegen.runtime_memory_calls import HipRuntimeMemoryCallMixin
 from .crossgl_codegen.runtime_module_calls import HipRuntimeModuleCallMixin
 from .crossgl_codegen.statements import HipStatementMixin
 from .crossgl_codegen.surfaces import HipSurfaceMixin
 from .crossgl_codegen.textures import HipTextureMixin
 from .crossgl_codegen.type_conversion import HipTypeConversionMixin
+from .crossgl_codegen.union_layouts import HipUnionLayoutMixin
 from .HipAst import (
     ArrayAccessNode,
     EnumNode,
@@ -83,6 +98,7 @@ class HipToCrossGLConverter(
     HipRuntimeCallMixin,
     HipRuntimeMemoryCallMixin,
     HipRuntimeExecutionCallMixin,
+    HipRuntimeGraphCallMixin,
     HipRuntimeModuleCallMixin,
     HipRecordMixin,
     HipDeclarationMixin,
@@ -95,6 +111,7 @@ class HipToCrossGLConverter(
     HipExpressionMixin,
     HipStatementMixin,
     HipTypeConversionMixin,
+    HipUnionLayoutMixin,
     ImportRefusalMixin,
 ):
     """Serialize HIP backend AST nodes back into CrossGL source.
@@ -591,6 +608,7 @@ class HipToCrossGLConverter(
         self.threadgroup_size = normalize_threadgroup_size_option(threadgroup_size)
         self.indent_level = 0
         self.output = []
+        self.block_votes = BlockVoteLibrary(())
         # Inside a __global__ kernel or a __device__ function, where host runtime calls are refused.
         self.in_device_code = False
         self.identifier_name_scopes = [{}]
@@ -604,6 +622,7 @@ class HipToCrossGLConverter(
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.variable_type_scopes = [{}]
+        self.integer_constants = IntegerConstants()
         self.device_property_source_scopes = [{}]
         self.device_attribute_source_scopes = [{}]
         self.device_query_source_scopes = [{}]
@@ -615,6 +634,7 @@ class HipToCrossGLConverter(
         self.generated_matrix_helper_types = set()
         self.namespace_aliases = {}
         self.source_identifier_names = frozenset()
+        self.directed_rounding = None
         self.anonymous_enum_count = 0
         self.global_resource_bindings = {}
         self.global_resource_binding_count = 0
@@ -634,6 +654,7 @@ class HipToCrossGLConverter(
         self.union_indirect_object_scopes = [set()]
         self.namespace_scope_variable = False
         self.namespace_constant_names = set()
+        self.function_templates = {}
         self.function_body_depth = 0
 
     def generate(self, ast_node):
@@ -654,12 +675,19 @@ class HipToCrossGLConverter(
             ast_node
         )
         self.user_function_names = self.collect_user_function_names(ast_node)
+        # A prototype's default arguments belong to its definition (C++17 [dcl.fct.default]).
+        merge_declared_defaults(
+            stmt
+            for stmt in getattr(ast_node, "statements", None) or []
+            if isinstance(stmt, FunctionNode)
+        )
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
         )
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.variable_type_scopes = [{}]
+        self.integer_constants = IntegerConstants()
         self.device_property_source_scopes = [{}]
         self.device_attribute_source_scopes = [{}]
         self.device_query_source_scopes = [{}]
@@ -675,6 +703,7 @@ class HipToCrossGLConverter(
         self.anonymous_enum_count = 0
         self.global_resource_binding_count = 0
         self.namespace_constant_names = set()
+        self.function_templates = collect_function_templates(ast_node)
         self.function_body_depth = 0
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
@@ -683,8 +712,18 @@ class HipToCrossGLConverter(
         self.prepare_global_resource_bindings(ast_node)
         self.reference_parameters = ReferenceParameters(ast_node)
         self.emitted_buffer_layouts = EmittedBufferLayouts("HIP")
+        self.begin_union_layout_contracts()
+        self.block_votes = BlockVoteLibrary(self.source_identifier_names)
+        self.directed_rounding = DirectedRoundingLibrary(self.source_identifier_names)
         self.visit(ast_node)
+        self.apply_union_layout_contracts()
         self.emitted_buffer_layouts.apply(self.output)
+        insert_block_vote_functions(
+            self.output, self.block_votes, "// HIP to CrossGL conversion"
+        )
+        insert_directed_rounding_functions(
+            self.output, self.directed_rounding, "// HIP to CrossGL conversion"
+        )
         return "\n".join(self.output)
 
     def refuse_incomplete_record_values(self, ast_node):
@@ -947,6 +986,12 @@ class HipToCrossGLConverter(
         if self.is_user_defined_function(stmt.name):
             return False
 
+        sine_cosine = sine_cosine_statements(self, stmt.name, stmt.args, UnaryOpNode)
+        if sine_cosine is not None:
+            for line in sine_cosine:
+                self.emit(line)
+            return True
+
         runtime_wrapper = self.format_hip_runtime_wrapper_expression(stmt)
         if runtime_wrapper is not None:
             comments, _ = runtime_wrapper
@@ -1117,517 +1162,16 @@ class HipToCrossGLConverter(
         return None
 
     def format_hip_graph_runtime_call(self, name, raw_args, args):
-        if name == "hipStreamBeginCaptureToGraph":
-            if len(args) >= 6:
-                return [
-                    f"// HIP stream begin capture to graph: stream: {args[0]}, "
-                    f"graph: {args[1]}, dependencies: {args[2]}, "
-                    f"dependency data: {args[3]}, count: {args[4]}, mode: {args[5]}"
-                ]
-        if name == "hipThreadExchangeStreamCaptureMode":
-            if args:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                return [f"// HIP exchange stream capture mode: output: {output}"]
-        if name == "hipGraphCreate":
-            if len(args) >= 2:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                return [f"// HIP graph create: output: {output}, flags: {args[1]}"]
-        if name == "hipGraphDestroy":
-            if args:
-                return [f"// HIP graph destroy: {args[0]}"]
-        if name == "hipGraphClone":
-            if len(args) >= 2:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                return [f"// HIP graph clone: output: {output}, source: {args[1]}"]
-        if name == "hipGraphAddNode":
-            if len(args) >= 5:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                return [
-                    f"// HIP graph add generic node: output: {output}, "
-                    f"graph: {args[1]}, dependencies: {args[2]}, "
-                    f"count: {args[3]}, params: {args[4]}"
-                ]
-        if name == "hipDrvGraphAddMemcpyNode":
-            if len(args) >= 6:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                return [
-                    f"// HIP driver graph add memcpy node: output: {output}, "
-                    f"graph: {args[1]}, dependencies: {args[2]}, "
-                    f"count: {args[3]}, params: {args[4]}, context: {args[5]}"
-                ]
-        if name == "hipDrvGraphAddMemsetNode":
-            if len(args) >= 6:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                return [
-                    f"// HIP driver graph add memset node: output: {output}, "
-                    f"graph: {args[1]}, dependencies: {args[2]}, "
-                    f"count: {args[3]}, params: {args[4]}, context: {args[5]}"
-                ]
-        if name == "hipDrvGraphAddMemFreeNode":
-            if len(args) >= 5:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                return [
-                    f"// HIP driver graph add memory free node: output: {output}, "
-                    f"graph: {args[1]}, dependencies: {args[2]}, "
-                    f"count: {args[3]}, pointer: {args[4]}"
-                ]
-        if name in {"hipDrvGraphMemcpyNodeGetParams", "hipDrvGraphMemcpyNodeSetParams"}:
-            if len(args) >= 2:
-                action = "get" if "GetParams" in name else "set"
-                params = (
-                    self.format_runtime_raw_output_target(raw_args[1])
-                    if action == "get"
-                    else args[1]
-                )
-                label = "params output" if action == "get" else "params"
-                return [
-                    f"// HIP driver graph memcpy node {action} params: "
-                    f"node: {args[0]}, {label}: {params}"
-                ]
-        if name in {
-            "hipDrvGraphExecMemcpyNodeSetParams",
-            "hipDrvGraphExecMemsetNodeSetParams",
-        }:
-            if len(args) >= 4:
-                node_kind = "memcpy" if "Memcpy" in name else "memset"
-                return [
-                    f"// HIP driver graph exec {node_kind} node set params: "
-                    f"exec: {args[0]}, node: {args[1]}, params: {args[2]}, "
-                    f"context: {args[3]}"
-                ]
-        if name in {
-            "hipGraphAddEmptyNode",
-            "hipGraphAddHostNode",
-            "hipGraphAddKernelNode",
-            "hipGraphAddMemcpyNode",
-            "hipGraphAddMemsetNode",
-        }:
-            if len(args) >= 4:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                node_kind = {
-                    "hipGraphAddEmptyNode": "empty",
-                    "hipGraphAddHostNode": "host",
-                    "hipGraphAddKernelNode": "kernel",
-                    "hipGraphAddMemcpyNode": "memcpy",
-                    "hipGraphAddMemsetNode": "memset",
-                }[name]
-                comment = (
-                    f"// HIP graph add {node_kind} node: output: {output}, "
-                    f"graph: {args[1]}, dependencies: {args[2]}, count: {args[3]}"
-                )
-                if len(args) >= 5:
-                    comment += f", params: {args[4]}"
-                return [comment]
-        if name == "hipGraphAddChildGraphNode":
-            if len(args) >= 5:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                return [
-                    f"// HIP graph add child graph node: output: {output}, "
-                    f"graph: {args[1]}, dependencies: {args[2]}, "
-                    f"count: {args[3]}, child graph: {args[4]}"
-                ]
-        if name in {"hipGraphAddEventRecordNode", "hipGraphAddEventWaitNode"}:
-            if len(args) >= 5:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                action = "record" if name == "hipGraphAddEventRecordNode" else "wait"
-                return [
-                    f"// HIP graph add event {action} node: output: {output}, "
-                    f"graph: {args[1]}, dependencies: {args[2]}, "
-                    f"count: {args[3]}, event: {args[4]}"
-                ]
-        if name in {
-            "hipGraphAddMemAllocNode",
-            "hipGraphAddMemFreeNode",
-        }:
-            if len(args) >= 5:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                node_kind = "alloc" if name == "hipGraphAddMemAllocNode" else "free"
-                detail_label = "params" if node_kind == "alloc" else "pointer"
-                return [
-                    f"// HIP graph add memory {node_kind} node: output: {output}, "
-                    f"graph: {args[1]}, dependencies: {args[2]}, "
-                    f"count: {args[3]}, {detail_label}: {args[4]}"
-                ]
-        if name in {"hipGraphMemAllocNodeGetParams", "hipGraphMemFreeNodeGetParams"}:
-            if len(args) >= 2:
-                output = self.format_runtime_raw_output_target(raw_args[1])
-                node_kind = "alloc" if "Alloc" in name else "free"
-                detail_label = (
-                    "params output" if node_kind == "alloc" else "pointer output"
-                )
-                return [
-                    f"// HIP graph memory {node_kind} node get params: "
-                    f"node: {args[0]}, {detail_label}: {output}"
-                ]
-        if name in {
-            "hipGraphAddMemcpyNode1D",
-            "hipGraphAddMemcpyNodeFromSymbol",
-            "hipGraphAddMemcpyNodeToSymbol",
-        }:
-            if name == "hipGraphAddMemcpyNode1D" and len(args) >= 8:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                return [
-                    f"// HIP graph add memcpy 1D node: output: {output}, "
-                    f"graph: {args[1]}, dependencies: {args[2]}, count: {args[3]}, "
-                    f"destination: {args[4]}, source: {args[5]}, bytes: {args[6]}, "
-                    f"kind: {args[7]}"
-                ]
-            if len(args) >= 9:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                copy_kind = {
-                    "hipGraphAddMemcpyNodeFromSymbol": "from symbol",
-                    "hipGraphAddMemcpyNodeToSymbol": "to symbol",
-                }[name]
-                return [
-                    f"// HIP graph add memcpy {copy_kind} node: output: {output}, "
-                    f"graph: {args[1]}, dependencies: {args[2]}, count: {args[3]}, "
-                    f"destination: {args[4]}, source: {args[5]}, bytes: {args[6]}, "
-                    f"offset: {args[7]}, kind: {args[8]}"
-                ]
-        if name in {
-            "hipGraphMemcpyNodeSetParams1D",
-            "hipGraphMemcpyNodeSetParamsFromSymbol",
-            "hipGraphMemcpyNodeSetParamsToSymbol",
-        }:
-            if name == "hipGraphMemcpyNodeSetParams1D" and len(args) >= 5:
-                return [
-                    f"// HIP graph memcpy 1D node set params: "
-                    f"node: {args[0]}, destination: {args[1]}, source: {args[2]}, "
-                    f"bytes: {args[3]}, kind: {args[4]}"
-                ]
-            if len(args) >= 6:
-                copy_kind = {
-                    "hipGraphMemcpyNodeSetParamsFromSymbol": "from symbol",
-                    "hipGraphMemcpyNodeSetParamsToSymbol": "to symbol",
-                }[name]
-                return [
-                    f"// HIP graph memcpy {copy_kind} node set params: "
-                    f"node: {args[0]}, destination: {args[1]}, source: {args[2]}, "
-                    f"bytes: {args[3]}, offset: {args[4]}, kind: {args[5]}"
-                ]
-        if name in {
-            "hipGraphExecMemcpyNodeSetParams1D",
-            "hipGraphExecMemcpyNodeSetParamsFromSymbol",
-            "hipGraphExecMemcpyNodeSetParamsToSymbol",
-        }:
-            if name == "hipGraphExecMemcpyNodeSetParams1D" and len(args) >= 6:
-                return [
-                    f"// HIP graph exec memcpy 1D node set params: "
-                    f"exec: {args[0]}, node: {args[1]}, destination: {args[2]}, "
-                    f"source: {args[3]}, bytes: {args[4]}, kind: {args[5]}"
-                ]
-            if len(args) >= 7:
-                copy_kind = {
-                    "hipGraphExecMemcpyNodeSetParamsFromSymbol": "from symbol",
-                    "hipGraphExecMemcpyNodeSetParamsToSymbol": "to symbol",
-                }[name]
-                return [
-                    f"// HIP graph exec memcpy {copy_kind} node set params: "
-                    f"exec: {args[0]}, node: {args[1]}, destination: {args[2]}, "
-                    f"source: {args[3]}, bytes: {args[4]}, offset: {args[5]}, "
-                    f"kind: {args[6]}"
-                ]
-        if name in {"hipGraphAddDependencies", "hipGraphRemoveDependencies"}:
-            if len(args) >= 4:
-                action = "add" if name == "hipGraphAddDependencies" else "remove"
-                return [
-                    f"// HIP graph {action} dependencies: graph: {args[0]}, "
-                    f"from: {args[1]}, to: {args[2]}, count: {args[3]}"
-                ]
-        if name in {"hipGraphGetNodes", "hipGraphGetRootNodes"}:
-            if len(args) >= 3:
-                output = self.format_runtime_raw_output_target(raw_args[2])
-                node_set = "nodes" if name == "hipGraphGetNodes" else "root nodes"
-                return [
-                    f"// HIP graph get {node_set}: graph: {args[0]}, "
-                    f"nodes output: {args[1]}, count output: {output}"
-                ]
-        if name == "hipGraphGetEdges":
-            if len(args) >= 4:
-                output = self.format_runtime_raw_output_target(raw_args[3])
-                return [
-                    f"// HIP graph get edges: graph: {args[0]}, "
-                    f"from output: {args[1]}, to output: {args[2]}, "
-                    f"count output: {output}"
-                ]
-        if name in {"hipGraphNodeGetDependencies", "hipGraphNodeGetDependentNodes"}:
-            if len(args) >= 3:
-                output = self.format_runtime_raw_output_target(raw_args[2])
-                node_set = (
-                    "dependencies"
-                    if name == "hipGraphNodeGetDependencies"
-                    else "dependent nodes"
-                )
-                return [
-                    f"// HIP graph node get {node_set}: node: {args[0]}, "
-                    f"nodes output: {args[1]}, count output: {output}"
-                ]
-        if name == "hipGraphNodeFindInClone":
-            if len(args) >= 3:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                return [
-                    f"// HIP graph node find in clone: output: {output}, "
-                    f"original: {args[1]}, clone graph: {args[2]}"
-                ]
-        if name == "hipGraphNodeGetType":
-            if len(args) >= 2:
-                output = self.format_runtime_raw_output_target(raw_args[1])
-                return [
-                    f"// HIP graph node get type: node: {args[0]}, output: {output}"
-                ]
-        if name == "hipGraphChildGraphNodeGetGraph":
-            if len(args) >= 2:
-                output = self.format_runtime_raw_output_target(raw_args[1])
-                return [
-                    f"// HIP graph child node get graph: "
-                    f"node: {args[0]}, output: {output}"
-                ]
-        if name == "hipGraphKernelNodeCopyAttributes":
-            if len(args) >= 2:
-                return [
-                    f"// HIP graph kernel node copy attributes: "
-                    f"source: {args[0]}, destination: {args[1]}"
-                ]
-        if name in {"hipGraphKernelNodeGetAttribute", "hipGraphKernelNodeSetAttribute"}:
-            if len(args) >= 3:
-                action = "get" if name == "hipGraphKernelNodeGetAttribute" else "set"
-                value = (
-                    self.format_runtime_raw_output_target(raw_args[2])
-                    if action == "get"
-                    else self.format_runtime_pointer_target(raw_args[2])
-                )
-                label = "output" if action == "get" else "value"
-                return [
-                    f"// HIP graph kernel node {action} attribute: "
-                    f"node: {args[0]}, attribute: {args[1]}, {label}: {value}"
-                ]
-        if name in {"hipGraphNodeSetEnabled", "hipGraphNodeGetEnabled"}:
-            if len(args) >= 3:
-                action = "get" if name == "hipGraphNodeGetEnabled" else "set"
-                value = (
-                    self.format_runtime_raw_output_target(raw_args[2])
-                    if action == "get"
-                    else args[2]
-                )
-                label = "output" if action == "get" else "value"
-                return [
-                    f"// HIP graph node {action} enabled: "
-                    f"exec: {args[0]}, node: {args[1]}, {label}: {value}"
-                ]
-        if name == "hipGraphDestroyNode":
-            if args:
-                return [f"// HIP graph destroy node: {args[0]}"]
-        if name == "hipGraphInstantiate":
-            if len(args) >= 5:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                error_output = self.format_runtime_raw_output_target(raw_args[2])
-                return [
-                    f"// HIP graph instantiate: output: {output}, graph: {args[1]}, "
-                    f"error node output: {error_output}, log buffer: {args[3]}, "
-                    f"log bytes: {args[4]}"
-                ]
-        if name == "hipGraphInstantiateWithFlags":
-            if len(args) >= 3:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                return [
-                    f"// HIP graph instantiate with flags: output: {output}, "
-                    f"graph: {args[1]}, flags: {args[2]}"
-                ]
-        if name == "hipGraphInstantiateWithParams":
-            if len(args) >= 3:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                return [
-                    f"// HIP graph instantiate with params: output: {output}, "
-                    f"graph: {args[1]}, params: {args[2]}"
-                ]
-        if name == "hipGraphUpload":
-            if len(args) >= 2:
-                return [f"// HIP graph upload: exec: {args[0]}, stream: {args[1]}"]
-        if name == "hipGraphLaunch":
-            if len(args) >= 2:
-                return [f"// HIP graph launch: exec: {args[0]}, stream: {args[1]}"]
-        if name == "hipGraphExecDestroy":
-            if args:
-                return [f"// HIP graph exec destroy: {args[0]}"]
-        if name == "hipGraphExecUpdate":
-            if len(args) >= 4:
-                error_output = self.format_runtime_raw_output_target(raw_args[2])
-                result_output = self.format_runtime_raw_output_target(raw_args[3])
-                return [
-                    f"// HIP graph exec update: exec: {args[0]}, graph: {args[1]}, "
-                    f"error node output: {error_output}, result output: {result_output}"
-                ]
-        if name == "hipGraphExecGetFlags":
-            if len(args) >= 2:
-                output = self.format_runtime_raw_output_target(raw_args[1])
-                return [
-                    f"// HIP graph exec get flags: exec: {args[0]}, output: {output}"
-                ]
-        if name in {"hipGraphNodeSetParams", "hipGraphExecNodeSetParams"}:
-            if len(args) >= 2:
-                if name == "hipGraphNodeSetParams":
-                    return [
-                        f"// HIP graph generic node set params: "
-                        f"node: {args[0]}, params: {args[1]}"
-                    ]
-                if len(args) >= 3:
-                    return [
-                        f"// HIP graph exec generic node set params: "
-                        f"exec: {args[0]}, node: {args[1]}, params: {args[2]}"
-                    ]
-        if name in {
-            "hipGraphKernelNodeGetParams",
-            "hipGraphKernelNodeSetParams",
-            "hipGraphMemcpyNodeGetParams",
-            "hipGraphMemcpyNodeSetParams",
-            "hipGraphMemsetNodeGetParams",
-            "hipGraphMemsetNodeSetParams",
-            "hipGraphHostNodeGetParams",
-            "hipGraphHostNodeSetParams",
-        }:
-            if len(args) >= 2:
-                if "GetParams" in name:
-                    self.clear_lvalue_metadata_source(raw_args[1])
-                return [self.format_hip_graph_node_params_comment(name, args)]
-        if name in {
-            "hipGraphExecKernelNodeSetParams",
-            "hipGraphExecMemcpyNodeSetParams",
-            "hipGraphExecMemsetNodeSetParams",
-            "hipGraphExecHostNodeSetParams",
-            "hipGraphExecChildGraphNodeSetParams",
-        }:
-            if len(args) >= 3:
-                node_kind = self.get_hip_graph_node_kind(name)
-                return [
-                    f"// HIP graph exec set {node_kind} node params: exec: {args[0]}, "
-                    f"node: {args[1]}, params: {args[2]}"
-                ]
-        if name in {
-            "hipGraphEventRecordNodeGetEvent",
-            "hipGraphEventWaitNodeGetEvent",
-        }:
-            if len(args) >= 2:
-                output = self.format_runtime_raw_output_target(raw_args[1])
-                action = (
-                    "record" if name == "hipGraphEventRecordNodeGetEvent" else "wait"
-                )
-                return [
-                    f"// HIP graph event {action} node get event: "
-                    f"node: {args[0]}, output: {output}"
-                ]
-        if name in {
-            "hipGraphEventRecordNodeSetEvent",
-            "hipGraphEventWaitNodeSetEvent",
-        }:
-            if len(args) >= 2:
-                action = (
-                    "record" if name == "hipGraphEventRecordNodeSetEvent" else "wait"
-                )
-                return [
-                    f"// HIP graph event {action} node set event: "
-                    f"node: {args[0]}, event: {args[1]}"
-                ]
-        if name in {
-            "hipGraphExecEventRecordNodeSetEvent",
-            "hipGraphExecEventWaitNodeSetEvent",
-        }:
-            if len(args) >= 3:
-                action = (
-                    "record"
-                    if name == "hipGraphExecEventRecordNodeSetEvent"
-                    else "wait"
-                )
-                return [
-                    f"// HIP graph exec event {action} node set event: "
-                    f"exec: {args[0]}, node: {args[1]}, event: {args[2]}"
-                ]
-        if name in {
-            "hipGraphAddExternalSemaphoresSignalNode",
-            "hipGraphAddExternalSemaphoresWaitNode",
-        }:
-            if len(args) >= 5:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                action = (
-                    "signal"
-                    if name == "hipGraphAddExternalSemaphoresSignalNode"
-                    else "wait"
-                )
-                return [
-                    f"// HIP graph add external semaphore {action} node: "
-                    f"output: {output}, graph: {args[1]}, dependencies: {args[2]}, "
-                    f"count: {args[3]}, params: {args[4]}"
-                ]
-        if name in {
-            "hipGraphExternalSemaphoresSignalNodeGetParams",
-            "hipGraphExternalSemaphoresSignalNodeSetParams",
-            "hipGraphExternalSemaphoresWaitNodeGetParams",
-            "hipGraphExternalSemaphoresWaitNodeSetParams",
-        }:
-            if len(args) >= 2:
-                action = "signal" if "Signal" in name else "wait"
-                direction = "get" if "GetParams" in name else "set"
-                if direction == "get":
-                    self.clear_lvalue_metadata_source(raw_args[1])
-                return [
-                    f"// HIP graph external semaphore {action} node {direction} params: "
-                    f"node: {args[0]}, params: {args[1]}"
-                ]
-        if name in {
-            "hipGraphExecExternalSemaphoresSignalNodeSetParams",
-            "hipGraphExecExternalSemaphoresWaitNodeSetParams",
-        }:
-            if len(args) >= 3:
-                action = "signal" if "Signal" in name else "wait"
-                return [
-                    f"// HIP graph exec external semaphore {action} node set params: "
-                    f"exec: {args[0]}, node: {args[1]}, params: {args[2]}"
-                ]
-        if name in {"hipDeviceGetGraphMemAttribute", "hipDeviceSetGraphMemAttribute"}:
-            if len(args) >= 3:
-                action = "get" if name == "hipDeviceGetGraphMemAttribute" else "set"
-                value = (
-                    self.format_runtime_raw_output_target(raw_args[2])
-                    if action == "get"
-                    else self.format_runtime_pointer_target(raw_args[2])
-                )
-                label = "output" if action == "get" else "value"
-                return [
-                    f"// HIP device graph memory {action} attribute: "
-                    f"device: {args[0]}, attribute: {args[1]}, {label}: {value}"
-                ]
-        if name == "hipDeviceGraphMemTrim":
-            if args:
-                return [f"// HIP device graph memory trim: device: {args[0]}"]
-        if name == "hipGraphDebugDotPrint":
-            if len(args) >= 3:
-                return [
-                    f"// HIP graph debug dot print: graph: {args[0]}, "
-                    f"path: {args[1]}, flags: {args[2]}"
-                ]
-        if name == "hipUserObjectCreate":
-            if len(args) >= 5:
-                output = self.format_runtime_raw_output_target(raw_args[0])
-                return [
-                    f"// HIP user object create: output: {output}, "
-                    f"resource: {args[1]}, destructor: {args[2]}, "
-                    f"initial refcount: {args[3]}, flags: {args[4]}"
-                ]
-        if name in {"hipUserObjectRetain", "hipUserObjectRelease"}:
-            if len(args) >= 2:
-                action = "retain" if name == "hipUserObjectRetain" else "release"
-                return [
-                    f"// HIP user object {action}: object: {args[0]}, count: {args[1]}"
-                ]
-        if name in {"hipGraphRetainUserObject", "hipGraphReleaseUserObject"}:
-            if len(args) >= 3:
-                action = "retain" if name == "hipGraphRetainUserObject" else "release"
-                comment = (
-                    f"// HIP graph {action} user object: graph: {args[0]}, "
-                    f"object: {args[1]}, count: {args[2]}"
-                )
-                if len(args) >= 4:
-                    comment += f", flags: {args[3]}"
-                return [comment]
+        for describe in (
+            self.describe_hip_graph_capture_and_driver_node_call,
+            self.describe_hip_graph_node_creation_call,
+            self.describe_hip_graph_topology_call,
+            self.describe_hip_graph_execution_call,
+            self.describe_hip_graph_event_and_resource_call,
+        ):
+            comments = describe(name, raw_args, args)
+            if comments is not None:
+                return comments
         return None
 
     def format_hip_runtime_expression_call(self, node, args):
@@ -1670,6 +1214,10 @@ class HipToCrossGLConverter(
 
         for stmt in node.statements:
             if isinstance(stmt, FunctionNode):
+                if getattr(stmt, "body", None) is None:
+                    # A prototype: CrossGL declares each function once, at its definition, and the generators
+                    # declare a function ahead of an earlier caller where the target needs it.
+                    continue
                 if self.is_generated_matrix_helper_function(stmt):
                     continue
                 if hasattr(stmt, "qualifiers") and "__global__" in getattr(
@@ -1740,6 +1288,9 @@ class HipToCrossGLConverter(
         )
         self.push_variable_type_scope()
         self.push_identifier_name_scope()
+        for parameter in template_parameters(node) or []:
+            # A template value parameter hides a namespace constant of its name.
+            self.integer_constants.declare(parameter.name)
         try:
             params = []
 
@@ -1774,10 +1325,13 @@ class HipToCrossGLConverter(
                     if getattr(self, "reference_parameters", None) is None:
                         self.reference_parameters = ReferenceParameters(None)
                     mode = self.reference_parameters.mode(node, index)
+                    default = parameter_default_suffix(
+                        self, node.name, param_name, param, "HIP"
+                    )
                     params.append(
-                        f"{mode} {param_type} {output_name}"
+                        f"{mode} {param_type} {output_name}{default}"
                         if mode
-                        else f"{param_type} {output_name}"
+                        else f"{param_type} {output_name}{default}"
                     )
 
             param_str = ", ".join(params)
@@ -1786,7 +1340,14 @@ class HipToCrossGLConverter(
                 node, file_scope_off=self.fp_contract_file_scope_off
             ):
                 self.emit(PRECISE_FUNCTION_ATTRIBUTE)
-            self.emit(f"{return_type} {function_name}({param_str}) {{")
+            prefix = generic_prefix(
+                self,
+                node,
+                "HIP",
+                self.convert_hip_type_to_crossgl,
+                f"{return_type} {param_str}",
+            )
+            self.emit(f"{prefix}{return_type} {function_name}({param_str}) {{")
 
             self.indent_level += 1
             self.push_packed_argument_scope()
@@ -2031,6 +1592,9 @@ class HipToCrossGLConverter(
         ):
             return self.visit(raw_args[0].operand)
 
+        if len(raw_args) == 1:
+            return f"(*{formatted_args[0]})"
+
         return self.refuse_import(
             f"HIP load cache intrinsic {function_name}({', '.join(formatted_args)}): CrossGL loads take one "
             "address",
@@ -2091,16 +1655,19 @@ class HipToCrossGLConverter(
                 if width_limit == "WaveGetLaneCount()"
                 else f"(WaveGetLaneIndex() % {width_limit})"
             )
+            # Select the source lane first and read in every lane, as the
+            # mask-less __shfl_up/__shfl_down below do: the source lane is
+            # inactive in the lanes that take the other arm of ?: (#4569).
             if function_name == "__shfl_up_sync":
                 return (
+                    f"WaveReadLaneAt({value}, "
                     f"(({segment_lane} >= ({delta})) ? "
-                    f"WaveReadLaneAt({value}, (WaveGetLaneIndex() - ({delta}))) "
-                    f": {value})"
+                    f"(WaveGetLaneIndex() - ({delta})) : WaveGetLaneIndex()))"
                 )
             return (
+                f"WaveReadLaneAt({value}, "
                 f"((({segment_lane} + ({delta})) < {width_limit}) ? "
-                f"WaveReadLaneAt({value}, (WaveGetLaneIndex() + ({delta}))) "
-                f": {value})"
+                f"(WaveGetLaneIndex() + ({delta})) : WaveGetLaneIndex()))"
             )
 
         if function_name == "__shfl_xor_sync":
@@ -2283,22 +1850,26 @@ class HipToCrossGLConverter(
         if member_name == "shfl":
             source_lane = f"(({lane} - {local_lane}) + {lane_arg})"
             return f"WaveReadLaneAt({value}, {source_lane})"
+        # The shuffle runs in every lane and only its source lane is selected; a
+        # source outside the tile reads the caller's own lane (#4569).
         if member_name == "shfl_down":
             return (
+                f"WaveReadLaneAt({value}, "
                 f"((({local_lane} + ({lane_arg})) < {tile_size}) ? "
-                f"WaveReadLaneAt({value}, ({lane} + ({lane_arg}))) : {value})"
+                f"({lane} + ({lane_arg})) : {lane}))"
             )
         if member_name == "shfl_up":
             return (
+                f"WaveReadLaneAt({value}, "
                 f"(({local_lane} >= ({lane_arg})) ? "
-                f"WaveReadLaneAt({value}, ({lane} - ({lane_arg}))) : {value})"
+                f"({lane} - ({lane_arg})) : {lane}))"
             )
 
         source_local_lane = f"({local_lane} ^ ({lane_arg}))"
         source_lane = f"(({lane} - {local_lane}) + {source_local_lane})"
         return (
-            f"(({source_local_lane} < {tile_size}) ? "
-            f"WaveReadLaneAt({value}, {source_lane}) : {value})"
+            f"WaveReadLaneAt({value}, "
+            f"(({source_local_lane} < {tile_size}) ? {source_lane} : {lane}))"
         )
 
     def format_unsupported_cooperative_group_expression(
@@ -2320,11 +1891,12 @@ class HipToCrossGLConverter(
         }:
             return None
 
-        return self.refuse_import(
-            f"HIP block-wide sync vote {function_name}({', '.join(args)}): CrossGL has no barrier that "
-            "reduces a predicate",
-            "0",
-        )
+        if len(args) != 1:
+            return self.refuse_import(
+                f"HIP block-wide sync vote {function_name}({', '.join(args)}) takes one predicate",
+                "0",
+            )
+        return self.block_votes.call(function_name, self.format_wave_predicate(args[0]))
 
     def format_unsupported_hip_resource_expression(self, kind, member, fallback):
         return self.refuse_import(f"HIP {kind}.{member} has no CrossGL form", fallback)
@@ -2380,9 +1952,19 @@ class HipToCrossGLConverter(
         target_type = self.convert_hip_type_to_crossgl(node.target_type)
         if node.is_array:
             size = self.visit(node.size) if node.size is not None else ""
+            if self.in_device_code:
+                return self.refuse_import(
+                    f"HIP new[] {target_type}({size}): CrossGL has no device heap",
+                    "0",
+                )
             return f"new_array<{target_type}>({size})"
 
         args = ", ".join(self.visit(arg) for arg in node.args)
+        if self.in_device_code:
+            return self.refuse_import(
+                f"HIP new {target_type}({args}): CrossGL has no device heap",
+                "0",
+            )
         return f"new<{target_type}>({args})"
 
     def get_member_query_path(self, node):

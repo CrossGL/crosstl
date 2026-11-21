@@ -135,7 +135,7 @@ def test_translator_shard_legs_cover_every_shard():
             index, _, count = spec.partition("-of-")
             sharded.setdefault((suite, runner), set()).add((int(index), int(count)))
     assert set(sharded) == {
-        ("general", "ubuntu-latest"),
+        ("all", "ubuntu-latest"),
         ("all", "windows-latest"),
         ("all", "macOS-latest"),
     }

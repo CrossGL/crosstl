@@ -49,10 +49,16 @@ void main(uint3 id : SV_DispatchThreadID)
 """
 
 
+# DXC reads HLSL ``half`` as binary16 only under -enable-16bit-types; these sources test binary16 ``half``.
+HLSL_16_BIT = {"enable_16bit_types": True}
+
+
 def _translate(tmp_path, source, backend):
     path = tmp_path / "shader.hlsl"
     path.write_text(source, encoding="utf-8")
-    return crosstl.translate(str(path), backend=backend, format_output=False)
+    return crosstl.translate(
+        str(path), backend=backend, format_output=False, source_options=HLSL_16_BIT
+    )
 
 
 def _kernel(body, declarations=""):

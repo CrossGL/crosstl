@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import (
     integer64_workloads,
     packages,
@@ -518,8 +519,7 @@ def test_integer64_ci_requires_all_three_native_targets():
     job = workflow["jobs"]["integer64-host"]
     assert job["needs"] == ["ci-plan", "portable-host"]
     assert (
-        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
-        and "continue-on-error" not in job
+        job["if"] == job_condition("integer64-host") and "continue-on-error" not in job
     )
     assert {
         item["target"]: item["os"] for item in job["strategy"]["matrix"]["include"]

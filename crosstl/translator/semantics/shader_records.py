@@ -13,11 +13,10 @@ The GLSL block syntax ``layout(shaderRecordEXT, std430) buffer SBT { ... } sbt;`
 
 Before this module the qualifier was dropped on the way out: SPIR-V bound the block as an ordinary storage buffer
 at set 0, binding 0, and GLSL redeclared it with ``binding = 0``, so the stage read a descriptor the host never
-binds instead of its record. :func:`refuse_shader_record_buffers` refuses targets that cannot read a record:
-
-* Direct3D 12 passes record data as local root arguments, which need a local root signature (DirectX Raytracing
-  functional spec, "Local root signatures vs global root signatures"); CrossTL does not emit root signatures.
-* Metal, WGSL and the compute languages have no shader binding table.
+binds instead of its record. HLSL declares the block as a ``[[vk::shader_record_ext]]`` constant buffer that a
+local root signature feeds on Direct3D 12 (:mod:`crosstl.translator.codegen.hlsl_shader_records`).
+:func:`refuse_shader_record_buffers` refuses the targets that have no shader binding table: Metal, WGSL and the
+compute languages.
 """
 
 from __future__ import annotations
@@ -33,9 +32,9 @@ __all__ = [
     "shader_record_memory_layout",
 ]
 
-# Targets whose emitters declare a shader record buffer: GLSL (the Vulkan dialect for ray stages) and SPIR-V.
+# Targets whose emitters declare a shader record buffer: GLSL (the Vulkan dialect for ray stages), SPIR-V and HLSL.
 SHADER_RECORD_TARGETS = frozenset(
-    {"opengl", "glsl", "vulkan", "spirv", "cgl", "crossgl"}
+    {"opengl", "glsl", "vulkan", "spirv", "directx", "hlsl", "cgl", "crossgl"}
 )
 _MEMORY_LAYOUTS = ("std430", "std140", "scalar")
 
@@ -90,14 +89,9 @@ class ShaderRecordBufferUnsupportedError(TranslationDiagnostic):
     def __init__(self, target, name, *, source_location=None):
         self.source_location = source_location
         self.missing_capabilities = (f"{target}.shader-record-buffer",)
-        reason = (
-            "Direct3D 12 passes shader record data as local root arguments, which need a local root signature, "
-            "and CrossTL does not emit root signatures"
-            if target in {"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"}
-            else "the target has no shader binding table"
-        )
         super().__init__(
-            f"shader record buffer '{name}' (GL_EXT_ray_tracing shaderRecordEXT) cannot be read on {target}: {reason}",
+            f"shader record buffer '{name}' (GL_EXT_ray_tracing shaderRecordEXT) cannot be read on {target}: "
+            "the target has no shader binding table",
             target=target,
             code=f"{CODE_PREFIX}{target}-shader-record-buffer-unsupported",
         )

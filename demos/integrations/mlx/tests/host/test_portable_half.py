@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import (
     half_storage,
     packages,
@@ -611,10 +612,7 @@ def test_half_ci_requires_every_target_and_retained_evidence():
     )
     job = workflow["jobs"]["half-host"]
     assert job["needs"] == ["ci-plan", "portable-host"]
-    assert (
-        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
-        and "continue-on-error" not in job
-    )
+    assert job["if"] == job_condition("half-host") and "continue-on-error" not in job
     assert {
         item["target"]: item["os"] for item in job["strategy"]["matrix"]["include"]
     } == {"metal": "macos-26", "directx": "windows-2025", "opengl": "ubuntu-24.04"}

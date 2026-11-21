@@ -3,11 +3,12 @@ name: Corpus
 # Third-party corpus tier (tests/conformance/corpus). Rebuilds the corpus from the projects and commits pinned in
 # its manifest, translates every unit to each target this runner checks natively, and compares every cell and the
 # p95 translation latency per source language with the committed scoreboard and budgets.json. A cell that gets
-# worse or cannot be checked, or a latency budget that is exceeded, fails the job. Pull requests and the merge
-# queue run the Linux leg; the nightly schedule, manual runs and pull requests labelled "ci:full" also run the
-# macOS Metal leg. The legs job (tests/conformance/ci_plan.py) skips the corpus for a pull request or merge group
-# that changes none of the corpus paths, and "Corpus result" is the one check to require. The runner's unit tests
-# run with the conformance tier.
+# worse or cannot be checked, or a latency budget that is exceeded, fails the job. Pull requests run the Linux
+# leg; the nightly schedule, manual runs and pull requests labelled "ci:full" also run the macOS Metal leg. The
+# legs job (tests/conformance/ci_plan.py) skips the corpus for a pull request that changes none of the corpus
+# paths, and "Corpus result" is the one check to require. The workflow does not run in the merge queue: its
+# result is not a required check there, so a merge-group run could not hold a pull request back and would only
+# take runners for hours; the nightly run tests main. The runner's unit tests run with the conformance tier.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -19,7 +20,6 @@ on:
     - cron: "41 3 * * *"
   # Pull requests always run this workflow, so that its result check can be required.
   pull_request:
-  merge_group:
   workflow_dispatch:
     inputs:
       slices:
@@ -49,11 +49,10 @@ jobs:
       - name: Select legs
         id: select
         env:
-          # macOS runners are scarce, so a pull request runs the Metal leg only while it is labelled ci:full, and
-          # the merge queue never runs it.
+          # macOS runners are scarce, so a pull request runs the Metal leg only while it is labelled ci:full.
           FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
-          BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha }}
-          HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
           LINUX_LEGS: >-
             [{"name": "Linux HLSL, GLSL, GLSL ES and SPIR-V", "os": "ubuntu-24.04", "targets": "hlsl,glsl,essl,spirv",
             "developer_dir": ""}]
@@ -141,7 +140,8 @@ jobs:
             ${{ runner.temp }}/toolchains.md
 
   result:
-    # The one check per workflow that branch protection and the merge queue can require.
+    # The one check per workflow that branch protection can require. Requiring it also needs the merge_group
+    # trigger back, because the queue waits for every required check on the merge group.
     name: Corpus result
     if: always()
     needs: [legs, corpus]
