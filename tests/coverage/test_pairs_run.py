@@ -246,7 +246,9 @@ def test_a_diverging_cell_names_both_compilers():
         "00000-native": np.array([1, 2], dtype=np.uint32),
         "00000-translated": np.array([1, 3], dtype=np.uint32),
     }
-    judged = execution._judge(result, native, dict(native), outputs, False, "", True, 0)
+    judged = execution._judge(
+        result, native, dict(native), outputs, False, "", True, None, 0
+    )
     assert judged.outcome == "wrong"
     assert judged.detail.startswith(
         "on vulkan-lavapipe as SPIR-V from dxc and glslangValidator, the translation "
