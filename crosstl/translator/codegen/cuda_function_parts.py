@@ -209,7 +209,9 @@ class CudaFunctionPartsMixin:
             )
 
         for local_var in getattr(self, "current_stage_local_variables", []) or []:
-            if self.is_cuda_shared_variable(local_var):
+            if self.is_cuda_shared_variable(local_var) and id(local_var) not in getattr(
+                self, "file_scope_shared_variable_ids", ()
+            ):
                 self.visit(local_var)
 
         precise_state = self.enter_precise_evaluation(node)

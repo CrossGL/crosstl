@@ -169,6 +169,14 @@ class HipExpressionMixin:
         if enum_constructor is not None:
             return enum_constructor
 
+        union_constructor = self.native_unions.constructor(
+            self.type_name_string(getattr(node, "constructor_type", None)),
+            getattr(node, "arguments", None),
+            getattr(node, "named_arguments", None),
+        )
+        if union_constructor is not None:
+            return union_constructor
+
         struct_constructor = generate_struct_constructor_expression(self, node)
         if struct_constructor is not None:
             return struct_constructor

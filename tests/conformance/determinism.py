@@ -11,7 +11,7 @@ same diagnostic under every seed. Inputs are discovered by the source extensions
 new fixture or demo is covered without editing this file. Paths are passed relative to the repository root, and
 the workers run from it, so that diagnostics that quote a path are compared as they are.
 
-The conformance workflow's "Hash-seed determinism" job runs this check. Pull requests and the merge queue
+The conformance workflow's "Hash-seed determinism" job runs this check. Pull requests
 translate to CrossGL and the graphics targets under two seeds (the defaults); pushes to main, the nightly schedule
 and manual runs translate to every backend under three::
 

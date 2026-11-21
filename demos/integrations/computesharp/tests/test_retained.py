@@ -286,9 +286,11 @@ class FakeDotnet:
         self.results = results
         self.exits = exits or {}
         self.commands = []
+        self.directories = []
 
-    def __call__(self, command, log, *, deadline, check=True):
+    def __call__(self, command, log, *, deadline, check=True, cwd=None):
         self.commands.append(command)
+        self.directories.append(cwd)
         stdout = ""
         returncode = 0
         if command[1] == "msbuild":
@@ -369,6 +371,7 @@ def test_device_lost_reproduces_the_upstream_steps_and_runs_each_class(
         run["filter"] for run in item.retention["runs"]
     ]
     assert all("--no-build" in t and t[t.index("-c") + 1] == "Release" for t in tests)
+    assert set(fake.directories) == {tmp_path / "upstream"}
     upstream = [run for run in report["runs"] if not run["accounted"]]
     assert [run["selectedCases"] for run in upstream] == [0, 0, 0]
     assert all(run["trx"] is None for run in upstream)
