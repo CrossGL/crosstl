@@ -34,6 +34,47 @@ from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgr
 from .sizeof_scopes import OpenCLSizeofScopeMixin
 
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
+_OPENCL_ARITHMETIC_OPERATORS = frozenset({"+", "-", "*", "/"})
+# Built-in functions whose result has the type of their vector arguments
+# (OpenCL C 3.0, sections 6.15.2, 6.15.4 and 6.15.5).
+_OPENCL_ARGUMENT_TYPE_BUILTINS = frozenset(
+    {
+        "ceil",
+        "clamp",
+        "copysign",
+        "cos",
+        "cross",
+        "degrees",
+        "exp",
+        "exp2",
+        "fabs",
+        "fast_normalize",
+        "floor",
+        "fma",
+        "fmax",
+        "fmin",
+        "fmod",
+        "log",
+        "log2",
+        "mad",
+        "max",
+        "min",
+        "mix",
+        "normalize",
+        "pow",
+        "radians",
+        "rint",
+        "round",
+        "rsqrt",
+        "sign",
+        "sin",
+        "smoothstep",
+        "sqrt",
+        "step",
+        "tan",
+        "trunc",
+    }
+)
 _OPENCL_WORK_ITEM_QUERIES = frozenset(
     {
         "get_enqueued_local_size",
@@ -49,6 +90,18 @@ _OPENCL_WORK_ITEM_QUERIES = frozenset(
         "get_work_dim",
     }
 )
+
+
+def _is_enclosed_in_parentheses(text):
+    """Whether ``text`` is one parenthesized group, such as ``(a + b)`` but not ``(a) + (b)``."""
+    if not text.startswith("(") or not text.endswith(")"):
+        return False
+    depth = 0
+    for index, character in enumerate(text):
+        depth += {"(": 1, ")": -1}.get(character, 0)
+        if depth == 0:
+            return index == len(text) - 1
+    return False
 
 
 class OpenCLRecordSemanticError(ValueError):
@@ -994,6 +1047,9 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
                 if sizeof_value is not None:
                     return str(sizeof_value)
                 self.refuse_opencl_sizeof_expression(raw_args)
+            cross = self.format_opencl_four_component_cross(func_name, raw_args)
+            if cross is not None:
+                return cross
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
@@ -1001,6 +1057,100 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
             if fence is not None:
                 return fence
         return super().visit_FunctionCallNode(node)
+
+    def format_opencl_four_component_cross(self, func_name, args):
+        """Write OpenCL's four-component ``cross`` with the three-component form CrossGL has.
+
+        OpenCL defines ``cross`` for ``float4`` and ``double4`` as the cross product of the first three
+        components with a ``w`` of zero (OpenCL C 3.0, section 6.15.5). CrossGL's ``cross`` takes three
+        components only.
+        """
+        if (
+            func_name != "cross"
+            or len(args) != 2
+            or self.is_user_defined_function(func_name)
+        ):
+            return None
+        vector_types = {self.opencl_four_component_vector_type(arg) for arg in args}
+        vector_types.discard(None)
+        if len(vector_types) != 1:
+            return None
+        operands = []
+        for arg in args:
+            text = self.visit(arg)
+            if not re.fullmatch(
+                r"[A-Za-z_]\w*(?:\.\w+|\[[^\[\]]*\])*", text
+            ) and not _is_enclosed_in_parentheses(text):
+                text = f"({text})"
+            operands.append(f"{text}.xyz")
+        return f"{vector_types.pop()}(cross({operands[0]}, {operands[1]}), 0.0)"
+
+    def opencl_four_component_vector_type(self, expression):
+        """The CrossGL type of a four-component vector ``expression``, or ``None``."""
+        type_name = self.opencl_expression_vector_type(expression)
+        return type_name if re.fullmatch(r"vec4<\w+>", type_name or "") else None
+
+    def opencl_expression_vector_type(self, expression):
+        """The CrossGL type of a scalar or vector ``expression``, or ``None`` when it is not known."""
+        type_name = self.expression_declared_type(expression)
+        if type_name is not None:
+            return self.convert_hip_type_to_crossgl(str(type_name))
+        if (
+            isinstance(expression, BinaryOpNode)
+            and expression.op in _OPENCL_ARITHMETIC_OPERATORS
+        ):
+            return self.opencl_operands_vector_type((expression.left, expression.right))
+        if isinstance(expression, UnaryOpNode) and expression.op in {"+", "-"}:
+            return self.opencl_expression_vector_type(expression.operand)
+        if isinstance(expression, MemberAccessNode):
+            return self.opencl_swizzle_type(expression)
+        if not isinstance(expression, FunctionCallNode):
+            return None
+        name = str(expression.name)
+        if (
+            name in _OPENCL_ARGUMENT_TYPE_BUILTINS
+            and not self.is_user_defined_function(name)
+        ):
+            return self.opencl_operands_vector_type(expression.args or [])
+        # (float4)(x, y, z, w) is a call named after its type, as are
+        # convert_float4 and as_float4.
+        name = re.sub(r"^(?:convert|as)_", "", name).split("_")[0]
+        if name in self.OPENCL_VECTOR_TYPE_MAPPING:
+            return self.convert_hip_type_to_crossgl(name)
+        return None
+
+    def opencl_operands_vector_type(self, operands):
+        """The vector type of arithmetic or a built-in call on ``operands``.
+
+        A scalar operand is widened to the vector operand's type, and vector operands must have the same type
+        (OpenCL C 3.0, sections 6.4.2 and 6.15), so the result has the one vector type among the operands.
+        """
+        types = {self.opencl_expression_vector_type(operand) for operand in operands}
+        vector_types = {
+            name for name in types if re.fullmatch(r"vec\d<\w+>", name or "")
+        }
+        return vector_types.pop() if len(vector_types) == 1 else None
+
+    def opencl_swizzle_type(self, expression):
+        """The CrossGL type of a ``.xyzw``, ``.rgba`` or ``.s0123`` swizzle of a vector, or ``None``."""
+        vector = re.fullmatch(
+            r"vec(\d)<(\w+)>",
+            self.opencl_expression_vector_type(expression.object) or "",
+        )
+        if vector is None:
+            return None
+        width, element = int(vector.group(1)), vector.group(2)
+        member = str(expression.member)
+        if re.fullmatch(r"[sS][0-9a-fA-F]+", member):
+            indices = [int(digit, 16) for digit in member[1:]]
+        elif re.fullmatch(r"[xyzw]+|[rgba]+", member):
+            letters = "xyzw" if member[0] in "xyzw" else "rgba"
+            indices = [letters.index(letter) for letter in member]
+        else:
+            return None
+        if max(indices) >= width or len(indices) > 4:
+            return None
+        return element if len(indices) == 1 else f"vec{len(indices)}<{element}>"
 
     def format_opencl_fence_call(self, func_name, args):
         if func_name == "sub_group_barrier" and args:
