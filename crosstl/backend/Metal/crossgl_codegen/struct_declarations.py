@@ -38,6 +38,21 @@ class MetalStructDeclarationMixin:
             # already become a concrete function. One that is left has no
             # entry point in the Metal library, so it emits nothing.
             return ""
+        if qualifier == "vertex" and self.is_metal_post_tessellation_function(function):
+            # A [[patch]] vertex function is a tessellation evaluation stage (:mod:`..post_tessellation_import`).
+            return (
+                "    // Tessellation Evaluation Shader\n"
+                "    tessellation_evaluation {\n"
+                + self.generate_function(
+                    function,
+                    stage_entry=function.name != "main",
+                    template_value_bindings=template_value_bindings,
+                    template_type_bindings=template_type_bindings,
+                    output_name=output_name,
+                    specialization_key=specialization_key,
+                )
+                + "    }\n\n"
+            )
         if qualifier == "vertex":
             return (
                 "    // Vertex Shader\n"
