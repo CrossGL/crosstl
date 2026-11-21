@@ -248,6 +248,12 @@ from .vertex_input_positions import (
 from .void_casts import VoidCastError, lower_void_casts
 from .void_values import VoidValueError, refuse_void_values
 from .warp import CudaWarpIntrinsicUnsupportedError, legalize_cuda_warp_intrinsics
+from .work_graph_nodes import (
+    WorkGraphNodeError,
+    WorkGraphUnsupportedError,
+    check_work_graph_nodes,
+    refuse_work_graph_nodes,
+)
 from .written_stage_inputs import copy_written_stage_inputs
 
 __all__ = [
@@ -282,6 +288,8 @@ __all__ = [
     "HalfFloatUnsupportedError",
     "GlslMeshStageUnsupportedError",
     "HitObjectUnsupportedError",
+    "WorkGraphNodeError",
+    "WorkGraphUnsupportedError",
     "HlslGeometryStreamUnsupportedError",
     "RowMajorStructMemberUnsupportedError",
     "HlslRayPayloadUnsupportedError",
@@ -503,6 +511,8 @@ def apply_rule_carrying(program, source, target) -> RuleReport:
     hoist_stage_constant_blocks(program, report.target)
     distribute_block_matrix_orders(program, report.target)
     resolve_template_assertions(program, report.target)
+    refuse_work_graph_nodes(program, report.target)
+    check_work_graph_nodes(program, report.target)
     # These three passes only read the program, so they share one computation of its unreachable functions.
     with shared_dead_functions():
         refuse_undeclared_types(program, report.target)
