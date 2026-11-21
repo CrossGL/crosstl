@@ -1539,6 +1539,9 @@ class HipToCrossGLConverter(
         ):
             return self.visit(raw_args[0].operand)
 
+        if len(raw_args) == 1:
+            return f"(*{formatted_args[0]})"
+
         return self.refuse_import(
             f"HIP load cache intrinsic {function_name}({', '.join(formatted_args)}): CrossGL loads take one "
             "address",
