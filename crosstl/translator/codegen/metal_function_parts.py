@@ -19,6 +19,10 @@ from .metal_entry_return import (
     refuse_unreturnable_metal_entry_semantic,
 )
 from .metal_raster_order_groups import metal_raster_order_group_attribute
+from .metal_stage_input_merge import (
+    merge_metal_stage_inputs,
+    metal_stage_input_struct_parameter,
+)
 from .metal_varyings import (
     metal_varying_attribute,
 )
@@ -151,6 +155,7 @@ class MetalFunctionPartsMixin:
         skipped_parameter_indices = self.skipped_function_parameter_indices(
             self.current_function_name
         )
+        stage_input_structs = []
         for index, p in enumerate(param_list):
             if index in skipped_parameter_indices:
                 continue
@@ -399,6 +404,11 @@ class MetalFunctionPartsMixin:
             param_attr += metal_raster_order_group_attribute(
                 p, shader_type, declaration
             )
+            stage_input = metal_stage_input_struct_parameter(
+                self, shader_type, p, param_type, param_attr
+            )
+            if stage_input is not None:
+                stage_input_structs.append((len(params), stage_input))
             params.append(f"{declaration}{param_attr}")
             if self.is_structured_buffer_type(
                 raw_param_type
@@ -422,6 +432,14 @@ class MetalFunctionPartsMixin:
                 params.append(
                     self.format_structured_buffer_counter_parameter(p.name, array_size)
                 )
+        merge_metal_stage_inputs(
+            self,
+            shader_type,
+            params,
+            stage_input_structs,
+            vertex_stage_input_parameters,
+            fragment_stage_input_parameters,
+        )
 
     def metal_stage_entry_parameters(
         self,
