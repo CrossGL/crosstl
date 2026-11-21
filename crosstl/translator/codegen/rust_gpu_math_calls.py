@@ -48,6 +48,11 @@ __all__ = [
 _FLOATS = frozenset({"f32", "f64"})
 _SIGNED = frozenset({"i8", "i16", "i32", "i64"})
 _UNSIGNED = frozenset({"u8", "u16", "u32", "u64"})
+# The unsigned type of each integer type: absdiff's result.
+_UNSIGNED_OF = {
+    **{f"i{bits}": f"u{bits}" for bits in (8, 16, 32, 64)},
+    **{f"u{bits}": f"u{bits}" for bits in (8, 16, 32, 64)},
+}
 _GLAM_PREFIX = {
     "f32": "Vec",
     "f64": "DVec",
@@ -339,7 +344,9 @@ def rust_gpu_math_result_type(generator, name, arguments):
         return f"bvec{size}" if size else "bool"
     if name == "absdiff":
         scalar, size = _shape(generator, arguments[0])
-        unsigned = {"i32": "u32", "i64": "u64"}.get(scalar, scalar)
+        unsigned = _UNSIGNED_OF.get(scalar)
+        if unsigned is None:
+            return None
         if size:
             return f"uvec{size}" if unsigned == "u32" else None
         return _CROSSGL_SCALARS.get(unsigned)
