@@ -107,6 +107,7 @@ from .wgsl_matrix_inverse import (
     wgsl_matrix_inverse_call,
 )
 from .wgsl_matrix_resize import wgsl_matrix_resize
+from .wgsl_multisampled_textures import WGSLMultisampledTextureMixin
 from .wgsl_narrow_storage import narrow_storage_word_type
 from .wgsl_parameter_lowering import WGSLParameterLoweringMixin
 from .wgsl_program_collection import WGSLProgramCollectionMixin
@@ -124,6 +125,7 @@ from .wgsl_struct_initializers import (
 )
 from .wgsl_subgroup_operations import wgsl_wave_operation, wgsl_wave_result_type
 from .wgsl_texture_calls import WGSLTextureCallMixin
+from .wgsl_texture_gather import GATHER_OPERATIONS, WGSLTextureGatherMixin
 from .wgsl_type_names import WGSLTypeNameMixin
 from .wgsl_uniform_registers import wgsl_uniform_register_load
 from .wgsl_unsigned_builtin_members import is_int_builtin_member
@@ -168,6 +170,8 @@ class WGSLCodeGen(
     WGSLCallLoweringMixin,
     WGSLMathCallMixin,
     WGSLTextureCallMixin,
+    WGSLTextureGatherMixin,
+    WGSLMultisampledTextureMixin,
     WGSLConstructorMixin,
     WGSLTypeNameMixin,
     WGSLBuiltinOptionMixin,
@@ -628,6 +632,7 @@ class WGSLCodeGen(
         "textureprojoffset",
         "texturequerylevels",
         "texturequerylod",
+        "texturesamples",
         "texturesize",
         "texelfetch",
         "texelfetchoffset",
@@ -1712,6 +1717,12 @@ class WGSLCodeGen(
             return self.generate_texture_sample_compare_level_offset_call(
                 function_name, args
             )
+        if normalized_name in GATHER_OPERATIONS:
+            return self.generate_texture_gather_call(function_name, args)
+        if normalized_name == "texturequerylevels":
+            return self.generate_texture_query_levels_call(function_name, args)
+        if normalized_name == "texturesamples":
+            return self.generate_texture_samples_call(function_name, args)
         if normalized_name == "texturesize":
             return self.generate_texture_dimensions_call(args)
         if normalized_name == "imagesize":

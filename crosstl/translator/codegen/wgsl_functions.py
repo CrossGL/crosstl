@@ -191,6 +191,9 @@ class WGSLFunctionMixin:
                 f"{self.texture_sampler_name(parameter_name)}: "
                 f"{self.companion_sampler_type(node.param_type)}"
             )
+        multisampled_texture_type = self.multisampled_texture_type(node.param_type)
+        if multisampled_texture_type is not None:
+            return f"{prefix}{parameter_name}: {multisampled_texture_type}"
         if self.is_sampler_type(node.param_type):
             return f"{prefix}{parameter_name}: {self.sampler_type(node.param_type)}"
         if self.is_buffer_pointer_type(node.param_type, node.qualifiers):
