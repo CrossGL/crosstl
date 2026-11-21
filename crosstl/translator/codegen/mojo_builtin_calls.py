@@ -883,7 +883,6 @@ class MojoBuiltinCallMixin:
     ):
         left = self.generate_expression(args[0])
         right = self.generate_expression(args[1])
-        comparator = ">=" if func_name == "max" else "<="
 
         if self.is_scalar_integer_type(target_type) or (
             self.is_scalar_integer_type(left_type)

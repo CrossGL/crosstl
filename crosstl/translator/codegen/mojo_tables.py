@@ -257,6 +257,8 @@ MOJO_DTYPE_SUFFIX = {
 }
 MOJO_SCALAR_DTYPES = {
     "f16": "DType.float16",
+    "f32": "DType.float32",
+    "f64": "DType.float64",
     "half": "DType.float16",
     "min10float": "DType.float16",
     "min16float": "DType.float16",

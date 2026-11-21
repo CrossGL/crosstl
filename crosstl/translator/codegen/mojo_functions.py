@@ -171,6 +171,7 @@ class MojoFunctionMixin:
                 emitted_param_names.add(p.name)
                 continue
 
+            param_type = self.mojo_storage_parameter_type(p, param_type)
             self.register_variable_type(p.name, param_type)
             self.register_resource_access_metadata(p, param_type)
             if semantic:
@@ -182,6 +183,9 @@ class MojoFunctionMixin:
             if {"out", "inout"} & set(getattr(p, "qualifiers", None) or []):
                 # A CrossGL out or inout parameter writes the caller's variable, as a Mojo mut argument does.
                 ownership = "mut "
+            elif self.parse_pointer_type_name(str(param_type)) is not None:
+                # Storing through a pointer argument does not change the argument itself.
+                ownership = ""
             else:
                 ownership = "var " if p.name in mutated_params else ""
             params.append(

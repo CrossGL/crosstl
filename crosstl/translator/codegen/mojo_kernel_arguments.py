@@ -39,9 +39,7 @@ MOJO_GPU_INDEX_SOURCES = {
     "block_dim_uint": "block_dim",
 }
 # The built-in placeholders of mojo_tables.MOJO_BUILTIN_PLACEHOLDERS that a Mojo device function can compute.
-_LINEAR_THREAD_INDEX = (
-    "thread_idx.z * block_dim.y * block_dim.x + thread_idx.y * block_dim.x + thread_idx.x"
-)
+_LINEAR_THREAD_INDEX = "thread_idx.z * block_dim.y * block_dim.x + thread_idx.y * block_dim.x + thread_idx.x"
 # A Mojo warp is the subgroup: WARP_SIZE lanes of consecutive linear thread indices, lane_id() among them.
 MOJO_COMPUTED_BUILTIN_PLACEHOLDERS = {
     "local_invocation_index": f"UInt32({_LINEAR_THREAD_INDEX})",
@@ -335,6 +333,30 @@ class MojoKernelArgumentMixin:
             return None
         array_type = self.array_declared_type(node)
         return self.mojo_kernel_argument_type(node, array_type)
+
+    def mojo_storage_parameter_type(self, parameter, param_type):
+        """The type a ``var<storage>`` entry parameter is passed as: a runtime-sized array as a pointer.
+
+        A storage buffer's runtime-sized array is the buffer itself, so it becomes a pointer to its first element,
+        like a module-scope ``buffer``. Mojo passes any other argument by value, so a writable storage parameter of
+        another type would lose its stores, and is refused.
+        """
+        qualifiers = {
+            str(qualifier).lower()
+            for qualifier in getattr(parameter, "resource_qualifiers", None) or []
+        }
+        if "storage" not in qualifiers:
+            return param_type
+        if self.is_array_type_name(param_type):
+            element_type, size = self.parse_array_type_name(param_type)
+            if size in (None, ""):
+                return f"{element_type}*"
+        if qualifiers & {"read_write", "write"}:
+            raise MojoRefusal(
+                f"Mojo kernel parameter '{parameter.name}': a writable storage buffer of type "
+                f"{param_type} has no Mojo argument form; only a runtime-sized array becomes a pointer"
+            )
+        return param_type
 
     def mojo_kernel_argument_captures(self, functions, arguments):
         """The kernel arguments each function needs, directly or through its calls, keyed by function name."""

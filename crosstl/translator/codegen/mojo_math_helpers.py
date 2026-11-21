@@ -578,7 +578,8 @@ class MojoMathHelperMixin:
             expr, target_dtype, force_scalar_target=True
         )
         self.validate_expression_target_shape(expr, target_type, context)
-        return self.generate_expression(expr, target_type, context)
+        # The constructor converts its argument, so the argument is not converted to target_type first.
+        return self.generate_expression_value(expr, target_type, context)
 
     def constructor_helper_argument_target_type(self, piece, target_dtype):
         if piece["kind"] == "scalar" and self.image_result_target_types_in_expression(

@@ -1,6 +1,5 @@
 """CrossGL-to-Mojo code generator."""
 
-from ..float_limit_constants import float_limit_constant
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -28,6 +27,7 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
 )
+from ..float_limit_constants import float_limit_constant
 from ..refusals import MojoRefusal
 from ..unhandled import UNHANDLED
 from .array_utils import collect_literal_int_constants
@@ -41,6 +41,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
 )
 from .generic_global_types import collect_constant_and_cbuffer_member_types
+from .mojo_arithmetic_conversions import MojoArithmeticConversionMixin
 from .mojo_builtin_calls import MojoBuiltinCallMixin
 from .mojo_call_expressions import MojoCallExpressionMixin
 from .mojo_expression_nodes import MojoExpressionNodeMixin
@@ -51,9 +52,6 @@ from .mojo_kernel_arguments import MojoKernelArgumentMixin
 from .mojo_match_lowering import MojoMatchMixin
 from .mojo_math_helpers import MojoMathHelperMixin
 from .mojo_pointer_expressions import MojoPointerExpressionMixin
-from .mojo_shared_memory import MojoSharedMemoryMixin
-from .mojo_arithmetic_conversions import MojoArithmeticConversionMixin
-from .mojo_split_builtins import MojoSplitBuiltinMixin
 from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
     MojoLoweringRefused,
 )
@@ -64,6 +62,8 @@ from .mojo_resource_types import MojoResourceTypeMixin
 from .mojo_result_types import MojoResultTypeMixin
 from .mojo_return_aliases import MojoReturnAliasMixin
 from .mojo_semantics import MojoSemanticMixin
+from .mojo_shared_memory import MojoSharedMemoryMixin
+from .mojo_split_builtins import MojoSplitBuiltinMixin
 from .mojo_stage_contracts import MojoStageContractMixin
 from .mojo_statements import MojoStatementMixin
 from .mojo_tables import (
@@ -390,6 +390,8 @@ class MojoCodeGen(
             "uint64": "UInt64",
             "uint64_t": "UInt64",
             "f16": "Float16",
+            "f32": "Float32",
+            "f64": "Float64",
             "float": "Float32",
             "double": "Float64",
             "half": "Float16",

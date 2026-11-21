@@ -1,5 +1,7 @@
 """Enums, payload enums, structs and constant buffers emitted by the Mojo generator."""
 
+import re
+
 from ..ast import (
     ArrayNode,
     BinaryOpNode,
@@ -18,6 +20,14 @@ from .enum_utils import (
 )
 from .mojo_tables import MOJO_VALUE_STRUCT_TRAITS
 from .union_layout import UnionLayoutCollector
+
+
+def _qualify_struct_parameters(type_text, parameters):
+    """``type_text`` with each struct type parameter ``T`` written ``Self.T``, as Mojo 1.2 requires in a struct."""
+    if not parameters:
+        return type_text
+    pattern = r"(?<![\w.])(" + "|".join(re.escape(name) for name in parameters) + r")\b"
+    return re.sub(pattern, r"Self.\1", type_text)
 
 
 class MojoTypeDeclarationMixin:
@@ -417,11 +427,15 @@ class MojoTypeDeclarationMixin:
         if generic_params:
             generic_suffix = (
                 "["
-                + ", ".join(f"{param}: ImplicitlyCopyable" for param in generic_params)
+                + ", ".join(
+                    f"{param}: {MOJO_VALUE_STRUCT_TRAITS}" for param in generic_params
+                )
                 + "]"
             )
-        # CrossGL structs are plain values that are copied on assignment and argument passing, so they conform
-        # to ImplicitlyCopyable; @fieldwise_init writes the member-wise constructor @value used to.
+        # CrossGL structs are plain values that are copied on assignment and argument passing. Mojo 1.2 passes
+        # a TrivialRegisterPassable struct by value and copies it bit for bit, which needs every member, and so
+        # every type parameter, to be TrivialRegisterPassable too. @fieldwise_init writes the member-wise
+        # constructor.
         code = (
             f"@fieldwise_init\nstruct {node.name}{generic_suffix}"
             f"({MOJO_VALUE_STRUCT_TRAITS}):\n"
@@ -444,9 +458,12 @@ class MojoTypeDeclarationMixin:
                     f"{semantic_comment}\n"
                 )
             else:
+                mapped = _qualify_struct_parameters(
+                    self.map_type(member_type), generic_params
+                )
                 code += (
                     f"    var {self.mojo_identifier(member_name)}: "
-                    f"{self.map_type(member_type)}{semantic_comment}\n"
+                    f"{mapped}{semantic_comment}\n"
                 )
 
         code += "\n"

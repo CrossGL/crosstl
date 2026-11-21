@@ -1,11 +1,10 @@
 """Statements in the Mojo generator: assignments, dimension queries, increments, switches, branches and loops."""
 
-
 from ..ast import (
-    BlockNode,
     ArrayAccessNode,
     ArrayNode,
     AssignmentNode,
+    BlockNode,
     BreakNode,
     CaseNode,
     ContinueNode,

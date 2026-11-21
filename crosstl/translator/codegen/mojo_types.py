@@ -2,7 +2,6 @@
 
 import re
 
-from .mojo_shared_memory import split_pointee_address_space
 from ..ast import (
     ArrayLiteralNode,
     BinaryOpNode,
@@ -11,6 +10,7 @@ from ..ast import (
 )
 from .array_utils import evaluate_literal_int_expression
 from .mojo_integer_promotion import promoted_type
+from .mojo_shared_memory import split_pointee_address_space
 from .mojo_tables import (
     MOJO_ATOMIC_OP_ALIASES,
     MOJO_BUFFER_OP_ALIASES,
