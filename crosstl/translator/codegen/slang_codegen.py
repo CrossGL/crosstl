@@ -1181,7 +1181,7 @@ class SlangCodeGen(
             )
             self.validate_slang_geometry_stage(node, shader_type, effective_param_list)
             self.validate_slang_stage_parameter_semantics(
-                shader_type, effective_param_list, stage_role=stage_role
+                shader_type, effective_param_list, stage_role=stage_role, function=node
             )
             self.validate_slang_stage_body_builtins(
                 body_statements,
@@ -1683,7 +1683,11 @@ class SlangCodeGen(
                     node.operation, target_reason
                 )
 
-        args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
+        # Each operand has its own type (a lane index is uint whatever the value is), so the
+        # expression the wave op result is assigned to does not type its operands.
+        args = ", ".join(
+            self.generate_expression_without_expected(arg) for arg in node.arguments
+        )
         call = f"{node.operation}({args})"
         return f"{conversion}({call})" if conversion else call
 
