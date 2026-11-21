@@ -3,6 +3,7 @@
 import re
 
 from ....translator.integer_literals import crossgl_legacy_octal
+from ..array_extents import crossgl_array_extent, extent_identifier
 from ..keyword_renames import unused_identifier_name
 
 
@@ -120,30 +121,14 @@ class CudaImportNameMixin:
         )
 
     def format_crossgl_array_extent(self, size):
-        size = str(size).strip()
-        if not size:
-            return size
-        simple_extent_pattern = r"[A-Za-z_][A-Za-z0-9_]*|(?:0[xX][0-9A-Fa-f]+|\d+)[uU]?"
-        if re.fullmatch(simple_extent_pattern, size):
-            return size
-
-        replacements = {
-            "*": "_mul_",
-            "/": "_div_",
-            "%": "_mod_",
-            "+": "_plus_",
-            "-": "_minus_",
-        }
-        extent = size
-        for operator, word in replacements.items():
-            extent = extent.replace(operator, word)
-        extent = re.sub(r"[^A-Za-z0-9_]+", "_", extent).strip("_")
-        extent = re.sub(r"_+", "_", extent)
-        if not extent:
-            extent = "expr"
-        if extent[0].isdigit():
-            extent = f"cuda_array_extent_{extent}"
-        return self.sanitize_identifier_name(extent)
+        """The CrossGL extent of a CUDA array extent: its value when it is a constant (:mod:`..array_extents`)."""
+        return crossgl_array_extent(
+            size,
+            self.integer_constants,
+            lambda extent: self.sanitize_identifier_name(
+                extent_identifier(extent, "cuda_array_extent_")
+            ),
+        )
 
     def is_simple_identifier(self, name):
         return isinstance(name, str) and name.isidentifier()

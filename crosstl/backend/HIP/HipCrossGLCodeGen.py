@@ -4,11 +4,17 @@ import re
 
 from ...translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ...translator.semantics.warp import ORDERED_WORKGROUP_BARRIER
+from ..CUDA.array_extents import IntegerConstants
 from ..CUDA.block_votes import BlockVoteLibrary, insert_block_vote_functions
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..CUDA.directed_rounding import (
     DirectedRoundingLibrary,
     insert_directed_rounding_functions,
+)
+from ..CUDA.function_templates import (
+    collect_function_templates,
+    generic_prefix,
+    template_parameters,
 )
 from ..CUDA.keyword_renames import source_identifier_names
 from ..CUDA.parameter_defaults import merge_declared_defaults, parameter_default_suffix
@@ -616,6 +622,7 @@ class HipToCrossGLConverter(
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.variable_type_scopes = [{}]
+        self.integer_constants = IntegerConstants()
         self.device_property_source_scopes = [{}]
         self.device_attribute_source_scopes = [{}]
         self.device_query_source_scopes = [{}]
@@ -647,6 +654,7 @@ class HipToCrossGLConverter(
         self.union_indirect_object_scopes = [set()]
         self.namespace_scope_variable = False
         self.namespace_constant_names = set()
+        self.function_templates = {}
         self.function_body_depth = 0
 
     def generate(self, ast_node):
@@ -679,6 +687,7 @@ class HipToCrossGLConverter(
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.variable_type_scopes = [{}]
+        self.integer_constants = IntegerConstants()
         self.device_property_source_scopes = [{}]
         self.device_attribute_source_scopes = [{}]
         self.device_query_source_scopes = [{}]
@@ -694,6 +703,7 @@ class HipToCrossGLConverter(
         self.anonymous_enum_count = 0
         self.global_resource_binding_count = 0
         self.namespace_constant_names = set()
+        self.function_templates = collect_function_templates(ast_node)
         self.function_body_depth = 0
         self.reset_function_local_record_materializations()
         self.prepare_function_local_record_materializations(ast_node)
@@ -1278,6 +1288,9 @@ class HipToCrossGLConverter(
         )
         self.push_variable_type_scope()
         self.push_identifier_name_scope()
+        for parameter in template_parameters(node) or []:
+            # A template value parameter hides a namespace constant of its name.
+            self.integer_constants.declare(parameter.name)
         try:
             params = []
 
@@ -1327,7 +1340,8 @@ class HipToCrossGLConverter(
                 node, file_scope_off=self.fp_contract_file_scope_off
             ):
                 self.emit(PRECISE_FUNCTION_ATTRIBUTE)
-            self.emit(f"{return_type} {function_name}({param_str}) {{")
+            prefix = generic_prefix(self, node, "HIP", self.convert_hip_type_to_crossgl)
+            self.emit(f"{prefix}{return_type} {function_name}({param_str}) {{")
 
             self.indent_level += 1
             self.push_packed_argument_scope()

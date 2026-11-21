@@ -314,8 +314,7 @@ class TestCudaCodeGen:
         assert "@group(0) @binding(0) var<uniform> stencil: array<f32, 4>;" in result
         assert "@group(0) @binding(1) var<uniform> offsets: array<i32, 4>;" in result
         assert (
-            "@group(0) @binding(2) var<uniform> c_Kernel: "
-            "array<f32, cuda_array_extent_2_mul_8_plus_1>;"
+            "@group(0) @binding(2) var<uniform> c_Kernel: " "array<f32, 17>;"
         ) in result
         assert (
             "@group(0) @binding(3) var<storage, read_write> out: array<f32>" in result
@@ -593,9 +592,7 @@ class TestCudaCodeGen:
         result = CudaToCrossGLConverter().generate(ast)
 
         assert "u32 scan1Inclusive(u32 idata, ptr<u32> s_Data, u32 size)" in result
-        assert (
-            "var<workgroup> s_Data: array<u32, cuda_array_extent_2_mul_256>;" in result
-        )
+        assert "var<workgroup> s_Data: array<u32, 512>;" in result
         expected_pos = "var pos: u32 = gl_GlobalInvocationID.x;"
         assert expected_pos in result
         assert "for (var offset: u32 = 1; (offset < size); offset <<= 1)" in result

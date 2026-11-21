@@ -1943,9 +1943,7 @@ def test_cuda_samples_transpose_parenthesized_index_and_shared_tile_codegen_repa
     crossgl = CudaToCrossGLConverter().generate(ast)
 
     assert shared.vtype == "float[32][(32 + 1)]"
-    assert (
-        "var<workgroup> tile: " "array<array<f32, cuda_array_extent_32_plus_1>, 32>;"
-    ) in crossgl
+    assert ("var<workgroup> tile: " "array<array<f32, 33>, 32>;") in crossgl
     assert "var index_in: i32 = (xIndex + (yIndex * width));" in crossgl
     assert "var index_out: i32 = (xIndex + (yIndex * height));" in crossgl
     assert "yIndex((*width))" not in crossgl

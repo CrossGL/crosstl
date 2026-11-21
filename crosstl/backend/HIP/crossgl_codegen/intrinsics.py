@@ -4,12 +4,9 @@ import re
 
 from ...CUDA.bit_intrinsics import format_bit_intrinsic
 from ...CUDA.directed_rounding import directed_rounding_call, refuse_directed_rounding
+from ...CUDA.function_templates import generic_call_name
 from ...CUDA.pointer_math_import import format_pointer_output_call
-from ..HipAst import (
-    FunctionCallNode,
-    MemberAccessNode,
-    UnaryOpNode,
-)
+from ..HipAst import FunctionCallNode, MemberAccessNode, UnaryOpNode
 
 
 class HipIntrinsicMixin:
@@ -85,6 +82,13 @@ class HipIntrinsicMixin:
         if hip_intrinsic is not None:
             return hip_intrinsic
 
+        generic_call = generic_call_name(
+            func_name,
+            self.function_templates,
+            self.convert_hip_type_to_crossgl,
+        )
+        if generic_call is not None:
+            return f"{generic_call}({args_str})"
         user_defined_call_name = self.format_user_defined_function_call_name(func_name)
         if user_defined_call_name is not None:
             return f"{user_defined_call_name}({args_str})"

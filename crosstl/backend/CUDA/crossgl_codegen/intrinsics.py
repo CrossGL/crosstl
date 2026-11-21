@@ -6,6 +6,7 @@ from ...thread_hierarchy import global_invocation_axis
 from ..bit_intrinsics import format_bit_intrinsic
 from ..CudaAst import UnaryOpNode
 from ..directed_rounding import directed_rounding_call, refuse_directed_rounding
+from ..function_templates import generic_call_name
 from ..pointer_math_import import format_pointer_output_call
 from ..sizeof_operands import sizeof_type_operand
 
@@ -111,6 +112,11 @@ class CudaImportIntrinsicMixin:
             if integer_intrinsic is not None:
                 return integer_intrinsic
 
+        generic_call = generic_call_name(
+            raw_name, self.function_templates, self.convert_cuda_type_to_crossgl
+        )
+        if generic_call is not None:
+            return f"{generic_call}({args_str})"
         if self.is_user_defined_function(raw_name):
             # A call names the function as its declaration does, ``let_`` for ``let``.
             func_name = (

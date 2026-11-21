@@ -2,13 +2,9 @@
 
 import re
 
+from ...CUDA.array_extents import crossgl_array_extent, extent_identifier
 from ...CUDA.keyword_renames import unused_identifier_name
-from ..HipAst import (
-    ArrayAccessNode,
-    CastNode,
-    MemberAccessNode,
-    UnaryOpNode,
-)
+from ..HipAst import ArrayAccessNode, CastNode, MemberAccessNode, UnaryOpNode
 
 
 class HipNameScopeMixin:
@@ -206,28 +202,14 @@ class HipNameScopeMixin:
         return "_".join(part for part in parts if part)
 
     def format_crossgl_array_extent(self, size):
-        size = str(size).strip()
-        if not size:
-            return size
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*|(?:0[xX][0-9A-Fa-f]+|\d+)[uU]?", size):
-            return size
-        replacements = {
-            "*": "_mul_",
-            "/": "_div_",
-            "%": "_mod_",
-            "+": "_plus_",
-            "-": "_minus_",
-        }
-        extent = size
-        for operator, word in replacements.items():
-            extent = extent.replace(operator, word)
-        extent = re.sub(r"[^A-Za-z0-9_]+", "_", extent).strip("_")
-        extent = re.sub(r"_+", "_", extent)
-        if not extent:
-            extent = "expr"
-        if extent[0].isdigit():
-            extent = f"hip_array_extent_{extent}"
-        return self.sanitize_identifier_name(extent)
+        """The CrossGL extent of a HIP array extent: its value when it is a constant (``CUDA.array_extents``)."""
+        return crossgl_array_extent(
+            size,
+            self.integer_constants,
+            lambda extent: self.sanitize_identifier_name(
+                extent_identifier(extent, "hip_array_extent_")
+            ),
+        )
 
     def sanitize_qualified_variable_name(self, name):
         if not isinstance(name, str) or "::" not in name:
