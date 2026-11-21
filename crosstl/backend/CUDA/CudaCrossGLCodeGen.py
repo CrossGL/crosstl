@@ -41,6 +41,7 @@ from .directed_rounding import (
     insert_directed_rounding_functions,
 )
 from .keyword_renames import source_identifier_names
+from .parameter_defaults import parameter_default_suffix
 from .struct_methods import lower_struct_methods
 from .union_layout_import import UnionLayoutContracts
 
@@ -753,7 +754,10 @@ class CudaToCrossGLConverter(
                 mode = self.function_reference_parameters().mode(node, index)
                 if mode:
                     param_type = f"{mode} {param_type}"
-                params.append(f"{param_type} {param_name}")
+                default = parameter_default_suffix(
+                    self, node.name, param.name, param, "CUDA"
+                )
+                params.append(f"{param_type} {param_name}{default}")
 
             param_str = ", ".join(params)
             if function_requires_no_contraction(node):

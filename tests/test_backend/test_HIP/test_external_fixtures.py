@@ -926,7 +926,12 @@ def test_external_rocm_stb_image_write_function_type_typedef_codegen_reparse():
     assert alias.alias_type == "void"
     assert function.params[0]["type"] == "stbi_write_func *"
     assert "typedef void stbi_write_func;" in crossgl
-    assert "i32 stbi_write_png_to_func(ptr<stbi_write_func> func" in crossgl
+    # A prototype adds no CrossGL function; a definition with the same parameters keeps the pointer type.
+    assert "stbi_write_png_to_func" not in crossgl
+    _ast, defined = assert_crossgl_reparses(
+        source.replace("int h);", "int h) { return 0; }")
+    )
+    assert "i32 stbi_write_png_to_func(ptr<stbi_write_func> func" in defined
 
 
 def test_external_hip_examples_function_pointer_parameter_codegen_reparse():
@@ -947,7 +952,7 @@ def test_external_hip_examples_function_pointer_parameter_codegen_reparse():
 
     assert isinstance(function, FunctionNode)
     assert function.params[1]["type"] == "std::ios_base & (*)"
-    assert "std::string toString(T t, ptr<std::ios_base> r)" in crossgl
+    assert "std::string toString(T t, ptr<std::ios_base> r = std::dec)" in crossgl
     assert "ptr<std::ios_base ()>" not in crossgl
     assert "var output: std::ostringstream;" in crossgl
 
@@ -2877,6 +2882,6 @@ def test_external_llvm_amdgpu_numeric_template_kernel_name_codegen_reparse():
 
     assert ast.statements[0].name == "template_flat_work_group_size_32_64"
     assert ast.statements[1].name == "template_flat_work_group_size_32_64<32, 64>"
-    assert "fn template_flat_work_group_size_32_64(" in crossgl
-    assert crossgl.count("fn template_flat_work_group_size_32_64(") == 2
+    # The explicit instantiation has no body, so it adds no second entry point of the same name.
+    assert crossgl.count("fn template_flat_work_group_size_32_64(") == 1
     assert "fn template_flat_work_group_size_32_64<32, 64>" not in crossgl
