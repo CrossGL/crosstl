@@ -410,7 +410,8 @@ def host_workgroup_defines(source: str) -> list[str]:
 
 def host_sized_glsl(source: str) -> str:
     """``source`` as an OpenGL host compiles it: with the size macros defined after ``#version``, and a ``#line``
-    that keeps the log's line numbers those of ``source``. glslang takes ``-D`` only when it links."""
+    that keeps the log's line numbers those of ``source``. glslang takes ``-D`` only when it links.
+    """
     macros = _host_workgroup_macros(source)
     version = _GLSL_VERSION_LINE.search(source)
     if not macros or version is None:

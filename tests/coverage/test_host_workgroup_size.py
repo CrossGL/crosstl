@@ -30,7 +30,9 @@ def _translate(tmp_path, backend):
 
 
 def test_only_a_host_sized_translation_gets_a_size_of_one_in_each_dimension():
-    guarded = "#elif defined(CROSSGL_WORKGROUP_SIZE_X) && defined(CROSSGL_WORKGROUP_SIZE_Y)\n"
+    guarded = (
+        "#elif defined(CROSSGL_WORKGROUP_SIZE_X) && defined(CROSSGL_WORKGROUP_SIZE_Y)\n"
+    )
     assert validators.host_workgroup_defines(guarded) == [
         argument
         for macro in HOST_WORKGROUP_SIZE_MACROS
