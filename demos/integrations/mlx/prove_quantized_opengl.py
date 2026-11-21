@@ -635,7 +635,7 @@ def _translated_artifact(
 
 def _validate_quantize_generated_glsl(source: str) -> dict[str, Any]:
     _require(
-        source.count("#version 450 core") == 1
+        len(re.findall(r"^#version [1-9][0-9]{2} core$", source, re.M)) == 1
         and source.count("void main()") == 1
         and (
             "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;"
@@ -683,7 +683,7 @@ def _validate_gather_generated_glsl(source: str) -> dict[str, Any]:
         "GL_KHR_shader_subgroup_arithmetic",
     )
     _require(
-        source.count("#version 450 core") == 1
+        len(re.findall(r"^#version [1-9][0-9]{2} core$", source, re.M)) == 1
         and source.count("void main()") == 1
         and (
             "layout(local_size_x = 32, local_size_y = 2, "
