@@ -16,6 +16,7 @@ from ..DirectxAst import (
     TypeAliasNode,
     VariableNode,
 )
+from ..vk_locations import vk_location_suffix
 
 
 class IdentifierAttributeMixin:
@@ -374,6 +375,11 @@ class IdentifierAttributeMixin:
         mapped_semantic = self.map_semantic(semantic, parameter=node)
         if mapped_semantic:
             attributes.append(mapped_semantic)
+        location = vk_location_suffix(
+            self, node, semantic, f"'{getattr(node, 'name', '<member>')}'"
+        ).strip()
+        if location:
+            attributes.append(location)
         interpolation_attributes = self.format_interpolation_attributes(node)
         if interpolation_attributes:
             attributes.append(interpolation_attributes)
@@ -488,11 +494,17 @@ class IdentifierAttributeMixin:
             function_qualifier=function_qualifier,
             parameter=parameter,
         )
+        location = vk_location_suffix(
+            self,
+            parameter,
+            getattr(parameter, "semantic", None),
+            f"parameter '{parameter_name}'",
+        ).strip()
         interpolation_attributes = self.format_interpolation_attributes(parameter)
-        if semantic or interpolation_attributes:
+        if semantic or location or interpolation_attributes:
             parameter_text += " " + " ".join(
                 attribute
-                for attribute in (semantic, interpolation_attributes)
+                for attribute in (semantic, location, interpolation_attributes)
                 if attribute
             )
         prefixes.append(parameter_text)

@@ -37,7 +37,6 @@ from ..ast import (
     PointerAccessNode,
     PointerReinterpretNode,
     PointerType,
-    PreprocessorNode,
     PrimitiveType,
     RangeNode,
     RayQueryOpNode,
@@ -94,7 +93,6 @@ from .enum_utils import (
     infer_enum_constructor_type,
     sanitize_type_name,
 )
-from .exponent_builtins import emit_glsl_exponent_helpers
 from .generic_concrete_call_results import concrete_overload_results_differ
 from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
@@ -114,12 +112,13 @@ from .generic_struct_utils import (
     collect_generic_struct_specializations,
     infer_struct_constructor_type,
 )
-from .glsl_builtin_extensions import require_builtin_extensions
+from .glsl_call_helpers import emit_glsl_call_helpers
 from .glsl_compute_derivative_groups import compute_derivative_group_layout
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_exact_lookups import glsl_call_names_resolving_to
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_fragment_depth_layout import entry_depth_redeclarations
 from .glsl_fragment_interlock import plan_fragment_interlock, wrap_fragment_interlock
 from .glsl_guarded_offsets import call_offset_relation
 from .glsl_helper_stage_guards import (
@@ -134,12 +133,17 @@ from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
 from .glsl_invariant_builtins import invariant_builtin_redeclarations
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
+from .glsl_program_requirements import finish_glsl_program_requirements
+from .glsl_quad_lane_reads import glsl_quad_lane_read_call, quad_lane_read_needs_helper
 from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
     glsl_ray_query_constant_expression,
 )
 from .glsl_refusals import input_attachment_refusal_reason
-from .glsl_shadow_lod import require_shadow_lod_extension
+from .glsl_source_directives import (
+    glsl_source_directives,
+    glsl_target_profile_is_es,
+)
 from .glsl_specialization_dependents import (
     constant_source_name,
     partition_constants_by_specialization_dependency,
@@ -375,6 +379,8 @@ class GLSLCodeGen(
 
     # Desktop GLSL converts integer literals to float and uint implicitly.
     GLSL_IMPLICIT_LITERAL_CONVERSIONS = True
+    # Whether every program is written as GLSL ES, whatever its ``#version`` line (:mod:`.glsl_source_directives`).
+    GLSL_ES_OUTPUT = False
     GLSL_UNAVAILABLE_BUILTINS = OPENGL_UNAVAILABLE_BUILTINS
     GLSL_WAVE_ADDITIONAL_EXTENSION_REQUIREMENTS = {
         "WaveMatch",
@@ -415,8 +421,12 @@ class GLSLCodeGen(
         software_subgroup_width=None,
         private_pointer_out_of_bounds_read="error",
         cooperative_matrix_mma_profile=None,
+        target_profile=None,
     ):
         """Initialize GLSL type maps and per-generation stage/resource state."""
+        self.glsl_es_target = self.GLSL_ES_OUTPUT or glsl_target_profile_is_es(
+            target_profile
+        )
         self.float_atomic_storage = FloatAtomicStorage(self)
         self.metadata_preconditions = []
         self.immutable_storage = []
@@ -645,6 +655,7 @@ class GLSLCodeGen(
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_metal_math_helpers = set()
         self.glsl_exponent_helpers = {}
+        self.glsl_quad_lane_read_helpers = {}
         self.glsl_half_helper_names = {}
         self.glsl_half_bitcast_helper_names = {}
         self.glsl_bfloat_helper_names = {}
@@ -3338,32 +3349,7 @@ class GLSLCodeGen(
         self.validate_glsl_software_subgroup_contract(ast, target_stage)
         self.enforce_concrete_glsl_types = True
         code = ""
-        preprocessors = getattr(ast, "preprocessors", []) or []
-        version_line = None
-        extra_lines = []
-        for directive in preprocessors:
-            if not self.should_emit_glsl_preprocessor_directive(directive):
-                continue
-            if isinstance(directive, PreprocessorNode):
-                if directive.directive == "precision":
-                    line = (
-                        f"precision {directive.content};"
-                        if directive.content
-                        else "precision;"
-                    )
-                else:
-                    line = f"#{directive.directive} {directive.content}".strip()
-            else:
-                line = str(directive).strip()
-            if line.startswith("#version") and version_line is None:
-                version_line = line
-            elif line and self.should_emit_glsl_preprocessor_line(line):
-                extra_lines.append(line)
-        if version_line is None:
-            version_line = self.default_glsl_version_line(ast, target_stage)
-        required_version_line = getattr(self, "glsl_required_version_line", None)
-        if required_version_line is not None:
-            version_line = required_version_line
+        version_line, extra_lines = glsl_source_directives(self, ast, target_stage)
         self.glsl_raised_version_line = None
         self.glsl_emission_requirements = []
         self.glsl_descriptor_binding_macro_used = False
@@ -3780,6 +3766,7 @@ class GLSLCodeGen(
         code += self.generate_constants(ast, struct_dependent_constants)
         code += stage_io_code
         code += invariant_builtin_redeclarations(self, target_stage)
+        code += entry_depth_redeclarations(self, target_stage)
         code += self.generate_glsl_enum_constructor_functions(self.struct_payload_enums)
         code += self.generate_glsl_generic_enum_constructor_functions(
             self.generic_enum_specializations,
@@ -4523,7 +4510,7 @@ class GLSLCodeGen(
             + self.generate_glsl_trailing_zero_helpers()
             + self.generate_glsl_boolean_order_helpers()
             + self.generate_glsl_metal_math_helpers()
-            + emit_glsl_exponent_helpers(self)
+            + emit_glsl_call_helpers(self)
             + self.generate_glsl_half_helpers()
             + self.generate_glsl_half_bitcast_helpers()
             + self.generate_glsl_bfloat_helpers()
@@ -4565,15 +4552,7 @@ class GLSLCodeGen(
         )
         code = self.finish_generic_resource_helper_refusals(code)
         self.validate_glsl_function_call_graph()
-        code = self.ensure_glsl_version_supports_generated_layouts(code)
-        if getattr(self, "glsl_shadow_lod_extension_used", False):
-            code = require_shadow_lod_extension(code)
-        code = self.ensure_glsl_formatted_image_load_support(code)
-        code = self.ensure_glsl_precise_support(code)
-        code = require_builtin_extensions(
-            code, getattr(self, "glsl_stage_builtin_extensions", ())
-        )
-        return self.ensure_glsl_int64_support(code)
+        return finish_glsl_program_requirements(self, code)
 
     def annotate_glsl_control_flow_intervals(self, function):
         constants = self.initial_literal_int_constants(function)
@@ -9773,7 +9752,7 @@ class GLSLCodeGen(
             return "shared "
         if is_compile_time:
             return "const "
-        if "static" in qualifiers or "thread" in qualifiers:
+        if qualifiers & {"private", "static", "thread"}:
             # Static and thread-address-space globals are private to each
             # invocation, which is what a GLSL global without a storage
             # qualifier is.
@@ -10807,6 +10786,9 @@ class GLSLCodeGen(
             mask = self.generate_expression(arguments[1])
             helper = self.GLSL_WAVE_MULTI_PREFIX_HELPERS[operation]
             return f"{helper}({value}, {mask})"
+
+        if quad_lane_read_needs_helper(operation, arguments):
+            return glsl_quad_lane_read_call(self, arguments)
 
         mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
         if mapped is None:

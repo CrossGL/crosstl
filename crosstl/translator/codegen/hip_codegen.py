@@ -34,7 +34,14 @@ from .comma_expressions import (
     is_comma_expression,
 )
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
+from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_library_functions import rename_cuda_library_functions
+from .cuda_subscripts import matrix_column_type
+from .cuda_texel_buffers import (
+    TEXEL_BUFFER_QUERY_SPEC,
+    CudaTexelBufferMixin,
+    sampled_texel_buffer_type,
+)
 from .cuda_unions import NativeUnions
 from .enum_utils import infer_enum_constructor_type
 from .float_remainder_assignment import float_remainder_assignment
@@ -70,7 +77,6 @@ from .hip_tables import (
     HIP_INTEGER_BIT_FUNCTION_ALIASES,
     HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES,
     HIP_TYPE_MAP,
-    HIP_WARP_SYNC_BUILTIN_ARITIES,
     HIP_WAVE_BOOL_RESULT_OPS,
     HIP_WAVE_OP_ARITIES,
     HIP_WAVE_PREDICATE_ARGUMENT_OPS,
@@ -108,7 +114,6 @@ __all__ = [
     "HIP_FP16_VECTOR_TYPES",
     "HIP_INTEGER_BIT_FUNCTION_ALIASES",
     "HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES",
-    "HIP_WARP_SYNC_BUILTIN_ARITIES",
     "HIP_WAVE_BOOL_RESULT_OPS",
     "HIP_WAVE_OP_ARITIES",
     "HIP_WAVE_PREDICATE_ARGUMENT_OPS",
@@ -156,6 +161,7 @@ class HipCodeGen(
     HipMathCallMixin,
     HipVectorTypeMixin,
     HipTextureMixin,
+    CudaTexelBufferMixin,
     HipBufferCallMixin,
     HipBufferMetadataMixin,
     HipTypeMixin,
@@ -579,6 +585,13 @@ class HipCodeGen(
             declaration = f"{' '.join(qualifiers)} {declaration}"
 
         if initial_value is not None:
+            array_initializer = generate_cpp_array_initializer(
+                self, initial_value, var_type
+            )
+            if array_initializer is not None:
+                if array_initializer.strip():
+                    declaration += f" = {array_initializer}"
+                return declaration
             declaration += f" = {self.visit(initial_value)}"
 
         return declaration
@@ -723,6 +736,10 @@ class HipCodeGen(
         return super().vector_type_for_components(component_type, component_count)
 
     def generate_resource_call(self, func_name, raw_args, args):
+        handled = self.texel_buffer_call(func_name, raw_args, args)
+        if handled is not UNHANDLED:
+            return handled
+
         if func_name in {"textureSize", "imageSize"}:
             return self.generate_dimension_query(func_name, raw_args, args)
 
@@ -763,7 +780,13 @@ class HipCodeGen(
         return None
 
     def array_access_element_type(self, type_name):
-        """Return the element type for HIP arrays and structured buffers."""
+        """Return the element type for HIP arrays and structured buffers.
+
+        A matrix subscript yields its column vector.
+        """
+        column_type = matrix_column_type(type_name)
+        if column_type is not None:
+            return column_type
         array_element_type = super().array_access_element_type(type_name)
         if array_element_type is not None:
             return array_element_type
@@ -967,6 +990,13 @@ class HipCodeGen(
     def dimension_query_spec(self, type_name):
         """Return HIP-specific resource metadata dimensions before shared specs."""
         base_type = self.resource_base_type(type_name)
+        if sampled_texel_buffer_type(base_type) is not None:
+            return dict(TEXEL_BUFFER_QUERY_SPEC)
+        if isinstance(base_type, str) and base_type.startswith(
+            ("isampler", "usampler")
+        ):
+            # An integer texture has the dimensions of the float texture of its shape.
+            base_type = self.sampled_texture_shape_type(base_type)
         hip_specs = {
             "image1D": (("width",), False, False),
             "iimage1D": (("width",), False, False),

@@ -260,11 +260,64 @@ def test_a_diverging_cell_names_both_compilers():
     assert execution.found(judged.detail)
 
 
-def test_idle_names_a_cell_that_ran_nothing():
+def test_idle_names_a_cell_that_ran_nothing(monkeypatch):
+    monkeypatch.setattr(lowering, "can_lower", lambda language: True)
     mad = CATALOG["hlsl"][0]
     ready = Result(mad, PAIR, "supported", sources=(GLSL_SOURCE,) * 2, into="glsl")
     assert execution.idle([ready]) == ["hlsl to glsl"]
     assert execution.idle([replace(ready, runtime="vulkan-lavapipe")]) == []
+    # run() never executes a cell with an end that does not lower to SPIR-V, so it cannot be idle.
+    assert execution.idle([replace(ready, into="metal")]) == []
+    assert execution.unlowered([ready]) == []
+
+
+def test_a_cell_whose_end_cannot_lower_here_is_compile_only_and_not_idle(
+    monkeypatch,
+):
+    # The Linux leg has no rust-gpu, so a Rust native probe cannot run there.
+    monkeypatch.setattr(lowering, "can_lower", lambda language: language != "rust")
+    rust = Feature("rust", "function", "Float::abs", ABS)
+    cell = Result(rust, PAIR, "supported", sources=(GLSL_SOURCE,) * 2, into="glsl")
+    hlsl = Result(
+        CATALOG["hlsl"][0], PAIR, "supported", sources=(GLSL_SOURCE,) * 2, into="glsl"
+    )
+    assert execution.unlowered([cell, hlsl]) == ["rust to glsl"]
+    assert execution.idle([cell, hlsl]) == ["hlsl to glsl"]
+
+
+def test_each_end_of_a_cell_runs_in_the_environment_of_its_own_spirv(
+    monkeypatch, tmp_path
+):
+    # DXC's SPIR-V 1.0 decorates storage blocks with BufferBlock, which Vulkan 1.2 rejects, and slangc writes SPIR-V
+    # 1.5, which Vulkan 1.1 rejects; an environment shared by both would run neither end of an HLSL to Slang cell.
+    versions = {"hlsl": "1.0", "slang": "1.5"}
+    monkeypatch.setattr(
+        execution,
+        "as_spirv",
+        lambda language, source: f"; SPIR-V\n; Version: {versions[language]}\n",
+    )
+    runs = []
+
+    def run_suite(cases, targets, configs, selection, root, *, reference, environment):
+        runs.append((environment, sorted(case.id for case in cases)))
+        return [
+            {"case": case.id, "runtime": "vulkan-lavapipe", "outcome": "preserved"}
+            for case in cases
+        ]
+
+    from tests.conformance import runner as harness
+
+    monkeypatch.setattr(harness, "run_suite", run_suite)
+    mad = CATALOG["hlsl"][0]
+    cell = Result(mad, PAIR, "supported", sources=(GLSL_SOURCE,) * 2, into="slang")
+    found, skipped = execution._execute("hlsl", [(0, cell)], {}, tmp_path, True)
+    assert runs == [
+        ("vulkan1.1", ["00000-native"]),
+        ("vulkan1.2", ["00000-translated"]),
+    ]
+    native, translated = found[0][:2]
+    assert native["outcome"] == translated["outcome"] == "preserved"
+    assert skipped == {}
 
 
 def _loaded(language):

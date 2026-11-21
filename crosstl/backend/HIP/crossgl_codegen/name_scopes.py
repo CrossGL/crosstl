@@ -2,13 +2,14 @@
 
 import re
 
-from ...CUDA.keyword_renames import unused_identifier_name
-from ..HipAst import (
-    ArrayAccessNode,
-    CastNode,
-    MemberAccessNode,
-    UnaryOpNode,
+from ...CUDA.array_extents import (
+    crossgl_array_extent,
+    expression_extent,
+    extent_identifier,
+    undeclared_extent_names,
 )
+from ...CUDA.keyword_renames import unused_identifier_name
+from ..HipAst import ArrayAccessNode, CastNode, MemberAccessNode, UnaryOpNode
 
 
 class HipNameScopeMixin:
@@ -206,28 +207,33 @@ class HipNameScopeMixin:
         return "_".join(part for part in parts if part)
 
     def format_crossgl_array_extent(self, size):
-        size = str(size).strip()
-        if not size:
-            return size
-        if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*|(?:0[xX][0-9A-Fa-f]+|\d+)[uU]?", size):
-            return size
-        replacements = {
-            "*": "_mul_",
-            "/": "_div_",
-            "%": "_mod_",
-            "+": "_plus_",
-            "-": "_minus_",
-        }
-        extent = size
-        for operator, word in replacements.items():
-            extent = extent.replace(operator, word)
-        extent = re.sub(r"[^A-Za-z0-9_]+", "_", extent).strip("_")
-        extent = re.sub(r"_+", "_", extent)
-        if not extent:
-            extent = "expr"
-        if extent[0].isdigit():
-            extent = f"hip_array_extent_{extent}"
-        return self.sanitize_identifier_name(extent)
+        """The CrossGL extent of a HIP array extent: its value when it is a constant (``CUDA.array_extents``)."""
+        return crossgl_array_extent(
+            size, self.integer_constants, self.format_crossgl_expression_extent
+        )
+
+    def format_crossgl_expression_extent(self, size):
+        """``(K * 2)`` for an extent of names and arithmetic, or a typed import refusal for any other extent."""
+        declared = self.integer_constants.declares
+        expression = expression_extent(size, declared=declared)
+        if expression is not None:
+            return expression
+        placeholder = self.sanitize_identifier_name(
+            extent_identifier(size, "hip_array_extent_")
+        )
+        undeclared = undeclared_extent_names(size, declared)
+        if undeclared and expression_extent(size) is not None:
+            names = ", ".join(f"'{name}'" for name in undeclared)
+            return self.refuse_import(
+                f"HIP array extent '{size}' names {names}, which the program does not declare (a macro or "
+                "constant of a header the importer did not read), so no target can size the array",
+                placeholder,
+            )
+        return self.refuse_import(
+            f"HIP array extent '{size}' is not an integral constant expression of names, integer "
+            "literals and arithmetic, which is all a CrossGL array extent can spell",
+            placeholder,
+        )
 
     def sanitize_qualified_variable_name(self, name):
         if not isinstance(name, str) or "::" not in name:
