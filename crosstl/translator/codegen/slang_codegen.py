@@ -93,6 +93,7 @@ from .sampler_pairs import canonicalize_separate_textures
 from .slang_buffer_block_types import SlangBufferBlockTypesMixin
 from .slang_byte_address_words import SlangThreeComponentAccess
 from .slang_call_expressions import SlangCallExpressionMixin
+from .slang_conservative_depth import slang_conservative_depth_semantic
 from .slang_control_flow import SlangControlFlowMixin
 from .slang_declaration_modifiers import (
     is_slang_declaration_metadata_attribute,
@@ -113,6 +114,7 @@ from .slang_numeric_types import slang_unrepresentable_type_reason
 from .slang_pointer_declarations import refuse_slang_pointer_declarations
 from .slang_precise_functions import SlangPreciseFunctionMixin
 from .slang_program_symbols import SlangProgramSymbolsMixin
+from .slang_rasterizer_order import slang_rasterizer_ordered_type
 from .slang_ray_tracing import SlangRayTracingMixin
 from .slang_refusals import SlangLoweringRefused
 from .slang_resource_bindings import SlangResourceBindingsMixin
@@ -348,7 +350,8 @@ class SlangCodeGen(
         self._generating = False
         self.semantic_map = {
             "gl_Position": "SV_Position",
-            "gl_PointSize": "PSIZE",
+            # PSIZE is a user varying for slangc's SPIR-V and GLSL targets; SV_PointSize is the built-in.
+            "gl_PointSize": "SV_PointSize",
             "gl_ClipDistance": "SV_ClipDistance",
             "gl_CullDistance": "SV_CullDistance",
             "gl_VertexID": "SV_VertexID",
@@ -841,6 +844,9 @@ class SlangCodeGen(
         return result
 
     def semantic_from_node(self, node, skip_stage_attributes=False):
+        depth_semantic = slang_conservative_depth_semantic(node)
+        if depth_semantic is not None:
+            return depth_semantic
         semantic = getattr(node, "semantic", None)
         if semantic:
             if skip_stage_attributes and self.slang_shader_stage_marker_name(semantic):
@@ -943,7 +949,9 @@ class SlangCodeGen(
                 return ""
             declaration = self.slang_resource_memory_qualifier_prefix(
                 direct_buffer_type, node
-            ) + format_c_style_array_declaration(direct_buffer_type, node.name)
+            ) + format_c_style_array_declaration(
+                slang_rasterizer_ordered_type(self, direct_buffer_type, node), node.name
+            )
             declaration = self.apply_slang_resource_binding_decorations(
                 declaration, node, direct_buffer_type, auto_assign=True
             )
@@ -970,7 +978,8 @@ class SlangCodeGen(
             if self.skip_duplicate_slang_global_variable(node, storage_buffer_type):
                 return ""
             declaration = format_c_style_array_declaration(
-                storage_buffer_type, node.name
+                slang_rasterizer_ordered_type(self, storage_buffer_type, node),
+                node.name,
             )
             declaration = (
                 self.slang_resource_memory_qualifier_prefix(storage_buffer_type, node)

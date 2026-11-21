@@ -125,6 +125,19 @@ class SlangCallExpressionMixin:
             left = self.generate_expression(node.args[0])
             right = self.generate_expression(node.args[1])
             return self.generate_slang_mod_expression(left, right)
+        if (
+            callee == "select"
+            and len(node.args) == 3
+            and callee not in self.user_function_names
+        ):
+            # CrossGL select(a, b, c) is MSL's (MSL 6.4): c ? b : a per component. Slang's select is HLSL's
+            # select(cond, trueValue, falseValue). Both evaluate every argument.
+            false_value, true_value, condition = node.args
+            args = ", ".join(
+                self.generate_expression_without_expected(argument)
+                for argument in (condition, true_value, false_value)
+            )
+            return f"select({args})"
         if callee == "inverse" and callee not in self.user_function_names:
             if len(node.args) != 1:
                 fallback_type = self.current_expression_expected_type or "float"
