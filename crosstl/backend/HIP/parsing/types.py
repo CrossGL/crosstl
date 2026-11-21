@@ -1,5 +1,7 @@
 """Types in the HIP parser: type names, decltype, elaborated types and parameter lists."""
 
+from ...CUDA.parameter_defaults import UnparsedParameterDefault
+
 
 class HipTypeMixin:
     """Type members of ``HipParser``."""
@@ -317,8 +319,11 @@ class HipTypeMixin:
                 self.skip_cpp_attributes()
 
             param_type += self.parse_array_suffix()
-            self.skip_default_parameter_value()
-            params.append({"type": param_type, "name": param_name})
+            param = {"type": param_type, "name": param_name}
+            default = self.parse_default_parameter_value()
+            if default is not None:
+                param["default"] = default
+            params.append(param)
 
             self.skip_newlines()
             if self.match("COMMA"):
@@ -382,6 +387,31 @@ class HipTypeMixin:
             self.skip_balanced_parentheses()
 
         return name
+
+    def parse_default_parameter_value(self):
+        """Parse a parameter's ``= value`` default argument, or return ``None`` when it has none.
+
+        A default the expression parser cannot read up to the next ``,`` or ``)`` is skipped and returned as an
+        :class:`UnparsedParameterDefault` that keeps its text, so the importer refuses it instead of dropping it.
+        """
+        self.skip_newlines()
+        if not self.match("ASSIGN"):
+            return None
+        start = self.pos
+        self.advance()
+        self.skip_newlines()
+        try:
+            value = self.parse_assignment_expression()
+            self.skip_newlines()
+        except SyntaxError:
+            value = None
+        if value is not None and self.match("COMMA", "RPAREN"):
+            return value
+        self.pos = start
+        self.current_token = self.tokens[start]
+        self.skip_default_parameter_value()
+        text = " ".join(str(token.value) for token in self.tokens[start + 1 : self.pos])
+        return UnparsedParameterDefault(text)
 
     def skip_default_parameter_value(self):
         self.skip_newlines()
