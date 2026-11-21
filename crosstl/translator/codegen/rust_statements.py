@@ -1,6 +1,5 @@
 """Rust statements, blocks, branches and loops emitted for CrossGL statements."""
 
-from .rust_gpu_builtins import BARRIERS
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
@@ -33,6 +32,7 @@ from ..ast import (
 )
 from .array_utils import get_array_size_from_node
 from .assignment_values import is_reevaluable_place
+from .rust_gpu_builtins import BARRIERS
 
 
 class RustStatementMixin:
