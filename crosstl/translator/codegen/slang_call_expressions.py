@@ -18,7 +18,9 @@ from .shader_clock_refusals import (
 )
 from .slang_buffer_lengths import (
     slang_glsl_buffer_block_length,
+    slang_structured_buffer_length,
 )
+from .slang_value_resizes import slang_resize_constructor
 from .slang_wave_shuffles import (
     as_type_target,
 )
@@ -106,6 +108,9 @@ class SlangCallExpressionMixin:
             block_length = slang_glsl_buffer_block_length(self, func_expr, node.args)
             if block_length is not None:
                 return block_length
+            buffer_length = slang_structured_buffer_length(self, func_expr, node.args)
+            if buffer_length is not None:
+                return buffer_length
             resource_member_call = self.generate_resource_member_call(
                 func_expr,
                 node.args,
@@ -172,6 +177,9 @@ class SlangCallExpressionMixin:
                 [self.generate_expression_without_expected(arg) for arg in node.args]
             )
         if isinstance(callee, str) and callee not in self.user_function_names:
+            resize = slang_resize_constructor(self, callee, node.args)
+            if resize is not None:
+                return resize
             matrix_constructor = self.hlsl_matrix_orientation.constructor(
                 callee,
                 node.args,

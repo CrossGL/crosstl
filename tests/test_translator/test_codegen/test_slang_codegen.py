@@ -11334,8 +11334,11 @@ def test_matrix_multiply_and_inverse_lower_to_slang_helpers():
     assert "float4x4 _crossgl_inverse_float4x4(float4x4 m)" in generated_code
     assert "float4x4 modelView = mul(view, model);" in generated_code
     assert (
-        "float3x3 normalMatrix = float3x3(transpose(_crossgl_inverse_float4x4(model)));"
-        in (generated_code)
+        "float3x3 normalMatrix = cgl_matrix_resize_float4x4_to_float3x3("
+        "transpose(_crossgl_inverse_float4x4(model)));" in (generated_code)
+    )
+    assert "float3x3 cgl_matrix_resize_float4x4_to_float3x3(float4x4 m)" in (
+        generated_code
     )
     assert "float3 normal = mul(normalMatrix, float3(0.0, 1.0, 0.0));" in (
         generated_code
