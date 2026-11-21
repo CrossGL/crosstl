@@ -99,11 +99,11 @@ _IMPLICIT_FORMS = {
         _ImplicitForm("textureOffset", "textureLodOffset", 0, 1, True),
         _ImplicitForm("textureProj", "textureProjLod", 0, 0, True),
         _ImplicitForm("textureProjOffset", "textureProjLodOffset", 0, 1, True),
-        _ImplicitForm("textureCompare", "textureCompareLod", 1, 0, False),
-        _ImplicitForm("textureCompareOffset", "textureCompareLodOffset", 1, 1, False),
-        _ImplicitForm("textureCompareProj", "textureCompareProjLod", 1, 0, False),
+        _ImplicitForm("textureCompare", "textureCompareLod", 1, 0, True),
+        _ImplicitForm("textureCompareOffset", "textureCompareLodOffset", 1, 1, True),
+        _ImplicitForm("textureCompareProj", "textureCompareProjLod", 1, 0, True),
         _ImplicitForm(
-            "textureCompareProjOffset", "textureCompareProjLodOffset", 1, 1, False
+            "textureCompareProjOffset", "textureCompareProjLodOffset", 1, 1, True
         ),
     )
 }
