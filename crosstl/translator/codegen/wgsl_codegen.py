@@ -858,6 +858,7 @@ class WGSLCodeGen(
         self._pointer_identifier_scopes = []
         self._parameter_plan_stack = []
         self._value_type_scopes = []
+        self._local_mutability_scopes = []
         self._resource_alias_scopes = []
         self._module_identifier_names = {}
         self._function_identifier_names = {}
@@ -879,6 +880,7 @@ class WGSLCodeGen(
         self._module_storage_access_modes = {}
         self._used_access_mode_identifiers = set()
         self._read_only_module_names = set()
+        self._addressable_module_names = set()
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
@@ -1819,6 +1821,15 @@ class WGSLCodeGen(
                 self.expression_type(expr.true_expr),
                 self.expression_type(expr.false_expr),
             )
+        if (
+            isinstance(expr, UnaryOpNode)
+            and expr.operator == "*"
+            and not expr.is_postfix
+        ):
+            # A dereferenced pointer local (wgsl_pointer_locals) has its pointee type.
+            pointer_type = self.expression_type(expr.operand)
+            if isinstance(pointer_type, PointerType):
+                return pointer_type.pointee_type
         if (
             isinstance(expr, UnaryOpNode)
             and expr.operator in {"-", "+", "~"}
