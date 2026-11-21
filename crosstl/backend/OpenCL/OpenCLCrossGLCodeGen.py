@@ -23,6 +23,7 @@ from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
 from ..assignment_operands import grouped_operand
+from ..import_refusals import OpenCLImportRefused
 from ..no_contraction import (
     PRECISE_FUNCTION_ATTRIBUTE,
     FpContractState,
@@ -129,6 +130,7 @@ class OpenCLToCrossGLConverter(
     """Serialize OpenCL backend AST nodes into CrossGL source."""
 
     SOURCE_LANGUAGE_NAME = "OpenCL"
+    IMPORT_REFUSAL_TYPE = OpenCLImportRefused
     ERASE_CONCRETE_TYPE_ALIASES = False
     RECORD_SEMANTIC_ERROR = OpenCLRecordSemanticError
 
