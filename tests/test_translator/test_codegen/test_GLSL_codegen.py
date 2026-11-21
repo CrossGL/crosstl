@@ -18326,7 +18326,7 @@ def test_glsl_tessellation_evaluation_outputtopology_metadata_lowers_layout_part
 @pytest.mark.parametrize(
     ("domain", "topology", "message"),
     [
-        ("isoline", "triangle_cw", "triangle_cw requires triangles domain"),
+        ("isoline", "triangle_cw", "triangle_cw requires a triangles or quads domain"),
         ("triangle", "line", "line requires isolines domain"),
         (
             "triangle",

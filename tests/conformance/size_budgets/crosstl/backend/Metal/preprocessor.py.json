@@ -1,0 +1,11 @@
+{
+ "functions": {
+  "MetalPreprocessor._elide_used_resolved_static_data_members": 367,
+  "MetalPreprocessor._find_explicit_template_function_calls": 344,
+  "MetalPreprocessor._find_explicit_template_struct_instantiations": 602,
+  "MetalPreprocessor._infer_argument_type": 401,
+  "MetalPreprocessor._materialize_constrained_template_calls_in_scope": 703,
+  "MetalPreprocessor._try_rewrite_call_at": 645
+ },
+ "module": 31860
+}

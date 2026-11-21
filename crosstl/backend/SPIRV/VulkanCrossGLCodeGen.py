@@ -3,6 +3,7 @@
 from ...translator.codegen.image_access_contracts import SUPPORTED_IMAGE_FORMATS
 from ..common_ast import InitializerListNode
 from .buffer_memory_qualifiers import storage_buffer_memory_attribute_suffix
+from .depth_layout_import import fragment_depth_layout_attribute
 from .import_exact_lookups import SpirvBuiltinUnsupportedError
 from .ray_tracing_import import BUILTIN_VARIABLE_NAMES
 from .statement_import import (
@@ -480,6 +481,11 @@ class VulkanToCrossGLConverter:
         layouts = stage_interface_layouts.get(id(function), [])
         clip_position_location = self.crossgl_vertex_clip_position_location(
             function, layouts
+        )
+        self.fragment_depth_attribute = (
+            fragment_depth_layout_attribute(function)
+            if self.function_shader_stage(function) == "fragment"
+            else None
         )
         for layout in layouts:
             override_name = None
@@ -1317,6 +1323,9 @@ class VulkanToCrossGLConverter:
                         value, getattr(node, "spirv_storage_class", None)
                     )
                 )
+                depth_attribute = getattr(self, "fragment_depth_attribute", None)
+                if value == "FragDepth" and layout_type == "out" and depth_attribute:
+                    attributes.append(depth_attribute)
         if forced_builtin is not None:
             attributes.append(
                 self.crossgl_builtin_attribute(
