@@ -1,0 +1,41 @@
+// gcd, lcm, factorial, comb and perm of 16-, 32- and 64-bit integers, signed and unsigned, scalar and vector.
+// Thread i reads a = inp[i] and b = inp[i + 64] and writes 16 words; a 64-bit result is two words, low first.
+shader IntegerCombinatorics {
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+        readonly buffer int inp[] @binding(0);
+        buffer uint outp[] @binding(1);
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            int a = inp[i];
+            int b = inp[i + 64u];
+            uint ua = uint(a);
+            uint ub = uint(b);
+            uint o = i * 16u;
+            outp[o] = uint(gcd(a, b));
+            outp[o + 1u] = gcd(ua, ub);
+            outp[o + 2u] = uint(lcm(a >> 20, b >> 20));
+            uint64_t wide = uint64_t(lcm(int64_t(a), int64_t(b)));
+            outp[o + 3u] = uint(wide & uint64_t(4294967295u));
+            outp[o + 4u] = uint(wide >> uint64_t(32u));
+            uint64_t product = uint64_t(factorial(int64_t(ua % 21u)));
+            outp[o + 5u] = uint(product & uint64_t(4294967295u));
+            outp[o + 6u] = uint(product >> uint64_t(32u));
+            uint64_t binomial = comb(uint64_t(ua & 63u), uint64_t(ub & 63u));
+            outp[o + 7u] = uint(binomial & uint64_t(4294967295u));
+            outp[o + 8u] = uint(binomial >> uint64_t(32u));
+            uint64_t arranged = uint64_t(perm(int64_t(ua & 15u), int64_t(ub & 15u)));
+            outp[o + 9u] = uint(arranged & uint64_t(4294967295u));
+            outp[o + 10u] = uint(arranged >> uint64_t(32u));
+            outp[o + 11u] = uint(perm(int(ua & 7u)));
+            outp[o + 12u] = uint(comb(int(ua & 31u), int(ub & 31u) - 2));
+            ivec2 divisors = gcd(ivec2(a, b), ivec2(12, -18));
+            outp[o + 13u] = uint(divisors.x);
+            outp[o + 14u] = uint(divisors.y);
+            int16_t narrow = gcd(int16_t(a >> 17), int16_t(b >> 17));
+            outp[o + 15u] = uint(int(narrow));
+        }
+    }
+}

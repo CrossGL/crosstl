@@ -327,14 +327,14 @@ CUDA_FUNCTION_NAMES = (
 # barrier family, sparse residency and sampler feedback writes, fine and coarse derivative widths, bit
 # reinterpretation of 64-bit values, debug output, fragment discard, ``inverseSqrt``, the ``sizeof`` and ``alignof``
 # operators (with ``metal_sizeof``, a size in the MSL layout, :mod:`.sizeof_values`), lambdas, Mojo's ``assert`` and
-# ``raise``, and the constructor and helpers of the built-in ``Option<T>`` that the generators declare when a
-# program uses them.
+# ``raise``, the constructor and helpers of the built-in ``Option<T>`` that the generators declare when a
+# program uses them, and the integer combinatorics functions that :mod:`.integer_math` lowers.
 _CROSSGL_OPERATION_NAMES = _names("""
 atomicLoad atomicStore atomicCompareExchange atomicCompareExchangeWeak atomicThreadFence workgroupBarrier
 workgroupExecutionBarrier subgroupExecutionBarrier deviceMemoryBarrier allMemoryBarrier textureResidency
 textureResident textureGatherCompareOffsets textureSamplePosition write_sampler_feedback write_sampler_feedback_bias
 write_sampler_feedback_grad write_sampler_feedback_level fwidth_fine fwidth_coarse doubleBitsToLong longBitsToDouble
-printf discard inverseSqrt alignof lambda assert raise Some is_Some is_None unwrap_Some
+printf discard inverseSqrt alignof lambda assert raise Some is_Some is_None unwrap_Some gcd lcm factorial comb perm
 """) | frozenset(SIZEOF_LAYOUTS)
 
 # CrossGL's intrinsic functions: the wave, subgroup, ray tracing and mesh intrinsics the parser and
