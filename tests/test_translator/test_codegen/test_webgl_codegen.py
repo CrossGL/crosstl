@@ -81,13 +81,13 @@ def assert_webgl_stage_validates_if_available(generated, tmp_path, name, stage="
     assert result.returncode == 0, result.stdout
 
 
-def test_webgl_backend_is_target_only():
+def test_webgl_backend_reads_its_source_with_the_glsl_frontend():
     spec = codegen.get_backend("webgl2")
 
     assert spec is not None
     assert spec.name == "webgl"
-    assert spec.source_registry_name is None
-    assert "webgl" not in codegen.source_backend_names()
+    assert spec.source_registry_name == "opengl"
+    assert "webgl" in codegen.source_backend_names()
     assert codegen.normalize_backend_name("target.webgl.glsl") == "webgl"
     assert codegen.get_backend_extension("glsl-es") == ".webgl.glsl"
     assert isinstance(codegen.get_codegen("essl"), WebGLCodeGen)
