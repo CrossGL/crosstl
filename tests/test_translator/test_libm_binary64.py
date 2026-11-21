@@ -278,7 +278,8 @@ def test_mixed_operands_convert_to_binary64(tmp_path, backend):
     if backend == "opengl":
         assert "cgl_rule_libm64_pow(x, double(values[i]))" in code
         assert "cgl_rule_libm64_pow(x, 3)" in code
-        assert "cgl_rule_libm64_pow(double(2.0), x)" in code
+        # A floating literal in a double context is a double constant (glsl_double_literals).
+        assert "cgl_rule_libm64_pow(2.0lf, x)" in code
         assert not _calls(code, "pow")
         return
     assert "%1 Pow " not in code
