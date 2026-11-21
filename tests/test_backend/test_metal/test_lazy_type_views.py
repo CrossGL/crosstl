@@ -6,8 +6,8 @@ import pickle
 import pytest
 
 from crosstl.backend.Metal.preprocessing.lazy_type_views import LazyTypeView
-from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 from crosstl.backend.Metal.preprocessing.support import _MetalAddressableValueType
+from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 
 NAMES = {"b": [1], "a": [2], "skip": [3], "c": [4]}
 
@@ -135,7 +135,10 @@ def test_the_preprocessor_views_equal_the_eager_views(position):
 def test_the_struct_field_views_equal_the_eager_views():
     preprocessor = MetalPreprocessor()
     source = "struct Pair { float first; int second; };\n"
-    structs = {struct.name: struct for struct in preprocessor._find_concrete_struct_definitions(source)}
+    structs = {
+        struct.name: struct
+        for struct in preprocessor._find_concrete_struct_definitions(source)
+    }
     assert structs["Pair"].data_member_types
     declarations = _declarations()
     for position in (0, 6, 60):
