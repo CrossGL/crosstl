@@ -3,6 +3,7 @@
 from ..barrier_import import (
     spirv_barrier_statements,
 )
+from ..fragment_interlock_import import SPIRV_INTERLOCK_FUNCTIONS
 from ..image_texel_atomics import (
     fold_image_texel_atomic,
 )
@@ -687,7 +688,7 @@ class VulkanFunctionBodyOperationMixin:
 
         Handles ``OpFunctionCall``, ``OpAtomicStore``, ``OpImageWrite``, the
         ``SPIRV_GEOMETRY_EMIT_FUNCTIONS`` opcodes, the ``SPIRV_RAY_QUERY_STATEMENT_FUNCTIONS`` opcodes,
-        ``OpControlBarrier``, ``OpMemoryBarrier``, ``OpMemoryNamedBarrier``.
+        ``OpBeginInvocationInterlockEXT``, ``OpEndInvocationInterlockEXT``, ``OpControlBarrier``, ``OpMemoryBarrier``, ``OpMemoryNamedBarrier``.
         """
         if result_id and opcode == "OpFunctionCall" and len(operands) >= 2:
             call = FunctionCallNode(
@@ -741,6 +742,10 @@ class VulkanFunctionBodyOperationMixin:
                     constants,
                 )
             )
+            return True
+
+        if opcode in SPIRV_INTERLOCK_FUNCTIONS:
+            statements.append(FunctionCallNode(SPIRV_INTERLOCK_FUNCTIONS[opcode], []))
             return True
 
         if opcode in self.SPIRV_GEOMETRY_EMIT_FUNCTIONS:
