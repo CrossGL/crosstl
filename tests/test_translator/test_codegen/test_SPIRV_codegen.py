@@ -2776,6 +2776,10 @@ class TestVulkanSPIRVCodeGen:
                     payload.value = 3.0;
                     double values[2];
                     values[0] = 4.0;
+                    float single = 5.0;
+                    localDouble = single;
+                    payload.value = single;
+                    values[1] = single;
                 }
             }
         }
@@ -2789,6 +2793,7 @@ class TestVulkanSPIRVCodeGen:
 
         assert double_type is not None
         assert int_type is not None
+        # A float value stored to a double location is widened; an unsuffixed literal is a double constant.
         assert (
             len(
                 re.findall(
@@ -2796,8 +2801,17 @@ class TestVulkanSPIRVCodeGen:
                     spv_code,
                 )
             )
-            >= 4
+            >= 3
         )
+        for literal in ("0.0", "1.0", "3.0", "4.0"):
+            constant = re.search(
+                rf"(%\d+) = OpConstant {re.escape(double_type.group(1))} {literal}\n",
+                spv_code,
+            )
+            assert constant is not None
+            assert re.search(
+                rf"OpStore %\d+ {re.escape(constant.group(1))}\n", spv_code
+            )
         assert re.search(
             rf"%\d+ = OpConvertFToS {re.escape(int_type.group(1))} %\d+",
             spv_code,
@@ -2812,12 +2826,17 @@ class TestVulkanSPIRVCodeGen:
                     return 0.0;
                 }
 
+                double widenSingle(float single) {
+                    return single;
+                }
+
                 int makeInt() {
                     return 2.5;
                 }
 
                 void main() {
                     double x = makeDouble();
+                    double w = widenSingle(0.5f);
                     int y = makeInt();
                 }
             }
@@ -2838,6 +2857,11 @@ class TestVulkanSPIRVCodeGen:
             rf"OpReturnValue (?P=result)",
             spv_code,
         )
+        zero = re.search(
+            rf"(%\d+) = OpConstant {re.escape(double_type.group(1))} 0.0\n", spv_code
+        )
+        assert zero is not None
+        assert f"OpReturnValue {zero.group(1)}\n" in spv_code
         assert re.search(
             rf"(?P<result>%\d+) = OpConvertFToS "
             rf"{re.escape(int_type.group(1))} %\d+\n"
@@ -2860,6 +2884,8 @@ class TestVulkanSPIRVCodeGen:
 
                 void main() {
                     double x = useDouble(0.0);
+                    float single = 0.25;
+                    double z = useDouble(single);
                     int y = useInt(2.5);
                 }
             }
@@ -2879,6 +2905,15 @@ class TestVulkanSPIRVCodeGen:
             rf"{re.escape(double_type.group(1))} %\d+\n"
             rf"%\d+ = OpFunctionCall {re.escape(double_type.group(1))} %\d+ "
             rf"(?P=arg)",
+            spv_code,
+        )
+        zero = re.search(
+            rf"(%\d+) = OpConstant {re.escape(double_type.group(1))} 0.0\n", spv_code
+        )
+        assert zero is not None
+        assert re.search(
+            rf"%\d+ = OpFunctionCall {re.escape(double_type.group(1))} %\d+ "
+            rf"{re.escape(zero.group(1))}\n",
             spv_code,
         )
         assert re.search(
@@ -3940,9 +3975,10 @@ class TestVulkanSPIRVCodeGen:
             rf"{re.escape(float_type.group(1))} %\d+",
             spv_code,
         )
+        # The unsuffixed literal 3.0 is read as the double member's value, not widened from binary32.
         assert re.search(
-            rf"{re.escape(construct.group('gain'))} = OpFConvert "
-            rf"{re.escape(double_type.group(1))} %\d+",
+            rf"{re.escape(construct.group('gain'))} = OpConstant "
+            rf"{re.escape(double_type.group(1))} 3.0\n",
             spv_code,
         )
         assert re.search(
@@ -5503,6 +5539,8 @@ class TestVulkanSPIRVCodeGen:
                     dvec3 da = dvec3(1.0, 0.0, 0.0);
                     dvec3 db = dvec3(0.0, 1.0, 0.0);
                     dvec3 dt = refract(da, db, 0.5);
+                    float single = 0.75;
+                    dvec3 dw = refract(da, db, single);
 
                     vec3 fa = vec3(1.0, 0.0, 0.0);
                     vec3 fb = vec3(0.0, 1.0, 0.0);
@@ -5543,6 +5581,16 @@ class TestVulkanSPIRVCodeGen:
                 spv_code,
             )
             for conversion in double_eta_conversions
+        )
+        # The unsuffixed literal eta of the double refract is a double constant.
+        half = re.search(
+            rf"(%\d+) = OpConstant {re.escape(double_type.group(1))} 0.5\n", spv_code
+        )
+        assert half is not None
+        assert re.search(
+            rf"OpExtInst {re.escape(dvec3_type.group(1))} %\d+ "
+            rf"Refract %\d+ %\d+ {re.escape(half.group(1))}(?:\s|$)",
+            spv_code,
         )
 
         float_eta_conversions = re.findall(
