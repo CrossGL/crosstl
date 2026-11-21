@@ -24,7 +24,13 @@ from __future__ import annotations
 
 _FLOATS = frozenset({"f32", "f64"})
 _INTEGERS = frozenset({"i32", "u32"})
-_GLAM_PREFIX = {"f32": "Vec", "f64": "DVec", "i32": "IVec", "u32": "UVec", "bool": "BVec"}
+_GLAM_PREFIX = {
+    "f32": "Vec",
+    "f64": "DVec",
+    "i32": "IVec",
+    "u32": "UVec",
+    "bool": "BVec",
+}
 _LANES = "xyzw"
 
 COMMON_FUNCTION_NAMES = frozenset(
@@ -80,7 +86,11 @@ def _bitcast_scalar(value, source, result):
         bits = f"{value}.to_bits()"
         return bits if result == "u32" else f"({bits} as i32)"
     if result == "f32":
-        return f"f32::from_bits({value})" if source == "u32" else f"f32::from_bits({value} as u32)"
+        return (
+            f"f32::from_bits({value})"
+            if source == "u32"
+            else f"f32::from_bits({value} as u32)"
+        )
     return f"({value} as {result})"
 
 
@@ -91,7 +101,9 @@ def _bitcast(name, shapes, values):
         return None
     if size == 0:
         return f"({_bitcast_scalar(f'({value})', scalar, result)})"
-    lanes = ", ".join(_bitcast_scalar(f"__v.{lane}", scalar, result) for lane in _LANES[:size])
+    lanes = ", ".join(
+        _bitcast_scalar(f"__v.{lane}", scalar, result) for lane in _LANES[:size]
+    )
     return f"{{ let __v = {value}; {_glam(result, size)}::new({lanes}) }}"
 
 
@@ -151,7 +163,11 @@ def _float_call(name, shapes, values, scalar, size):
     if name == "smoothstep" and count == 3:
         if size and not shapes[2][1]:
             return None
-        low, high = ("0.0", "1.0") if not size else (f"{_glam(scalar, size)}::ZERO", f"{_glam(scalar, size)}::ONE")
+        low, high = (
+            ("0.0", "1.0")
+            if not size
+            else (f"{_glam(scalar, size)}::ZERO", f"{_glam(scalar, size)}::ONE")
+        )
         e0, e1, x = values
         return (
             f"{{ let __e0 = {e0}; let __e1 = {e1}; "
@@ -201,12 +217,20 @@ def _float_unary(name, value, scalar, size):
     if name == "isfinite":
         return f"({value}).is_finite_mask()" if size else f"({value}).is_finite()"
     if name in {"fract", "frac"}:
-        return f"({value}).fract_gl()" if size else f"{{ let __x = {value}; __x - __x.floor() }}"
+        return (
+            f"({value}).fract_gl()"
+            if size
+            else f"{{ let __x = {value}; __x - __x.floor() }}"
+        )
     if name == "saturate":
         if size:
             vector = _glam(scalar, size)
             return f"({value}).clamp({vector}::ZERO, {vector}::ONE)"
         return f"({value}).clamp(0.0, 1.0)"
     if name in {"inverseSqrt", "rsqrt"}:
-        return f"({value}).map(|c| 1.0 / c.sqrt())" if size else f"(1.0 / ({value}).sqrt())"
+        return (
+            f"({value}).map(|c| 1.0 / c.sqrt())"
+            if size
+            else f"(1.0 / ({value}).sqrt())"
+        )
     return None

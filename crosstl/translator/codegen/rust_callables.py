@@ -12,9 +12,9 @@ from ..ast import (
 from .rust_exact_lookups import RUST_PRIMITIVE_SOURCE_TYPES
 from .rust_refusals import RustEnumEmptyBraceError
 
-
 # A matrix as the generator spells it before glam names it (``Mat2<f64>``), or glam's own name (``DMat2``).
 _RUST_MATRIX_TYPE = re.compile(r"D?Mat[234](?:x[234])?(?:<\w+>)?")
+
 
 class RustCallableMixin:
     """Callable and call members of ``RustCodeGen``."""
@@ -787,9 +787,10 @@ class RustCallableMixin:
             zero_literal = "0.0" if arg_type in {"float", "double", "half"} else "0"
             return f"({arg_expr} != {zero_literal})"
 
-        if rust_type in {"f16", "f32", "f64"} and self.normalize_scalar_type(
-            self.expression_result_type(arg)
-        ) == "bool":
+        if (
+            rust_type in {"f16", "f32", "f64"}
+            and self.normalize_scalar_type(self.expression_result_type(arg)) == "bool"
+        ):
             # Rust casts bool only to integers (E0606), and true becomes 1.
             return f"(({arg_expr} as u32) as {rust_type})"
         return f"({arg_expr} as {rust_type})"
@@ -823,9 +824,7 @@ class RustCallableMixin:
         args_str = ", ".join(generated_args)
         if _RUST_MATRIX_TYPE.fullmatch(str(rust_type)):
             # glam has no lane-wise matrix ``new``; it builds a matrix from its components in column order.
-            constructor = (
-                f"{self.rust_constructor_path(rust_type)}::from_cols_array(&[{args_str}])"
-            )
+            constructor = f"{self.rust_constructor_path(rust_type)}::from_cols_array(&[{args_str}])"
         else:
             constructor = f"{self.rust_constructor_path(rust_type)}::new({args_str})"
         if not temp_bindings:

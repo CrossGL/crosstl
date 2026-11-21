@@ -405,7 +405,9 @@ class RustResourceAttributeMixin:
             return "glsl_buffer_block"
         if node is not None and storage_slice_parts(node) is not None:
             return STORAGE_SLICE_KIND
-        if node is not None and is_uniform_value(node, self.type_name_string(type_name)):
+        if node is not None and is_uniform_value(
+            node, self.type_name_string(type_name)
+        ):
             return UNIFORM_VALUE_KIND
 
         base_type, _count = self.rust_resource_base_type_and_count(type_name)
@@ -434,7 +436,12 @@ class RustResourceAttributeMixin:
         return rust_resource_kind_of_spelling(mapped_base)
 
     def rust_resource_binding_namespace(self, kind):
-        if kind in {"cbuffer", "glsl_buffer_block", STORAGE_SLICE_KIND, UNIFORM_VALUE_KIND}:
+        if kind in {
+            "cbuffer",
+            "glsl_buffer_block",
+            STORAGE_SLICE_KIND,
+            UNIFORM_VALUE_KIND,
+        }:
             return "buffer"
         return kind
 
@@ -581,9 +588,7 @@ class RustResourceAttributeMixin:
         name = self.rust_identifier(node.name)
         kind = resource_info.get("kind")
         if kind == BUILTIN_INPUT_KIND:
-            return (
-                f"#[spirv({resource_info['builtin']})] {name}: {self.map_type(type_name)}"
-            )
+            return f"#[spirv({resource_info['builtin']})] {name}: {self.map_type(type_name)}"
         if kind == SPEC_CONSTANT_KIND:
             return spec_constant_parameter(name, resource_info)
         if kind == WORKGROUP_KIND:

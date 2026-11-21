@@ -102,7 +102,11 @@ def spec_constant_infos(generator, ast) -> dict:
             )
             continue
         initializer = getattr(node, "value", getattr(node, "initial_value", None))
-        bits = 0 if initializer is None else _default_bits(_literal_value(initializer), type_name)
+        bits = (
+            0
+            if initializer is None
+            else _default_bits(_literal_value(initializer), type_name)
+        )
         if bits is None:
             generator.refuse_lowering(
                 f"specialization constant: '{name}' has no literal default value, which rust-gpu's "

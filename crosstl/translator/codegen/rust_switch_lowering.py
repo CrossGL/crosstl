@@ -88,7 +88,9 @@ class RustSwitchLoweringMixin:
                             self.generate_expression(s) for s in clause.selectors
                         )
                     code += f"{arm_str}{pattern} => {{\n"
-                    code += self.generate_switch_clause_body(clause.statements, inner + 2)
+                    code += self.generate_switch_clause_body(
+                        clause.statements, inner + 2
+                    )
                     code += f"{arm_str}}}\n"
                 code += f"{inner_str}}}\n"
             else:
@@ -103,12 +105,16 @@ class RustSwitchLoweringMixin:
                         for s in clause.selectors
                     )
                     code += f"{keyword} {condition} {{\n"
-                    code += self.generate_switch_clause_body(clause.statements, inner + 1)
+                    code += self.generate_switch_clause_body(
+                        clause.statements, inner + 1
+                    )
                     code += f"{inner_str}}}"
                     keyword = " else if"
                 for clause in default:
                     code += " else {\n" if branches else f"{inner_str}{{\n"
-                    code += self.generate_switch_clause_body(clause.statements, inner + 1)
+                    code += self.generate_switch_clause_body(
+                        clause.statements, inner + 1
+                    )
                     code += f"{inner_str}}}"
                 code += "\n"
             code += f"{indent_str}}}\n"

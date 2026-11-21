@@ -211,7 +211,9 @@ class RustStatementMixin:
 
         elif isinstance(stmt, ArrayAccessNode):
             # ArrayAccessNode as statement - likely misclassified
-            return self.refuse_lowering("statement: an array element read as a statement")
+            return self.refuse_lowering(
+                "statement: an array element read as a statement"
+            )
 
         elif isinstance(stmt, SyncNode):
             return self.generate_sync_statement(stmt, indent)

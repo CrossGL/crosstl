@@ -45,7 +45,10 @@ class RustGpuPaddedSliceMixin:
 
     def rust_gpu_padded_slice_read(self, array_expr, array, index):
         """``array[index]`` as the 3-vector it holds, outside an assignment target."""
-        if self.assignment_lhs_depth > 0 or self.rust_gpu_padded_element(array_expr) is None:
+        if (
+            self.assignment_lhs_depth > 0
+            or self.rust_gpu_padded_element(array_expr) is None
+        ):
             return None
         return f"{array}[{index}].truncate()"
 
@@ -59,7 +62,9 @@ class RustGpuPaddedSliceMixin:
             return None
         _vector, zero = padded
         array = self.rust_identifier(array_expr.name)
-        index = self.generate_array_index_expression(getattr(target, "index_expr", None))
+        index = self.generate_array_index_expression(
+            getattr(target, "index_expr", None)
+        )
         element_type = self.expression_result_type(target)
         rhs = self.generate_expression_with_type(value, element_type)
         if operator == "=":

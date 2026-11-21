@@ -305,7 +305,10 @@ class RustGlobalDeclarationMixin:
         if array_type is not None:
             element_type, size = array_type
             element = self.rust_gpu_default_value(element_type)
-            if self.rust_array_innermost_type(element_type) == "bool" and size.isdigit():
+            if (
+                self.rust_array_innermost_type(element_type) == "bool"
+                and size.isdigit()
+            ):
                 # rust-gpu lowers [false; N] to a memset, which SPIR-V cannot apply to bool ("memset invalid on
                 # bool pattern"), so bool arrays list their elements.
                 return f"[{', '.join([element] * int(size))}]"

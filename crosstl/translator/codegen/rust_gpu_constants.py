@@ -74,7 +74,11 @@ def rust_integer_constants(ast) -> dict[str, ScalarConstant]:
         if not name or kind is None:
             continue
         folded = folder.fold(getattr(node, "value", None))
-        if folded is not None and isinstance(folded.value, int) and not isinstance(folded.value, bool):
+        if (
+            folded is not None
+            and isinstance(folded.value, int)
+            and not isinstance(folded.value, bool)
+        ):
             values[name] = folded
     return values
 

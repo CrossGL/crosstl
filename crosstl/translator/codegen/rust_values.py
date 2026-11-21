@@ -951,7 +951,9 @@ class RustValueMixin:
                 "uint64_t": "u64",
             }.get(str(literal_type))
             if suffix is None:
-                suffix = "u32" if 0 <= value < 2**32 else ("i64" if value < 2**63 else "u64")
+                suffix = (
+                    "u32" if 0 <= value < 2**32 else ("i64" if value < 2**63 else "u64")
+                )
             return f"{value}{suffix}"
         return str(value)
 
