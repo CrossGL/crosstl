@@ -998,7 +998,8 @@ def test_upstream_op_ci_runs_on_all_three_platforms_with_the_job_families():
         Path(".github/workflows/demo-project-testing.yml").read_text()
     )
     job = workflow["jobs"]["upstream-ops-host"]
-    assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
+    # The plan names the groups that run (ci_plan.QUEUE_UPSTREAM_GROUPS).
+    assert job["if"] == "contains(needs.ci-plan.outputs.legs, 'upstream-ops-host[')"
     assert "upstream-ops-host" in workflow["jobs"]["result"]["needs"]
     matrix = job["strategy"]["matrix"]
     assert {row["target"] for row in matrix["include"]} == {

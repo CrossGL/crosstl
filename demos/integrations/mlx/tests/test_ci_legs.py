@@ -212,7 +212,8 @@ def test_every_real_heavy_job_is_planned_and_keeps_its_steps():
     legs = workflow_legs(workflow)
     for name, job in workflow["jobs"].items():
         planned = [leg for leg in legs if ci_legs.job_of(leg) == name]
-        if str(job.get("if", "")).strip() != HEAVY:
+        condition = str(job.get("if", "")).strip()
+        if condition != HEAVY and ci_legs.LEGS_OUTPUT not in condition:
             assert not planned, name
             continue
         assert planned, name

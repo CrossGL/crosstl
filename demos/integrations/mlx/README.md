@@ -42,7 +42,10 @@ See the [CI coverage policy](../../../.github/TESTING.md) for the platform split
 Full native, parity, corpus and host jobs run nightly, on manual dispatch, and
 for main-branch pushes and merge-queue groups that change
 `demos/integrations/mlx/**` or this demo's workflow. Every merge-queue group
-runs the smoke job. A pull request runs them only when it carries the `ci:full` label,
+runs the smoke job. The upstream op tests (36 groups on 3 targets, 39 to 141
+minutes per job) never run in a merge-queue group or a push, whose runs must
+stay near 25 minutes; the nightly run, a dispatch and a `ci:full` pull request
+run every group on every target. A pull request runs the full tier only when it carries the `ci:full` label,
 because the full tier is several hundred jobs on runners every open pull
 request shares. Run `gh workflow run demo-project-testing.yml --ref <branch>`
 for a single full run of a branch. Pull requests that change the MLX demo,

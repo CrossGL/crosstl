@@ -11,10 +11,12 @@ import yaml
 from demos.integrations.mlx import ci_legs, smoke_canary
 from demos.integrations.mlx.ci_plan import (
     PLAN_JOB,
+    QUEUE_EVENTS,
     _without_plan_job,
     changed_legs,
     changed_paths,
     classify_workflow_change,
+    is_upstream_leg,
     main,
     validation_plan,
 )
@@ -24,6 +26,12 @@ from demos.integrations.mlx.tests.test_ci_legs import TREE as DEMO_TREE
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github/workflows/demo-project-testing.yml"
 EVERY_LEG = sorted(ci_legs.workflow_legs(yaml.safe_load(WORKFLOW.read_text())))
+UPSTREAM_GROUPS = yaml.safe_load(WORKFLOW.read_text())["jobs"]["upstream-ops-host"][
+    "strategy"
+]["matrix"]["group"]
+UPSTREAM_LEGS = [f"upstream-ops-host[{group}]" for group in UPSTREAM_GROUPS]
+# A queue group or a push runs no upstream op group.
+QUEUE_LEGS = [leg for leg in EVERY_LEG if leg not in UPSTREAM_LEGS]
 
 
 @pytest.fixture(autouse=True)
@@ -43,6 +51,13 @@ def _tier(heavy, smoke, legs=None):
     if legs is None:
         legs = EVERY_LEG if heavy == "true" else []
     return {"heavy": heavy, "smoke": smoke, "legs": legs}
+
+
+def _queue_tier(heavy, smoke):
+    """Return the plan of a queue group or a push that selects every leg."""
+    if heavy != "true":
+        return _tier(heavy, smoke)
+    return _tier(heavy, smoke, QUEUE_LEGS)
 
 
 @pytest.mark.parametrize("event", ["pull_request", "push"])
@@ -243,13 +258,18 @@ def test_push_whose_old_tip_is_absent_gets_full_validation(tmp_path, monkeypatch
         )
         == 0
     )
-    assert _outputs(output) == _tier("true", "true")
+    assert _outputs(output) == _queue_tier("true", "true")
 
 
-def test_new_branch_gets_full_validation(tmp_path):
+def test_new_branch_gets_full_validation(tmp_path, capsys):
     output = tmp_path / "output"
     assert main(["--event", "push", "--base", "0" * 40, "--output", str(output)]) == 0
-    assert _outputs(output) == _tier("true", "true")
+    assert _outputs(output) == _queue_tier("true", "true")
+    assert (
+        f"::notice title=MLX upstream op groups::{len(UPSTREAM_GROUPS)} selected "
+        "groups run in the nightly tier only: upstream-ops-host["
+        in capsys.readouterr().err
+    )
 
 
 @pytest.mark.parametrize("base,head", [("", "a" * 40), ("a" * 40, "--help")])
@@ -307,7 +327,7 @@ def test_merge_group_reads_the_diff_from_its_base(tmp_path, monkeypatch, path, h
     output = tmp_path.parent / f"{tmp_path.name}-output"
     arguments = ["--event", "merge_group", "--base", base, "--head", head]
     assert main([*arguments, "--output", str(output)]) == 0
-    assert _outputs(output) == _tier(heavy, "true")
+    assert _outputs(output) == _queue_tier(heavy, "true")
 
 
 def test_merge_group_without_its_base_gets_full_validation(tmp_path, monkeypatch):
@@ -318,7 +338,7 @@ def test_merge_group_without_its_base_gets_full_validation(tmp_path, monkeypatch
     output = tmp_path.parent / f"{tmp_path.name}-output"
     arguments = ["--event", "merge_group", "--base", "c" * 40, "--head", head]
     assert main([*arguments, "--output", str(output)]) == 0
-    assert _outputs(output) == _tier("true", "true")
+    assert _outputs(output) == _queue_tier("true", "true")
 
 
 def test_merge_group_without_revisions_fails(tmp_path):
@@ -488,7 +508,14 @@ def test_every_heavy_job_obeys_the_full_tier():
             continue
         needs = job["needs"]
         assert "ci-plan" in (needs if isinstance(needs, list) else [needs]), name
-        if name != "mlx-full-corpus-scout":
+        if name == "upstream-ops-host":
+            # The plan names the upstream op groups only for the nightly run,
+            # a dispatch and a ci:full pull request.
+            assert job["if"] == (
+                "contains(needs.ci-plan.outputs.legs, 'upstream-ops-host[')"
+            )
+            assert "exclude" not in job["strategy"]["matrix"]
+        elif name != "mlx-full-corpus-scout":
             assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'", name
     assert workflow[True]["schedule"] == [{"cron": "31 4 * * *"}]
     plan = jobs["ci-plan"]
@@ -661,3 +688,30 @@ def test_real_tree_harness_change_selects_only_the_job_that_runs_it(monkeypatch)
     legs = ci_legs.workflow_legs(workflow)
     path = f"{ci_legs.MLX}/run_porting.py"
     assert changed_legs(workflow, legs, head, head, [path]) == {"mlx-metal-porting"}
+
+
+def test_upstream_legs_are_the_upstream_op_job_groups():
+    assert all(is_upstream_leg(leg) for leg in UPSTREAM_LEGS)
+    assert not is_upstream_leg("portable-host")
+    assert not is_upstream_leg("upstream-ops-host-summary")
+    assert set(UPSTREAM_LEGS) <= set(EVERY_LEG)
+
+
+@pytest.mark.parametrize("event", sorted(QUEUE_EVENTS))
+def test_queue_groups_and_pushes_run_no_upstream_group(tmp_path, event, capsys):
+    # Without a diff every leg is selected; the plan still runs no upstream
+    # op group, and every other heavy leg stays.
+    output = tmp_path / "output"
+    assert main(["--event", event, "--base", "0" * 40, "--output", str(output)]) == 0
+    assert _outputs(output)["legs"] == QUEUE_LEGS
+    assert QUEUE_LEGS and len(QUEUE_LEGS) == len(EVERY_LEG) - len(UPSTREAM_LEGS)
+    notice = capsys.readouterr().err
+    assert f"::notice title=MLX upstream op groups::{len(UPSTREAM_LEGS)} " in notice
+
+
+@pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
+def test_nightly_and_dispatched_runs_run_every_upstream_group(tmp_path, event):
+    output = tmp_path / "output"
+    assert main(["--event", event, "--output", str(output)]) == 0
+    outputs = _outputs(output)
+    assert set(UPSTREAM_LEGS) <= set(outputs["legs"])

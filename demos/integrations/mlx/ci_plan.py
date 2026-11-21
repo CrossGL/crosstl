@@ -34,6 +34,13 @@ PLANNER_PATHS = (
     "demos/integrations/mlx/*.md",
     PLAN_JOB,
 )
+# The upstream MLX op tests run one job per group and target: 36 groups on 3
+# targets are 108 jobs of 39 to 141 minutes each. The shortest of them is longer
+# than a merge group may take (about 25 minutes, agreed with Repo), so a queue
+# group and a push to main run none of them. The nightly run, a dispatch and a
+# pull request with the ``ci:full`` label run every group on every target.
+UPSTREAM_JOB = "upstream-ops-host"
+QUEUE_EVENTS = frozenset({"merge_group", "push"})
 SMOKE_PATHS = (
     "crosstl/**",
     "tests/**",
@@ -205,6 +212,15 @@ def main(argv=None):
             # which asks for every leg.
             change = (args.base, args.head, paths)
     legs = plan_legs(args.workflow, change) if plan["heavy"] else []
+    if args.event in QUEUE_EVENTS:
+        deferred = [leg for leg in legs if is_upstream_leg(leg)]
+        if deferred:
+            print(
+                f"::notice title=MLX upstream op groups::{len(deferred)} selected "
+                "groups run in the nightly tier only: " + ", ".join(deferred),
+                file=sys.stderr,
+            )
+        legs = [leg for leg in legs if not is_upstream_leg(leg)]
     if args.output is not None:
         with args.output.open("a", encoding="utf-8") as output:
             output.writelines(
@@ -213,6 +229,11 @@ def main(argv=None):
             output.write(f"legs={json.dumps(legs)}\n")
     print(json.dumps({**plan, "legs": len(legs)}, sort_keys=True))
     return 0
+
+
+def is_upstream_leg(leg):
+    """Return whether ``leg`` is one group of the upstream op job (``ci_legs``)."""
+    return leg.startswith(f"{UPSTREAM_JOB}[")
 
 
 def plan_legs(workflow, change=None):
