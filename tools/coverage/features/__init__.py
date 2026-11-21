@@ -8,6 +8,7 @@ from ..upstream import fetch
 from . import (
     cuda,
     glam,
+    gles,
     glsl,
     glsl_subgroup,
     hip,
@@ -46,6 +47,10 @@ def _glsl(offline: bool) -> list[Feature]:
     return glsl.parse(fetch("glsl", offline=offline)) + glsl_subgroup.parse(
         *_subgroup(offline)
     )
+
+
+def _gles(offline: bool) -> list[Feature]:
+    return gles.parse(fetch("glsl", offline=offline), *_subgroup(offline))
 
 
 def _hip(offline: bool) -> list[Feature]:
@@ -161,6 +166,7 @@ def _wgsl(offline: bool) -> list[Feature]:
 
 PARSERS = {
     "cuda": _cuda,
+    "gles": _gles,
     "glsl": _glsl,
     "hip": _hip,
     "hlsl": _hlsl,

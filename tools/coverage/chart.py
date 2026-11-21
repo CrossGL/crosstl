@@ -13,6 +13,7 @@ from . import ir
 
 NAMES = {
     "glsl": "GLSL",
+    "gles": "GLSL ES",
     "hlsl": "HLSL",
     "metal": "Metal",
     "spirv": "SPIR-V",

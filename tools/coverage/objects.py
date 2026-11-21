@@ -208,6 +208,12 @@ UNIFORMS: dict[str, dict[str, Uniform]] = {
         "read_write image2d_t",
         "sampler_t",
     ),
+    # GLSL ES 3.20 declares an image without readonly or writeonly only in the r32f, r32i or r32ui format (GLSL ES
+    # 3.20, section 4.10), and has no multisampled images.
+    "gles": {
+        **{k: v for k, v in _GLSL_UNIFORMS.items() if k != "image2DMS"},
+        "image2D": Uniform("image2D", "r32f"),
+    },
     # GLSL ES 3.00 has no images or multisampled samplers; the probe passes the samplers CrossGL also declares.
     "webgl": _same("sampler2D", "sampler2DShadow", "sampler2DArray"),
     # rust-gpu's images as spirv_std's Image! macro spells them, the 2D ones features/spirv_std.py probes methods on,

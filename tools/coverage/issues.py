@@ -45,6 +45,7 @@ LISTED = 40
 
 TOOLS = {
     "cuda": "nvcc",
+    "gles": "glslang",
     "glsl": "glslang",
     "hip": "hipcc",
     "hlsl": "DXC",
