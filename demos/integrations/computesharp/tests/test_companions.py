@@ -33,11 +33,13 @@ class FakeDotnet:
     def __init__(self, tmp_path, *, test_exit=0, fail=None):
         self.tmp_path = tmp_path
         self.commands = []
+        self.directories = []
         self.test_exit = test_exit
         self.fail = fail
 
-    def __call__(self, command, log, *, deadline, check=True):
+    def __call__(self, command, log, *, deadline, check=True, cwd=None):
         self.commands.append(command)
+        self.directories.append(cwd)
         if self.fail and self.fail in command:
             raise COMPANIONS.StepError(f"{self.fail} failed")
         stdout = ""
@@ -106,6 +108,8 @@ def test_baseline_runs_each_suite_as_the_upstream_step(tmp_path, monkeypatch):
         "ComputeSharp.Tests.Internals",
     ]
     assert all("--no-build" in c and "-p:Platform=x64" in c for c in tests)
+    # The upstream global.json selects the SDK only in its own working directory.
+    assert set(fake.directories) == {tmp_path / "upstream"}
     ((args, kwargs),) = programs
     assert args[0].name == "ComputeSharp.Tests.GlobalStatements.dll"
     assert kwargs["trx_name"] == "baseline.trx"
@@ -146,6 +150,7 @@ def test_translated_runs_build_against_the_portable_runtime(tmp_path, monkeypatc
         f"-p:CustomAfterMicrosoftCommonTargets={COMPANIONS.PORTABLE_TARGETS}" in build
     )
     assert "-p:Platform=x64" not in build
+    assert fake.directories == [None, None, None]
     assert discovery[-2] == str(tmp_path / "adapted" / item.assembly)
     assert run[run.index("--suite") + 1] == item.name
     assert run[run.index("--profile") + 1] == "metal-apple-gpu"
@@ -278,3 +283,15 @@ def test_qualification_command_requires_every_companion_suite(tmp_path, monkeypa
 
 def test_summary_of_a_report_without_companions_has_no_suites():
     assert SUMMARY.summarize({"status": "passed", "profiles": {}})["suites"] == {}
+
+
+def test_run_command_starts_the_command_in_the_given_directory(tmp_path):
+    log = tmp_path / "logs" / "pwd.log"
+    completed = COMPANIONS.run_command(
+        [sys.executable, "-c", "import os; print(os.getcwd())"],
+        log,
+        deadline=60,
+        cwd=tmp_path,
+    )
+    assert Path(completed.stdout.strip()).resolve() == tmp_path.resolve()
+    assert log.read_text(encoding="utf-8").startswith("$ ")

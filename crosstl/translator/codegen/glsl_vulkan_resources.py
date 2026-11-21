@@ -66,6 +66,7 @@ from ..ast import (
     IdentifierNode,
 )
 from .array_utils import format_c_style_array_declaration
+from .glsl_spirv_varying_locations import spirv_location_macro_definition
 from .glsl_vulkan_descriptor_sets import descriptor_binding_macro_definition
 from .image_access_contracts import TEXTURE_SAMPLING_INTRINSIC_NAMES
 
@@ -395,13 +396,17 @@ class VulkanResourceForms:
         self.fragments.append(sampled)
         return sampled
 
-    def with_prelude(self, code, index, descriptor_binding_macro=False):
+    def with_prelude(
+        self, code, index, descriptor_binding_macro=False, location_macro=False
+    ):
         """``code`` with :meth:`prelude` inserted at ``index``, the end of its ``#extension`` lines.
 
-        The descriptor binding macro of :mod:`.glsl_vulkan_descriptor_sets` follows it when ``descriptor_binding_macro``
-        is true, since both are definitions of the Vulkan branch.
+        The varying location macro of :mod:`.glsl_spirv_varying_locations` precedes it when ``location_macro`` is
+        true, and the descriptor binding macro of :mod:`.glsl_vulkan_descriptor_sets` follows it when
+        ``descriptor_binding_macro`` is true, since all three are definitions of the SPIR-V branch.
         """
-        text = self.prelude(code)
+        text = spirv_location_macro_definition() if location_macro else ""
+        text += self.prelude(code)
         if descriptor_binding_macro:
             text += descriptor_binding_macro_definition()
         return code[:index] + text + code[index:] if text else code

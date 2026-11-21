@@ -3373,6 +3373,7 @@ class GLSLCodeGen(
         self.glsl_raised_version_line = None
         self.glsl_emission_requirements = []
         self.glsl_descriptor_binding_macro_used = False
+        self.glsl_spirv_location_macro_used = False
         self.current_glsl_version_line = version_line
         self.current_glsl_disabled_extensions = {
             match.group(1)
@@ -4566,6 +4567,7 @@ class GLSLCodeGen(
             code,
             cooperative_matrix_support_insertion_index,
             self.glsl_descriptor_binding_macro_used,
+            self.glsl_spirv_location_macro_used,
         )
         code = self.finish_generic_resource_helper_refusals(code)
         self.validate_glsl_function_call_graph()
