@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import (
     gather_dispatch,
     gather_packages,
@@ -756,10 +757,7 @@ def test_scatter_ci_requires_separate_three_os_host_execution():
         "directx",
         "opengl",
     }
-    assert (
-        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
-        and "continue-on-error" not in job
-    )
+    assert job["if"] == job_condition("scatter-host") and "continue-on-error" not in job
     assert job["needs"] == ["ci-plan", "integer64-host"]
     assert 90 <= job["timeout-minutes"] <= 360
     steps = {step.get("name"): step for step in job["steps"]}
