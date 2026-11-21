@@ -21,6 +21,7 @@ from .cuda_constant_folding import (
     device_variable_declaration,
     is_device_variable,
 )
+from .cuda_hip_array_copies import generate_cpp_array_copy
 from .for_initializers import join_for_initializer
 from .gpu_device_globals import (
     at_file_scope,
@@ -140,6 +141,18 @@ class CudaStatementMixin:
             self.emit(f"{expr};")
 
     def emit_assignment_statement(self, node):
+        operator = getattr(node, "operator", getattr(node, "op", "="))
+        if operator == "=":
+            target = getattr(node, "target", getattr(node, "left", None))
+            value = getattr(node, "value", getattr(node, "right", None))
+            array_copy = generate_cpp_array_copy(self, target, value)
+            if array_copy is not None:
+                self.emit_generated_code(array_copy)
+                metadata_assignment = self.format_query_metadata_assignment(node)
+                if metadata_assignment:
+                    self.emit(f"{metadata_assignment};")
+                return
+
         assignment = self.format_assignment_expression(node)
         if assignment and assignment.strip():
             self.emit(f"{assignment};")

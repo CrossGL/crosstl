@@ -287,6 +287,7 @@ class MetalConverterSetupMixin:
         self.structured_buffer_lvalue_roots = set()
         self.struct_member_types = {}
         self.struct_member_name_maps = {}
+        self.anonymous_member_paths = {}
         self.resolved_struct_member_types = {}
         self.resolved_struct_member_qualifiers = {}
         self.struct_declarations = {}
