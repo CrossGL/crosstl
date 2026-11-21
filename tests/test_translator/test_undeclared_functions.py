@@ -183,8 +183,9 @@ shader Dead {
 LIVE_HELPER = DEAD_HELPER.replace("values[0] = used(1.0);", "values[0] = unused(1.0);")
 
 
-def test_calls_in_functions_no_entry_reaches_are_not_checked():
-    assert undeclared_function_calls(_program(DEAD_HELPER)) == []
+def test_calls_in_functions_no_entry_reaches_are_checked():
+    calls = undeclared_function_calls(_program(DEAD_HELPER))
+    assert [name for name, _ in calls] == ["undeclaredHelper"]
 
 
 def test_calls_in_functions_an_entry_reaches_are_checked():

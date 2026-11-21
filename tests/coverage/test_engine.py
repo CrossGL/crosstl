@@ -184,6 +184,48 @@ def test_only_coded_diagnostics_count_as_refusals(monkeypatch, error, expected):
         runner.translate("shader S {}", ".cgl", "opengl", "cgl")
 
 
+@pytest.mark.parametrize(
+    ("source_backend", "expected"),
+    [("directx", {"enable_16bit_types": True}), ("opengl", None), ("cgl", None)],
+)
+def test_importers_read_probes_as_the_reference_compiler_does(
+    monkeypatch, source_backend, expected
+):
+    # DXC compiles every HLSL probe with -enable-16bit-types, so the HLSL importer is told to read ``half`` as
+    # binary16 too; other importers get no source options.
+    import crosstl
+
+    seen = {}
+
+    def record(*args, **kwargs):
+        seen.update(kwargs)
+        return ""
+
+    monkeypatch.setattr(crosstl, "translate", record)
+    runner.translate("probe", ".src", "cgl", source_backend)
+    assert seen["source_options"] == expected
+
+
+def test_hlsl_probes_import_half_as_binary16(tmp_path):
+    # Without the option the importer reads ``half`` as DXC does by default, as binary32; the coverage runner
+    # imports with DXC's -enable-16bit-types reading, under which ``half`` is binary16.
+    import crosstl
+
+    source = (
+        "RWStructuredBuffer<float> fin : register(u0);\n"
+        "[numthreads(1, 1, 1)]\n"
+        "void main(uint3 id : SV_DispatchThreadID) {\n"
+        "    half v = half(fin[id.x]);\n"
+        "    fin[id.x] = float(v * v);\n"
+        "}\n"
+    )
+    path = tmp_path / "probe.hlsl"
+    path.write_text(source)
+    assert "float v = float(fin[id.x]);" in crosstl.translate(str(path), backend="cgl")
+    imported = runner.translate(source, ".hlsl", "cgl", "directx")
+    assert "float16 v = float16(fin[id.x]);" in imported
+
+
 @pytest.mark.skipif(
     not validators.available("glsl"), reason="glslangValidator is not installed"
 )

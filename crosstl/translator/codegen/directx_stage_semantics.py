@@ -23,6 +23,7 @@ from .hlsl_glsl_tessellation_interface import refuse_glsl_style_tessellation_int
 from .hlsl_refusals import DirectXStageAttributesMissingError
 from .hlsl_render_targets import is_render_target_value_type
 from .hlsl_struct_varyings import assign_struct_varying_semantic
+from .hlsl_vk_locations import hlsl_location_replaces_semantic
 from .interface_conflicts import InterfaceLocationConflictError
 from .stage_utils import (
     assign_stage_entry_names,
@@ -355,10 +356,7 @@ class DirectXStageSemanticMixin:
         struct_name = getattr(struct_node, "name", "<anonymous>")
         for member in getattr(struct_node, "members", []) or []:
             semantic = self.hlsl_struct_member_declared_semantic(member)
-            if (
-                semantic is None
-                or self.hlsl_location_attribute_index(member) is not None
-            ):
+            if semantic is None or hlsl_location_replaces_semantic(self, member):
                 continue
             count = self.hlsl_struct_member_semantic_slot_count(
                 struct_name, member, semantic
@@ -430,7 +428,9 @@ class DirectXStageSemanticMixin:
 
             declared_semantic = self.hlsl_struct_member_declared_semantic(member)
             location_index = self.hlsl_location_attribute_index(member)
-            if declared_semantic is not None and location_index is None:
+            if declared_semantic is not None and not hlsl_location_replaces_semantic(
+                self, member
+            ):
                 continue
             if not self.hlsl_can_default_fragment_input_semantic(
                 self.hlsl_struct_member_type_name(member)
@@ -591,7 +591,9 @@ class DirectXStageSemanticMixin:
 
             declared_semantic = self.hlsl_struct_member_declared_semantic(member)
             location_index = self.hlsl_location_attribute_index(member)
-            if declared_semantic is not None and location_index is None:
+            if declared_semantic is not None and not hlsl_location_replaces_semantic(
+                self, member
+            ):
                 continue
 
             if location_index is not None:
@@ -654,7 +656,9 @@ class DirectXStageSemanticMixin:
 
             declared_semantic = self.hlsl_struct_member_declared_semantic(member)
             location_index = self.hlsl_location_attribute_index(member)
-            if declared_semantic is not None and location_index is None:
+            if declared_semantic is not None and not hlsl_location_replaces_semantic(
+                self, member
+            ):
                 continue
 
             if location_index is not None:

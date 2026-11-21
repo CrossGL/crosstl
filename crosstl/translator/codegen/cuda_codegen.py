@@ -39,6 +39,7 @@ from .cuda_function_prototypes import (
     prototype_of,
 )
 from .cuda_gather import CudaGatherMixin
+from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_math_calls import CudaMathCallMixin
 from .cuda_query_metadata import CudaQueryMetadataMixin
@@ -64,6 +65,7 @@ from .cuda_tables import (
     CUDA_WAVE_UINT_RESULT_OPS,
     CUDA_WAVE_UVEC4_RESULT_OPS,
 )
+from .cuda_texel_buffers import CudaTexelBufferMixin
 from .cuda_textures import CudaTextureMixin
 from .cuda_types import CudaTypeMixin
 from .cuda_unions import NativeUnions
@@ -144,6 +146,7 @@ class CudaCodeGen(
     CudaResourceAccessMixin,
     CudaVectorTypeMixin,
     CudaTextureMixin,
+    CudaTexelBufferMixin,
     CudaGatherMixin,
     LoweringRefusalMixin,
     PreciseEvaluationMixin,
@@ -898,6 +901,13 @@ class CudaCodeGen(
                 declaration, node.name, node
             )
             if initial_value is not None:
+                array_initializer = generate_cpp_array_initializer(
+                    self, initial_value, var_type
+                )
+                if array_initializer is not None:
+                    if array_initializer.strip():
+                        declaration += f" = {array_initializer}"
+                    return declaration
                 declaration += f" = {self.visit(initial_value)}"
             return declaration
 
@@ -1258,6 +1268,10 @@ class CudaCodeGen(
             "usamplerCubeArray": "cudaTextureObject_t",
             "usampler2DMS": "cudaTextureObject_t",
             "usampler2DMSArray": "cudaTextureObject_t",
+            # A texel buffer is a texture object bound to linear memory (cudaResourceTypeLinear).
+            "samplerBuffer": "cudaTextureObject_t",
+            "isamplerBuffer": "cudaTextureObject_t",
+            "usamplerBuffer": "cudaTextureObject_t",
             "image1D": "cudaSurfaceObject_t",
             "image1DArray": "cudaSurfaceObject_t",
             "image2D": "cudaSurfaceObject_t",
@@ -1550,6 +1564,10 @@ class CudaCodeGen(
         return super().vector_type_for_components(component_type, component_count)
 
     def generate_resource_call(self, func_name, raw_args, args):
+        handled = self.texel_buffer_call(func_name, raw_args, args)
+        if handled is not UNHANDLED:
+            return handled
+
         handled = self.cuda_texture_query_call(func_name, raw_args, args)
         if handled is not UNHANDLED:
             return handled

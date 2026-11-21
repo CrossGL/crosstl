@@ -6,7 +6,7 @@ import pytest
 
 from crosstl.translator import parse
 from crosstl.translator.ast import ShaderStage
-from tools.coverage import probes, validators
+from tools.coverage import probes, runner, validators
 from tools.coverage.model import VOID, Feature, Param, Signature, Type
 
 from .glsl_features import VEC3, feature
@@ -17,7 +17,7 @@ DFDX = feature("dFdx", VEC3, VEC3, stage="fragment")
 @pytest.mark.parametrize(
     ("language", "entry"),
     [
-        ("crossgl", "FragmentOutput main(FragmentInput input) {"),
+        ("crossgl", "FragmentOutput main() {"),
         ("glsl", "layout(location = 0) out vec4 color;"),
         ("hlsl", "float4 main() : SV_Target {"),
         ("metal", "fragment float4 probe(device float* fin [[buffer(0)]]"),
@@ -32,6 +32,24 @@ def test_fragment_features_get_a_fragment_shader(language, entry):
     assert "compute" not in probe.source and "numthreads" not in probe.source
     assert probe.suffix == (
         ".frag" if language == "glsl" else probes.DIALECTS[language].suffix
+    )
+
+
+def test_a_crossgl_fragment_probe_has_the_host_interface_of_the_native_probes():
+    """No native fragment probe has a stage input the feature does not need, so neither has the CrossGL one: Metal
+    reflects an entry's stage-in members, and a translation with one more measures another interface.
+    """
+    crossgl = probes.build(DFDX, "crossgl").source
+    assert "FragmentInput" not in crossgl and "uv" not in crossgl
+    assert "output.color = vec4(0.0);" in crossgl
+    metal = runner.translate(crossgl, ".cgl", "metal", "cgl")
+    (entry,) = (line for line in metal.splitlines() if line.startswith("fragment "))
+    assert "[[stage_in]]" not in entry
+    assert (
+        "(device float* fin [[buffer(0)]], device float3* outp [[buffer(1)]])" in entry
+    )
+    assert "(device float* fin [[buffer(0)]], device float3* outp [[buffer(1)]])" in (
+        probes.build(replace(DFDX, language="metal", name="dfdx"), "metal").source
     )
 
 

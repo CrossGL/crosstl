@@ -1,11 +1,7 @@
 """Template-prefixed declarations, explicit instantiations, typedef and using aliases, C++ attributes and namespaces in the HIP parser."""
 
-from ..HipAst import (
-    EnumNode,
-    FunctionNode,
-    StructNode,
-    TypeAliasNode,
-)
+from ...CUDA.function_templates import parse_template_parameters
+from ..HipAst import EnumNode, FunctionNode, StructNode, TypeAliasNode
 
 
 class HipAliasMixin:
@@ -17,7 +13,14 @@ class HipAliasMixin:
         if not self.match("LT"):
             return self.parse_explicit_template_instantiation()
 
-        self.parse_template_suffix()
+        parameters = parse_template_parameters(self.parse_template_suffix())
+        declaration = self.parse_template_prefixed_declaration_body()
+        if isinstance(declaration, FunctionNode) and parameters:
+            declaration.template_parameters = parameters
+        return declaration
+
+    def parse_template_prefixed_declaration_body(self):
+        """The declaration after a ``template <...>`` header."""
         self.skip_newlines()
         self.skip_requires_clause()
         self.skip_newlines()

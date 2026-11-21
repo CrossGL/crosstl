@@ -688,6 +688,18 @@ class HipExpressionMixin:
         elif self.is_type_constructor_expression_start():
             return self.parse_type_without_array_suffix()
 
+        elif self.match("SIGNED", "UNSIGNED") and self.is_sign_only_functional_cast():
+            # `unsigned(x)`: a lone sign keyword is a simple-type-specifier naming
+            # int, so it can start a functional cast (C++ [expr.type.conv]).
+            target_type = "unsigned int" if self.match("UNSIGNED") else "int"
+            self.advance()
+            self.consume("LPAREN")
+            self.skip_newlines()
+            expr = self.parse_expression()
+            self.skip_newlines()
+            self.consume("RPAREN")
+            return CastNode(target_type, expr)
+
         elif self.match("STRING"):
             return self.parse_string_literal_sequence()
 

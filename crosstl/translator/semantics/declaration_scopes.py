@@ -39,11 +39,20 @@ _CALLEE_FIELDS = frozenset({"function", "name"})
 
 
 def _children(node):
+    """The field values of ``node`` that can hold nodes, each distinct object once.
+
+    A node keeps some children under two field names (``FunctionCallNode.arguments`` and ``args``,
+    ``AssignmentNode.target`` and ``left``); yielding both would make every walk visit them twice, which doubles
+    the work with every level of nested calls.
+    """
+    seen = set()
+    call = isinstance(node, A.FunctionCallNode)
     for field, value in vars(node).items():
-        if field in _SKIPPED:
+        if field in _SKIPPED or (call and field in _CALLEE_FIELDS):
             continue
-        if isinstance(node, A.FunctionCallNode) and field in _CALLEE_FIELDS:
+        if id(value) in seen:
             continue
+        seen.add(id(value))
         yield value
 
 
