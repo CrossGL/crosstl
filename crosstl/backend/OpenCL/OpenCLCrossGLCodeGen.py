@@ -464,7 +464,17 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
                 self.emit(f"// Function: {stmt.name}")
                 self.visit(stmt)
                 self.emit("")
-            elif isinstance(stmt, (StructNode, VariableNode, TypeAliasNode, EnumNode)):
+            elif isinstance(stmt, VariableNode):
+                # A program-scope `const` variable with a constant initializer
+                # imports as a CrossGL constant, as a C++ namespace-scope one
+                # does, so device code on every target reads its value.
+                self.namespace_scope_variable = True
+                try:
+                    self.visit(stmt)
+                finally:
+                    self.namespace_scope_variable = False
+                self.emit("")
+            elif isinstance(stmt, (StructNode, TypeAliasNode, EnumNode)):
                 self.visit(stmt)
                 self.emit("")
             elif isinstance(stmt, OpenCLMacroBlockNode):
