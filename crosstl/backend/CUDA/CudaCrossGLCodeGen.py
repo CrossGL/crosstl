@@ -37,6 +37,7 @@ from .CudaAst import (
     VariableNode,
 )
 from .keyword_renames import source_identifier_names
+from .struct_methods import lower_struct_methods
 from .union_layout_import import UnionLayoutContracts
 
 # Warp intrinsics CrossGL keeps as CUDA calls; __syncwarp is a statement (visit_SyncNode).
@@ -337,6 +338,7 @@ class CudaToCrossGLConverter(
     def render_program(self, ast_node):
         self.output = []
         self.indent_level = 0
+        lower_struct_methods(ast_node, self.refuse_import)
         self.source_identifier_names = source_identifier_names(ast_node)
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
