@@ -4998,6 +4998,37 @@ def test_metal_pointer_typed_member_access_uses_arrow_operator():
     assert "payload.value" not in generated_code
 
 
+def test_metal_arrow_keeps_grouping_of_a_parenthesized_pointer_expression():
+    shader = """
+    shader MetalArrowGrouping {
+        struct S {
+            float a;
+            float b;
+        };
+
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer S* s;
+            buffer float* o;
+
+            void main() {
+                o[0] = (s + 1)->a;
+                o[1] = s->b;
+                o[2] = (o[2] > 0.0 ? s : s + 1)->b;
+            }
+        }
+    }
+    """
+
+    generated_code = MetalCodeGen().generate_stage(
+        parse_code(tokenize_code(shader)), "compute"
+    )
+
+    assert "o[0] = (s + 1)->a;" in generated_code
+    assert "o[1] = s->b;" in generated_code
+    assert "o[2] = (o[2] > 0.0 ? s : s + 1)->b;" in generated_code
+
+
 def test_metal_indexed_pointer_member_access_uses_element_dot_operator():
     shader = """
     shader MetalIndexedPointerMemberAccess {
