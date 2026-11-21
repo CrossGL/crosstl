@@ -7,7 +7,7 @@ import yaml
 from tools.coverage import legs
 
 REPO = Path(__file__).resolve().parents[2]
-NONE = {"metal": False, "compute": False, "rust": False}
+NONE = {"metal": False, "compute": False, "rust": False, "d3d12": False}
 
 # A small CrossTL: the dispatcher imports every generator, as crosstl/_crosstl.py does, so only the walk that stops
 # at the languages' own modules keeps the pipeline from reaching everything.
@@ -23,6 +23,7 @@ TREE = {
     "translator/codegen/__init__.py": "",
     "translator/codegen/registry.py": (
         "from . import GLSL_codegen, metal_codegen, cuda_codegen, hip_codegen, rust_codegen\n"
+        "from . import directx_codegen\n"
     ),
     "translator/codegen/shared_names.py": "",
     "translator/codegen/texture_names.py": "",
@@ -44,11 +45,16 @@ TREE = {
     "translator/codegen/rust_codegen.py": (
         "import crosstl.translator.codegen.char_names\n"
     ),
+    # Only HLSL imports these, yet HLSL is a Linux-leg language, so they are not the D3D12 leg's alone.
+    "translator/codegen/directx_codegen.py": "from .hlsl_buffer_layout import layout\n",
+    "translator/codegen/hlsl_buffer_layout.py": "from .wave_names import wave\n",
+    "translator/codegen/wave_names.py": "",
     "backend/__init__.py": "",
     "backend/common_ast.py": "",
     "backend/GLSL/__init__.py": "from ..common_ast import Node\n",
     "backend/Metal/__init__.py": "from ..common_ast import Node\n",
     "backend/CUDA/__init__.py": "",
+    "backend/DirectX/__init__.py": "from ..common_ast import Node\n",
 }
 
 
@@ -82,10 +88,19 @@ def _legs(*runs):
         # The pipeline lowers for every target, although only Metal's generator imports it.
         ("crosstl/translator/semantics/lower.py", []),
         ("tests/conformance/vkrun.c", ["rust"]),
-        ("tests/conformance/runtimes.py", ["metal", "rust"]),
-        ("tools/coverage/probes.py", ["metal", "compute", "rust"]),
-        (".github/workflows/coverage.yml", ["metal", "compute", "rust"]),
+        ("tests/conformance/runtimes.py", ["metal", "rust", "d3d12"]),
+        ("tools/coverage/probes.py", ["metal", "compute", "rust", "d3d12"]),
+        (".github/workflows/coverage.yml", ["metal", "compute", "rust", "d3d12"]),
         ("README.md", []),
+        # HLSL's own front end and generator modules, and the files the D3D12 runtime executes with.
+        ("crosstl/translator/codegen/directx_codegen.py", ["d3d12"]),
+        ("crosstl/translator/codegen/hlsl_buffer_layout.py", ["d3d12"]),
+        ("crosstl/backend/DirectX/__init__.py", ["d3d12"]),
+        ("tests/conformance/toolchains.py", ["d3d12"]),
+        ("crosstl/project/directx_runtime_worker.cpp", ["d3d12"]),
+        (".github/actions/install-windows-d3d12/action.yml", ["d3d12"]),
+        # A module only HLSL imports, but under no HLSL prefix: the Linux leg measures HLSL on it.
+        ("crosstl/translator/codegen/wave_names.py", []),
     ],
 )
 def test_a_change_runs_the_legs_whose_rows_it_can_move(tree, changed, runs):
@@ -121,11 +136,32 @@ def test_the_command_prints_github_outputs(tree, monkeypatch, capsys):
         "sys.stdin", io.StringIO("crosstl/translator/codegen/char_names.py\n")
     )
     assert legs.main([str(tree)]) == 0
-    assert capsys.readouterr().out == "metal=false\ncompute=true\nrust=true\n"
+    assert (
+        capsys.readouterr().out == "metal=false\ncompute=true\nrust=true\nd3d12=false\n"
+    )
+
+
+@pytest.mark.parametrize(
+    "changed,runs",
+    [
+        ("crosstl/translator/codegen/directx_codegen.py", []),
+        ("tools/coverage/probes.py", ["metal", "compute", "rust"]),
+        ("crosstl/backend/Metal/__init__.py", ["metal"]),
+    ],
+)
+def test_the_merge_queue_leaves_out_the_d3d12_leg(tree, changed, runs):
+    assert legs.plan([changed], tree, merge_group=True) == _legs(*runs)
+
+
+def test_the_command_plans_a_merge_group(tree, monkeypatch, capsys):
+    monkeypatch.setattr("sys.stdin", io.StringIO("tools/coverage/probes.py\n"))
+    assert legs.main(["--merge-group", str(tree)]) == 0
+    assert capsys.readouterr().out.splitlines()[-1] == "d3d12=false"
 
 
 def test_every_leg_has_generators_in_crosstl_and_shares_the_parser():
     exclusive = legs.exclusive_modules(REPO)
+    assert set(exclusive) == {name for name, leg in legs.LEGS.items() if leg.alone}
     assert all(modules is not None for modules in exclusive.values()), exclusive
     assert all(
         "crosstl/translator/parser.py" not in modules for modules in exclusive.values()
@@ -141,3 +177,10 @@ def test_the_workflow_plans_every_leg_with_the_planner():
     (step,) = (step for step in plan["steps"] if step.get("id") == "plan")
     assert f"legs=({' '.join(legs.LEGS)})" in step["run"]
     assert "python3 -m tools.coverage.legs" in step["run"]
+    assert '[ "$EVENT" = merge_group ]; then queue=(--merge-group)' in step["run"]
+
+
+def test_every_d3d12_prefix_names_modules_in_crosstl():
+    leg = legs.LEGS["d3d12"]
+    for prefix in leg.generators + leg.frontends:
+        assert list(REPO.glob(prefix + "*")), prefix

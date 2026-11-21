@@ -185,6 +185,8 @@ OPERATORS = (
     c("operator", "operator-precedence", "OpShiftLeftLogical", "OpBitwiseXor"),
     c("operator", "matrix-arithmetic", "OpMatrixTimesScalar", "OpFAdd"),
     c("operator", "implicit-conversion", "OpConvertSToF", "OpConvertUToF"),
+    # Two 8-bit integers multiplied as int, as CrossGL and C promote them (..templates.promotion).
+    c("operator", "integer-promotion", "OpSConvert", "OpIMul"),
     c(
         "operator",
         "matrix-compound-assignment",
@@ -340,4 +342,7 @@ TYPES = (
     c("type", "pointer-arithmetic", "OpPtrAccessChain"),
     # A program-scope variable in device memory with an initializer, shared by every invocation.
     c("type", "device-global", "StorageClass.CrossWorkgroup"),
+    # A union written through one member and read through another; SPIR-V has no union type, so its storage is
+    # one member's type and the others are reinterpreted from it.
+    c("type", "union", "OpTypeStruct", "OpBitcast"),
 )

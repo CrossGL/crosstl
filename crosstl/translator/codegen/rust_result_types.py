@@ -848,10 +848,23 @@ class RustResultTypeMixin:
             array_type = self.convert_type_node_to_string(array_type)
         else:
             array_type = str(array_type)
+        reference_parts = self.reference_type_parts(array_type)
+        if reference_parts is not None:
+            # A storage slice or workgroup array parameter indexes like the array it refers to.
+            array_type = reference_parts[1]
         pointer_parts = self.pointer_type_parts(self.map_type(array_type))
         if pointer_parts is not None:
             return pointer_parts[1]
         if "[" not in array_type or "]" not in array_type:
+            matrix_info = self.matrix_type_info(array_type)
+            if matrix_info is not None:
+                # m[i] is column i of a matrix.
+                return self.vector_type_for_components(
+                    matrix_info["component_type"], matrix_info["rows"]
+                )
+            vector_info = self.vector_type_info(array_type)
+            if vector_info is not None:
+                return vector_info["component_type"]
             patch_info = self.rust_tessellation_patch_info(array_type)
             if patch_info is not None and patch_info["valid"]:
                 return patch_info["element_type"]

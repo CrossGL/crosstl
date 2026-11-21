@@ -56,7 +56,10 @@ from .fixed_sampler_contracts import (
     fixed_sampler_records,
     with_glsl_fixed_samplers,
 )
-from .generic_function_utils import generic_function_parameters
+from .generic_function_utils import (
+    generic_function_definition_name,
+    generic_function_parameters,
+)
 from .generic_pointer_spaces import (
     assign_generic_pointer_spaces,
     refuse_written_generic_pointers,
@@ -65,12 +68,14 @@ from .generic_struct_utils import (
     generic_struct_specialized_fields,
     generic_struct_specialized_type_name,
 )
+from .glsl_builtin_functions import called_builtin_spellings, reset_builtin_spellings
 from .glsl_exact_lookups import glsl_undeclared_call_reasons
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_refusals import stageless_entry_refusal_reason
 from .glsl_string_literals import string_literal_reasons
 from .glsl_target_builtins import unavailable_builtin_reasons
 from .glsl_tessellation_modes import program_control_sources
+from .glsl_view_index import lower_view_index
 from .loop_induction import (
     checked_induction_value,
     init_less_counter_loops,
@@ -409,6 +414,17 @@ class OpenGLProgramStructureMixin:
                 subgroup_width=width,
                 reason="target-width-unsupported",
             )
+        if self.software_subgroup_width is not None:
+            # Software subgroups have exactly software_subgroup_width lanes and never read
+            # gl_SubgroupSize, so an equal WaveSize holds without a hardware guard.
+            if width != self.software_subgroup_width:
+                raise self.glsl_software_subgroup_error(
+                    "OpenGL software subgroup width conflicts with the source "
+                    "WaveSize contract",
+                    reason="hardware-contract-conflict",
+                    source_location=getattr(attributes[0], "source_location", None),
+                )
+            return None
         return width
 
     def glsl_stage_exact_subgroup_width(self, ast, target_stage=None):
@@ -1180,6 +1196,7 @@ class OpenGLProgramStructureMixin:
             )
         finally:
             self.written_foreign_type_names = None
+        code = lower_view_index(self, ast, target_stage, code)
         for reason in unavailable_builtin_reasons(
             code,
             self.GLSL_UNAVAILABLE_BUILTINS,
@@ -1267,21 +1284,59 @@ class OpenGLProgramStructureMixin:
         )
         pristine = deepcopy(ast) if retry else None
         try:
-            return self._generate_program_attempt(ast, target_stage, False)
+            return self._generate_program_with_vulkan_forms(ast, target_stage, False)
         except OpenGLSoftwareSubgroupError as error:
             if not retry or error.reason not in self.GLSL_EARLY_EXIT_RETRY_REASONS:
                 raise
             try:
-                return self._generate_program_attempt(pristine, target_stage, True)
+                return self._generate_program_with_vulkan_forms(
+                    pristine, target_stage, True
+                )
             except OpenGLSoftwareSubgroupError:
                 raise error from None
 
+    def _generate_program_with_vulkan_forms(self, ast, target_stage, early_exits):
+        """Render the program, again without each Vulkan resource form that a use outside it would break.
+
+        :mod:`.glsl_vulkan_resources` plans its forms from the uses it can see in the AST; a texture that the
+        rendering still names outside them, or a runtime array it names without an index, keeps the combined
+        OpenGL form in both compilations.
+
+        It also renders the program again with every built-in function name reserved that a program identifier
+        spelled and the rendering calls (:mod:`.glsl_builtin_functions`), so the identifier no longer hides it.
+        """
+        self.glsl_vulkan_resource_exclusions = frozenset()
+        reset_builtin_spellings(self)
+        while True:
+            code = self._generate_program_attempt(ast, target_stage, early_exits)
+            shadowed = called_builtin_spellings(self, code)
+            if shadowed:
+                self.glsl_shadowed_builtin_names = (
+                    self.glsl_shadowed_builtin_names | shadowed
+                )
+                continue
+            unwrapped = self.glsl_vulkan_resources.unwrapped(code)
+            if not unwrapped:
+                return code
+            self.glsl_vulkan_resource_exclusions = (
+                self.glsl_vulkan_resource_exclusions | unwrapped
+            )
+
     def collect_called_function_names(self, root):
-        return {
-            self.function_call_name(node)
-            for node in self.walk_ast(root)
-            if isinstance(node, FunctionCallNode) and self.function_call_name(node)
-        }
+        """Names of the functions ``root`` calls.
+
+        A call spelled ``helper<float>(x)`` also names its generic definition ``helper``, so a call that comes
+        before the definition gets the specialization's prototype like the implicit call ``helper(x)``.
+        """
+        names = set()
+        for node in self.walk_ast(root):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            name = self.function_call_name(node)
+            if name:
+                names.add(name)
+                names.add(generic_function_definition_name(self, name))
+        return names
 
     def should_skip_unreachable_lowered_member_helper(self, func):
         reachable_names = self.glsl_stage_reachable_function_names

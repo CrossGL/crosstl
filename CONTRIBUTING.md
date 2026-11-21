@@ -57,10 +57,10 @@ Coverage is measured, so there is no support table to edit. The Coverage
 workflow writes a probe for every built-in in each language's pinned upstream
 feature list and for a set of language constructs (types, operators, control
 flow, resources, compute and stages), translates it, and checks the result
-with the language's reference tool. A comment on your pull request lists how
-it changes coverage against `main`.
-Once the change is on `main`, it closes the `coverage` issues whose probes now
-pass. Each of those issues gives the command that reproduces it, for example:
+with the language's reference tool. A comment on your pull request lists the
+scores and features your change moves against `main`. Once it is on `main`, the
+Coverage workflow closes the `coverage` issues whose probes now pass. Each of
+those issues gives the command that reproduces it, for example:
 
 ```bash
 python -m tools.coverage run --backend hlsl --direction input --feature WaveActiveSum --keep probes

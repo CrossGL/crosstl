@@ -23,6 +23,7 @@ from .generic_emission_order import (
     mark_generic_function_emitted,
 )
 from .generic_function_utils import (
+    generic_function_definition_name,
     generic_function_emission_list,
     generic_function_parameters,
 )
@@ -44,6 +45,7 @@ from .metal_global_emission import (
 from .metal_hlsl_matrix import (
     metal_hlsl_matrix_prelude,
 )
+from .metal_post_tessellation import post_tessellation_plan
 from .metal_safe_math import (
     METAL_SAFE_MATH_PRAGMA,
 )
@@ -150,9 +152,6 @@ class MetalProgramSectionMixin:
         global_vars,
     ):
         """Reserve the cbuffer and explicit bindings, then declare every program-scope variable after ``code``."""
-        texture_register = 0
-        sampler_register = 0
-        buffer_register = 0
         used_resource_bindings = {}
         source_resource_bindings = {}
         self.pre_reserve_cbuffer_bindings(
@@ -161,15 +160,12 @@ class MetalProgramSectionMixin:
         self.reserve_explicit_global_resource_bindings(
             global_vars, used_resource_bindings, source_resource_bindings
         )
-        buffer_register = self.reserve_cbuffer_bindings(
+        self.reserve_cbuffer_bindings(
             used_resource_bindings,
             source_resource_bindings,
         )
         emission = MetalGlobalEmission(
             code,
-            texture_register,
-            sampler_register,
-            buffer_register,
             used_resource_bindings,
             source_resource_bindings,
         )
@@ -233,6 +229,15 @@ class MetalProgramSectionMixin:
         )
         return code, stage_entry_names
 
+    def metal_ordering_callee_name(self, call):
+        """The function a call depends on for emission order.
+
+        The parser keeps an explicit call's type arguments in the callee name (``twice<float>``), so the call names
+        the generic definition ``twice`` once they are removed; otherwise a caller defined before the generic was
+        emitted ahead of the specialization it calls.
+        """
+        return generic_function_definition_name(self, self.function_call_name(call))
+
     def render_metal_program_functions(
         self,
         ast,
@@ -243,7 +248,7 @@ class MetalProgramSectionMixin:
         functions = order_functions_by_dependencies(
             getattr(ast, "functions", []),
             self.iter_ast_nodes,
-            self.function_call_name,
+            self.metal_ordering_callee_name,
             FunctionCallNode,
             include_overloads=True,
         )
@@ -296,7 +301,7 @@ class MetalProgramSectionMixin:
                 for func in order_functions_by_dependencies(
                     getattr(stage, "local_functions", []) or [],
                     self.iter_ast_nodes,
-                    self.function_call_name,
+                    self.metal_ordering_callee_name,
                     FunctionCallNode,
                 ):
                     if generic_function_parameters(func):
@@ -313,7 +318,12 @@ class MetalProgramSectionMixin:
                     functions_code += f"// {stage_name.title()} Shader\n"
                     functions_code += self.generate_function(
                         stage.entry_point,
-                        shader_type=stage_name,
+                        # A planned domain entry is a post-tessellation vertex function.
+                        shader_type=(
+                            "vertex"
+                            if post_tessellation_plan(stage.entry_point)
+                            else stage_name
+                        ),
                         execution_config=getattr(stage, "execution_config", None),
                         entry_name=stage_entry_names.get(id(stage.entry_point)),
                         stage_local_variables=self.metal_stage_local_variables_with_lowered_program_groupshared(

@@ -1,0 +1,1 @@
+HLSL output refuses a call cycle through two or more functions, such as `even` and `odd` calling each other, with `DirectXRecursiveFunctionError` (reason `indirect-recursion-unsupported`) that names the cycle. It used to write the cycle, which DXC rejects with "recursive functions are not allowed" (#4747).

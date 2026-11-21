@@ -15,7 +15,6 @@ from ..ast import (
     BinaryOpNode,
     BlockNode,
     BreakNode,
-    CastNode,
     ConstructorNode,
     ContinueNode,
     CooperativeMatrixOpNode,
@@ -45,7 +44,6 @@ from ..ast import (
     WaveOpNode,
     WhileNode,
 )
-from ..matrix_shape import length_method_object
 from ..refusals import MetalRefusal
 from ..resource_identity import resource_identity_marker
 from ..semantics.unsized_arrays import UnsizedArrayUnsupportedError
@@ -58,53 +56,18 @@ from ..unhandled import UNHANDLED
 from .array_utils import (
     format_c_style_array_declaration,
     get_array_size_from_node,
-    split_array_type_suffix,
 )
 from .assignment_values import assignment_value_expression
-from .bitfield_builtins import BITFIELD_ARITIES, metal_bitfield_call
-from .boolean_mix import boolean_mix_selector, metal_boolean_mix
-from .builtin_result_types import (
-    C_FAMILY,
-    boolean_builtin_result_type,
-    component_access_type,
-)
-from .c_family_operands import postfix_operand
 from .comma_expressions import (
     c_family_comma_expression,
     comma_result_operand,
     is_comma_expression,
 )
 from .enum_utils import (
-    enum_value_expression,
-    generate_enum_constructor_call,
-    generate_enum_constructor_expression,
     infer_enum_constructor_type,
 )
-from .exponent_builtins import metal_exponent_call
-from .extended_arithmetic_builtins import (
-    metal_extended_arithmetic_call,
-)
-from .generic_function_utils import (
-    generate_numeric_trait_method_call,
-    generate_static_generic_numeric_call,
-    generic_function_call_name,
-    numeric_trait_method_result_type,
-    reject_unresolved_generic_function_call,
-)
 from .generic_struct_utils import (
-    generate_struct_constructor_expression,
     infer_struct_constructor_type,
-)
-from .glsl_buffer_array_values import glsl_buffer_array_value_type
-from .glsl_buffer_block_arrays import (
-    glsl_buffer_indexed_value_type,
-    glsl_buffer_whole_array_reason,
-)
-from .image_access_contracts import (
-    is_resource_size_query_operation,
-    is_texel_fetch_operation,
-    is_texture_sampling_operation,
-    record_explicit_image_metadata,
 )
 from .match_utils import (
     generate_match_expression_assignment,
@@ -113,22 +76,29 @@ from .match_utils import (
 from .metal_array_arguments import MetalArrayArguments
 from .metal_array_copies import generate_metal_array_initializer
 from .metal_atomic_addresses import metal_vector_component_address
-from .metal_bit_scans import metal_bit_scan_call
 from .metal_buffer_scalars import metal_buffer_scalar_type
+from .metal_call_expressions import MetalCallExpressionMixin
 from .metal_call_lowering import MetalCallLoweringMixin
-from .metal_comparison_signs import metal_sign_matched_comparison_operands
 from .metal_constant_initializers import (
     metal_constant_initializer,
     restore_static_initializer_helpers,
 )
 from .metal_entry_return import (
     metal_entry_return_semantic_key,
-    refuse_unreturnable_metal_entry_semantic,
 )
+from .metal_expression_forms import MetalExpressionFormMixin
+from .metal_feature_errors import UnsupportedMetalFeatureError
 from .metal_function_dependencies import MetalFunctionDependencyMixin
+from .metal_function_parts import MetalFunctionPartsMixin
+from .metal_function_state import (
+    METAL_FUNCTION_BODY_STATE_ATTRIBUTES,
+    METAL_FUNCTION_RESOURCE_PARAMETER_ATTRIBUTES,
+    METAL_FUNCTION_STATE_ATTRIBUTES,
+    restore_metal_function_state,
+    save_metal_function_state,
+)
 from .metal_glsl_buffer_blocks import MetalGLSLBufferBlockMixin
 from .metal_hlsl_functions import MetalHlslFunctionMixin
-from .metal_hlsl_matrix import hlsl_emulated_matrix_shape
 from .metal_hlsl_resources import MetalHlslResourceMixin
 from .metal_hlsl_values import MetalHlslValueMixin
 from .metal_keyword_identifiers import METAL_KEYWORD_IDENTIFIERS
@@ -137,6 +107,7 @@ from .metal_matrix_builtins import MetalMatrixBuiltins
 from .metal_mesh_outputs import MetalMeshOutputMixin
 from .metal_narrow_vectors import MetalNarrowVectorMixin
 from .metal_parameter_address_spaces import MetalParameterAddressSpaceMixin
+from .metal_post_tessellation import MetalPostTessellationMixin
 from .metal_program_entries import MetalProgramEntryMixin
 from .metal_program_scope_variables import MetalProgramScopeVariableMixin
 from .metal_program_sections import MetalProgramSectionMixin
@@ -150,6 +121,7 @@ from .metal_reference_sequenced_calls import generate_conditional_call_statement
 from .metal_refusals import metal_refusals
 from .metal_render_walks import MetalRenderWalks
 from .metal_resource_arguments import MetalResourceArgumentMixin
+from .metal_result_types import MetalResultTypeMixin
 from .metal_signed_builtins import (
     metal_signed_member_assignment,
 )
@@ -168,28 +140,17 @@ from .metal_threadgroup_forwarding import (
     METAL_GROUPSHARED_ENTRY_STAGES,
 )
 from .metal_type_mapping import MetalTypeMappingMixin
-from .metal_varyings import metal_varying_attribute
 from .metal_wave_operations import MetalWaveOperationMixin
-from .pack_builtins import PACK_FUNCTIONS, metal_pack_call
-from .relational_builtins import metal_logical_not_operand
-from .sizeof_calls import sizeof_call_bytes
+from .metal_wide_atomics import (
+    discarded_wide_atomic_call,
+    is_metal_wide_atomic,
+    metal_wide_atomic_call,
+)
 from .stage_io_semantic_locations import SEMANTIC_LOCATIONS
 from .stage_utils import (
     collect_stage_entry_records,
     function_stage_name,
     normalize_stage_name,
-    requests_early_fragment_tests,
-)
-from .storage_image_texels import is_whole_texel_load
-from .texture_lod_clamp import (
-    is_texture_lod_clamp_operation,
-    metal_texture_lod_clamp_call,
-)
-from .texture_residency import (
-    TEXTURE_RESIDENCY_OPERATION,
-    TEXTURE_RESIDENT_OPERATION,
-    metal_texture_residency_call,
-    metal_texture_resident_call,
 )
 
 FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
@@ -201,29 +162,6 @@ FRAGMENT_INVOCATION_DENSITY_CAPABILITIES = (
 METAL_COLOR_ATTACHMENT_TYPE = re.compile(
     r"(?:float|half|int|uint|short|ushort|char|uchar)[234]?"
 )
-
-
-class UnsupportedMetalFeatureError(ValueError):
-    """Raised when Metal has no equivalent target representation."""
-
-    project_diagnostic_code = "project.translate.unsupported-feature"
-
-    def __init__(
-        self,
-        feature,
-        message,
-        *,
-        missing_capabilities=(),
-        operation=None,
-        reason=None,
-        source_location=None,
-    ):
-        super().__init__(message)
-        self.feature = feature
-        self.missing_capabilities = tuple(missing_capabilities)
-        self.operation = operation
-        self.reason = reason
-        self.source_location = source_location
 
 
 class MetalStructConversionError(ValueError):
@@ -299,6 +237,11 @@ class MetalCodeGen(
     MetalProgramScopeVariableMixin,
     MetalProgramStateMixin,
     MetalProgramSectionMixin,
+    MetalFunctionPartsMixin,
+    MetalPostTessellationMixin,
+    MetalExpressionFormMixin,
+    MetalCallExpressionMixin,
+    MetalResultTypeMixin,
 ):
     """Emit Metal Shading Language from the shared CrossGL translator AST."""
 
@@ -1770,91 +1713,11 @@ class MetalCodeGen(
         self.metal_entry_buffer_array_names = set()
         stage_output_parameters = []
         stage_output_struct_name = None
-        previous_function_name = self.current_function_name
-        previous_function_return_type = self.current_function_return_type
-        previous_function_return_wrapper = self.current_function_return_wrapper
-        previous_metal_value_array_locals = self.current_metal_value_array_locals
-        previous_local_identifier_remaps = self.current_local_identifier_remaps
-        previous_stage_output_return_active = getattr(
-            self, "current_metal_stage_output_return_active", False
+        previous_function_state = save_metal_function_state(
+            self, METAL_FUNCTION_STATE_ATTRIBUTES
         )
-        previous_local_variable_types = self.local_variable_types
-        previous_address_space_variables = self.current_address_space_variables
-        previous_native_width_local_array_declaration_ids = (
-            self.current_metal_native_width_local_array_declaration_ids
-        )
-        previous_generic_function_substitutions = (
-            self.current_generic_function_substitutions
-        )
-        previous_cbuffer_parameter_names = self.cbuffer_parameter_names
-        previous_cbuffer_member_references = self.cbuffer_member_references
-        previous_ambiguous_cbuffer_members = self.ambiguous_cbuffer_members
-        previous_glsl_buffer_block_parameters = (
-            self.current_glsl_buffer_block_parameters
-        )
-        previous_unsupported_glsl_buffer_block_parameters = (
-            self.current_unsupported_glsl_buffer_block_parameters
-        )
-        previous_unsupported_glsl_buffer_block_local_variables = (
-            self.current_unsupported_glsl_buffer_block_local_variables
-        )
-        previous_glsl_buffer_block_parameter_failures = (
-            self.current_glsl_buffer_block_parameter_failures
-        )
-        previous_glsl_buffer_block_parameter_struct_failures = (
-            self.current_glsl_buffer_block_parameter_struct_failures
-        )
-        previous_unsupported_metal_ray_function_table_array_variables = dict(
-            self.unsupported_metal_ray_function_table_array_variables
-        )
-        previous_unsupported_metal_acceleration_structure_array_variables = dict(
-            self.unsupported_metal_acceleration_structure_array_variables
-        )
-        previous_structured_buffer_length_parameters = (
-            self.current_structured_buffer_length_parameters
-        )
-        previous_structured_buffer_counter_parameters = (
-            self.current_structured_buffer_counter_parameters
-        )
-        previous_metal_mesh_output_config = self.current_metal_mesh_output_config
-        previous_metal_mesh_output_parameter = self.current_metal_mesh_output_parameter
-        previous_metal_mesh_grid_properties_parameter = (
-            self.current_metal_mesh_grid_properties_parameter
-        )
-        previous_metal_mesh_payload_parameter = (
-            self.current_metal_mesh_payload_parameter
-        )
-        previous_metal_mesh_payload_type = self.current_metal_mesh_payload_type
-        previous_metal_mesh_output_accumulators = (
-            self.current_metal_mesh_output_accumulators
-        )
-        previous_metal_non_thread_payload_parameters = (
-            self.current_metal_non_thread_payload_parameters
-        )
-        previous_readonly_metal_mesh_payload_parameters = (
-            self.current_readonly_metal_mesh_payload_parameters
-        )
-        previous_readonly_metal_mesh_payload_reasons = (
-            self.current_readonly_metal_mesh_payload_reasons
-        )
-        previous_readonly_raw_buffer_parameters = (
-            self.current_readonly_raw_buffer_parameters
-        )
-        previous_readonly_metal_parameters = self.current_readonly_metal_parameters
-        previous_readonly_metal_parameter_reasons = (
-            self.current_readonly_metal_parameter_reasons
-        )
-        previous_metal_wave_lane_index_parameter = (
-            self.current_metal_wave_lane_index_parameter
-        )
-        previous_metal_wave_lane_count_parameter = (
-            self.current_metal_wave_lane_count_parameter
-        )
-        previous_metal_graphics_builtin_parameter_names = (
-            self.current_metal_graphics_builtin_parameter_names
-        )
-        previous_metal_compute_builtin_parameter_names = (
-            self.current_metal_compute_builtin_parameter_names
+        previous_function_body_state = save_metal_function_state(
+            self, METAL_FUNCTION_BODY_STATE_ATTRIBUTES
         )
         self.current_function_name = getattr(func, "name", None)
         self.current_function_return_wrapper = None
@@ -1863,456 +1726,38 @@ class MetalCodeGen(
         self.current_generic_function_substitutions = (
             getattr(func, "_generic_substitutions", {}) or {}
         )
-        (
-            self.current_glsl_buffer_block_parameters,
-            self.current_glsl_buffer_block_parameter_failures,
-            self.current_glsl_buffer_block_parameter_struct_failures,
-        ) = self.collect_lowered_glsl_buffer_block_parameters(param_list)
-        for param in param_list or []:
-            block = self.current_glsl_buffer_block_parameters.get(
-                getattr(param, "name", None)
-            )
-            if block is not None:
-                block["memory"] = self.metal_parameter_memory_qualifier_prefix(
-                    param, getattr(param, "param_type", None), "device"
-                )
-        if shader_type in {"vertex", "fragment", "compute", "ray_generation"}:
-            self.validate_stage_parameter_resource_bindings(
-                param_list, self.current_function_name
-            )
-        if shader_type in {"vertex", "fragment"}:
-            self.validate_graphics_builtin_parameter_types(param_list, shader_type)
-            self.validate_metal_fragment_invocation_density(func, shader_type)
-        if shader_type == "compute":
-            self.validate_compute_builtin_parameter_types(param_list)
-        if shader_type in self.METAL_DERIVATIVE_FREE_FUNCTION_KINDS:
-            self.validate_metal_kernel_derivatives(func, shader_type)
-        self.current_unsupported_glsl_buffer_block_parameters = (
-            self.collect_unsupported_glsl_buffer_block_parameter_names(param_list)
-        )
-        self.current_unsupported_glsl_buffer_block_local_variables = set()
-        unsupported_metal_ray_function_table_parameter_diagnostics = []
-        self.current_structured_buffer_length_parameters = {}
-        self.current_structured_buffer_counter_parameters = {}
-        self.current_metal_mesh_payload_parameter = None
-        self.current_metal_mesh_payload_type = None
-        self.current_metal_mesh_output_accumulators = {}
-        self.current_metal_non_thread_payload_parameters = set()
-        self.current_readonly_metal_mesh_payload_parameters = set()
-        self.current_readonly_metal_mesh_payload_reasons = {}
-        self.current_readonly_raw_buffer_parameters = set()
-        self.current_readonly_metal_parameters = set()
-        self.current_readonly_metal_parameter_reasons = {}
-        self.current_metal_wave_lane_index_parameter = None
-        self.current_metal_wave_lane_count_parameter = None
-        self.current_metal_graphics_builtin_parameter_names = {}
-        self.current_metal_compute_builtin_parameter_names = {}
-        self.local_variable_types = {}
-        self.current_metal_value_array_locals = self.metal_value_array_returned_locals(
-            func
-        )
-        self.current_address_space_variables = {}
-        self.current_metal_native_width_local_array_declaration_ids = (
-            self.metal_native_width_local_array_declaration_ids(func)
-        )
-        if shader_type in {"vertex", "fragment"}:
-            for interface in self.spirv_stage_input_layouts(shader_type):
-                name = getattr(interface, "variable_name", None)
-                raw_type = getattr(interface, "data_type", None)
-                if not name or not raw_type or "[" in str(name):
-                    continue
-                mapped_type = self.map_type(raw_type)
-                if shader_type == "vertex":
-                    vertex_stage_input_parameters.append(
-                        {
-                            "name": name,
-                            "raw_type": raw_type,
-                            "mapped_type": mapped_type,
-                            "attribute": self.spirv_stage_input_attribute(interface),
-                            "semantic": self.spirv_stage_input_semantic(interface),
-                        }
-                    )
-                    self.local_variable_types[name] = self.type_name_string(raw_type)
-
-            for interface in self.spirv_stage_output_layouts(shader_type):
-                name = getattr(interface, "variable_name", None)
-                raw_type = getattr(interface, "data_type", None)
-                if not name or not raw_type or "[" in str(name):
-                    continue
-                stage_output_parameters.append(
-                    {
-                        "name": name,
-                        "raw_type": raw_type,
-                        "mapped_type": self.map_type(raw_type),
-                        "semantic": self.spirv_stage_output_semantic(interface),
-                        "attribute": self.spirv_stage_output_attribute(interface),
-                    }
-                )
-                self.local_variable_types[name] = self.type_name_string(raw_type)
-        skipped_parameter_indices = self.skipped_function_parameter_indices(
-            self.current_function_name
-        )
-        for index, p in enumerate(param_list):
-            if index in skipped_parameter_indices:
-                continue
-            if hasattr(p, "param_type"):
-                raw_param_type = (
-                    self.type_name_string(p.param_type)
-                    if getattr(p.param_type, "generic_args", None)
-                    else p.param_type
-                )
-            elif hasattr(p, "vtype"):
-                raw_param_type = p.vtype
-            else:
-                raw_param_type = "float"
-            self.local_variable_types[p.name] = self.type_name_string(raw_param_type)
-            address_space = self.parameter_variable_address_space(
-                raw_param_type, p, shader_type
-            )
-            if address_space is not None:
-                self.current_address_space_variables[p.name] = address_space
-            value_array_dimensions = None
-            if shader_type is None:
-                value_array_dimensions = self.metal_value_array_parameter_dimensions(
-                    raw_param_type,
-                    p,
-                    self.map_resource_type_with_format(raw_param_type, p),
-                )
-                if (
-                    value_array_dimensions is not None
-                    and not self.metal_value_array_parameter_is_mutated(func, p.name)
-                ):
-                    value_array_dimensions = None
-            if (
-                value_array_dimensions is None
-                and self.is_readonly_raw_buffer_parameter(
-                    raw_param_type, p, shader_type
-                )
-            ):
-                self.current_readonly_raw_buffer_parameters.add(p.name)
-            readonly_parameter_reason = (
-                None
-                if value_array_dimensions is not None
-                else self.readonly_metal_parameter_reason(
-                    raw_param_type, p, shader_type
-                )
-            )
-            if readonly_parameter_reason is not None:
-                self.current_readonly_metal_parameters.add(p.name)
-                self.current_readonly_metal_parameter_reasons[p.name] = (
-                    readonly_parameter_reason
-                )
-
-            if self.is_metal_mesh_output_parameter(shader_type, p):
-                continue
-
-            table_array_kind = self.metal_ray_function_table_array_parameter_kind(
-                raw_param_type, p
-            )
-            if table_array_kind is not None:
-                self.unsupported_metal_ray_function_table_array_variables[p.name] = (
-                    table_array_kind
-                )
-                unsupported_metal_ray_function_table_parameter_diagnostics.append(
-                    self.unsupported_metal_ray_function_table_array_diagnostic(
-                        table_array_kind, p.name
-                    ).rstrip()
-                )
-                continue
-
-            acceleration_structure_array = (
-                self.metal_acceleration_structure_array_parameter_kind(
-                    raw_param_type, p
-                )
-            )
-            if acceleration_structure_array is not None:
-                self.unsupported_metal_acceleration_structure_array_variables[
-                    p.name
-                ] = acceleration_structure_array
-                unsupported_metal_ray_function_table_parameter_diagnostics.append(
-                    self.unsupported_metal_acceleration_structure_array_diagnostic(
-                        p.name
-                    ).rstrip()
-                )
-                continue
-
-            if self.is_sampler_type(raw_param_type):
-                sampler_parameters.add(p.name)
-                resource_array = self.resource_array_parameter(raw_param_type, p)
-                if resource_array is not None:
-                    _, array_size = resource_array
-                    sampler_parameter_array_sizes[p.name] = array_size
-            elif self.is_texture_or_image_resource_type(raw_param_type):
-                texture_parameters[p.name] = self.map_resource_type_with_format(
-                    self.resource_base_type(raw_param_type), p
-                )
-                texture_parameter_raw_types[p.name] = self.resource_base_type(
-                    raw_param_type
-                )
-                resource_array = self.resource_array_parameter(raw_param_type, p)
-                if resource_array is not None:
-                    _, array_size = resource_array
-                    texture_parameter_array_sizes[p.name] = array_size
-                record_explicit_image_metadata(
-                    p.name,
-                    p,
-                    self.attribute_value_to_string,
-                    image_formats=image_format_parameters,
-                )
-            param_type = self.map_resource_type_with_format(raw_param_type, p)
-
-            semantic = self.semantic_from_node(p)
-            if self.is_graphics_stage_output_parameter(p, shader_type):
-                stage_output_parameters.append(
-                    {
-                        "name": p.name,
-                        "raw_type": raw_param_type,
-                        "mapped_type": param_type,
-                        "semantic": semantic,
-                        "attribute": self.metal_stage_output_parameter_attribute(
-                            p, shader_type
-                        ),
-                    }
-                )
-                continue
-            if self.is_metal_mesh_payload_parameter(shader_type, p):
-                self.current_metal_mesh_payload_parameter = p.name
-                self.current_metal_mesh_payload_type = self.map_type(raw_param_type)
-                self.current_address_space_variables[p.name] = "object_data"
-                readonly_reason = self.readonly_metal_mesh_payload_parameter_reason(
-                    shader_type, p
-                )
-                if readonly_reason is not None:
-                    self.current_readonly_metal_mesh_payload_parameters.add(p.name)
-                    self.current_readonly_metal_mesh_payload_reasons[p.name] = (
-                        readonly_reason
-                    )
-            ray_payload_declaration = self.metal_ray_payload_parameter_declaration(
-                param_type, p.name, p, shader_type
-            )
-            if ray_payload_declaration is not None:
-                self.current_metal_non_thread_payload_parameters.add(p.name)
-                ray_payload_address_space = self.metal_ray_payload_address_space(
-                    shader_type
-                )
-                if ray_payload_address_space is not None:
-                    self.current_address_space_variables[p.name] = (
-                        ray_payload_address_space
-                    )
-
-            builtin_lowering = self.metal_graphics_builtin_parameter_lowering(
-                raw_param_type,
-                param_type,
-                p,
+        unsupported_metal_ray_function_table_parameter_diagnostics = (
+            self.prepare_metal_function_parameter_scope(
+                func,
                 shader_type,
-                reserved_parameter_names
-                | set(params)
-                | self.metal_function_local_variable_names(func),
+                param_list,
+                stage_output_parameters,
+                vertex_stage_input_parameters,
             )
-            if builtin_lowering is not None:
-                params.append(
-                    f"{builtin_lowering['type']} {builtin_lowering['name']} "
-                    f"[[{builtin_lowering['attribute']}]]"
-                )
-                reserved_parameter_names.add(builtin_lowering["name"])
-                stage_builtin_parameter_alias_declarations.append(
-                    f"{param_type} {p.name} = {param_type}({builtin_lowering['name']});"
-                )
-                continue
+        )
+        self.metal_function_parameter_declarations(
+            func,
+            shader_type,
+            fragment_stage_input_parameters,
+            image_format_parameters,
+            param_list,
+            params,
+            reserved_parameter_names,
+            sampler_parameter_array_sizes,
+            sampler_parameters,
+            stage_builtin_parameter_alias_declarations,
+            stage_output_parameters,
+            texture_parameter_array_sizes,
+            texture_parameter_raw_types,
+            texture_parameters,
+            unsupported_metal_ray_function_table_parameter_diagnostics,
+            value_array_parameter_copy_statements,
+            vertex_stage_input_parameters,
+        )
 
-            if self.is_plain_metal_vertex_stage_input_parameter(
-                raw_param_type, param_type, p, shader_type
-            ):
-                vertex_stage_input_parameters.append(
-                    {
-                        "name": p.name,
-                        "raw_type": raw_param_type,
-                        "mapped_type": param_type,
-                        "attribute": self.metal_vertex_input_location_attribute(p),
-                        "semantic": semantic,
-                    }
-                )
-                continue
-            if self.is_plain_metal_fragment_stage_input_parameter(
-                raw_param_type, param_type, p, shader_type
-            ):
-                fragment_stage_input_parameters.append(
-                    {
-                        "name": p.name,
-                        "raw_type": raw_param_type,
-                        "mapped_type": param_type,
-                        "attribute": metal_varying_attribute(self, p, semantic),
-                        "semantic": semantic,
-                        "preserve_user_attribute": True,
-                    }
-                )
-                continue
-
-            param_attr = (
-                self.metal_vertex_input_location_attribute(p)
-                if shader_type == "vertex"
-                else None
-            )
-            if param_attr is None and self.metal_vertex_input_takes_next_attribute(
-                raw_param_type, shader_type, p, semantic
-            ):
-                # The [[stage_in]] structure gives a user-semantic input the next free [[attribute(n)]].
-                param_attr = ""
-            if param_attr is None:
-                param_attr = self.parameter_attribute(
-                    raw_param_type, semantic, shader_type, p
-                )
-            param_attr += self.metal_conditional_resource_attribute(p)
-            if value_array_dimensions is not None:
-                input_name = self.metal_value_array_input_name(
-                    p.name,
-                    reserved_parameter_names
-                    | self.metal_function_local_variable_names(func),
-                )
-                reserved_parameter_names.add(input_name)
-                declaration = format_c_style_array_declaration(param_type, input_name)
-                value_array_parameter_copy_statements.extend(
-                    self.metal_value_array_copy_statements(
-                        param_type, p.name, input_name, value_array_dimensions
-                    )
-                )
-            else:
-                declaration = self.format_parameter_declaration(
-                    raw_param_type, param_type, p.name, p, shader_type
-                )
-            if any(
-                str(getattr(attribute, "name", "")).lower() == "maybe_unused"
-                for attribute in getattr(p, "attributes", []) or []
-            ):
-                declaration = self.format_unused_metal_declaration(declaration)
-            if self.should_wrap_metal_vertex_stage_input_parameter(
-                raw_param_type, shader_type, p
-            ):
-                vertex_stage_input_parameters.append(
-                    {
-                        "name": p.name,
-                        "declaration": declaration,
-                        "attribute": param_attr,
-                        "semantic": semantic,
-                    }
-                )
-                continue
-            params.append(f"{declaration}{param_attr}")
-            if self.is_structured_buffer_type(
-                raw_param_type
-            ) and self.structured_buffer_parameter_requires_length(
-                self.current_function_name, p.name
-            ):
-                length_name = self.structured_buffer_length_parameter_name(p.name)
-                self.current_structured_buffer_length_parameters[p.name] = length_name
-                array_size = self.structured_buffer_parameter_array_size(
-                    raw_param_type, p
-                )
-                params.append(
-                    self.format_structured_buffer_length_parameter(p.name, array_size)
-                )
-            if self.structured_buffer_requires_counter(raw_param_type):
-                counter_name = self.structured_buffer_counter_parameter_name(p.name)
-                self.current_structured_buffer_counter_parameters[p.name] = counter_name
-                array_size = self.structured_buffer_parameter_array_size(
-                    raw_param_type, p
-                )
-                params.append(
-                    self.format_structured_buffer_counter_parameter(p.name, array_size)
-                )
-
-        if shader_type == "vertex":
-            explicit_stage_builtins = self.explicit_graphics_stage_builtin_parameters(
-                param_list, shader_type
-            )
-            if explicit_stage_builtins.get("vertex_id"):
-                self.current_metal_graphics_builtin_parameter_names[
-                    "gl_VertexIndex"
-                ] = explicit_stage_builtins["vertex_id"]
-            if explicit_stage_builtins.get("instance_id"):
-                self.current_metal_graphics_builtin_parameter_names[
-                    "gl_InstanceIndex"
-                ] = explicit_stage_builtins["instance_id"]
-            reserved_builtin_names = set(reserved_parameter_names)
-            reserved_builtin_names.update(
-                self.metal_function_local_variable_names(func)
-            )
-            for (
-                builtin_name,
-                name,
-                param_type,
-                attribute,
-            ) in self.required_metal_vertex_builtin_parameters(
-                func, reserved_builtin_names, explicit_stage_builtins
-            ):
-                params.append(f"{param_type} {name} [[{attribute}]]")
-                reserved_parameter_names.add(name)
-                self.current_metal_graphics_builtin_parameter_names[builtin_name] = name
-
-        if shader_type == "fragment":
-            explicit_stage_builtins = self.explicit_graphics_stage_builtin_parameters(
-                param_list, shader_type
-            )
-            if explicit_stage_builtins.get("position"):
-                self.current_metal_graphics_builtin_parameter_names["gl_FragCoord"] = (
-                    explicit_stage_builtins["position"]
-                )
-            reserved_builtin_names = set(reserved_parameter_names)
-            reserved_builtin_names.update(
-                self.metal_function_local_variable_names(func)
-            )
-            for (
-                builtin_name,
-                name,
-                param_type,
-                attribute,
-            ) in self.required_metal_fragment_builtin_parameters(
-                func, reserved_builtin_names, explicit_stage_builtins
-            ):
-                params.append(f"{param_type} {name} [[{attribute}]]")
-                reserved_parameter_names.add(name)
-                self.current_metal_graphics_builtin_parameter_names[builtin_name] = name
-
-        if shader_type in {"compute", "ray_generation"}:
-            existing_param_names = {getattr(p, "name", None) for p in param_list}
-            explicit_stage_builtins = self.explicit_compute_stage_builtin_parameters(
-                param_list
-            )
-            self.current_metal_compute_builtin_parameter_names.update(
-                {
-                    builtin_name: explicit_stage_builtins[attribute]
-                    for builtin_name, _param_type, attribute in (
-                        self.compute_builtin_parameter_specs()
-                    )
-                    if attribute in explicit_stage_builtins
-                    and explicit_stage_builtins[attribute]
-                }
-            )
-            self.current_metal_wave_lane_index_parameter = explicit_stage_builtins.get(
-                "thread_index_in_simdgroup"
-            )
-            self.current_metal_wave_lane_count_parameter = explicit_stage_builtins.get(
-                "threads_per_simdgroup"
-            )
-            reserved_builtin_names = set(existing_param_names)
-            reserved_builtin_names.update(
-                self.metal_function_local_variable_names(func)
-            )
-            for name, param_type, attribute in self.required_compute_builtin_parameters(
-                func, reserved_builtin_names, explicit_stage_builtins
-            ):
-                if name not in existing_param_names:
-                    params.append(f"{param_type} {name} [[{attribute}]]")
-                    reserved_parameter_names.add(name)
-                builtin_name = self.compute_builtin_name_for_metal_attribute(attribute)
-                if builtin_name is not None:
-                    self.current_metal_compute_builtin_parameter_names[builtin_name] = (
-                        name
-                    )
-                if attribute == "thread_index_in_simdgroup":
-                    self.current_metal_wave_lane_index_parameter = name
-                elif attribute == "threads_per_simdgroup":
-                    self.current_metal_wave_lane_count_parameter = name
+        self.metal_stage_entry_parameters(
+            func, shader_type, param_list, params, reserved_parameter_names
+        )
 
         reserved_parameter_names.update(self.global_resource_parameter_names())
         self.cbuffer_parameter_names = self.collect_cbuffer_parameter_names(
@@ -2332,98 +1777,15 @@ class MetalCodeGen(
             )
         )
 
-        params_str = ", ".join(params)
-        if shader_type is None:
-            params_str = self.append_required_stage_output_parameter(
-                params_str, self.current_function_name
-            )
-            params_str = self.append_required_stage_parameter_parameters(
-                params_str, self.current_function_name
-            )
-            params_str = self.append_required_cbuffer_parameters(
-                params_str, self.current_function_name
-            )
-            params_str = self.append_required_thread_private_global_parameters(
-                params_str, self.current_function_name
-            )
-            params_str = self.append_required_global_resource_parameters(
-                params_str, self.current_function_name
-            )
-            params_str = self.append_metal_mesh_dispatch_context_parameters(
-                params_str,
+        params_str, effective_return_type, raw_return_type, return_type = (
+            self.metal_function_return_plan(
                 func,
+                shader_type,
+                params,
                 reserved_parameter_names,
+                stage_output_parameters,
             )
-            params_str = self.append_required_metal_wave_lane_parameters(
-                params_str, self.current_function_name
-            )
-            for parameter in self.required_function_stage_parameters(
-                self.current_function_name
-            ):
-                self.local_variable_types[parameter.name] = self.type_name_string(
-                    self.parameter_raw_type(parameter)
-                )
-            stage_output_type = self.required_function_stage_output_type(
-                self.current_function_name
-            )
-            if stage_output_type is not None:
-                self.local_variable_types["output"] = self.type_name_string(
-                    stage_output_type
-                )
-
-        if hasattr(func, "return_type"):
-            effective_return_type = self.metal_effective_function_return_type(func)
-            raw_return_type = self.type_name_string(effective_return_type)
-            if "[" in raw_return_type:
-                # Metal cannot return C arrays; ``array<T, N>`` keeps the
-                # value semantics of a source ``metal::array`` result.
-                return_type = self.metal_value_array_type(raw_return_type)
-                if return_type is None:
-                    raise MetalRefusal(
-                        "Metal output does not support unsized C-style array "
-                        "return types; wrap the array in a struct or use an "
-                        "output parameter"
-                    )
-            elif isinstance(effective_return_type, PointerType):
-                return_type = self.format_metal_pointer_return_type(
-                    effective_return_type
-                )
-            else:
-                return_type = self.map_type(raw_return_type)
-        else:
-            effective_return_type = "void"
-            raw_return_type = "void"
-            return_type = "void"
-        if shader_type in {"vertex", "fragment"}:
-            self.validate_function_return_semantic_type(
-                func, raw_return_type, shader_type
-            )
-            if (
-                return_type != "void"
-                and str(raw_return_type) not in self.structs_by_name
-            ):
-                return_semantic = self.function_return_semantic(func)
-                refuse_unreturnable_metal_entry_semantic(
-                    self,
-                    func,
-                    shader_type,
-                    return_semantic,
-                    metal_entry_return_semantic_key(
-                        self, func, return_semantic, shader_type
-                    ),
-                    return_type,
-                    in_structure=bool(stage_output_parameters),
-                )
-            if stage_output_parameters and return_type != "void":
-                stage_output_parameters.append(
-                    self.metal_stage_return_value_output(
-                        func,
-                        shader_type,
-                        raw_return_type,
-                        return_type,
-                        stage_output_parameters,
-                    )
-                )
+        )
         self.current_function_return_type = effective_return_type
         self.validate_metal_ray_stage_signature(func, shader_type, raw_return_type)
         parameter_diagnostics = self.glsl_buffer_block_parameter_diagnostics(
@@ -2439,88 +1801,7 @@ class MetalCodeGen(
             code += self.unsupported_glsl_buffer_block_function_placeholder(
                 "Metal", getattr(func, "name", None), unsupported_function_reason
             )
-            self.current_function_name = previous_function_name
-            self.current_function_return_type = previous_function_return_type
-            self.current_function_return_wrapper = previous_function_return_wrapper
-            self.current_metal_value_array_locals = previous_metal_value_array_locals
-            self.current_local_identifier_remaps = previous_local_identifier_remaps
-            self.local_variable_types = previous_local_variable_types
-            self.current_address_space_variables = previous_address_space_variables
-            self.current_generic_function_substitutions = (
-                previous_generic_function_substitutions
-            )
-            self.cbuffer_parameter_names = previous_cbuffer_parameter_names
-            self.cbuffer_member_references = previous_cbuffer_member_references
-            self.ambiguous_cbuffer_members = previous_ambiguous_cbuffer_members
-            self.current_glsl_buffer_block_parameters = (
-                previous_glsl_buffer_block_parameters
-            )
-            self.current_unsupported_glsl_buffer_block_parameters = (
-                previous_unsupported_glsl_buffer_block_parameters
-            )
-            self.current_unsupported_glsl_buffer_block_local_variables = (
-                previous_unsupported_glsl_buffer_block_local_variables
-            )
-            self.unsupported_metal_ray_function_table_array_variables = (
-                previous_unsupported_metal_ray_function_table_array_variables
-            )
-            self.unsupported_metal_acceleration_structure_array_variables = (
-                previous_unsupported_metal_acceleration_structure_array_variables
-            )
-            self.current_glsl_buffer_block_parameter_failures = (
-                previous_glsl_buffer_block_parameter_failures
-            )
-            self.current_glsl_buffer_block_parameter_struct_failures = (
-                previous_glsl_buffer_block_parameter_struct_failures
-            )
-            self.current_structured_buffer_length_parameters = (
-                previous_structured_buffer_length_parameters
-            )
-            self.current_structured_buffer_counter_parameters = (
-                previous_structured_buffer_counter_parameters
-            )
-            self.current_metal_mesh_output_config = previous_metal_mesh_output_config
-            self.current_metal_mesh_output_parameter = (
-                previous_metal_mesh_output_parameter
-            )
-            self.current_metal_mesh_grid_properties_parameter = (
-                previous_metal_mesh_grid_properties_parameter
-            )
-            self.current_metal_mesh_payload_parameter = (
-                previous_metal_mesh_payload_parameter
-            )
-            self.current_metal_mesh_payload_type = previous_metal_mesh_payload_type
-            self.current_metal_mesh_output_accumulators = (
-                previous_metal_mesh_output_accumulators
-            )
-            self.current_metal_non_thread_payload_parameters = (
-                previous_metal_non_thread_payload_parameters
-            )
-            self.current_readonly_metal_mesh_payload_parameters = (
-                previous_readonly_metal_mesh_payload_parameters
-            )
-            self.current_readonly_metal_mesh_payload_reasons = (
-                previous_readonly_metal_mesh_payload_reasons
-            )
-            self.current_readonly_raw_buffer_parameters = (
-                previous_readonly_raw_buffer_parameters
-            )
-            self.current_readonly_metal_parameters = previous_readonly_metal_parameters
-            self.current_readonly_metal_parameter_reasons = (
-                previous_readonly_metal_parameter_reasons
-            )
-            self.current_metal_wave_lane_index_parameter = (
-                previous_metal_wave_lane_index_parameter
-            )
-            self.current_metal_wave_lane_count_parameter = (
-                previous_metal_wave_lane_count_parameter
-            )
-            self.current_metal_graphics_builtin_parameter_names = (
-                previous_metal_graphics_builtin_parameter_names
-            )
-            self.current_metal_compute_builtin_parameter_names = (
-                previous_metal_compute_builtin_parameter_names
-            )
+            restore_metal_function_state(self, previous_function_state)
             return code
 
         body = getattr(func, "body", None)
@@ -2535,300 +1816,34 @@ class MetalCodeGen(
                 f"{self.metal_function_linkage_prefix(func)}"
                 f"{return_type} {function_name}({params_str}){semantic_attr};\n\n"
             )
-            self.current_function_name = previous_function_name
-            self.current_function_return_type = previous_function_return_type
-            self.current_function_return_wrapper = previous_function_return_wrapper
-            self.current_metal_value_array_locals = previous_metal_value_array_locals
-            self.current_local_identifier_remaps = previous_local_identifier_remaps
-            self.local_variable_types = previous_local_variable_types
-            self.current_address_space_variables = previous_address_space_variables
-            self.current_generic_function_substitutions = (
-                previous_generic_function_substitutions
-            )
-            self.cbuffer_parameter_names = previous_cbuffer_parameter_names
-            self.cbuffer_member_references = previous_cbuffer_member_references
-            self.ambiguous_cbuffer_members = previous_ambiguous_cbuffer_members
-            self.current_glsl_buffer_block_parameters = (
-                previous_glsl_buffer_block_parameters
-            )
-            self.current_unsupported_glsl_buffer_block_parameters = (
-                previous_unsupported_glsl_buffer_block_parameters
-            )
-            self.current_unsupported_glsl_buffer_block_local_variables = (
-                previous_unsupported_glsl_buffer_block_local_variables
-            )
-            self.unsupported_metal_ray_function_table_array_variables = (
-                previous_unsupported_metal_ray_function_table_array_variables
-            )
-            self.unsupported_metal_acceleration_structure_array_variables = (
-                previous_unsupported_metal_acceleration_structure_array_variables
-            )
-            self.current_glsl_buffer_block_parameter_failures = (
-                previous_glsl_buffer_block_parameter_failures
-            )
-            self.current_glsl_buffer_block_parameter_struct_failures = (
-                previous_glsl_buffer_block_parameter_struct_failures
-            )
-            self.current_structured_buffer_length_parameters = (
-                previous_structured_buffer_length_parameters
-            )
-            self.current_structured_buffer_counter_parameters = (
-                previous_structured_buffer_counter_parameters
-            )
-            self.current_metal_mesh_output_config = previous_metal_mesh_output_config
-            self.current_metal_mesh_output_parameter = (
-                previous_metal_mesh_output_parameter
-            )
-            self.current_metal_mesh_grid_properties_parameter = (
-                previous_metal_mesh_grid_properties_parameter
-            )
-            self.current_metal_mesh_payload_parameter = (
-                previous_metal_mesh_payload_parameter
-            )
-            self.current_metal_mesh_payload_type = previous_metal_mesh_payload_type
-            self.current_metal_mesh_output_accumulators = (
-                previous_metal_mesh_output_accumulators
-            )
-            self.current_metal_non_thread_payload_parameters = (
-                previous_metal_non_thread_payload_parameters
-            )
-            self.current_readonly_metal_mesh_payload_parameters = (
-                previous_readonly_metal_mesh_payload_parameters
-            )
-            self.current_readonly_metal_mesh_payload_reasons = (
-                previous_readonly_metal_mesh_payload_reasons
-            )
-            self.current_readonly_raw_buffer_parameters = (
-                previous_readonly_raw_buffer_parameters
-            )
-            self.current_readonly_metal_parameters = previous_readonly_metal_parameters
-            self.current_readonly_metal_parameter_reasons = (
-                previous_readonly_metal_parameter_reasons
-            )
-            self.current_metal_wave_lane_index_parameter = (
-                previous_metal_wave_lane_index_parameter
-            )
-            self.current_metal_wave_lane_count_parameter = (
-                previous_metal_wave_lane_count_parameter
-            )
-            self.current_metal_graphics_builtin_parameter_names = (
-                previous_metal_graphics_builtin_parameter_names
-            )
-            self.current_metal_compute_builtin_parameter_names = (
-                previous_metal_compute_builtin_parameter_names
-            )
+            restore_metal_function_state(self, previous_function_state)
             return code
 
-        if shader_type == "vertex":
-            function_name = entry_name or f"vertex_{func.name}"
-            if vertex_stage_input_parameters:
-                stage_input_struct_name = self.unique_vertex_stage_input_struct_name(
-                    function_name
-                )
-                stage_input_parameter_name = self.unique_metal_generated_name(
-                    "_crossglInput",
-                    reserved_parameter_names
-                    | self.metal_function_local_variable_names(func),
-                )
-                self.local_variable_types[stage_input_parameter_name] = (
-                    stage_input_struct_name
-                )
-                code += self.generate_metal_vertex_stage_input_parameter_struct(
-                    stage_input_struct_name, vertex_stage_input_parameters
-                )
-                params_str = self.append_parameter_declaration(
-                    params_str,
-                    f"{stage_input_struct_name} {stage_input_parameter_name} "
-                    "[[stage_in]]",
-                )
-                vertex_stage_input_alias_declarations = (
-                    self.generate_metal_vertex_stage_input_alias_declarations(
-                        stage_input_parameter_name, vertex_stage_input_parameters
-                    )
-                )
-            params_str = self.append_global_resource_parameters(
-                params_str,
-                self.current_function_name,
-                func,
-                filter_writable_textures=True,
-            )
-            if stage_output_parameters:
-                stage_output_struct_name = self.unique_return_wrapper_struct_name(
-                    function_name
-                )
-                code += self.generate_metal_stage_output_parameter_struct(
-                    stage_output_struct_name, stage_output_parameters
-                )
-                return_type = stage_output_struct_name
-                self.current_function_return_wrapper = None
-            else:
-                return_wrapper = self.function_return_semantic_wrapper(
-                    func, raw_return_type, return_type, shader_type, function_name
-                )
-                if return_wrapper is not None:
-                    code += self.generate_return_wrapper_struct(return_wrapper)
-                    return_type = return_wrapper["struct_name"]
-                self.current_function_return_wrapper = return_wrapper
-            code += f"vertex {return_type} {function_name}({params_str}) {{\n"
-        elif shader_type == "fragment":
-            function_name = entry_name or f"fragment_{func.name}"
-            if fragment_stage_input_parameters:
-                stage_input_struct_name = self.unique_vertex_stage_input_struct_name(
-                    function_name
-                )
-                stage_input_parameter_name = self.unique_metal_generated_name(
-                    "_crossglInput",
-                    reserved_parameter_names
-                    | self.metal_function_local_variable_names(func),
-                )
-                self.local_variable_types[stage_input_parameter_name] = (
-                    stage_input_struct_name
-                )
-                code += self.generate_metal_vertex_stage_input_parameter_struct(
-                    stage_input_struct_name, fragment_stage_input_parameters
-                )
-                params_str = self.append_parameter_declaration(
-                    params_str,
-                    f"{stage_input_struct_name} {stage_input_parameter_name} "
-                    "[[stage_in]]",
-                )
-                fragment_stage_input_alias_declarations = (
-                    self.generate_metal_vertex_stage_input_alias_declarations(
-                        stage_input_parameter_name, fragment_stage_input_parameters
-                    )
-                )
-            params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name, func
-            )
-            if stage_output_parameters:
-                stage_output_struct_name = self.unique_return_wrapper_struct_name(
-                    function_name
-                )
-                code += self.generate_metal_stage_output_parameter_struct(
-                    stage_output_struct_name, stage_output_parameters
-                )
-                return_type = stage_output_struct_name
-                self.current_function_return_wrapper = None
-            else:
-                return_wrapper = self.function_return_semantic_wrapper(
-                    func, raw_return_type, return_type, shader_type, function_name
-                )
-                if return_wrapper is not None:
-                    code += self.generate_return_wrapper_struct(return_wrapper)
-                    return_type = return_wrapper["struct_name"]
-                self.current_function_return_wrapper = return_wrapper
-            # MSL's [[early_fragment_tests]] precedes the fragment function (MSL 4.1 section 5.1.2).
-            early_tests = (
-                "[[early_fragment_tests]] "
-                if requests_early_fragment_tests(func, stage_node)
-                else ""
-            )
-            code += f"{early_tests}fragment {return_type} {function_name}({params_str}) {{\n"
-        elif shader_type in ["compute", "ray_generation"]:
-            params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name, func
-            )
-            function_name = entry_name or self.stage_entry_base_name(shader_type, func)
-            self.validate_metal_kernel_return_type(func, shader_type, raw_return_type)
-            code += f"kernel {return_type} {function_name}({params_str}) {{\n"
-        elif shader_type in ["mesh", "object", "task", "amplification"]:
-            stage_keyword = "mesh" if shader_type == "mesh" else "object"
-            function_name = entry_name or f"{stage_keyword}_{func.name}"
-            params_str = self.append_global_resource_parameters(
-                params_str, self.current_function_name, func
-            )
-            stage_attribute = self.metal_mesh_stage_attribute(
-                shader_type, func, execution_config
-            )
-            generated_mesh_payload_parameter = (
-                self.generated_metal_mesh_payload_parameter(
-                    shader_type, func, reserved_parameter_names
-                )
-            )
-            if generated_mesh_payload_parameter is not None:
-                payload_type, payload_name = generated_mesh_payload_parameter
-                params_str = self.append_parameter_declaration(
-                    params_str,
-                    f"object_data {payload_type}& {payload_name} [[payload]]",
-                )
-                self.current_metal_mesh_payload_parameter = payload_name
-                self.current_metal_mesh_payload_type = payload_type
-                self.current_address_space_variables[payload_name] = "object_data"
-            mesh_grid_properties_parameter = self.metal_mesh_grid_properties_parameter(
-                shader_type, func, reserved_parameter_names
-            )
-            if mesh_grid_properties_parameter is not None:
-                params_str = self.append_parameter_declaration(
-                    params_str,
-                    f"mesh_grid_properties {mesh_grid_properties_parameter}",
-                )
-                self.current_metal_mesh_grid_properties_parameter = (
-                    mesh_grid_properties_parameter
-                )
-            mesh_output = self.metal_mesh_stage_output_config(
-                shader_type, func, function_name, reserved_parameter_names
-            )
-            if mesh_output is not None:
-                if mesh_output.get("generated_vertex_struct", False):
-                    code += self.generate_metal_mesh_vertex_output_struct(mesh_output)
-                params_str = self.append_parameter_declaration(
-                    params_str,
-                    self.metal_mesh_stage_output_parameter_declaration(mesh_output),
-                )
-                self.current_metal_mesh_output_parameter = mesh_output["parameter_name"]
-                self.current_metal_mesh_output_config = mesh_output
-                self.validate_metal_mesh_output_usage(func)
-            code += (
-                f"{stage_attribute} {return_type} {function_name}({params_str}) {{\n"
-            )
-        elif shader_type in [
-            "ray_any_hit",
-            "ray_closest_hit",
-            "ray_miss",
-            "ray_callable",
-            "anyhit",
-            "closesthit",
-            "miss",
-            "callable",
-        ]:
-            rt_stage_map = {
-                "ray_any_hit": "anyhit",
-                "ray_closest_hit": "closesthit",
-                "ray_miss": "miss",
-                "ray_callable": "callable",
-                "anyhit": "anyhit",
-                "closesthit": "closesthit",
-                "miss": "miss",
-                "callable": "callable",
-            }
-            stage_keyword = rt_stage_map[shader_type]
-            function_name = entry_name or f"{stage_keyword}_{func.name}"
-            code += f"[[visible]] {return_type} {function_name}({params_str}) {{\n"
-        elif shader_type in ["ray_intersection", "intersection"]:
-            function_name = entry_name or f"intersection_{func.name}"
-            stage_attribute = self.metal_ray_intersection_stage_attribute(
-                func, raw_return_type
-            )
-            code += (
-                f"{stage_attribute} {return_type} "
-                f"{function_name}({params_str}) {{\n"
-            )
-        else:
-            semantic = self.semantic_from_node(func)
-            function_name = entry_name or func.name
-            semantic_attr = self.map_non_stage_function_semantic(semantic)
-            # Lowered helpers can become unused after native operation selection.
-            if (
-                getattr(func, "linkage", None) == "internal"
-                and getattr(func, "is_inline", False)
-            ) or re.fullmatch(
-                r"CrossGLMetalVectorIndex_[iu](?:8|16)vec[234]_set", function_name
-            ):
-                code += "__attribute__((unused))\n"
-            code += (
-                f"{self.metal_function_linkage_prefix(func)}"
-                f"{return_type} {function_name}({params_str}){semantic_attr} {{\n"
-            )
+        (
+            function_name,
+            code,
+            vertex_stage_input_alias_declarations,
+            stage_output_struct_name,
+            return_type,
+            fragment_stage_input_alias_declarations,
+        ) = self.metal_function_signature(
+            func,
+            shader_type,
+            execution_config,
+            entry_name,
+            stage_node,
+            code,
+            fragment_stage_input_parameters,
+            params_str,
+            raw_return_type,
+            reserved_parameter_names,
+            return_type,
+            stage_output_parameters,
+            vertex_stage_input_parameters,
+            fragment_stage_input_alias_declarations,
+            stage_output_struct_name,
+            vertex_stage_input_alias_declarations,
+        )
 
         if shader_type is not None:
             code = (
@@ -2843,17 +1858,9 @@ class MetalCodeGen(
             code += "    #pragma clang fp contract(off)\n"
             code += "    #pragma clang fp reassociate(off)\n"
 
-        previous_sampler_parameters = self.current_sampler_parameters
-        previous_sampler_parameter_array_sizes = (
-            self.current_sampler_parameter_array_sizes
+        previous_resource_parameter_state = save_metal_function_state(
+            self, METAL_FUNCTION_RESOURCE_PARAMETER_ATTRIBUTES
         )
-        previous_texture_parameters = self.current_texture_parameters
-        previous_texture_parameter_raw_types = self.current_texture_parameter_raw_types
-        previous_texture_parameter_array_sizes = (
-            self.current_texture_parameter_array_sizes
-        )
-        previous_texture_alias_sources = self.current_texture_alias_sources
-        previous_image_format_parameters = self.current_image_format_parameters
         self.current_sampler_parameters = sampler_parameters
         self.current_sampler_parameter_array_sizes = sampler_parameter_array_sizes
         self.current_texture_parameters = texture_parameters
@@ -2925,103 +1932,9 @@ class MetalCodeGen(
                 f"    return {fallback} "
                 "/* fallback for unmatched generated control flow */;\n"
             )
-        self.current_sampler_parameters = previous_sampler_parameters
-        self.current_sampler_parameter_array_sizes = (
-            previous_sampler_parameter_array_sizes
-        )
-        self.current_texture_parameters = previous_texture_parameters
-        self.current_texture_parameter_raw_types = previous_texture_parameter_raw_types
-        self.current_texture_parameter_array_sizes = (
-            previous_texture_parameter_array_sizes
-        )
-        self.current_texture_alias_sources = previous_texture_alias_sources
-        self.current_image_format_parameters = previous_image_format_parameters
-        self.current_structured_buffer_length_parameters = (
-            previous_structured_buffer_length_parameters
-        )
-        self.current_structured_buffer_counter_parameters = (
-            previous_structured_buffer_counter_parameters
-        )
-        self.current_metal_mesh_output_config = previous_metal_mesh_output_config
-        self.current_metal_mesh_output_parameter = previous_metal_mesh_output_parameter
-        self.current_metal_mesh_grid_properties_parameter = (
-            previous_metal_mesh_grid_properties_parameter
-        )
-        self.current_metal_mesh_payload_parameter = (
-            previous_metal_mesh_payload_parameter
-        )
-        self.current_metal_mesh_payload_type = previous_metal_mesh_payload_type
-        self.current_metal_mesh_output_accumulators = (
-            previous_metal_mesh_output_accumulators
-        )
-        self.current_metal_non_thread_payload_parameters = (
-            previous_metal_non_thread_payload_parameters
-        )
-        self.current_readonly_metal_mesh_payload_parameters = (
-            previous_readonly_metal_mesh_payload_parameters
-        )
-        self.current_readonly_metal_mesh_payload_reasons = (
-            previous_readonly_metal_mesh_payload_reasons
-        )
-        self.current_readonly_raw_buffer_parameters = (
-            previous_readonly_raw_buffer_parameters
-        )
-        self.current_readonly_metal_parameters = previous_readonly_metal_parameters
-        self.current_readonly_metal_parameter_reasons = (
-            previous_readonly_metal_parameter_reasons
-        )
-        self.current_metal_wave_lane_index_parameter = (
-            previous_metal_wave_lane_index_parameter
-        )
-        self.current_metal_wave_lane_count_parameter = (
-            previous_metal_wave_lane_count_parameter
-        )
-        self.current_metal_graphics_builtin_parameter_names = (
-            previous_metal_graphics_builtin_parameter_names
-        )
-        self.current_function_name = previous_function_name
-        self.current_function_return_type = previous_function_return_type
-        self.current_function_return_wrapper = previous_function_return_wrapper
-        self.current_metal_value_array_locals = previous_metal_value_array_locals
-        self.current_local_identifier_remaps = previous_local_identifier_remaps
-        self.current_metal_stage_output_return_active = (
-            previous_stage_output_return_active
-        )
-        self.local_variable_types = previous_local_variable_types
-        self.current_address_space_variables = previous_address_space_variables
-        self.current_metal_native_width_local_array_declaration_ids = (
-            previous_native_width_local_array_declaration_ids
-        )
-        self.current_generic_function_substitutions = (
-            previous_generic_function_substitutions
-        )
-        self.cbuffer_parameter_names = previous_cbuffer_parameter_names
-        self.cbuffer_member_references = previous_cbuffer_member_references
-        self.ambiguous_cbuffer_members = previous_ambiguous_cbuffer_members
-        self.current_glsl_buffer_block_parameters = (
-            previous_glsl_buffer_block_parameters
-        )
-        self.current_unsupported_glsl_buffer_block_parameters = (
-            previous_unsupported_glsl_buffer_block_parameters
-        )
-        self.current_unsupported_glsl_buffer_block_local_variables = (
-            previous_unsupported_glsl_buffer_block_local_variables
-        )
-        self.unsupported_metal_ray_function_table_array_variables = (
-            previous_unsupported_metal_ray_function_table_array_variables
-        )
-        self.unsupported_metal_acceleration_structure_array_variables = (
-            previous_unsupported_metal_acceleration_structure_array_variables
-        )
-        self.current_glsl_buffer_block_parameter_failures = (
-            previous_glsl_buffer_block_parameter_failures
-        )
-        self.current_glsl_buffer_block_parameter_struct_failures = (
-            previous_glsl_buffer_block_parameter_struct_failures
-        )
-        self.current_metal_compute_builtin_parameter_names = (
-            previous_metal_compute_builtin_parameter_names
-        )
+        restore_metal_function_state(self, previous_resource_parameter_state)
+        restore_metal_function_state(self, previous_function_body_state)
+        restore_metal_function_state(self, previous_function_state)
 
         code += "}\n"
         code += "\n"
@@ -3813,83 +2726,9 @@ class MetalCodeGen(
             )
         if isinstance(expr, (int, float)):
             return "float" if isinstance(expr, float) else "int"
-        if isinstance(expr, BinaryOpNode):
-            left_type = self.expression_result_type(expr.left)
-            right_type = self.expression_result_type(expr.right)
-            operator = self.map_operator(getattr(expr, "op", ""))
-            emulated_result = self.metal_emulated_matrix_binary_result_type(
-                operator, left_type, right_type
-            )
-            if emulated_result is not None:
-                return emulated_result
-            pointer_operand = self.pointer_arithmetic_operand(
-                expr, (left_type, right_type)
-            )
-            if pointer_operand is not None:
-                return left_type if pointer_operand is expr.left else right_type
-            if operator in {"<", ">", "<=", ">=", "==", "!=", "&&", "||"}:
-                for candidate_type in (left_type, right_type):
-                    mapped_type = self.map_type(candidate_type)
-                    component_type = self.vector_component_type(mapped_type)
-                    if component_type is None:
-                        continue
-                    width = mapped_type[-1] if mapped_type[-1:].isdigit() else ""
-                    if width:
-                        return f"bool{width}"
-                return "bool"
-            matrix_result = self.metal_matrix_binary_result_type(
-                operator, left_type, right_type
-            )
-            if matrix_result is not None:
-                return matrix_result
-            if (
-                self.is_vector_value_type(left_type)
-                and self.is_vector_value_type(right_type)
-                and operator not in {"<<", ">>"}
-            ):
-                left_mapped = self.map_type(left_type)
-                right_mapped = self.map_type(right_type)
-                left_component = self.vector_component_type(left_mapped)
-                right_component = self.vector_component_type(right_mapped)
-                if (
-                    left_component != right_component
-                    and self.vector_value_width(left_mapped)
-                    == self.vector_value_width(right_mapped)
-                    and left_component in self.METAL_ARITHMETIC_COMPONENT_RANKS
-                    and right_component in self.METAL_ARITHMETIC_COMPONENT_RANKS
-                ):
-                    common = self.metal_binary_common_component(
-                        operator, left_component, right_component
-                    )
-                    if common is not None:
-                        return f"{common}{self.vector_value_width(left_mapped)}"
-            if self.is_vector_value_type(left_type) != self.is_vector_value_type(
-                right_type
-            ):
-                # metal_hlsl_values.py: vector op scalar has the common component type.
-                vector_type, scalar = (
-                    (left_type, expr.right)
-                    if self.is_vector_value_type(left_type)
-                    else (right_type, expr.left)
-                )
-                vector_mapped = self.map_type(vector_type)
-                component = self.vector_component_type(vector_mapped)
-                common = (
-                    self.metal_vector_scalar_common_component(
-                        operator, component, scalar
-                    )
-                    if component in self.METAL_ARITHMETIC_COMPONENT_RANKS
-                    else None
-                )
-                if common is not None and common != component:
-                    return f"{common}{self.vector_value_width(vector_mapped)}"
-            if self.is_vector_value_type(left_type):
-                return left_type
-            if self.is_vector_value_type(right_type):
-                return right_type
-            if left_type == "float" or right_type == "float":
-                return "float"
-            return left_type or right_type
+        handled = self.metal_binary_expression_result_type(expr)
+        if handled is not UNHANDLED:
+            return handled
         if isinstance(expr, PointerReinterpretNode):
             return getattr(expr, "target_type", None)
         if isinstance(expr, UnaryOpNode):
@@ -3926,112 +2765,9 @@ class MetalCodeGen(
             return self.expression_result_type(
                 getattr(expr, "target", getattr(expr, "left", None))
             )
-        if isinstance(expr, ArrayAccessNode):
-            block_access = self.glsl_buffer_block_array_access(expr)
-            if block_access is not None:
-                return glsl_buffer_indexed_value_type(block_access)
-            array_type = self.expression_result_type(expr.array)
-            if not array_type:
-                array_type = self.unsupported_glsl_buffer_block_expression_type(
-                    expr.array
-                )
-            array_type_name = self.type_name_string(array_type)
-            if array_type_name and "[" in array_type_name and "]" in array_type_name:
-                return self.metal_for_in_array_element_type(
-                    array_type_name, allow_unsized=True
-                )
-            metal_array_element_type = self.metal_array_element_type(array_type)
-            if metal_array_element_type is not None:
-                return metal_array_element_type
-            if self.is_structured_buffer_type(array_type):
-                return self.structured_buffer_element_type(array_type)
-            pointee_type = self.pointer_pointee_type_name(array_type)
-            if pointee_type is not None:
-                return pointee_type
-            emulated_matrix = (
-                hlsl_emulated_matrix_shape(array_type_name) if array_type_name else None
-            )
-            if emulated_matrix is not None:
-                # Like Metal matrices, indexing selects a column.
-                scalar, rows, _columns = emulated_matrix
-                return f"{scalar}{rows}"
-            if self.is_vector_value_type(array_type):
-                native = self.metal_native_narrow_bitcast_storage_type(array_type)
-                if native is not None and native[-1:] in {"2", "3", "4"}:
-                    return native[:-1]
-                return self.vector_component_type(array_type)
-            matrix_dimensions = self.metal_matrix_dimensions(
-                self.type_name_string(array_type) or ""
-            )
-            if matrix_dimensions is not None:
-                # An MSL floatCxR subscript is a column of R components, as in CrossGL.
-                return f"{matrix_dimensions[0]}{matrix_dimensions[2]}"
-            component_type = component_access_type(
-                self.type_name_string(array_type), C_FAMILY
-            )
-            if component_type is not None:
-                return component_type
-            mapped_array_type = (
-                self.map_type(array_type) if array_type is not None else None
-            )
-            if isinstance(mapped_array_type, str):
-                if self.is_vector_value_type(mapped_array_type):
-                    return self.vector_component_type(mapped_array_type)
-                if self.is_matrix_value_type(mapped_array_type):
-                    scalar, dimensions = re.fullmatch(
-                        r"(float|half|double)(\d)x(\d)", mapped_array_type
-                    ).group(1, 3)
-                    return f"{scalar}{dimensions}"
-            return array_type
-        if isinstance(expr, MemberAccessNode):
-            block_access = self.glsl_buffer_block_member_access(expr)
-            if block_access is not None:
-                if glsl_buffer_whole_array_reason(block_access, indexed=False):
-                    return glsl_buffer_array_value_type(block_access)
-                return block_access["type"]
-            object_type = self.expression_result_type(
-                expr.object
-            ) or self.unsupported_glsl_buffer_block_expression_type(expr.object)
-            object_type = self.member_lookup_type_name(object_type)
-            member = str(expr.member)
-            if object_type and all(ch in "xyzwrgba" for ch in member):
-                native = self.metal_native_narrow_bitcast_storage_type(object_type)
-                component_type = (
-                    native[:-1]
-                    if native is not None and native[-1:] in {"2", "3", "4"}
-                    else self.vector_component_type(object_type)
-                )
-                if component_type and len(member) == 1:
-                    return component_type
-                if component_type:
-                    return f"{component_type}{len(member)}"
-            if object_type:
-                member_type = self.struct_member_types.get(
-                    self.type_name_string(object_type), {}
-                ).get(member)
-                if member_type:
-                    return member_type
-            member_types = {
-                self.type_name_string(members[member])
-                for members in self.struct_member_types.values()
-                if member in members
-            }
-            if len(member_types) == 1:
-                return next(iter(member_types))
-            return None
-        if isinstance(expr, PointerAccessNode):
-            object_type = self.expression_result_type(
-                expr.pointer_expr
-            ) or self.unsupported_glsl_buffer_block_expression_type(expr.pointer_expr)
-            object_type = self.member_lookup_type_name(object_type)
-            member = str(expr.member)
-            if object_type:
-                member_type = self.struct_member_types.get(
-                    self.type_name_string(object_type), {}
-                ).get(member)
-                if member_type:
-                    return member_type
-            return None
+        handled = self.metal_access_expression_result_type(expr)
+        if handled is not UNHANDLED:
+            return handled
         if isinstance(expr, ConstructorNode):
             aggregate_type = infer_enum_constructor_type(
                 self, expr
@@ -4048,449 +2784,9 @@ class MetalCodeGen(
             return self.metal_wave_result_type(expr.operation, expr.arguments)
         if isinstance(expr, RayQueryOpNode):
             return self.metal_ray_query_method_return_type(expr.operation)
-        if isinstance(expr, FunctionCallNode):
-            buffer_source = self.structured_buffer_load_source(expr)
-            if buffer_source is not None:
-                return self.structured_buffer_element_type(
-                    self.expression_result_type(buffer_source)
-                )
-            ray_query_operation = self.ray_query_operation_from_function_call(expr)
-            if ray_query_operation is not None:
-                return self.metal_ray_query_method_return_type(ray_query_operation)
-            func_expr = getattr(expr, "function", None) or getattr(expr, "name", None)
-            func_name = getattr(func_expr, "name", func_expr)
-            args = getattr(expr, "arguments", getattr(expr, "args", []))
-            if isinstance(func_name, str) and func_name.rsplit("::", 1)[-1] == "Some":
-                payload_type = self.expected_option_payload_type_name()
-                if payload_type is not None:
-                    return payload_type
-                if self.option_payload_type_name(self.current_expression_expected_type):
-                    return None
-                return self.expression_result_type(args[0]) if args else None
-            if func_name == "RayDesc" and self.requires_metal_builtin_ray_desc(
-                func_name
-            ):
-                return "RayDesc"
-            if isinstance(func_name, str) and hlsl_emulated_matrix_shape(func_name):
-                return func_name
-            if func_name in {"and", "or"} and len(args) == 2:
-                for arg in args:
-                    shape = self.metal_expression_emulated_matrix_shape(arg)
-                    if shape is not None:
-                        return f"bool{shape[1]}x{shape[2]}"
-                logical_type = self.metal_hlsl_logical_result_type(func_name, args)
-                if logical_type is not None:
-                    return logical_type
-            if func_name == "select" and len(args) == 3:
-                for arg in args[:2]:
-                    if self.metal_expression_emulated_matrix_shape(arg) is not None:
-                        return self.expression_result_type(arg)
-            if func_name in self.METAL_WAVE_INTRINSIC_ARITIES:
-                return self.metal_wave_result_type(func_name, args)
-            numeric_result_type = numeric_trait_method_result_type(self, expr)
-            if numeric_result_type:
-                return numeric_result_type
-            if func_name in {"normalize", "reflect"} and args:
-                return self.expression_result_type(args[0])
-            if func_name == "inverse" and args:
-                return self.expression_result_type(args[0])
-            if func_name == "transpose" and args:
-                arg_type = self.expression_result_type(args[0])
-                dimensions = self.metal_matrix_dimensions(arg_type)
-                if dimensions is not None:
-                    component_prefix, columns, rows = dimensions
-                    return f"{component_prefix}{rows}x{columns}"
-                return arg_type
-            if func_name == "dot" and args:
-                unified_type = self.metal_unified_builtin_result_type(func_name, args)
-                if unified_type is not None:
-                    return unified_type
-                return (
-                    self.vector_component_type(self.expression_result_type(args[0]))
-                    or "float"
-                )
-            if func_name == "cross" and args:
-                return self.expression_result_type(args[0])
-            if (
-                func_name == "mod"
-                and args
-                and func_name not in self.user_function_names
-            ):
-                return self.expression_result_type(args[0])
-            if (
-                func_name == "frac"
-                and args
-                and func_name not in self.user_function_names
-            ):
-                return self.expression_result_type(args[0])
-            if (
-                func_name == "lerp"
-                and args
-                and func_name not in self.user_function_names
-            ):
-                return self.expression_result_type(args[0])
-            componentwise_type = self.metal_componentwise_builtin_result_type(
-                func_name, args
-            )
-            if componentwise_type is not None:
-                return componentwise_type
-            if (
-                func_name in {"inverseSqrt", "inversesqrt", "roundEven"}
-                and args
-                and func_name not in self.user_function_names
-            ):
-                unified_type = self.metal_unified_builtin_result_type(func_name, args)
-                if unified_type is not None:
-                    return unified_type
-                return self.expression_result_type(args[0])
-            if (
-                func_name in self.METAL_DERIVATIVE_FUNCTION_ALIASES
-                and args
-                and func_name not in self.user_function_names
-            ):
-                return self.expression_result_type(args[0])
-            explicit_as_type = self.metal_explicit_as_type_target(func_name, args)
-            if explicit_as_type is not None:
-                return explicit_as_type
-            bitcast_result_type = self.metal_bitcast_result_type(func_name, args)
-            if bitcast_result_type is not None:
-                return bitcast_result_type
-            integer_bit_result_type = self.metal_integer_bit_result_type(
-                func_name, args
-            )
-            if integer_bit_result_type is not None:
-                return integer_bit_result_type
-            if (
-                func_name in self.PACKED_BYTE_INTRINSICS
-                and func_name not in self.user_function_names
-            ):
-                return self.PACKED_BYTE_INTRINSICS[func_name][0]
-            if (
-                func_name in self.METAL_ANGLE_CONVERSION_FACTORS
-                and len(args or []) == 1
-                and func_name not in self.user_function_names
-            ):
-                argument_type = self.map_type(self.expression_result_type(args[0]))
-                if self.vector_component_type(argument_type) in {"int", "uint"}:
-                    width = self.vector_value_width(argument_type)
-                    return f"float{width or ''}"
-                return self.expression_result_type(args[0])
-            if func_name in {"mix", "clamp", "min", "max", "saturate"} and args:
-                unified_type = self.metal_unified_builtin_result_type(func_name, args)
-                if unified_type is not None:
-                    return unified_type
-                return self.expression_result_type(args[0])
-            if is_resource_size_query_operation(func_name) and args:
-                texture_type = self.texture_argument_resource_type(args[0])
-                raw_type = self.expression_result_type(args[0])
-                descriptor = self.texture_query_size_descriptor_for_argument(
-                    texture_type, raw_type
-                )
-                if descriptor is not None:
-                    return descriptor["return_type"]
-            if (
-                is_texture_sampling_operation(func_name)
-                or is_texel_fetch_operation(func_name)
-            ) and args:
-                if self.is_plain_depth_read(func_name, args):
-                    # generate_texture_call widens the scalar MSL depth read to (d, 0, 0, 1).
-                    return "float4"
-                return self.texture_sample_result_type(args[0])
-            specialized_func_name = generic_function_call_name(self, func_name, args)
-            if specialized_func_name in getattr(self, "function_return_types", {}):
-                return self.function_return_types[specialized_func_name]
-            overload = self.metal_user_function_overload_for_call(func_name, args)
-            if overload is not None:
-                return self.metal_effective_function_return_type(overload)
-            overloads = self.function_overloads_by_name.get(func_name, [])
-            if overloads:
-                argument_count = len(args or [])
-                viable_return_types = {
-                    self.metal_effective_function_return_type(candidate)
-                    for candidate in overloads
-                    if self.metal_user_function_accepts_argument_count(
-                        candidate,
-                        argument_count,
-                    )
-                }
-                if len(viable_return_types) == 1:
-                    return next(iter(viable_return_types))
-                # Type-aware source overload resolution is unavailable here.
-                # Differing same-arity results must remain unknown rather than
-                # consuming the last declaration in function_return_types.
-                return None
-            if func_name in getattr(self, "function_return_types", {}):
-                return self.function_return_types[func_name]
-            boolean_type = boolean_builtin_result_type(
-                func_name,
-                [self.expression_result_type(arg) for arg in args or ()],
-                C_FAMILY,
-            )
-            if boolean_type is not None:
-                return boolean_type
-            aggregate_constructor = self.metal_aggregate_constructor_name(func_name)
-            if aggregate_constructor is not None:
-                return aggregate_constructor
-            unsupported_functions = getattr(
-                self, "unsupported_glsl_buffer_block_functions", {}
-            )
-            if func_name in unsupported_functions:
-                return unsupported_functions[func_name].get("return_type")
-            if func_name == "imageLoad" and args:
-                return self.image_load_result_type(args[0])
-            if func_name == "subpassLoad":
-                return "vec4"
-            if self.is_builtin_value_constructor_type(func_name):
-                return str(func_name)
-            if func_name in {
-                "float",
-                "half",
-                "float16",
-                "min16float",
-                "min10float",
-                "double",
-                "f16",
-                "f32",
-                "f64",
-                "int",
-                "i8",
-                "i16",
-                "i32",
-                "char",
-                "signed char",
-                "int8",
-                "int16",
-                "int8_t",
-                "int16_t",
-                "int32_t",
-                "int64",
-                "int64_t",
-                "long",
-                "signed long",
-                "ptrdiff_t",
-                "min16int",
-                "min12int",
-                "uint",
-                "u8",
-                "u16",
-                "u32",
-                "i64",
-                "u64",
-                "uchar",
-                "unsigned char",
-                "uint8",
-                "uint16",
-                "uint8_t",
-                "uint16_t",
-                "uint32_t",
-                "uint64",
-                "uint64_t",
-                "ulong",
-                "unsigned long",
-                "size_t",
-                "min16uint",
-                "short",
-                "signed short",
-                "ushort",
-                "unsigned short",
-                "bool",
-                "vec2",
-                "vec3",
-                "vec4",
-                "vec2<f16>",
-                "vec3<f16>",
-                "vec4<f16>",
-                "vec2<f32>",
-                "vec3<f32>",
-                "vec4<f32>",
-                "vec2<f64>",
-                "vec3<f64>",
-                "vec4<f64>",
-                "vec2<i8>",
-                "vec3<i8>",
-                "vec4<i8>",
-                "vec2<u8>",
-                "vec3<u8>",
-                "vec4<u8>",
-                "vec2<i16>",
-                "vec3<i16>",
-                "vec4<i16>",
-                "vec2<u16>",
-                "vec3<u16>",
-                "vec4<u16>",
-                "vec2<i32>",
-                "vec3<i32>",
-                "vec4<i32>",
-                "vec2<u32>",
-                "vec3<u32>",
-                "vec4<u32>",
-                "vec2<i64>",
-                "vec3<i64>",
-                "vec4<i64>",
-                "vec2<u64>",
-                "vec3<u64>",
-                "vec4<u64>",
-                "vec2<bool>",
-                "vec3<bool>",
-                "vec4<bool>",
-                "ivec2",
-                "ivec3",
-                "ivec4",
-                "i64vec2",
-                "i64vec3",
-                "i64vec4",
-                "uvec2",
-                "uvec3",
-                "uvec4",
-                "u64vec2",
-                "u64vec3",
-                "u64vec4",
-                "bvec2",
-                "bvec3",
-                "bvec4",
-                "float2",
-                "float3",
-                "float4",
-                "packed_float2",
-                "packed_float3",
-                "packed_float4",
-                "simd_float2",
-                "simd_float3",
-                "simd_float4",
-                "int2",
-                "int3",
-                "int4",
-                "packed_int2",
-                "packed_int3",
-                "packed_int4",
-                "simd_int2",
-                "simd_int3",
-                "simd_int4",
-                "uint2",
-                "uint3",
-                "uint4",
-                "packed_uint2",
-                "packed_uint3",
-                "packed_uint4",
-                "simd_uint2",
-                "simd_uint3",
-                "simd_uint4",
-                "bool2",
-                "bool3",
-                "bool4",
-                "half2",
-                "half3",
-                "half4",
-                "packed_half2",
-                "packed_half3",
-                "packed_half4",
-                "simd_half2",
-                "simd_half3",
-                "simd_half4",
-                "f16vec2",
-                "f16vec3",
-                "f16vec4",
-                "mat2",
-                "mat3",
-                "mat4",
-                "mat2x2",
-                "mat2x3",
-                "mat2x4",
-                "mat3x2",
-                "mat3x3",
-                "mat3x4",
-                "mat4x2",
-                "mat4x3",
-                "mat4x4",
-                "f16mat2",
-                "f16mat3",
-                "f16mat4",
-                "f16mat2x2",
-                "f16mat2x3",
-                "f16mat2x4",
-                "f16mat3x2",
-                "f16mat3x3",
-                "f16mat3x4",
-                "f16mat4x2",
-                "f16mat4x3",
-                "f16mat4x4",
-                "simd_float2x2",
-                "simd_float2x3",
-                "simd_float2x4",
-                "simd_float3x2",
-                "simd_float3x3",
-                "simd_float3x4",
-                "simd_float4x2",
-                "simd_float4x3",
-                "simd_float4x4",
-                "simd_half2x2",
-                "simd_half2x3",
-                "simd_half2x4",
-                "simd_half3x2",
-                "simd_half3x3",
-                "simd_half3x4",
-                "simd_half4x2",
-                "simd_half4x3",
-                "simd_half4x4",
-                "char2",
-                "char3",
-                "char4",
-                "uchar2",
-                "uchar3",
-                "uchar4",
-                "i8vec2",
-                "i8vec3",
-                "i8vec4",
-                "u8vec2",
-                "u8vec3",
-                "u8vec4",
-                "short2",
-                "short3",
-                "short4",
-                "ushort2",
-                "ushort3",
-                "ushort4",
-                "i16vec2",
-                "i16vec3",
-                "i16vec4",
-                "u16vec2",
-                "u16vec3",
-                "u16vec4",
-                "min16float2",
-                "min16float3",
-                "min16float4",
-                "min10float2",
-                "min10float3",
-                "min10float4",
-                "min16int2",
-                "min16int3",
-                "min16int4",
-                "min12int2",
-                "min12int3",
-                "min12int4",
-                "min16uint2",
-                "min16uint3",
-                "min16uint4",
-                "min16float2x2",
-                "min16float2x3",
-                "min16float2x4",
-                "min16float3x2",
-                "min16float3x3",
-                "min16float3x4",
-                "min16float4x2",
-                "min16float4x3",
-                "min16float4x4",
-                "min10float2x2",
-                "min10float2x3",
-                "min10float2x4",
-                "min10float3x2",
-                "min10float3x3",
-                "min10float3x4",
-                "min10float4x2",
-                "min10float4x3",
-                "min10float4x4",
-            }:
-                return str(func_name)
+        handled = self.metal_call_expression_result_type(expr)
+        if handled is not UNHANDLED:
+            return handled
         if hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
             literal_type_name = self.type_name_string(
                 getattr(expr, "literal_type", None)
@@ -4510,6 +2806,9 @@ class MetalCodeGen(
 
     def generate_discarded_expression(self, expr):
         """Render an unused result without changing nested value expressions."""
+        wide_atomic = discarded_wide_atomic_call(self, expr)
+        if wide_atomic is not None:
+            return wide_atomic
         if isinstance(expr, (AssignmentNode, BackendAssignmentNode)):
             return self.generate_assignment(expr)
         if is_comma_expression(expr):
@@ -4722,128 +3021,18 @@ class MetalCodeGen(
         if substitutions and id(expr) in substitutions:
             return substitutions[id(expr)]
         elif isinstance(expr, str):
-            builtin_name = self.metal_builtin_expression_name(expr)
-            if builtin_name != expr:
-                return builtin_name
-            if expr.rsplit("::", 1)[-1] == "None":
-                option_default = self.option_none_default_expression()
-                if option_default is not None:
-                    return option_default
-            if expr in self.local_variable_types:
-                return self.metal_local_identifier_name(expr)
-            return expr
+            return self.generate_metal_raw_string_expression(expr)
         elif isinstance(expr, IdentifierNode):
-            name = expr.name
-            builtin_name = self.metal_builtin_expression_name(name)
-            if builtin_name != name:
-                return builtin_name
-            if isinstance(name, str) and name.rsplit("::", 1)[-1] == "None":
-                option_default = self.option_none_default_expression()
-                if option_default is not None:
-                    return option_default
-            buffer_block_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if buffer_block_value is not None:
-                return buffer_block_value
-            if name in self.METAL_RAY_FLAG_VALUES:
-                return f"{self.METAL_RAY_FLAG_VALUES[name]}u"
-            if name in getattr(self, "enum_variant_constants", {}):
-                return enum_value_expression(self, name)
-            if (
-                name not in self.local_variable_types
-                and name in self.ambiguous_cbuffer_members
-            ):
-                raise MetalRefusal(
-                    f"Ambiguous cbuffer member reference '{name}' appears in multiple cbuffers"
-                )
-            if (
-                name not in self.local_variable_types
-                and name in self.cbuffer_member_references
-            ):
-                return self.cbuffer_member_references[name]
-            if (
-                name not in self.local_variable_types
-                and name in self.metal_runtime_initialized_constants
-            ):
-                return f"{name}()"
-            return self.metal_local_identifier_name(name)
+            return self.generate_metal_identifier_node_expression(expr)
         elif isinstance(expr, bool):
             return "true" if expr else "false"
         elif isinstance(expr, int) or isinstance(expr, float):
             return str(expr)
         elif isinstance(expr, (VariableNode, BackendVariableNode)):
             # Fix infinite recursion - directly return the name
-            unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if unsupported_value is not None:
-                return unsupported_value
-            unsupported_value = (
-                self.unsupported_metal_acceleration_structure_array_expression(expr)
-            )
-            if unsupported_value is not None:
-                return unsupported_value
-            unsupported_value = (
-                self.unsupported_metal_ray_function_table_array_expression(expr)
-            )
-            if unsupported_value is not None:
-                return unsupported_value
-            if hasattr(expr, "name"):
-                builtin_name = self.metal_builtin_expression_name(expr.name)
-                if builtin_name != expr.name:
-                    return builtin_name
-                if (
-                    isinstance(expr.name, str)
-                    and expr.name.rsplit("::", 1)[-1] == "None"
-                ):
-                    option_default = self.option_none_default_expression()
-                    if option_default is not None:
-                        return option_default
-                if expr.name in self.METAL_RAY_FLAG_VALUES:
-                    return f"{self.METAL_RAY_FLAG_VALUES[expr.name]}u"
-                if expr.name in self.local_variable_types:
-                    return self.metal_local_identifier_name(expr.name)
-                enum_value = enum_value_expression(self, expr.name)
-                if enum_value is not None:
-                    return enum_value
-                # Not an enum value: a variable this program declares keeps its declared spelling.
-                return expr.name
-            else:
-                return str(expr)
+            return self.generate_metal_variable_expression(expr)
         elif isinstance(expr, BinaryOpNode):
-            operator = self.map_operator(expr.op)
-            left = self.metal_narrow_vector_operand(
-                expr.left, self.generate_binary_operand(expr.left, operator)
-            )
-            right = self.metal_narrow_vector_operand(
-                expr.right, self.generate_binary_operand(expr.right, operator, True)
-            )
-            if operator in {"<", ">", "<=", ">="}:
-                if self.map_type(self.expression_result_type(expr.left)) == "bool":
-                    left = f"int({left})"
-                if self.map_type(self.expression_result_type(expr.right)) == "bool":
-                    right = f"int({right})"
-            if operator in {"<", ">", "<=", ">=", "==", "!="}:
-                left, right = metal_sign_matched_comparison_operands(
-                    self.map_type(self.expression_result_type(expr.left)),
-                    self.map_type(self.expression_result_type(expr.right)),
-                    left,
-                    right,
-                )
-            left, right, common = self.metal_mixed_vector_binary_operands(
-                expr, operator, left, right
-            )
-            if operator == "%" and common in {"float", "half"}:
-                return f"fmod({left}, {right})"
-            matrix_arithmetic = self.metal_matrix_builtins.componentwise(
-                operator, expr.left, expr.right, left, right
-            )
-            if matrix_arithmetic is not None:
-                return matrix_arithmetic
-            # The operands keep their own (common) type and the declaration
-            # converts the result: converting each operand to the declared
-            # type would turn an integer division into a floating one, or a
-            # signed one into an unsigned one (#3166).
-            return self.metal_narrow_vector_wrap(
-                expr, operator, f"{left} {operator} {right}"
-            )
+            return self.generate_metal_binary_expression(expr)
         elif isinstance(expr, (AssignmentNode, BackendAssignmentNode)):
             return assignment_value_expression(self.generate_assignment(expr))
         elif is_comma_expression(expr):
@@ -4851,46 +3040,7 @@ class MetalCodeGen(
                 expr, self.generate_expression, self.generate_discarded_expression
             )
         elif isinstance(expr, ArrayLiteralNode):
-            element_type, array_suffix = split_array_type_suffix(
-                self.current_expression_expected_type or ""
-            )
-            matrix_element_type = (
-                element_type
-                if array_suffix.count("[") == 1
-                and self.is_matrix_value_type(element_type)
-                else None
-            )
-            # A structure's brace list gives each nested list its member's type,
-            # and an array of structures' list gives each its element type, so a
-            # matrix array member is written as the array above is.
-            nested_types = []
-            if element_type in self.struct_member_types and array_suffix:
-                nested_types = [
-                    self.metal_for_in_array_element_type(
-                        self.current_expression_expected_type
-                    )
-                ] * len(expr.elements)
-            elif element_type in self.struct_member_types:
-                nested_types = list(self.struct_member_types[element_type].values())
-            rendered_elements = []
-            for index, element in enumerate(expr.elements):
-                nested_type = (
-                    nested_types[index]
-                    if isinstance(element, ArrayLiteralNode)
-                    and index < len(nested_types)
-                    else None
-                )
-                rendered = self.generate_expression_with_expected(element, nested_type)
-                # A scalar cannot initialize a matrix element of a brace list, so
-                # write the matrix constructor, as GLSL output's mat3(0.0) does.
-                if (
-                    matrix_element_type is not None
-                    and self.expression_component_count(element) == 1
-                ):
-                    rendered = f"{self.map_type(matrix_element_type)}({rendered})"
-                rendered_elements.append(rendered)
-            elements = ", ".join(rendered_elements)
-            return f"{{{elements}}}"
+            return self.generate_metal_array_literal_expression(expr)
         elif isinstance(expr, PointerReinterpretNode):
             return self.generate_metal_storage_pointer_reinterpret(expr)
         elif isinstance(expr, UnaryOpNode):
@@ -4899,65 +3049,7 @@ class MetalCodeGen(
             # to that token first creates an unsigned value and triggers a
             # warning-fatal conversion back to ``long``.  Keep the exact value
             # in signed arithmetic using two representable long literals.
-            operand_value = getattr(getattr(expr, "operand", None), "value", None)
-            if (
-                getattr(expr, "op", getattr(expr, "operator", None)) == "-"
-                and not getattr(expr, "is_postfix", False)
-                and isinstance(operand_value, int)
-                and not isinstance(operand_value, bool)
-                and operand_value == 1 << 63
-                and self.map_type(
-                    getattr(getattr(expr.operand, "literal_type", None), "name", None)
-                )
-                not in {"ulong", "uint64_t"}
-            ):
-                return "(-9223372036854775807L - 1L)"
-            negated_literal = self.metal_negated_wide_integer_literal(expr)
-            if negated_literal is not None:
-                return negated_literal
-            local_reinterpret = self.generate_metal_local_reinterpret_read(expr)
-            if local_reinterpret is not None:
-                return local_reinterpret
-            operator = self.map_operator(expr.op)
-            if operator in {"++", "--"} and self.is_metal_signed_builtin_member(
-                expr.operand
-            ):
-                # The uint storage steps with the int's bits; the value read is converted back.
-                storage = self.generate_metal_signed_builtin_member_storage(
-                    expr.operand
-                )
-                if getattr(expr, "is_postfix", False):
-                    return f"int({storage}{operator})"
-                return f"int({operator}{storage})"
-            operand = self.generate_unary_operand(expr.operand)
-            if operator in {"++", "--"}:
-                byte_update = self.metal_narrow_integer_update_expression(
-                    expr, expr.operand, operator
-                )
-                if byte_update is not None:
-                    return byte_update
-                # Buffer storage whose reads convert (a packed vector's
-                # components) is updated in place through the storage itself.
-                layout_store = self.metal_hlsl_layout_store_target(expr.operand)
-                if layout_store is not None and not layout_store[1]:
-                    operand = layout_store[0]
-            if getattr(expr, "is_postfix", False):
-                return f"{postfix_operand(operand)}{operator}"
-            if operator == "!":
-                operand = metal_logical_not_operand(
-                    operand, self.expression_result_type(expr.operand)
-                )
-            operand = self.metal_narrow_vector_operand(expr.operand, operand)
-            if operator == "-":
-                matrix_negation = self.metal_matrix_builtins.negation(
-                    expr.operand, operand
-                )
-                if matrix_negation is not None:
-                    return matrix_negation
-            if operator in {"+", "-"} and operand.startswith(("+", "-")):
-                # Keep adjacent signs from becoming an increment or decrement.
-                operand = f"({operand})"
-            return self.metal_narrow_vector_wrap(expr, operator, f"{operator}{operand}")
+            return self.generate_metal_unary_expression(expr)
         elif isinstance(expr, CooperativeMatrixOpNode):
             return self.generate_cooperative_matrix_operation(expr)
         elif isinstance(expr, WaveOpNode):
@@ -4977,987 +3069,22 @@ class MetalCodeGen(
                 expr.arguments,
             )
         elif isinstance(expr, ArrayAccessNode):
-            unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if unsupported_value is not None:
-                return unsupported_value
-            stage_io_access = self.generate_metal_stage_io_lowered_array_access(expr)
-            if stage_io_access is not None:
-                return stage_io_access
-            unsupported_value = (
-                self.unsupported_metal_acceleration_structure_array_expression(expr)
-            )
-            if unsupported_value is not None:
-                return unsupported_value
-            unsupported_value = (
-                self.unsupported_metal_ray_function_table_array_expression(expr)
-            )
-            if unsupported_value is not None:
-                return unsupported_value
-            block_load = self.generate_glsl_buffer_block_array_load(expr)
-            if block_load is not None:
-                return block_load
-            layout_element = self.metal_hlsl_layout_element_access(expr)
-            if layout_element is not None:
-                access, conversion = layout_element
-                return f"{conversion}({access})" if conversion else access
-            if is_whole_texel_load(expr.array, self.function_call_name):
-                # The subscript selects a component of the whole texel.
-                array = self.generate_expression_with_expected(expr.array, None)
-            else:
-                array = self.generate_expression(expr.array)
-            if isinstance(
-                expr.array,
-                (
-                    AssignmentNode,
-                    BinaryOpNode,
-                    TernaryOpNode,
-                    CastNode,
-                    PointerReinterpretNode,
-                    UnaryOpNode,
-                ),
-            ):
-                array = f"({array})"
-            index = self.generate_expression(expr.index)
-            return f"{array}[{index}]"
+            return self.generate_metal_array_access_expression(expr)
         elif isinstance(expr, ConstructorNode):
-            registered_conversion = self.metal_registered_structure_scalar_conversion(
-                expr,
-                getattr(expr, "constructor_type", None),
-                getattr(expr, "arguments", []),
-            )
-            if registered_conversion is not None:
-                return registered_conversion
-            enum_constructor = generate_enum_constructor_expression(self, expr)
-            if enum_constructor is not None:
-                return enum_constructor
-            constructor = generate_struct_constructor_expression(self, expr)
-            if constructor is not None:
-                return constructor
-            constructor_type = getattr(expr, "constructor_type", None)
-            matrix_constructor = self.generate_metal_matrix_constructor_override(
-                constructor_type, getattr(expr, "arguments", [])
-            )
-            if matrix_constructor is not None:
-                return matrix_constructor
-            if self.is_builtin_value_constructor_type(constructor_type):
-                metal_type = self.map_type(constructor_type)
-                matrix_resize = self.generate_metal_matrix_resize_constructor(
-                    metal_type, getattr(expr, "arguments", [])
-                ) or self.metal_matrix_builtins.component_constructor(
-                    metal_type, getattr(expr, "arguments", [])
-                )
-                if matrix_resize is not None:
-                    return matrix_resize
-                args = ", ".join(
-                    self.generate_metal_value_constructor_arguments(
-                        metal_type, getattr(expr, "arguments", [])
-                    )
-                )
-                if getattr(
-                    expr, "is_braced_constructor", False
-                ) and self.is_vector_value_type(constructor_type):
-                    width = self.value_component_count(constructor_type)
-                    counts = [
-                        self.expression_component_count(arg) for arg in expr.arguments
-                    ]
-                    if (
-                        width
-                        and all(count is not None for count in counts)
-                        and sum(counts) > width
-                    ):
-                        raise UnsupportedMetalFeatureError(
-                            "vector-list-initialization",
-                            f"Vector initializer for {metal_type} exceeds its {width} components",
-                            reason="element-count-mismatch",
-                            source_location=getattr(expr, "source_location", None),
-                        )
-                    rendered = f"{metal_type}{{{args}}}"
-                else:
-                    rendered = f"{metal_type}({args})"
-                return (
-                    self.metal_narrow_integer_conversion_expression(
-                        rendered, constructor_type
-                    )
-                    or rendered
-                )
-            return str(expr)
+            return self.generate_metal_constructor_expression(expr)
         elif isinstance(expr, FunctionCallNode):
-            option_payload = self.option_constructor_payload_expression(expr)
-            if option_payload is not None:
-                return option_payload
-
-            func_expr = getattr(expr, "function", None)
-            if func_expr is None:
-                func_expr = expr.name
-            numeric_trait_call = generate_numeric_trait_method_call(
-                self,
-                func_expr,
-                expr.args,
-            )
-            if numeric_trait_call is not None:
-                return numeric_trait_call
-
-            func_name = None
-            if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
-                func_name = func_expr.name
-                callee = func_name
-            elif isinstance(func_expr, str):
-                func_name = func_expr
-                callee = func_expr
-            else:
-                callee = self.generate_expression(func_expr)
-
-            if (
-                func_name in PACK_FUNCTIONS
-                and func_name not in self.user_function_names
-            ):
-                return metal_pack_call(
-                    self, func_name, [self.generate_expression(a) for a in expr.args]
-                )
-            packed_dot = self.generate_packed_dot4add_call(func_name, expr.args)
-            if packed_dot is not None:
-                return packed_dot
-            if (
-                func_name in BITFIELD_ARITIES
-                and func_name not in self.user_function_names
-            ):
-                return metal_bitfield_call(
-                    self, func_name, [self.generate_expression(a) for a in expr.args]
-                )
-            boolean_mix = boolean_mix_selector(
-                self, func_name, expr.args, self.user_function_names
-            )
-            if boolean_mix is not None:
-                return metal_boolean_mix(self, expr.args, boolean_mix)
-            exponent_call = metal_exponent_call(self, func_name, expr.args)
-            if exponent_call is not None:
-                return exponent_call
-            bit_scan_call = metal_bit_scan_call(self, func_name, expr.args)
-            if bit_scan_call is not None:
-                return bit_scan_call
-            extended_arithmetic = metal_extended_arithmetic_call(
-                self, func_name, expr.args
-            )
-            if extended_arithmetic is not None:
-                return extended_arithmetic
-            packed_bytes = self.generate_packed_byte_call(func_name, expr.args)
-            if packed_bytes is not None:
-                return packed_bytes
-
-            vector_set = re.fullmatch(
-                r"CrossGLMetalVectorIndex_([iu](?:8|16)vec[234])_set",
-                str(func_name),
-            )
-            if vector_set and len(expr.args) == 3:
-                member = expr.args[0]
-                while isinstance(member, ArrayAccessNode):
-                    member = member.array
-                if (
-                    isinstance(member, MemberAccessNode)
-                    and self.member_lookup_type_name(
-                        self.expression_result_type(member.object)
-                    )
-                    in self.structs_by_name
-                ):
-                    native = self.metal_native_narrow_bitcast_storage_type(
-                        vector_set[1]
-                    )
-                    target = self.generate_expression(expr.args[0])
-                    lane = self.generate_expression_with_expected(expr.args[1], "uint")
-                    selected = self.generate_expression(expr.args[2])
-                    return f"({target}[{lane}] = {native[:-1]}({selected}))"
-
-            block_length = self.glsl_buffer_block_length_call(func_expr, expr.args)
-            if block_length is not None:
-                return block_length
-            length_object = length_method_object(func_expr, expr.args)
-            matrix_dimensions = (
-                self.metal_matrix_dimensions(
-                    self.expression_result_type(length_object) or ""
-                )
-                if length_object is not None
-                else None
-            )
-            if matrix_dimensions is not None:
-                # A matrix's length() is its column count (GLSL 4.60 section 5.10).
-                return f"int({matrix_dimensions[1]})"
-
-            unsupported_table_call = (
-                self.unsupported_metal_ray_function_table_array_member_call(func_expr)
-            )
-            if unsupported_table_call is not None:
-                return unsupported_table_call
-
-            ray_query_operation = self.ray_query_operation_from_function_call(expr)
-            if ray_query_operation is not None and isinstance(
-                func_expr, MemberAccessNode
-            ):
-                return self.generate_metal_ray_query_call(
-                    ray_query_operation,
-                    getattr(
-                        func_expr,
-                        "object",
-                        getattr(func_expr, "object_expr", None),
-                    ),
-                    expr.args,
-                )
-
-            sizeof_bytes = sizeof_call_bytes(self, func_name, expr.args, "metal")
-            if sizeof_bytes is not None:
-                return str(sizeof_bytes)
-
-            static_generic_call = generate_static_generic_numeric_call(self, func_name)
-            if static_generic_call is not None:
-                return static_generic_call
-
-            if isinstance(func_name, str) and not self.metal_function_name_is_shadowed(
-                func_name
-            ):
-                matrix_constructor = self.generate_metal_matrix_constructor_override(
-                    func_name, expr.args
-                )
-                if matrix_constructor is not None:
-                    return matrix_constructor
-                logical_intrinsic = self.generate_metal_hlsl_logical_intrinsic(
-                    func_name, expr.args
-                )
-                if logical_intrinsic is not None:
-                    return logical_intrinsic
-
-            if func_name == "RayDesc" and self.requires_metal_builtin_ray_desc(
-                func_name
-            ):
-                self.required_metal_ray_desc_runtime = True
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                return f"CglRayDesc({args})"
-
-            unsupported_call = self.unsupported_glsl_buffer_block_function_call(
-                func_name
-            )
-            if unsupported_call is not None:
-                return unsupported_call
-
-            input_attachment_call = self.unsupported_input_attachment_call(func_name)
-            if input_attachment_call is not None:
-                return input_attachment_call
-
-            enum_constructor = generate_enum_constructor_call(
-                self, func_name, expr.args
-            )
-            if enum_constructor is not None:
-                return enum_constructor
-
-            glsl_block_atomic_call = self.generate_glsl_buffer_block_atomic_call(
-                func_name, expr.args
-            )
-            if glsl_block_atomic_call is not None:
-                return glsl_block_atomic_call
-
-            buffer_atomic_call = self.generate_metal_buffer_resource_atomic_call(
-                func_name, expr.args
-            )
-            if buffer_atomic_call is not None:
-                return buffer_atomic_call
-
-            synchronization_call = self.synchronization_function_call(
-                func_name,
-                expr.args,
-                source_location=getattr(expr, "source_location", None),
-            )
-            if synchronization_call is not None:
-                return synchronization_call
-
-            wave_call = self.generate_metal_wave_operation(func_name, expr.args)
-            if wave_call is not None:
-                return wave_call
-
-            atomic_call = self.generate_atomic_function_call(func_name, expr.args)
-            if atomic_call is not None:
-                return atomic_call
-
-            mesh_output_call = self.generate_metal_mesh_output_call(
-                func_name, expr.args
-            )
-            if mesh_output_call is not None:
-                return mesh_output_call
-
-            if func_name == TEXTURE_RESIDENCY_OPERATION:
-                return metal_texture_residency_call(self, expr.args, expr)
-            if func_name == TEXTURE_RESIDENT_OPERATION:
-                return metal_texture_resident_call(self, expr.args, expr)
-
-            if is_texture_lod_clamp_operation(func_name):
-                return metal_texture_lod_clamp_call(self, func_name, expr.args, expr)
-
-            texture_call = self.generate_texture_call(func_name, expr.args)
-            if texture_call is not None:
-                return texture_call
-
-            buffer_call = self.generate_buffer_call(func_name, expr.args)
-            if buffer_call is not None:
-                return buffer_call
-            specialized_func_name = generic_function_call_name(
-                self,
-                func_name,
-                expr.args,
-            )
-            argument_func_name = func_name
-            if specialized_func_name is not None:
-                callee = specialized_func_name
-                func_name = specialized_func_name
-            else:
-                reject_unresolved_generic_function_call(self, func_name, "Metal")
-            scalar_geometric_call = self.metal_scalar_geometric_call(
-                func_name, expr.args
-            )
-            if scalar_geometric_call is not None:
-                return scalar_geometric_call
-            if func_name == "normalize" and func_name not in self.user_function_names:
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                call_name = (
-                    "metal::normalize"
-                    if self.metal_function_name_is_shadowed("normalize")
-                    else "normalize"
-                )
-                return f"{call_name}({args})"
-            matrix_builtin = self.metal_matrix_builtins.call(func_name, expr.args)
-            if matrix_builtin is not None:
-                return matrix_builtin
-            if (
-                func_name == "inverse"
-                and len(expr.args) == 1
-                and func_name not in self.user_function_names
-            ):
-                arg_type = self.map_type(self.expression_result_type(expr.args[0]))
-                if arg_type in {"float2x2", "float3x3", "float4x4"}:
-                    self.required_metal_inverse_helpers.add(arg_type)
-                    arg = self.generate_expression(expr.args[0])
-                    return f"__crossgl_inverse_{arg_type}({arg})"
-            if (
-                func_name == "mod"
-                and len(expr.args) == 2
-                and func_name not in self.user_function_names
-            ):
-                left = self.generate_expression(expr.args[0])
-                right = self.generate_expression(expr.args[1])
-                return f"(({left}) - (({right}) * floor(({left}) / ({right}))))"
-            if (
-                func_name == "frac"
-                and len(expr.args) == 1
-                and func_name not in self.user_function_names
-            ):
-                arg = self.generate_expression(expr.args[0])
-                fract_name = (
-                    "metal::fract"
-                    if self.metal_function_name_is_shadowed("fract")
-                    else "fract"
-                )
-                return f"{fract_name}({arg})"
-            if (
-                func_name == "lerp"
-                and len(expr.args) == 3
-                and func_name not in self.user_function_names
-            ):
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                mix_name = (
-                    "metal::mix"
-                    if self.metal_function_name_is_shadowed("mix")
-                    else "mix"
-                )
-                return f"{mix_name}({args})"
-            if (
-                func_name == "atan"
-                and len(expr.args) == 2
-                and func_name not in self.user_function_names
-            ):
-                args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                atan2_name = (
-                    "metal::atan2"
-                    if self.metal_function_name_is_shadowed("atan2")
-                    else "atan2"
-                )
-                return f"{atan2_name}({args})"
-            if (
-                func_name in {"inverseSqrt", "inversesqrt"}
-                and len(expr.args) == 1
-                and func_name not in self.user_function_names
-            ):
-                arg = self.generate_expression(expr.args[0])
-                rsqrt_name = (
-                    "metal::rsqrt"
-                    if self.metal_function_name_is_shadowed("rsqrt")
-                    else "rsqrt"
-                )
-                return f"{rsqrt_name}({arg})"
-            if (
-                func_name == "roundEven"
-                and len(expr.args) == 1
-                and func_name not in self.user_function_names
-            ):
-                # MSL rint() rounds halfway cases to the nearest even integer (MSL 4.1 section 6.5).
-                # It has only float and half overloads, so integer operands are converted to float.
-                unified_args = self.generate_metal_unified_builtin_arguments(
-                    func_name, expr.args
-                )
-                arg = (
-                    unified_args[0]
-                    if unified_args is not None
-                    else self.generate_expression(expr.args[0])
-                )
-                rint_name = (
-                    "metal::rint"
-                    if self.metal_function_name_is_shadowed("rint")
-                    else "rint"
-                )
-                return f"{rint_name}({arg})"
-            derivative_name = self.METAL_DERIVATIVE_FUNCTION_ALIASES.get(func_name)
-            if (
-                derivative_name is not None
-                and len(expr.args) == 1
-                and func_name not in self.user_function_names
-            ):
-                arg = self.generate_expression(expr.args[0])
-                derivative_call_name = (
-                    f"metal::{derivative_name}"
-                    if self.metal_function_name_is_shadowed(derivative_name)
-                    else derivative_name
-                )
-                return f"{derivative_call_name}({arg})"
-            explicit_as_type = self.generate_metal_explicit_as_type_call(
-                func_name, expr.args
-            )
-            if explicit_as_type is not None:
-                return explicit_as_type
-            bitcast_call = self.generate_metal_bitcast_call(func_name, expr.args)
-            if bitcast_call is not None:
-                return bitcast_call
-            integer_bit_call = self.generate_metal_integer_bit_call(
-                func_name, expr.args
-            )
-            if integer_bit_call is not None:
-                return integer_bit_call
-            angle_conversion = self.generate_metal_angle_conversion_call(
-                func_name, expr.args
-            )
-            if angle_conversion is not None:
-                return angle_conversion
-            if (
-                func_name in self.METAL_STDLIB_BUILTIN_FUNCTIONS
-                and func_name not in self.user_function_names
-            ):
-                integer_dot = self.generate_metal_integer_dot_call(func_name, expr.args)
-                if integer_dot is not None:
-                    return integer_dot
-                unified_args = self.generate_metal_unified_builtin_arguments(
-                    func_name, expr.args
-                )
-                if unified_args is not None:
-                    args = ", ".join(unified_args)
-                elif func_name in self.METAL_BFLOAT_ARGUMENT_PROMOTED_FUNCTIONS:
-                    args = ", ".join(
-                        self.generate_metal_bfloat_promoted_argument(arg)
-                        for arg in expr.args
-                    )
-                else:
-                    args = ", ".join(self.generate_expression(arg) for arg in expr.args)
-                if self.metal_fast_math_call(expr, func_name):
-                    return f"metal::fast::{func_name}({args})"
-                if self.metal_precise_math_call(
-                    expr, func_name
-                ) or self.metal_safe_math_call(expr, func_name):
-                    return f"metal::precise::{func_name}({args})"
-                call_name = (
-                    f"metal::{func_name}"
-                    if self.metal_function_name_is_shadowed(func_name)
-                    else func_name
-                )
-                return f"{call_name}({args})"
-            registered_conversion = self.metal_registered_structure_scalar_conversion(
-                expr,
-                func_name,
-                expr.args,
-            )
-            if registered_conversion is not None:
-                return registered_conversion
-            aggregate_constructor = self.generate_metal_aggregate_constructor_call(
-                expr,
-                func_name,
-            )
-            if aggregate_constructor is not None:
-                return aggregate_constructor
-            if (
-                func_name in self.metal_type_aliases
-                or (
-                    func_name not in self.user_function_names
-                    and self.is_vector_value_type(func_name)
-                )
-                or re.fullmatch(
-                    r"(?:u?int(?:8|16|32|64)(?:_t)?|"
-                    r"(?:float(?:16|32|64)|bfloat16)(?:_t)?)[234]",
-                    str(func_name),
-                )
-                is not None
-                or func_name in [
-                    "float",
-                    "half",
-                    "float16",
-                    "float16_t",
-                    "min16float",
-                    "min10float",
-                    "double",
-                    "f16",
-                    "f32",
-                    "f64",
-                    "bfloat",
-                    "bfloat16",
-                    "bfloat16_t",
-                    "int",
-                    "i8",
-                    "i16",
-                    "i32",
-                    "char",
-                    "signed char",
-                    "int8",
-                    "int16",
-                    "int8_t",
-                    "int16_t",
-                    "int32_t",
-                    "int64",
-                    "int64_t",
-                    "long",
-                    "signed long",
-                    "ptrdiff_t",
-                    "min16int",
-                    "min12int",
-                    "uint",
-                    "u8",
-                    "u16",
-                    "u32",
-                    "i64",
-                    "u64",
-                    "uchar",
-                    "unsigned char",
-                    "uint8",
-                    "uint16",
-                    "uint8_t",
-                    "uint16_t",
-                    "uint32_t",
-                    "uint64",
-                    "uint64_t",
-                    "ulong",
-                    "unsigned long",
-                    "size_t",
-                    "min16uint",
-                    "short",
-                    "signed short",
-                    "ushort",
-                    "unsigned short",
-                    "bool",
-                    "vec2",
-                    "vec3",
-                    "vec4",
-                    "vec2<f16>",
-                    "vec3<f16>",
-                    "vec4<f16>",
-                    "vec2<f32>",
-                    "vec3<f32>",
-                    "vec4<f32>",
-                    "vec2<f64>",
-                    "vec3<f64>",
-                    "vec4<f64>",
-                    "vec2<i8>",
-                    "vec3<i8>",
-                    "vec4<i8>",
-                    "vec2<u8>",
-                    "vec3<u8>",
-                    "vec4<u8>",
-                    "vec2<i16>",
-                    "vec3<i16>",
-                    "vec4<i16>",
-                    "vec2<u16>",
-                    "vec3<u16>",
-                    "vec4<u16>",
-                    "vec2<i32>",
-                    "vec3<i32>",
-                    "vec4<i32>",
-                    "vec2<u32>",
-                    "vec3<u32>",
-                    "vec4<u32>",
-                    "vec2<i64>",
-                    "vec3<i64>",
-                    "vec4<i64>",
-                    "vec2<u64>",
-                    "vec3<u64>",
-                    "vec4<u64>",
-                    "vec2<bool>",
-                    "vec3<bool>",
-                    "vec4<bool>",
-                    "ivec2",
-                    "ivec3",
-                    "ivec4",
-                    "i64vec2",
-                    "i64vec3",
-                    "i64vec4",
-                    "uvec2",
-                    "uvec3",
-                    "uvec4",
-                    "u64vec2",
-                    "u64vec3",
-                    "u64vec4",
-                    "bvec2",
-                    "bvec3",
-                    "bvec4",
-                    "packed_float2",
-                    "packed_float3",
-                    "packed_float4",
-                    "simd_float2",
-                    "simd_float3",
-                    "simd_float4",
-                    "half2",
-                    "half3",
-                    "half4",
-                    "packed_half2",
-                    "packed_half3",
-                    "packed_half4",
-                    "simd_half2",
-                    "simd_half3",
-                    "simd_half4",
-                    "f16vec2",
-                    "f16vec3",
-                    "f16vec4",
-                    "mat2",
-                    "mat3",
-                    "mat4",
-                    "mat2x2",
-                    "mat2x3",
-                    "mat2x4",
-                    "mat3x2",
-                    "mat3x3",
-                    "mat3x4",
-                    "mat4x2",
-                    "mat4x3",
-                    "mat4x4",
-                    "f16mat2",
-                    "f16mat3",
-                    "f16mat4",
-                    "f16mat2x2",
-                    "f16mat2x3",
-                    "f16mat2x4",
-                    "f16mat3x2",
-                    "f16mat3x3",
-                    "f16mat3x4",
-                    "f16mat4x2",
-                    "f16mat4x3",
-                    "f16mat4x4",
-                    "char2",
-                    "char3",
-                    "char4",
-                    "uchar2",
-                    "uchar3",
-                    "uchar4",
-                    "packed_int2",
-                    "packed_int3",
-                    "packed_int4",
-                    "packed_uint2",
-                    "packed_uint3",
-                    "packed_uint4",
-                    "simd_int2",
-                    "simd_int3",
-                    "simd_int4",
-                    "simd_uint2",
-                    "simd_uint3",
-                    "simd_uint4",
-                    "simd_float2x2",
-                    "simd_float2x3",
-                    "simd_float2x4",
-                    "simd_float3x2",
-                    "simd_float3x3",
-                    "simd_float3x4",
-                    "simd_float4x2",
-                    "simd_float4x3",
-                    "simd_float4x4",
-                    "simd_half2x2",
-                    "simd_half2x3",
-                    "simd_half2x4",
-                    "simd_half3x2",
-                    "simd_half3x3",
-                    "simd_half3x4",
-                    "simd_half4x2",
-                    "simd_half4x3",
-                    "simd_half4x4",
-                    "i8vec2",
-                    "i8vec3",
-                    "i8vec4",
-                    "u8vec2",
-                    "u8vec3",
-                    "u8vec4",
-                    "short2",
-                    "short3",
-                    "short4",
-                    "ushort2",
-                    "ushort3",
-                    "ushort4",
-                    "i16vec2",
-                    "i16vec3",
-                    "i16vec4",
-                    "u16vec2",
-                    "u16vec3",
-                    "u16vec4",
-                    "min16float2",
-                    "min16float3",
-                    "min16float4",
-                    "min10float2",
-                    "min10float3",
-                    "min10float4",
-                    "min16int2",
-                    "min16int3",
-                    "min16int4",
-                    "min12int2",
-                    "min12int3",
-                    "min12int4",
-                    "min16uint2",
-                    "min16uint3",
-                    "min16uint4",
-                    "min16float2x2",
-                    "min16float2x3",
-                    "min16float2x4",
-                    "min16float3x2",
-                    "min16float3x3",
-                    "min16float3x4",
-                    "min16float4x2",
-                    "min16float4x3",
-                    "min16float4x4",
-                    "min10float2x2",
-                    "min10float2x3",
-                    "min10float2x4",
-                    "min10float3x2",
-                    "min10float3x3",
-                    "min10float3x4",
-                    "min10float4x2",
-                    "min10float4x3",
-                    "min10float4x4",
-                ]
-            ):
-                metal_type = self.map_type(func_name)
-                matrix_resize = self.generate_metal_matrix_resize_constructor(
-                    metal_type, expr.args
-                ) or self.metal_matrix_builtins.component_constructor(
-                    metal_type, expr.args
-                )
-                if matrix_resize is not None:
-                    return matrix_resize
-                args = ", ".join(
-                    self.generate_metal_value_constructor_arguments(
-                        metal_type, expr.args
-                    )
-                )
-                direct = self.metal_direct_narrow_float_conversion(
-                    func_name, expr.args, args
-                )
-                if direct is not None:
-                    return direct
-                rendered = f"{metal_type}({args})"
-                return (
-                    self.metal_narrow_integer_conversion_expression(rendered, func_name)
-                    or rendered
-                )
-            readonly_raw_buffer_call = self.readonly_raw_buffer_call_diagnostic(
-                argument_func_name, expr.args
-            )
-            if readonly_raw_buffer_call is not None:
-                return readonly_raw_buffer_call
-            readonly_parameter_call = self.readonly_metal_parameter_call_diagnostic(
-                argument_func_name, expr.args
-            )
-            if readonly_parameter_call is not None:
-                return readonly_parameter_call
-            mesh_context_call = self.metal_mesh_dispatch_context_call_diagnostic(
-                func_name
-            )
-            if mesh_context_call is not None:
-                return mesh_context_call
-            self.validate_address_space_call(argument_func_name, expr.args)
-            wave_lane_call = self.metal_wave_lane_helper_call_diagnostic(func_name)
-            if wave_lane_call is not None:
-                return wave_lane_call
-            readonly_mesh_payload_call = (
-                self.readonly_metal_mesh_payload_call_diagnostic(
-                    argument_func_name, expr.args
-                )
-            )
-            if readonly_mesh_payload_call is not None:
-                return readonly_mesh_payload_call
-            self.validate_function_resource_argument_types(func_name, expr.args)
-            self.validate_function_image_access_arguments(func_name, expr.args)
-            args = self.generate_function_call_arguments(argument_func_name, expr.args)
-            if self.function_call_matches_known_signature(func_name, expr.args):
-                args.extend(
-                    self.required_function_stage_output_argument_names(func_name)
-                )
-                args.extend(
-                    self.required_function_stage_parameter_argument_names(func_name)
-                )
-                args.extend(
-                    self.cbuffer_parameter_name(cbuffer)
-                    for cbuffer in self.required_function_cbuffers(func_name)
-                )
-                args.extend(
-                    self.required_function_thread_private_global_argument_names(
-                        func_name
-                    )
-                )
-                args.extend(self.required_function_resource_argument_names(func_name))
-                args.extend(
-                    self.required_metal_mesh_dispatch_context_arguments(func_name)
-                )
-                wave_lane_args = self.required_metal_wave_lane_context_arguments(
-                    func_name
-                )
-                if wave_lane_args is not None:
-                    args.extend(wave_lane_args)
-            args = ", ".join(args)
-            if callee == func_name and (
-                self.metal_precise_math_call(expr, func_name)
-                or self.metal_safe_math_call(expr, func_name)
-            ):
-                return f"metal::precise::{func_name}({args})"
-            return f"{callee}({args})"
+            return self.generate_metal_function_call_expression(expr)
         elif isinstance(expr, MemberAccessNode):
-            unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if unsupported_value is not None:
-                return unsupported_value
-            stage_io_access = self.generate_metal_stage_io_lowered_member_access(expr)
-            if stage_io_access is not None:
-                return stage_io_access
-            if id(
-                expr
-            ) not in self.metal_signed_member_raw_reads and self.is_metal_signed_builtin_member(
-                expr
-            ):
-                return f"int({self.generate_metal_signed_builtin_member_storage(expr)})"
-            unsupported_value = (
-                self.unsupported_metal_ray_function_table_array_expression(expr)
-            )
-            if unsupported_value is not None:
-                return unsupported_value
-            block_load = self.generate_glsl_buffer_block_member_load(expr)
-            if block_load is not None:
-                return block_load
-            suppress_suffix = self.member_access_is_image_load_component(expr)
-            object_name = self.expression_name(expr.object)
-            if (
-                object_name in self.metal_static_struct_members
-                and str(expr.member)
-                in self.metal_static_struct_members.get(object_name, set())
-                and object_name not in self.local_variable_types
-                and object_name not in self.metal_program_scope_value_global_types
-            ):
-                return f"{object_name}::{expr.member}"
-            previous_suppression = self.suppress_image_load_component_suffix
-            self.suppress_image_load_component_suffix = (
-                previous_suppression or suppress_suffix
-            )
-            try:
-                obj = self.generate_expression_with_expected(expr.object, None)
-            finally:
-                self.suppress_image_load_component_suffix = previous_suppression
-            if isinstance(
-                expr.object, (BinaryOpNode, TernaryOpNode, UnaryOpNode)
-            ) and not self.metal_expression_is_parenthesized(obj):
-                # Member access binds tighter than every operator; keep the
-                # operand grouping that CrossGL expresses through the tree.
-                obj = f"({obj})"
-            if self.member_access_uses_pointer_operator(expr):
-                return f"{obj}->{expr.member}"
-            layout_member = self.metal_hlsl_layout_member(expr)
-            if (
-                layout_member is not None
-                and layout_member.read_conversion
-                and layout_member.array_count is None
-            ):
-                return f"{layout_member.read_conversion}({obj}.{expr.member})"
-            return f"{obj}.{expr.member}"
+            return self.generate_metal_member_access_expression(expr)
         elif isinstance(expr, PointerAccessNode):
             pointer = self.generate_expression_with_expected(expr.pointer_expr, None)
             return f"{pointer}->{expr.member}"
         elif isinstance(expr, TernaryOpNode):
-            true_code, false_code = self.metal_conditional_arms(
-                expr,
-                self.generate_expression(expr.true_expr),
-                self.generate_expression(expr.false_expr),
-            )
-            condition = self.generate_expression(expr.condition)
-            # `?:` is right-associative: an unparenthesized conditional
-            # condition would regroup as part of the false arm.
-            if isinstance(expr.condition, TernaryOpNode):
-                condition = f"({condition})"
-            return f"{condition} ? {true_code} : {false_code}"
+            return self.generate_metal_ternary_expression(expr)
         elif hasattr(expr, "__class__") and "Literal" in str(expr.__class__):
-            if hasattr(expr, "value"):
-                value = expr.value
-                literal_type = getattr(
-                    getattr(expr, "literal_type", None), "name", None
-                )
-                if isinstance(value, int) and not isinstance(value, bool):
-                    mapped_type = self.map_type(literal_type) if literal_type else None
-                    if mapped_type in {"long", "ulong", "int64_t", "uint64_t"}:
-                        suffix = "ul" if mapped_type in {"ulong", "uint64_t"} else "l"
-                        return f"{value}{suffix}"
-                if (
-                    literal_type == "uint"
-                    and isinstance(value, int)
-                    and not isinstance(value, bool)
-                ):
-                    return f"{value}u"
-                if isinstance(value, bool):
-                    return "true" if value else "false"
-                if isinstance(value, int):
-                    # Unsuffixed decimal literals beyond int are long in
-                    # Metal; the source type of such a literal is uint up to
-                    # 2^32 - 1 (as in GLSL and HLSL) and 64-bit above it.
-                    if value > 0x7FFFFFFFFFFFFFFF:
-                        return f"{value}ul"
-                    if 0x7FFFFFFF < value <= 0xFFFFFFFF:
-                        return f"{value}u"
-                    if value < -0x80000000:
-                        return f"{value}l"
-                if isinstance(value, str) and not (
-                    value.startswith('"') and value.endswith('"')
-                ):
-                    return f'"{value}"'  # Add quotes for string literals
-                return str(value)
-            return str(expr)
+            return self.generate_metal_literal_class_expression(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
-            name = getattr(expr, "name", str(expr))
-            if isinstance(name, str) and name.rsplit("::", 1)[-1] == "None":
-                option_default = self.option_none_default_expression()
-                if option_default is not None:
-                    return option_default
-            unsupported_value = self.unsupported_glsl_buffer_block_access_value(expr)
-            if unsupported_value is not None:
-                return unsupported_value
-            if name in self.METAL_RAY_FLAG_VALUES:
-                return f"{self.METAL_RAY_FLAG_VALUES[name]}u"
-            if name in getattr(self, "enum_variant_constants", {}):
-                return enum_value_expression(self, name)
-            if (
-                name not in self.local_variable_types
-                and name in self.ambiguous_cbuffer_members
-            ):
-                raise MetalRefusal(
-                    f"Ambiguous cbuffer member reference '{name}' appears in multiple cbuffers"
-                )
-            if (
-                name not in self.local_variable_types
-                and name in self.cbuffer_member_references
-            ):
-                return self.cbuffer_member_references[name]
-            if (
-                name not in self.local_variable_types
-                and name in self.metal_runtime_initialized_constants
-            ):
-                return f"{name}()"
-            return name
+            return self.generate_metal_identifier_class_expression(expr)
         else:
             return str(expr)
 
@@ -6070,7 +3197,9 @@ class MetalCodeGen(
             source_location=getattr(node, "source_location", None),
         )
 
-    def generate_metal_buffer_resource_atomic_call(self, func_name, args):
+    def generate_metal_buffer_resource_atomic_call(
+        self, func_name, args, *, wide_result_discarded=False
+    ):
         if func_name in self.user_function_names:
             return None
         operation_info = self.buffer_atomic_operations().get(func_name)
@@ -6088,7 +3217,10 @@ class MetalCodeGen(
         target = args[0]
         target_type = self.expression_result_type(target)
         mapped_target_type = self.map_type(target_type)
-        if not self.buffer_atomic_supports_scalar_type(operation, mapped_target_type):
+        wide = is_metal_wide_atomic(operation, mapped_target_type)
+        if not wide and not self.buffer_atomic_supports_scalar_type(
+            operation, mapped_target_type
+        ):
             return self.unsupported_metal_buffer_resource_atomic_call(
                 func_name,
                 target,
@@ -6127,6 +3259,17 @@ class MetalCodeGen(
             target_expr = self.generate_expression(target)
             if not self.is_metal_address_expression(target, target_expr):
                 target_expr = f"&{target_expr}"
+        if wide:
+            return metal_wide_atomic_call(
+                self,
+                func_name,
+                operation,
+                target,
+                target_expr,
+                address_space,
+                args[1],
+                discarded=wide_result_discarded,
+            )
         if operation == "compare_exchange":
             compare = self.generate_expression_with_expected(
                 args[1], mapped_target_type

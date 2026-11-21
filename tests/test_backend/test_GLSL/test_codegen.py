@@ -1660,12 +1660,20 @@ def test_codegen_combined_sampler_constructor_from_glslang_register_autoassign(
     assert "sampler1D(g_tTex1, g_sSamp1)" not in crossgl
 
     # OpenGL GLSL has neither separate textures nor sampler objects in the language: the pair becomes one combined
-    # sampler uniform on the texture's binding, and the host binds g_sSamp1's state to that unit.
+    # sampler uniform on the texture's binding, and the host binds g_sSamp1's state to that unit. A Vulkan
+    # compilation (which defines VULKAN) keeps the separate texture and sampler at their source bindings.
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "layout(binding = 1) uniform sampler1D g_tTex1;" in glsl
-    assert "texture(g_tTex1, 0.1)" in glsl
-    assert "g_sSamp1" not in glsl
-    assert "texture1D" not in glsl
+    assert (
+        "#ifdef VULKAN\nlayout(binding = 1) uniform texture1D g_tTex1;\n#else\n"
+        "layout(binding = 1) uniform sampler1D g_tTex1;\n#endif\n"
+    ) in glsl
+    assert (
+        "#ifdef VULKAN\nlayout(binding = 0) uniform sampler g_sSamp1;\n#endif\n" in glsl
+    )
+    assert (
+        "texture(CROSSGL_SAMPLED(sampler1D(g_tTex1, g_sSamp1), g_tTex1), 0.1)" in glsl
+    )
+    assert "#else\n#define CROSSGL_SAMPLED(vulkan, opengl) opengl\n#endif\n" in glsl
     validate_glsl_with_glslang(tmp_path, glsl, "frag")
 
     # Reduced from KhronosGroup/glslang@98beacdbe5d99f4ac5e4c58bc02bb16c6aeee515
@@ -2763,7 +2771,7 @@ def test_codegen_push_constant_interface_block_preserves_attribute():
     parse_crossgl(crossgl)
 
 
-def test_codegen_push_constant_scalar_array_to_wgsl_uses_padded_elements(tmp_path):
+def test_codegen_push_constant_scalar_array_to_wgsl_keeps_std430_offsets(tmp_path):
     code = textwrap.dedent("""
         #version 450
         layout(push_constant, std430) uniform Material {
@@ -2781,11 +2789,10 @@ def test_codegen_push_constant_scalar_array_to_wgsl_uses_padded_elements(tmp_pat
 
     assert "cbuffer Material @push_constant @buffer_layout(std430) {" in crossgl
     assert "float fa[3];" in crossgl
-    assert (
-        "struct UniformArrayElementF32 {\n" "    @size(16) value: f32,\n" "};"
-    ) in wgsl
-    assert "@align(16) fa: array<UniformArrayElementF32, 3>," in wgsl
-    assert "_Material.fa[1].value" in wgsl
+    # std430 places fa[1] at byte 8, where WGSL's uniform layout of float[3] would put it at byte 32, so the block
+    # is read as 16-byte registers: fa[1] is the third word of the first register.
+    assert "registers: array<vec4<u32>, 1>," in wgsl
+    assert "bitcast<f32>(_Material.registers[0].z)" in wgsl
     validate_wgsl_with_naga(tmp_path, wgsl)
 
 

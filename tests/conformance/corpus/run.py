@@ -11,8 +11,8 @@ Every (unit, target) cell gets one outcome:
 
 A cell is feasible when the target language can express every stage of the unit, partial when it can express
 some, and infeasible otherwise; usable shares are computed over feasible cells. Translation latency is measured
-inside a persistent worker around ``crosstl.translate`` alone, and its p95 per source language is checked
-against ``budgets.json``. The scoreboard records one outcome code per cell; a run fails when a cell in its scope
+inside a persistent worker around ``crosstl.translate`` alone, and its median, p95 and maximum wall time and its
+p95 CPU time per source language are checked against ``budgets.json``. The scoreboard records one outcome code per cell; a run fails when a cell in its scope
 is worse than recorded, a cell cannot be checked, or a latency budget is exceeded.
 """
 
@@ -456,21 +456,31 @@ def compare(baseline, records, manifest):
     return failures, better
 
 
+# Each latency budget key with the clock and the statistic it bounds. The median bounds the typical translation and
+# the maximum the worst one; the p95 bounds the tail.
+LATENCY_BUDGETS = (
+    ("p50Seconds", "wall", "p50"),
+    ("p95Seconds", "wall", "p95"),
+    ("maxSeconds", "wall", "max"),
+    ("p95CpuSeconds", "CPU", "p95"),
+)
+
+
 def check_budgets(summary, budgets):
     """Wall-time budgets bound what a user waits; CPU-time budgets catch a slowdown on a loaded runner."""
     failures = []
     for language, measured in summary["latency"].items():
-        for key, kind in (("p95Seconds", "wall"), ("p95CpuSeconds", "CPU")):
+        for key, kind, statistic in LATENCY_BUDGETS:
             if key not in budgets:
                 continue
             limit = budgets[key].get(language)
             if limit is None:
                 failures.append(
-                    f"No {kind} latency budget for source language {language}"
+                    f"No {kind} {statistic} latency budget for source language {language}"
                 )
             elif measured.get(key) is not None and measured[key] > limit:
                 failures.append(
-                    f"Latency budget exceeded for {language}: {kind} p95 {measured[key]} s > {limit} s"
+                    f"Latency budget exceeded for {language}: {kind} {statistic} {measured[key]} s > {limit} s"
                 )
     return failures
 

@@ -24,6 +24,7 @@ from .stage_io_semantic_locations import allocate_locations
 __all__ = (
     "VertexInputLocationError",
     "allocated_stage_layouts",
+    "location_span",
     "vertex_input_builtin",
     "vertex_input_layouts",
     "vertex_parameter_layouts",
@@ -121,6 +122,11 @@ def _layouts(codegen, nodes, type_of, occupied=()):
 def allocated_stage_layouts(codegen, nodes, type_of, occupied=()):
     """The layout of each user stage variable in ``nodes``: its own, with the allocated location when it has none."""
     return _layouts(codegen, nodes, type_of, occupied)
+
+
+def location_span(codegen, type_node) -> int:
+    """Locations a stage variable of ``type_node`` occupies (:func:`_span`)."""
+    return _span(codegen, type_node)
 
 
 def _span(codegen, type_node) -> int:

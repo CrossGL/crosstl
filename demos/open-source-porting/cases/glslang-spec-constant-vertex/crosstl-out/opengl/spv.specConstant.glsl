@@ -1,5 +1,13 @@
 #version 400
 #if defined(GL_SPIRV) || defined(VULKAN)
+#if !defined(GL_ES) && __VERSION__ < 410
+#extension GL_ARB_separate_shader_objects : require
+#endif
+#define CROSSGL_LOCATION(n) layout(location = n)
+#else
+#define CROSSGL_LOCATION(n)
+#endif
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 16) const int arraySize = 5;
 #else
 const int arraySize = 5;
@@ -55,8 +63,8 @@ layout(constant_id = 24) gl_MaxImageUnits;
 
 layout(location = 0) in vec4 ucol[arraySize];
 layout(location = 5) in vec4 dupUcol[dupArraySize];
-out vec4 color;
-flat out int size;
+CROSSGL_LOCATION(0) out vec4 color;
+CROSSGL_LOCATION(1) flat out int size;
 // Vertex Shader
 void foo(vec4 p[arraySize]);
 

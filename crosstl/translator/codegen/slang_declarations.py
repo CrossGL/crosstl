@@ -23,6 +23,7 @@ from .enum_utils import (
     generate_generic_enum_structs,
 )
 from .slang_declaration_modifiers import slang_precise_prefix
+from .slang_rasterizer_order import slang_rasterizer_ordered_type
 from .slang_specialization_constants import plan_slang_specialization_constants
 
 
@@ -167,12 +168,14 @@ class SlangDeclarationsMixin:
 
     def format_declaration(self, type_name, name, node=None):
         mapped_type = self.map_resource_type_with_format(type_name, node)
+        # Only the declaration names the rasterizer-ordered view; its accesses are those of the RW type.
+        declared_type = slang_rasterizer_ordered_type(self, mapped_type, node)
         if self.slang_needs_fixed_unsized_value_array(mapped_type) and (
             getattr(node, "initial_value", None) is None
         ):
             # An initializer sizes the array (HLSL and Slang follow C); nothing else can.
             raise UnsizedArrayUnsupportedError("slang", name, "is not a resource array")
-        return format_c_style_array_declaration(mapped_type, name)
+        return format_c_style_array_declaration(declared_type, name)
 
     def slang_needs_fixed_unsized_value_array(self, mapped_type):
         if not isinstance(mapped_type, str) or "[]" not in mapped_type:

@@ -148,7 +148,10 @@ def test_samplers_are_reported_for_the_texture_units_they_combine_with(tmp_path)
     assert samplers[0]["binding"] == texture["binding"]
     assert samplers[0]["register"] == "s0"
     assert samplers[0]["texture"] == "image"
-    assert "textureLod(image, vec2(0.5, 0.5), 0)" in result.code
+    assert (
+        "textureLod(CROSSGL_SAMPLED(sampler2D(image, sampler_), image), vec2(0.5, 0.5), 0)"
+        in result.code
+    )
 
 
 def test_storage_textures_take_the_format_of_the_bound_image(tmp_path):

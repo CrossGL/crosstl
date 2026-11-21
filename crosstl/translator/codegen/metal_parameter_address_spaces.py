@@ -21,6 +21,7 @@ from .metal_buffer_coherence import (
     coherent_array_parameter_declaration,
     merge_memory_contracts,
 )
+from .metal_reference_parameters import buffer_reference_value_type
 from .metal_restrict import metal_restrict_suffix
 from .metal_texture_coherence import (
     is_storage_texture_type_name,
@@ -353,6 +354,9 @@ class MetalParameterAddressSpaceMixin:
             default_for_stage_binding=bool(qualifiers & {"out", "inout"}),
         )
         if address_space is not None:
+            mapped_type = buffer_reference_value_type(
+                self, raw_param_type, address_space, mapped_type
+            )
             address_space = self.readonly_qualified_address_space(
                 address_space,
                 node,

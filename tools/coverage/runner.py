@@ -22,7 +22,7 @@ from . import (
     validators,
 )
 from .features.spirv import is_core
-from .model import ROUND_TRIPS, Feature, Result, kept_folder
+from .model import PAIR, ROUND_TRIPS, Feature, Result, kept_folder
 from .semantic import identify, instructions, lower
 
 OUTPUT_BACKENDS = {
@@ -52,6 +52,7 @@ INPUT_BACKENDS = {
     "rust": "rust",
     "slang": "slang",
     "spirv": "vulkan",
+    "webgl": "webgl",
 }
 # The target a language's probes fall back to when the reference compiler rejects a native probe for its usual target.
 # slangc writes invalid SPIR-V for some operations its HLSL target compiles, such as an OpAtomicCompareExchange on
@@ -429,14 +430,25 @@ def run_input(feature: Feature, language: str) -> Result:
     return result("supported")
 
 
-def _job(job: tuple[Feature, str, str]) -> Result:
-    feature, direction, language = job
+def _job(job: tuple) -> Result:
+    feature, direction, language, *partner = job
+    # A cell's files sit under its source language, in the folder of its target (:func:`.pairs.run_pair`).
+    owner, folder = (
+        (feature.language, f"to-{language}")
+        if direction == PAIR
+        else (language, direction)
+    )
     if _kept:
         # Files an earlier run kept for this probe would sit beside this run's as if they belonged to it.
         shutil.rmtree(
-            Path(_kept, kept_folder(language, direction, feature.name)),
+            Path(_kept, kept_folder(owner, folder, feature.name)),
             ignore_errors=True,
         )
+    if direction == PAIR:
+        # Imported here because :mod:`.pairs` builds on this module.
+        from . import pairs
+
+        return pairs.run_pair(feature, feature.language, language, *partner)
     if direction == "input":
         return run_input(feature, language)
     result = run_output(feature, language)
@@ -447,12 +459,14 @@ def _job(job: tuple[Feature, str, str]) -> Result:
 
 
 def run(
-    jobs: list[tuple[Feature, str, str]],
+    jobs: list[tuple],
     workers: int | None = None,
     keep: Path | None = None,
 ) -> list[Result]:
     """Run every ``(feature, direction, language)`` job; results come back in job order.
 
+    A translation matrix job is ``(feature, PAIR, target, partner)``: it translates ``feature``'s native probe into
+    ``target`` and checks it as ``partner``, ``target``'s feature of the same semantic key (:func:`.pairs.run_pair`).
     With ``keep``, each job writes its probe and CrossTL's translations of it to the job's :func:`.model.kept_folder`
     under ``keep``.
     """
@@ -472,7 +486,7 @@ def run(
 
 
 def _run_jobs(
-    jobs: list[tuple[Feature, str, str]], workers: int, verdicts: str, kept: str | None
+    jobs: list[tuple], workers: int, verdicts: str, kept: str | None
 ) -> list[Result]:
     if workers == 1 or len(jobs) < 2:
         _remember(verdicts, kept)

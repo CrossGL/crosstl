@@ -5,11 +5,16 @@ rebuilds the CrossGL IR row from all of them. ``publish`` writes what CI publish
 ``issues`` reconciles the tracking and bug issues with a report, and ``compare`` shows how a pull request's report
 differs from the published one. ``tools`` lists the reference tool of every language and whether it is installed, so
 you can tell before a local run which rows it will report as untested.
+
+``run --pairs REPORT`` measures the translation matrix (:mod:`.pairs`) instead of rows: the cells that the rows of
+``REPORT``, a merged report, define, for each ``--backend`` as the target. ``merge`` adds such reports' cells to the
+rows.
 """
 
 from __future__ import annotations
 
 import argparse
+import functools
 import re
 import sys
 from pathlib import Path
@@ -21,6 +26,7 @@ from . import (
     github,
     issues,
     lowering,
+    pairs,
     publish,
     report,
     runner,
@@ -44,6 +50,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     run.add_argument("--direction", choices=DIRECTIONS, help="default: both")
     run.add_argument(
+        "--pairs",
+        type=Path,
+        metavar="REPORT",
+        help="measure the translation matrix cells into each --backend instead of rows; REPORT, a merged report of "
+        "every row, defines the cells",
+    )
+    run.add_argument(
         "--feature",
         action="append",
         help="measure only the feature with this upstream name; repeatable",
@@ -66,6 +79,18 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="also run supported compute probes on the conformance harness's runtimes and compare them with the "
         "native probe",
+    )
+    run.add_argument(
+        "--runtimes",
+        default="available",
+        help="with --execute, the conformance harness's runtimes to run probes on: available (the default), or a "
+        "comma-separated list of runtime ids, each of which must then be available",
+    )
+    run.add_argument(
+        "--execution-only",
+        action="store_true",
+        help="with --execute, write a report that merge reads only for its execution verdicts, which it adds to the "
+        "rows another report measures",
     )
     run.add_argument(
         "--strict",
@@ -139,7 +164,63 @@ def _lowering_gaps(language: str) -> list[str]:
     return [tool for tool in tools if not validators.command(tool)]
 
 
+def _run_pairs(args: argparse.Namespace) -> int:
+    """``run --pairs``: measure the cells of the translation matrix into each requested backend."""
+    if args.direction:
+        print("error: --pairs measures cells, which have no direction", file=sys.stderr)
+        return 2
+    try:
+        rows = report.load(args.pairs)
+    except (OSError, ValueError, KeyError) as error:
+        print(f"error: cannot read {args.pairs}: {error}", file=sys.stderr)
+        return 2
+    targets = [t for t in args.backend or LANGUAGES if t in runner.OUTPUT_BACKENDS]
+    missing = [
+        f"{target} ({validators.TOOLS[target]})"
+        for target in targets
+        if not validators.available(target)
+    ]
+    if args.strict and missing:
+        print("error: missing tools for " + "; ".join(missing), file=sys.stderr)
+        return 2
+    catalog = functools.cache(
+        lambda language: features.load(language, offline=args.offline)
+    )
+    measured = pairs.plan(rows["backends"], targets, catalog, args.feature or ())
+    results = runner.run(measured.jobs, args.jobs or None, keep=args.keep)
+    results += measured.results
+    if args.execute:
+        results, used = execution.run(results)
+        executed = sum(1 for r in results if r.runtime)
+        print(f"executed {executed} translations on {', '.join(used) or 'no runtime'}")
+        idle = execution.idle(results)
+        if args.strict and idle:
+            print(f"error: no executable {', '.join(idle)} probe ran", file=sys.stderr)
+            return 2
+    data = report.build(
+        results, targets, [], execute=args.execute, cells=measured.cells
+    )
+    report.write(data, args.output)
+    print(report.summary(data))
+    if args.feature:
+        for result in results:
+            detail = f": {result.detail}" if result.detail else ""
+            print(
+                f"{result.feature.language} to {result.into} {result.feature.name} {result.outcome}{detail}"
+            )
+    print(f"wrote {args.output}")
+    return 0
+
+
 def _run(args: argparse.Namespace) -> int:
+    if args.execution_only and not args.execute:
+        print("error: --execution-only needs --execute", file=sys.stderr)
+        return 2
+    if args.pairs and args.execution_only:
+        print("error: --execution-only measures rows, not --pairs", file=sys.stderr)
+        return 2
+    if args.pairs:
+        return _run_pairs(args)
     languages = args.backend or LANGUAGES
     directions = [args.direction] if args.direction else list(DIRECTIONS)
     missing = [
@@ -150,6 +231,8 @@ def _run(args: argparse.Namespace) -> int:
         f"{language} lowering to SPIR-V ({', '.join(_lowering_gaps(language))})"
         for language in languages
         if language in lowering.SPIRV_COMPILERS and not lowering.can_lower(language)
+        # An execution-only run judges no static verdict, so it needs no SPIR-V where it runs a language natively.
+        and not (args.execution_only and language in execution.SUFFIXES)
     ]
     # Slang functions SPIR-V lacks compile for HLSL or CUDA, which DXC or nvcc then checks.
     if "slang" in languages:
@@ -158,6 +241,14 @@ def _run(args: argparse.Namespace) -> int:
             for target, tool in validators.SLANG_SOURCE_TARGETS.items()
             if not validators.command(tool)
         ]
+    # HLSL features that need shader model 6.10 are checked by DXC's Shader Model 6.10 preview. An execution-only
+    # run gives no static verdict, and the runtimes compile with the pinned DXC, so it does not need the preview.
+    if (
+        "hlsl" in languages
+        and not args.execution_only
+        and not validators.available("hlsl", validators.HLSL_PREVIEW)
+    ):
+        missing.append("hlsl for shader model 6.10 (dxc-preview)")
     # SPIR-V input probes are lowered from GLSL, and from HLSL or Slang for the constructs GLSL cannot spell.
     gaps = dict.fromkeys(
         gap
@@ -185,14 +276,20 @@ def _run(args: argparse.Namespace) -> int:
             jobs += [(feature, direction, language) for feature in feature_list]
     results = runner.run(jobs, args.jobs or None, keep=args.keep)
     if args.execute:
-        results, used = execution.run(results)
+        results, used = execution.run(results, args.runtimes)
         executed = sum(1 for r in results if r.runtime)
         print(f"executed {executed} probes on {', '.join(used) or 'no runtime'}")
         idle = execution.idle(results)
         if args.strict and idle:
             print(f"error: no executable {', '.join(idle)} probe ran", file=sys.stderr)
             return 2
-    data = report.build(results, languages, directions, execute=args.execute)
+    data = report.build(
+        results,
+        languages,
+        directions,
+        execute=args.execute,
+        execution_only=args.execution_only,
+    )
     report.write(data, args.output)
     print(report.summary(data))
     if args.feature:

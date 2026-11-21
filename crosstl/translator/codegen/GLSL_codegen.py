@@ -94,21 +94,15 @@ from .enum_utils import (
     infer_enum_constructor_type,
     sanitize_type_name,
 )
-from .exponent_builtins import emit_glsl_exponent_helpers, glsl_exponent_call
-from .extended_arithmetic_builtins import glsl_extended_arithmetic_call
+from .exponent_builtins import emit_glsl_exponent_helpers
 from .generic_concrete_call_results import concrete_overload_results_differ
 from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
-    generate_numeric_trait_method_call,
-    generate_static_generic_numeric_call,
     generic_function_call_name,
     generic_function_emission_list,
     generic_function_parameters,
-    generic_function_value_arguments,
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
-    reject_unresolved_explicit_generic_call,
-    reject_unresolved_generic_member_call,
 )
 from .generic_global_types import (
     collect_constant_and_cbuffer_member_types,
@@ -118,15 +112,15 @@ from .generic_struct_utils import (
     collect_generic_struct_definitions,
     collect_generic_struct_specialization_member_types,
     collect_generic_struct_specializations,
-    generate_struct_constructor_expression,
     infer_struct_constructor_type,
 )
 from .glsl_builtin_extensions import require_builtin_extensions
+from .glsl_compute_derivative_groups import compute_derivative_group_layout
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
-from .glsl_exact_lookups import glsl_call_names_resolving_to, glsl_note_call_target
+from .glsl_exact_lookups import glsl_call_names_resolving_to
 from .glsl_float_atomic_storage import FloatAtomicStorage
-from .glsl_generic_vectors import glsl_generic_vector_constructor_name
+from .glsl_fragment_interlock import plan_fragment_interlock, wrap_fragment_interlock
 from .glsl_guarded_offsets import call_offset_relation
 from .glsl_helper_stage_guards import (
     glsl_helper_stage_macros,
@@ -146,7 +140,6 @@ from .glsl_ray_queries import (
 )
 from .glsl_refusals import input_attachment_refusal_reason
 from .glsl_shadow_lod import require_shadow_lod_extension
-from .glsl_shared_array_values import is_shared_array_value
 from .glsl_specialization_dependents import (
     constant_source_name,
     partition_constants_by_specialization_dependency,
@@ -156,13 +149,13 @@ from .glsl_stage_entries import refuse_repeated_stage_entries
 from .glsl_stage_input_values import stage_input_struct_value_declarations
 from .glsl_stage_output_values import (
     flattened_stage_output_assignment,
+    refuse_unwritten_entry_return,
     render_flattened_stage_output_store,
     render_stage_struct_value_return,
 )
 from .glsl_target_builtins import OPENGL_UNAVAILABLE_BUILTINS
-from .glsl_tessellation_input_arrays import tessellation_input_length
 from .glsl_union_storage import UnionStorage
-from .glsl_vulkan_descriptor_sets import descriptor_binding_macro_definition
+from .glsl_vulkan_resources import VulkanResourceForms
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -210,8 +203,10 @@ from .metadata_call_bounds import (
 )
 from .opengl_aggregate_assignments import OpenGLAggregateAssignmentMixin
 from .opengl_call_arguments import OpenGLCallArgumentMixin
+from .opengl_call_expressions import OpenGLCallExpressionMixin
 from .opengl_compound_statements import OpenGLCompoundStatementMixin
 from .opengl_cooperative_matrix import OpenGLCooperativeMatrixMixin
+from .opengl_expression_forms import OpenGLExpressionFormMixin
 from .opengl_fixed_array_parameters import OpenGLFixedArrayParameterMixin
 from .opengl_function_intervals import OpenGLFunctionIntervalMixin
 from .opengl_function_signatures import OpenGLFunctionSignatureMixin
@@ -292,7 +287,6 @@ from .opengl_workgroup_pointers import OpenGLWorkgroupPointerMixin
 from .pointer_reinterpret import PointerReinterpretationError, scalar_storage_layout
 from .private_vector_views import lower_private_vector_views
 from .reference_aliases import lower_reference_aliases
-from .relational_builtins import glsl_vector_logical_not
 from .resource_aggregates import lower_resource_aggregates
 from .resource_array_bounds import DynamicIndexSizes
 from .resource_arrays import (
@@ -301,7 +295,6 @@ from .resource_arrays import (
 )
 from .sampler_pairs import COMBINED_SAMPLER_PAIRS, lower_combined_sampler_pairs
 from .scalar_return_bounds import aggregate_call_intervals
-from .sizeof_calls import sizeof_call_bytes
 from .specialized_workgroup_size import has_specialized_workgroup_size
 from .stage_io_semantic_locations import SEMANTIC_LOCATIONS
 from .stage_utils import (
@@ -317,7 +310,6 @@ from .stage_utils import (
     should_emit_qualified_function,
     stage_matches,
 )
-from .storage_image_texels import is_whole_texel_load
 from .subgroup_control_flow import (
     converge_subgroup_bounded_loops,
     converge_subgroup_conditional_calls,
@@ -327,16 +319,6 @@ from .subgroup_control_flow import (
 )
 from .subgroup_loop_carried import loop_carried_names
 from .subgroup_reassignments import ReassignmentFlow
-from .texture_lod_clamp import (
-    glsl_texture_lod_clamp_call,
-    is_texture_lod_clamp_operation,
-)
-from .texture_residency import (
-    TEXTURE_RESIDENCY_OPERATION,
-    TEXTURE_RESIDENT_OPERATION,
-    glsl_texture_residency_call,
-    glsl_texture_resident_call,
-)
 from .uniform_returns import UniformReturnAnalysis, storage_load_call
 from .workgroup_size_extents import glsl_workgroup_size_declaration_layout
 
@@ -388,6 +370,8 @@ class GLSLCodeGen(
     GLSLHlslPreciseMixin,
     GLSLHlslValueMixin,
     GLSLHlslResourceMixin,
+    OpenGLExpressionFormMixin,
+    OpenGLCallExpressionMixin,
 ):
     """Emit GLSL source from the shared CrossGL translator AST."""
 
@@ -476,6 +460,8 @@ class GLSLCodeGen(
         self.glsl_float_remainder_types = set()
         self.glsl_precise_float_remainder_types = set()
         self.glsl_integer_dot_types = set()
+        self.glsl_vulkan_resources = VulkanResourceForms()
+        self.glsl_vulkan_resource_exclusions = frozenset()
         self.reset_glsl_emulated_matrices()
         self.reset_glsl_hlsl_structured_buffers()
         self.reset_glsl_hlsl_cbuffers()
@@ -1866,17 +1852,8 @@ class GLSLCodeGen(
             invocation_count + self.software_subgroup_width - 1
         ) // self.software_subgroup_width
 
-        if any(
-            self.glsl_wave_size_attribute(attribute)
-            for attribute in getattr(entry_function, "attributes", []) or []
-        ):
-            raise self.glsl_software_subgroup_error(
-                "OpenGL software subgroup lowering cannot be combined with a "
-                "hardware WaveSize contract",
-                workgroup_size=concrete_workgroup_size,
-                reason="hardware-contract-conflict",
-                source_location=getattr(entry_function, "source_location", None),
-            )
+        # Refuses a WaveSize other than the software subgroup width.
+        self.glsl_exact_subgroup_width(entry_function, "compute")
 
         all_records = self.glsl_software_subgroup_operation_records(
             ast,
@@ -2779,9 +2756,10 @@ class GLSLCodeGen(
         for operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
             if operation not in operations:
                 continue
-            line = self.GLSL_WAVE_EXTENSION_REQUIREMENTS.get(operation)
-            if line and line not in lines:
-                lines.append(line)
+            required = self.GLSL_WAVE_EXTENSION_REQUIREMENTS.get(operation) or ""
+            for line in required.splitlines():
+                if line not in lines:
+                    lines.append(line)
             if operation in self.GLSL_WAVE_ADDITIONAL_EXTENSION_REQUIREMENTS:
                 shuffle_line = "#extension GL_KHR_shader_subgroup_shuffle : require"
                 if shuffle_line not in lines:
@@ -2808,12 +2786,14 @@ class GLSLCodeGen(
         )
         ast = lower_reference_aliases(ast)
         ast = lower_private_vector_views(ast, "opengl")
+        separate_ast = ast
         ast, self.combined_sampler_records = lower_combined_sampler_pairs(
             ast, self.LOWERING_REFUSAL_TYPE.label
         )
         self.combined_sampler_pairs = (getattr(ast, "annotations", None) or {}).get(
             COMBINED_SAMPLER_PAIRS, []
         )
+        self.glsl_vulkan_resources = VulkanResourceForms.plan(self, separate_ast, ast)
         self.glsl_narrow_scalars_promote = narrow_scalars_promote(ast)
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
@@ -3064,6 +3044,9 @@ class GLSLCodeGen(
         self.current_target_stage = target_stage
         self.glsl_tessellation_input_extents = {}
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
+        self.glsl_fragment_interlock_plan = plan_fragment_interlock(
+            self, ast, target_stage
+        )
         self.glsl_vulkan_memory_model = declares_vulkan_memory_model(
             getattr(ast, "preprocessors", None), self.current_glsl_extensions
         )
@@ -3394,6 +3377,7 @@ class GLSLCodeGen(
         self.glsl_raised_version_line = None
         self.glsl_emission_requirements = []
         self.glsl_descriptor_binding_macro_used = False
+        self.glsl_spirv_location_macro_used = False
         self.current_glsl_version_line = version_line
         self.current_glsl_disabled_extensions = {
             match.group(1)
@@ -3408,6 +3392,7 @@ class GLSLCodeGen(
         self.current_glsl_resource_binding_layouts_supported = (
             self.glsl_resource_binding_layouts_supported(version_line)
         )
+        self.glsl_vulkan_resources.activate(self, version_line)
         exact_subgroup_width = self.glsl_stage_exact_subgroup_width(ast, target_stage)
         self.current_glsl_exact_subgroup_width = exact_subgroup_width
         self.current_glsl_group_vote_suffix = self.glsl_group_vote_suffix(
@@ -4148,7 +4133,14 @@ class GLSLCodeGen(
                 qualifier_parts.append("uniform")
                 if precision_qualifiers:
                     qualifier_parts.append(precision_qualifiers)
-                code += f"{' '.join(qualifier_parts)} {declaration};\n"
+                code += self.glsl_vulkan_resources.declaration(
+                    source_var_name,
+                    var_name,
+                    " ".join(qualifier_parts),
+                    declaration,
+                    mapped_type,
+                    array_suffix,
+                )
                 self.record_glsl_resource_binding(
                     node,
                     source_var_name,
@@ -4266,6 +4258,7 @@ class GLSLCodeGen(
             self.prepare_glsl_resource_function_specializations(ast, target_stage)
         finally:
             self.enforce_concrete_glsl_types = previous_enforce_concrete_glsl_types
+        code += self.glsl_vulkan_resources.sampler_declarations(self)
         generated_helper_insertion_index = len(code)
         functions = getattr(ast, "functions", [])
         helper_stage_macros = glsl_helper_stage_macros(self, ast)
@@ -4577,12 +4570,12 @@ class GLSLCodeGen(
                 + cooperative_matrix_support
                 + code[cooperative_matrix_support_insertion_index:]
             )
-        if self.glsl_descriptor_binding_macro_used:
-            code = (
-                code[:cooperative_matrix_support_insertion_index]
-                + descriptor_binding_macro_definition()
-                + code[cooperative_matrix_support_insertion_index:]
-            )
+        code = self.glsl_vulkan_resources.with_prelude(
+            code,
+            cooperative_matrix_support_insertion_index,
+            self.glsl_descriptor_binding_macro_used,
+            self.glsl_spirv_location_macro_used,
+        )
         code = self.finish_generic_resource_helper_refusals(code)
         self.validate_glsl_function_call_graph()
         code = self.ensure_glsl_version_supports_generated_layouts(code)
@@ -8761,9 +8754,13 @@ class GLSLCodeGen(
         is_native_stage_entry = (entry_name or "main") == "main"
         if shader_type in {"compute", "mesh", "task"} and is_native_stage_entry:
             code += self.generate_compute_layout(execution_config)
+            code += compute_derivative_group_layout(
+                self, shader_type, stage_layout_qualifiers, execution_config
+            )
 
         if shader_type in stage_entry_types:
             code += f"void {entry_name or 'main'}() {{\n"
+            interlock_body_start = len(code)
             self.current_function_return_type = "void"
             self.current_glsl_precise_return_type = None
             if shader_type == "compute" and is_native_stage_entry:
@@ -8776,6 +8773,7 @@ class GLSLCodeGen(
                 func, return_type
             )
             code += f"{return_type} {declaration_name}({params_str}) {{\n"
+            interlock_body_start = len(code)
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
@@ -9010,6 +9008,9 @@ class GLSLCodeGen(
             previous_private_pointer_function_name
         )
 
+        code = wrap_fragment_interlock(
+            self, shader_type, entry_name, code, interlock_body_start
+        )
         code += "}\n\n"
         return code
 
@@ -9302,6 +9303,7 @@ class GLSLCodeGen(
                         + distance_output_epilogue(self, indent_str)
                         + f"{indent_str}return;\n"
                     )
+                refuse_unwritten_entry_return(self, stmt.value)
                 value = self.generate_expression_with_expected(stmt.value, None)
                 return (
                     self.generate_glsl_statement_code(value, indent)
@@ -10602,93 +10604,15 @@ class GLSLCodeGen(
                 source_location=getattr(expr, "source_location", None),
             )
         if isinstance(expr, str):
-            scalar_array_element = self.glsl_scalar_array_view_element_expression(expr)
-            if scalar_array_element is not None:
-                return scalar_array_element
-            if self.is_glsl_builtin_option_none_expression(expr):
-                none_value = self.generate_glsl_builtin_option_none_value()
-                if none_value is not None:
-                    return none_value
-            binding = self.current_glsl_workgroup_pointer_aliases.get(expr)
-            if (
-                binding is not None
-                and binding.get("kind") == "workgroup-pointer"
-                and not is_shared_array_value(self, expr)
-            ):
-                raise OpenGLWorkgroupPointerError(
-                    "OpenGL cannot emit a workgroup pointer as a first-class value: "
-                    f"{expr}",
-                    parameter_name=expr,
-                    reason="bare-pointer-expression",
-                )
-            storage_binding = self.current_glsl_storage_pointer_aliases.get(expr)
-            if (
-                storage_binding is not None
-                and storage_binding.get("kind") == "storage-pointer"
-                and not storage_binding.get("resource_root")
-            ):
-                raise OpenGLStoragePointerError(
-                    "OpenGL cannot emit a storage pointer as a first-class value: "
-                    f"{expr}",
-                    parameter_name=expr,
-                    reason="bare-pointer-expression",
-                )
-            return expr
+            return self.generate_glsl_raw_string_expression(expr)
         elif isinstance(expr, (int, float, bool)):
             if isinstance(expr, bool):
                 return "true" if expr else "false"
             return str(expr)
         elif hasattr(expr, "__class__") and "VariableNode" in str(type(expr)):
-            if hasattr(expr, "name"):
-                scalar_array_element = self.glsl_scalar_array_view_element_expression(
-                    expr.name
-                )
-                if scalar_array_element is not None:
-                    return scalar_array_element
-                if self.is_glsl_builtin_option_none_expression(expr):
-                    none_value = self.generate_glsl_builtin_option_none_value()
-                    if none_value is not None:
-                        return none_value
-                self.glsl_workgroup_pointer_bare_expression_error(expr)
-                self.glsl_storage_pointer_bare_expression_error(expr)
-                if expr.name in self.current_resource_aliases:
-                    return self.current_resource_aliases[expr.name]["expression"]
-                if expr.name in getattr(self, "enum_variant_constants", {}):
-                    return self.glsl_enum_value_expression(expr.name)
-                substitution = self.glsl_compile_time_bitcast_substitution_expression(
-                    expr.name
-                )
-                if substitution is not None:
-                    return substitution
-                if expr.name in self.current_identifier_aliases:
-                    return self.current_identifier_aliases[expr.name]
-                return self.generate_glsl_identifier_expression(expr.name)
-            else:
-                return str(expr)
+            return self.generate_glsl_variable_expression(expr)
         elif hasattr(expr, "__class__") and "IdentifierNode" in str(type(expr)):
-            scalar_array_element = self.glsl_scalar_array_view_element_expression(
-                expr.name
-            )
-            if scalar_array_element is not None:
-                return scalar_array_element
-            if self.is_glsl_builtin_option_none_expression(expr):
-                none_value = self.generate_glsl_builtin_option_none_value()
-                if none_value is not None:
-                    return none_value
-            self.glsl_workgroup_pointer_bare_expression_error(expr)
-            self.glsl_storage_pointer_bare_expression_error(expr)
-            if expr.name in self.current_resource_aliases:
-                return self.current_resource_aliases[expr.name]["expression"]
-            if expr.name in getattr(self, "enum_variant_constants", {}):
-                return self.glsl_enum_value_expression(expr.name)
-            substitution = self.glsl_compile_time_bitcast_substitution_expression(
-                expr.name
-            )
-            if substitution is not None:
-                return substitution
-            if expr.name in self.current_identifier_aliases:
-                return self.current_identifier_aliases[expr.name]
-            return self.generate_glsl_identifier_expression(expr.name)
+            return self.generate_glsl_identifier_node_expression(expr)
         elif isinstance(expr, ArrayLiteralNode):
             return self.generate_glsl_aggregate_initializer(expr)
         elif is_comma_expression(expr):
@@ -10698,989 +10622,39 @@ class GLSLCodeGen(
                 self.generate_discarded_expression,
             )
         elif hasattr(expr, "__class__") and "LiteralNode" in str(type(expr)):
-            literal_type = getattr(getattr(expr, "literal_type", None), "name", None)
-            if literal_type == "string":
-                return f'"{expr.value}"'
-            if literal_type == "char":
-                return f"'{expr.value}'"
-            mapped_literal_type = self.map_type(literal_type) if literal_type else None
-            if (
-                mapped_literal_type == "uint64_t"
-                and isinstance(expr.value, int)
-                and not isinstance(expr.value, bool)
-            ):
-                return f"{expr.value}ul"
-            if (
-                mapped_literal_type == "int64_t"
-                and isinstance(expr.value, int)
-                and not isinstance(expr.value, bool)
-            ):
-                return f"{expr.value}l"
-            if (
-                literal_type == "uint"
-                and isinstance(expr.value, int)
-                and not isinstance(expr.value, bool)
-            ):
-                return f"{expr.value}u"
-            if isinstance(expr.value, bool):
-                return "true" if expr.value else "false"
-            if isinstance(expr.value, int):
-                if expr.value > 0xFFFFFFFF:
-                    return f"{expr.value}ul"
-                if expr.value > 0x7FFFFFFF:
-                    return f"{expr.value}u"
-                if expr.value < -0x80000000:
-                    return f"{expr.value}l"
-            return str(expr.value)
+            return self.generate_glsl_literal_expression(expr)
         elif hasattr(expr, "__class__") and "BinaryOpNode" in str(type(expr)):
-            op = self.map_operator(expr.op)
-            emulated_matrix = self.generate_glsl_emulated_matrix_binary(expr, op)
-            if emulated_matrix is not None:
-                return emulated_matrix
-            if op in {"&&", "||"}:
-                self.reject_glsl_software_subgroup_control_flow(expr)
-                left = self.generate_glsl_boolean_context(expr.left)
-                right = self.generate_glsl_boolean_context(expr.right)
-                return f"({left} {op} {right})"
-            option_none_comparison = self.generate_glsl_builtin_option_none_comparison(
-                expr.left, op, expr.right
-            )
-            if option_none_comparison is not None:
-                return option_none_comparison
-            vector_relational = self.generate_vector_relational_expression(
-                expr.left, op, expr.right, source_node=expr
-            )
-            if vector_relational is not None:
-                return vector_relational
-            vector_equality = self.generate_glsl_componentwise_equality(
-                expr.left, op, expr.right
-            )
-            if vector_equality is not None:
-                return vector_equality
-            float_remainder = self.generate_glsl_float_remainder(
-                expr.left, op, expr.right
-            )
-            if float_remainder is not None:
-                return float_remainder
-            left_type = self.glsl_source_expression_type(expr.left)
-            right_type = self.glsl_source_expression_type(expr.right)
-            if self.is_glsl_registered_complex64_type(
-                left_type
-            ) or self.is_glsl_registered_complex64_type(right_type):
-                left = self.generate_expression(expr.left)
-                right = self.generate_expression(expr.right)
-                return self.glsl_complex64_binary_expression(
-                    expr,
-                    left,
-                    right,
-                    op,
-                    left_type,
-                    right_type,
-                )
-            operand_types = self.glsl_binary_operand_conversion_types(
-                left_type,
-                right_type,
-                op,
-                source_node=expr,
-                fail_closed=True,
-            )
-            if operand_types is not None:
-                left_expected, right_expected = operand_types
-                left = self.generate_expression_with_expected(expr.left, left_expected)
-                right = self.generate_expression_with_expected(
-                    expr.right, right_expected
-                )
-            else:
-                left = self.generate_expression(expr.left)
-                right = self.generate_expression(expr.right)
-            if op in {"+", "-", "*", "/"} and operand_types is None:
-                expected_vector = self.expected_float_vector_expression_type()
-                if expected_vector:
-                    left = self.cast_integer_vector_expression_for_expected_float(
-                        left, left_type, expected_vector
-                    )
-                    right = self.cast_integer_vector_expression_for_expected_float(
-                        right, right_type, expected_vector
-                    )
-            if op == "%":
-                remainder = self.generate_glsl_signed_remainder(
-                    expr, left, right, left_type, right_type
-                )
-                if remainder is not None:
-                    return remainder
-            if op == "-":
-                difference = self.generate_glsl_identical_difference(expr, left, right)
-                if difference is not None:
-                    return self.glsl_apply_narrow_float_contract(
-                        difference, self.glsl_source_expression_type(expr), expr
-                    )
-            if self.current_glsl_ieee_operator_arithmetic:
-                ieee_arithmetic = self.generate_glsl_ieee_operator_arithmetic(
-                    expr, op, left, right
-                )
-                if ieee_arithmetic is not None:
-                    return ieee_arithmetic
-            return self.glsl_apply_narrow_float_contract(
-                self.glsl_narrow_vector_wrap(expr, op, f"({left} {op} {right})"),
-                self.glsl_source_expression_type(expr),
-                expr,
-            )
+            return self.generate_glsl_binary_expression(expr)
         elif hasattr(expr, "__class__") and "AssignmentNode" in str(type(expr)):
             return assignment_value_expression(
                 self.generate_assignment(expr),
                 discarded=expr is self.current_discarded_expression,
             )
         elif hasattr(expr, "__class__") and "UnaryOpNode" in str(type(expr)):
-            op = self.map_operator(expr.op)
-            emulated_matrix = self.generate_glsl_emulated_matrix_unary(expr, op)
-            if emulated_matrix is not None:
-                return emulated_matrix
-            if op == "*":
-                aggregate = self.generate_glsl_private_scalar_struct_reinterpret_read(
-                    expr
-                )
-                if aggregate is not None:
-                    return aggregate
-                pointee = self.generate_glsl_private_pointer_view_access(
-                    expr.operand, access_expression=expr
-                )
-                if pointee is not None:
-                    return pointee
-                pointee = self.glsl_workgroup_pointer_element_expression(expr.operand)
-                if pointee is not None:
-                    return pointee
-                pointee = self.glsl_storage_pointer_element_expression(expr.operand)
-                if pointee is not None:
-                    return pointee
-            if op == "&":
-                operand_name = self.expression_name(expr.operand)
-                if operand_name in getattr(self, "current_glsl_scalar_array_views", {}):
-                    return self.generate_glsl_identifier_expression(operand_name)
-                binding = self.glsl_workgroup_pointer_binding(
-                    expr,
-                    self.glsl_workgroup_pointer_aliases(),
-                )
-                if binding is not None:
-                    raise OpenGLWorkgroupPointerError(
-                        "OpenGL cannot emit a workgroup address as a first-class value",
-                        parameter_name=self.expression_name(expr.operand),
-                        reason="address-expression-unsupported",
-                        source_location=getattr(expr, "source_location", None),
-                    )
-                storage_binding = self.glsl_storage_pointer_binding(
-                    expr,
-                    self.glsl_storage_pointer_aliases(),
-                )
-                if storage_binding is not None:
-                    raise OpenGLStoragePointerError(
-                        "OpenGL cannot emit a storage-buffer address as a "
-                        "first-class value",
-                        parameter_name=self.expression_name(expr.operand),
-                        reason="address-expression-unsupported",
-                        source_location=getattr(expr, "source_location", None),
-                    )
-            if op in {"++", "--"} or expr.op in {
-                "PRE_INCREMENT",
-                "PRE_DECREMENT",
-                "POST_INCREMENT",
-                "POST_DECREMENT",
-            }:
-                pointer_step = self.generate_glsl_storage_pointer_step(expr, op)
-                if pointer_step is not None:
-                    return pointer_step
-                self.validate_glsl_private_pointer_byte_view_mutation(expr.operand)
-                self.validate_glsl_storage_pointer_mutation_target(expr.operand)
-                self.validate_glsl_buffer_block_member_access(
-                    expr.operand, "read_write"
-                )
-                storage_update = self.float_atomic_storage.unary_update(expr, op)
-                if storage_update is not None:
-                    return storage_update
-                narrow_update = self.generate_glsl_narrow_unary_update(expr, op)
-                if narrow_update is not None:
-                    return narrow_update
-                operand = self.generate_glsl_buffer_block_mutation_target(expr.operand)
-            elif op == "!":
-                vector_not = glsl_vector_logical_not(self, expr.operand)
-                if vector_not is not None:
-                    return vector_not
-                operand = self.generate_glsl_boolean_context(expr.operand)
-            else:
-                operand = self.generate_expression_with_expected(
-                    expr.operand,
-                    self.glsl_unary_operand_conversion_type(expr),
-                )
-            complex_unary = self.glsl_complex64_unary_expression(expr, operand, op)
-            if complex_unary is not None:
-                return complex_unary
-            is_postfix = bool(getattr(expr, "is_postfix", False)) or expr.op in {
-                "POST_INCREMENT",
-                "POST_DECREMENT",
-            }
-            if is_postfix:
-                return f"({operand}{op})"
-            return self.glsl_narrow_vector_wrap(expr, op, f"({op}{operand})")
+            return self.generate_glsl_unary_expression(expr)
         elif isinstance(expr, WaveOpNode):
             return self.generate_glsl_wave_op_expression(expr)
         elif isinstance(expr, RayTracingOpNode):
             args = [self.generate_expression(arg) for arg in expr.arguments]
             return self.map_ray_tracing_intrinsic(expr.operation, args)
         elif isinstance(expr, MeshOpNode):
-            mesh_output_counts_call = self.generate_mesh_output_counts_call(
-                expr.operation, expr.arguments
-            )
-            if mesh_output_counts_call is not None:
-                return mesh_output_counts_call
-            arguments = expr.arguments
-            if expr.operation == "DispatchMesh":
-                if self.current_stage_entry_type in {
-                    "task",
-                    "amplification",
-                    "object",
-                }:
-                    self.validate_dispatch_mesh_arguments(arguments)
-                if len(arguments) == 4:
-                    arguments = arguments[:3]
-            args = [self.generate_expression(arg) for arg in arguments]
-            return self.map_mesh_intrinsic(expr.operation, args)
+            return self.generate_glsl_mesh_operation_expression(expr)
         elif isinstance(expr, RayQueryOpNode):
             return self.map_ray_query_intrinsic(
                 expr.operation, expr.query_expr, expr.arguments
             )
         elif hasattr(expr, "__class__") and "ArrayAccessNode" in str(type(expr)):
-            if hasattr(expr, "array") and hasattr(expr, "index"):
-                emulated_matrix_column = self.generate_glsl_emulated_matrix_index(expr)
-                if emulated_matrix_column is not None:
-                    return emulated_matrix_column
-                structured_storage = self.generate_glsl_hlsl_structured_read(expr)
-                if structured_storage is not None:
-                    return structured_storage
-                fixed_vector_view_access = (
-                    self.generate_glsl_fixed_array_vector_pointer_view_access(expr)
-                )
-                if fixed_vector_view_access is not None:
-                    return fixed_vector_view_access
-                private_access = self.generate_glsl_private_pointer_view_access(
-                    expr.array, expr.index, access_expression=expr
-                )
-                if private_access is not None:
-                    return private_access
-                workgroup_access = self.glsl_workgroup_pointer_access_expression(expr)
-                if workgroup_access is not None:
-                    return workgroup_access
-                storage_access = self.glsl_storage_pointer_access_expression(expr)
-                if storage_access is not None:
-                    return storage_access
-                indexed_aggregate = self.glsl_indexed_aggregate_literal_expression(expr)
-                if indexed_aggregate is not None:
-                    return indexed_aggregate
-                if is_whole_texel_load(expr.array, self.function_call_name):
-                    # The subscript selects a component of the whole texel.
-                    array = self.generate_expression_with_expected(expr.array, None)
-                else:
-                    array = self.generate_expression(expr.array)
-                array = self.glsl_precise_selected_value(expr.array, array)
-                index = self.glsl_resource_array_index_expression(expr)
-                instance_member = self.glsl_structured_buffer_array_element_member(
-                    expr.array
-                )
-                if instance_member is not None:
-                    # One buffer of an array of storage blocks holds its elements in a member.
-                    return f"{array}.{instance_member}[{index}]"
-                return f"{array}[{index}]"
-            else:
-                return str(expr)
+            return self.generate_glsl_array_access_expression(expr)
         elif isinstance(expr, ConstructorNode):
-            union = self.union_storage.construct(
-                expr, expr.constructor_type, expr.arguments
-            )
-            if union is not None:
-                return union
-            if getattr(expr, "is_braced_constructor", False):
-                vector_initializer = self.generate_glsl_vector_aggregate_initializer(
-                    ArrayLiteralNode(list(expr.arguments)),
-                    self.map_type(expr.constructor_type),
-                )
-                if vector_initializer is not None:
-                    return vector_initializer
-            enum_constructor = self.glsl_enum_constructor_expression(expr)
-            if enum_constructor is not None:
-                return enum_constructor
-            constructor = generate_struct_constructor_expression(self, expr)
-            if constructor is not None:
-                return constructor
-            return str(expr)
+            return self.generate_glsl_constructor_expression(expr)
         elif hasattr(expr, "__class__") and "FunctionCallNode" in str(type(expr)):
-            reject_unresolved_generic_member_call(expr, "OpenGL")
-            func_expr = getattr(expr, "function", getattr(expr, "name", expr))
-            numeric_trait_call = generate_numeric_trait_method_call(
-                self,
-                func_expr,
-                expr.args,
-            )
-            if numeric_trait_call is not None:
-                return numeric_trait_call
-
-            if (
-                isinstance(func_expr, MemberAccessNode)
-                and func_expr.member == "length"
-                and not expr.args
-            ):
-                # A buffer parameter or reinterpreted view is rewritten as an
-                # offset into the buffer it reads, so its length is computed
-                # from that buffer's length, not one element's.
-                storage_binding = self.glsl_storage_pointer_binding(
-                    func_expr.object, self.glsl_storage_pointer_aliases()
-                )
-                if storage_binding is not None:
-                    return self.structured_buffer_length_expression(func_expr.object)
-
-            func_name = None
-            if hasattr(func_expr, "name") and isinstance(func_expr.name, str):
-                func_name = func_expr.name
-                callee = func_name
-            elif isinstance(func_expr, str):
-                func_name = func_expr
-                callee = func_expr
-            else:
-                callee = self.generate_expression(func_expr)
-            original_func_name = func_name
-            original_func_name = self.glsl_builtin_option_constructor_name(
-                original_func_name
-            )
-            original_func_name = glsl_generic_vector_constructor_name(
-                original_func_name
-            )
-            if original_func_name != func_name:
-                func_name = original_func_name
-                callee = original_func_name
-
-            emulated_matrix_call = self.generate_glsl_emulated_matrix_call(
-                expr, original_func_name, list(expr.args or [])
-            )
-            if emulated_matrix_call is not None:
-                return emulated_matrix_call
-            logical_intrinsic = self.generate_glsl_hlsl_logical_intrinsic(
-                original_func_name, list(expr.args or [])
-            )
-            if logical_intrinsic is not None:
-                return logical_intrinsic
-
-            mesh_output_counts_call = self.generate_mesh_output_counts_call(
-                original_func_name, expr.args
-            )
-            union = self.union_storage.call(original_func_name, expr.args)
-            if union is not None:
-                return union
-            if mesh_output_counts_call is not None:
-                return mesh_output_counts_call
-            self.reject_mesh_output_helper_expression_context(
-                original_func_name, expr.args
-            )
-
-            ray_query_member_call = self.ray_query_member_function_call(
-                func_expr, expr.args
-            )
-            if ray_query_member_call is not None:
-                return ray_query_member_call
-            if (
-                isinstance(func_expr, MemberAccessNode)
-                and func_expr.member == "length"
-                and not expr.args
-            ):
-                written_length = tessellation_input_length(self, func_expr)
-                if written_length is not None:
-                    return written_length
-                instance_member = self.glsl_structured_buffer_array_element_member(
-                    func_expr.object
-                )
-                if instance_member is not None:
-                    # One buffer of an array of storage blocks holds its elements in a member.
-                    buffer = self.generate_expression(func_expr.object)
-                    return f"{buffer}.{instance_member}.length()"
-
-            get_dimensions = self.glsl_structured_buffer_get_dimensions(
-                func_expr, expr.args
-            )
-            if get_dimensions is not None:
-                return get_dimensions
-
-            synchronization_call = self.synchronization_function_call(
-                original_func_name,
-                expr.args,
-                source_location=getattr(expr, "source_location", None),
-            )
-            if synchronization_call is not None:
-                return synchronization_call
-
-            wave_operation = self.glsl_wave_operation_name(original_func_name)
-            if wave_operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
-                return self.generate_glsl_wave_operation(
-                    wave_operation,
-                    expr.args,
-                    original_func_name,
-                    source_location=getattr(expr, "source_location", None),
-                )
-            if self.is_metal_simd_group_helper_name(original_func_name):
-                return self.glsl_wave_diagnostic_expression(
-                    original_func_name, "has no OpenGL subgroup equivalent"
-                )
-
-            hlsl_converted_call = self.generate_glsl_converted_builtin_call(
-                original_func_name, expr.args
-            )
-            if hlsl_converted_call is not None:
-                return hlsl_converted_call
-
-            glsl_memory_atomic_call = self.generate_glsl_memory_atomic_call(
-                original_func_name, expr.args
-            )
-            if glsl_memory_atomic_call is not None:
-                return glsl_memory_atomic_call
-
-            saturate_call = self.generate_saturate_call(original_func_name, expr.args)
-            if saturate_call is not None:
-                return saturate_call
-
-            reciprocal_call = self.generate_reciprocal_call(
-                original_func_name, expr.args
-            )
-            if reciprocal_call is not None:
-                return reciprocal_call
-
-            log10_call = self.generate_glsl_log10_call(original_func_name, expr.args)
-            if log10_call is not None:
-                return log10_call
-
-            metal_math_call = self.generate_glsl_metal_math_call(
-                original_func_name, expr.args, call_node=expr
-            )
-            if metal_math_call is not None:
-                return metal_math_call
-
-            ieee_math_call = self.generate_glsl_ieee_math_call(
-                original_func_name, expr.args, call_node=expr
-            )
-            if ieee_math_call is not None:
-                return ieee_math_call
-
-            trailing_zero_call = self.generate_glsl_trailing_zero_call(
-                original_func_name,
-                expr.args,
-                source_location=getattr(expr, "source_location", None),
-            )
-            if trailing_zero_call is not None:
-                return trailing_zero_call
-
-            boolean_order_call = self.glsl_ordered_boolean_minmax_call(
-                original_func_name,
-                expr.args,
-                source_location=getattr(expr, "source_location", None),
-            )
-            if boolean_order_call is not None:
-                return boolean_order_call
-
-            exponent_call = glsl_exponent_call(self, original_func_name, expr.args)
-            if exponent_call is not None:
-                return exponent_call
-            extended_arithmetic_refusal = glsl_extended_arithmetic_call(
-                self, original_func_name, expr.args
-            )
-            if extended_arithmetic_refusal is not None:
-                return extended_arithmetic_refusal
-
-            isfinite_call = self.generate_glsl_isfinite_call(
-                original_func_name,
-                expr.args,
-                call_node=expr,
-            )
-            if isfinite_call is not None:
-                return isfinite_call
-
-            signbit_call = self.generate_glsl_signbit_call(
-                original_func_name,
-                expr.args,
-                call_node=expr,
-            )
-            if signbit_call is not None:
-                return signbit_call
-
-            copysign_call = self.generate_glsl_copysign_call(
-                original_func_name,
-                expr.args,
-                call_node=expr,
-            )
-            if copysign_call is not None:
-                return copysign_call
-
-            remainder_call = self.generate_glsl_floating_remainder_call(
-                original_func_name, expr.args, call_node=expr
-            )
-            if remainder_call is not None:
-                return remainder_call
-
-            bitcast_call = self.generate_bitcast_call(original_func_name, expr.args)
-            if bitcast_call is not None:
-                return bitcast_call
-
-            metal_as_type_call = self.generate_metal_as_type_call(
-                original_func_name,
-                expr.args,
-            )
-            if metal_as_type_call is not None:
-                return metal_as_type_call
-
-            mul_call = self.generate_mul_call(original_func_name, expr.args)
-            if mul_call is not None:
-                return mul_call
-
-            packed_bytes = self.generate_packed_byte_call(original_func_name, expr.args)
-            if packed_bytes is not None:
-                return packed_bytes
-
-            mad_call = self.generate_mad_call(original_func_name, expr.args)
-            if mad_call is not None:
-                return mad_call
-
-            packed_dot = self.generate_packed_dot4add_call(
-                original_func_name, expr.args
-            )
-            if packed_dot is not None:
-                return packed_dot
-
-            if (
-                original_func_name not in self.function_return_types
-                and func_name in self.function_map
-            ):
-                func_name = self.function_map[func_name]
-            self.validate_fragment_only_helper_call(original_func_name)
-
-            sizeof_bytes = sizeof_call_bytes(
-                self, original_func_name, expr.args, "opengl"
-            )
-            if sizeof_bytes is not None:
-                return str(sizeof_bytes)
-
-            static_generic_call = generate_static_generic_numeric_call(
-                self,
-                original_func_name,
-            )
-            if static_generic_call is not None:
-                return static_generic_call
-
-            enum_constructor = self.glsl_enum_constructor_call(
-                original_func_name, expr.args
-            )
-            if enum_constructor is not None:
-                return enum_constructor
-
-            if original_func_name == TEXTURE_RESIDENCY_OPERATION:
-                return glsl_texture_residency_call(self, expr.args, expr)
-            if original_func_name == TEXTURE_RESIDENT_OPERATION:
-                return glsl_texture_resident_call(self, expr.args, expr)
-
-            if is_texture_lod_clamp_operation(original_func_name):
-                return glsl_texture_lod_clamp_call(
-                    self, original_func_name, expr.args, expr
-                )
-
-            texture_call = self.generate_texture_call(func_name, expr.args)
-            if texture_call is not None:
-                return texture_call
-
-            interpolation_call = self.generate_interpolation_call(func_name, expr.args)
-            if interpolation_call is not None:
-                return interpolation_call
-
-            derivative_call = self.generate_derivative_call(func_name, expr.args)
-            if derivative_call is not None:
-                return derivative_call
-
-            buffer_call = self.generate_buffer_call(func_name, expr.args)
-            if buffer_call is not None:
-                return buffer_call
-
-            specialized_func_name = generic_function_call_name(
-                self,
-                original_func_name,
-                expr.args,
-            )
-            resource_call_args = list(expr.args)
-            resolved_overload = None
-            specialized_source_name = specialized_func_name
-            if specialized_func_name is not None:
-                specialized_definition = self.function_definitions.get(
-                    specialized_func_name
-                )
-                func_name = (
-                    self.glsl_function_declaration_name(specialized_definition)
-                    if specialized_definition is not None
-                    else self.glsl_module_identifier_name(specialized_func_name)
-                )
-                callee = func_name
-                resource_call_args = generic_function_value_arguments(
-                    self,
-                    original_func_name,
-                    expr.args,
-                )
-            else:
-                reject_unresolved_explicit_generic_call(
-                    self, original_func_name, "OpenGL"
-                )
-            if (
-                specialized_func_name is None
-                and original_func_name in getattr(
-                    self, "generic_function_definitions", {}
-                )
-                and original_func_name not in (
-                    getattr(self, "concrete_function_names", None) or ()
-                )
-                and getattr(self, "enforce_concrete_glsl_types", False)
-            ):
-                raise OpenGLTemplateTypeError(
-                    "OpenGL codegen cannot infer concrete template arguments "
-                    f"for generic function '{original_func_name}'; provide a "
-                    "concrete instantiation before GLSL generation"
-                )
-
-            resource_lookup_name = specialized_source_name or func_name
-            private_materialized_call_name = None
-            if specialized_func_name is None:
-                resolved_overload = self.resolve_glsl_function_overload(
-                    original_func_name,
-                    expr.args,
-                    call_node=expr,
-                )
-                if resolved_overload is not None:
-                    func_name = self.glsl_function_declaration_name(resolved_overload)
-                    callee = func_name
-                else:
-                    normalized_private_name = (
-                        self.glsl_private_pointer_materialized_function_name(
-                            original_func_name
-                        )
-                    )
-                    if normalized_private_name in (
-                        self.function_private_pointer_parameters
-                    ):
-                        private_materialized_call_name = normalized_private_name
-                        func_name = normalized_private_name
-                        callee = normalized_private_name
-                        resource_lookup_name = normalized_private_name
-
-            constructor = self.glsl_constructor_type(func_name)
-            if constructor:
-                if self.glsl_half_width(original_func_name) is not None:
-                    for arg in expr.args:
-                        info = self.glsl_value_type_info(
-                            self.glsl_source_expression_type(arg)
-                        )
-                        if (
-                            info is not None
-                            and info["family"] == "float"
-                            and info["bits"] > 32
-                        ):
-                            self.glsl_scalar_conversion_error(
-                                expr,
-                                info["source"],
-                                original_func_name,
-                                "half-double-rounding",
-                            )
-                complex_scalar_constructor = (
-                    self.glsl_explicit_complex64_scalar_constructor(
-                        expr,
-                        original_func_name,
-                    )
-                )
-                if complex_scalar_constructor is not None:
-                    return complex_scalar_constructor
-                partial_vector_constructor = (
-                    self.generate_glsl_partial_vector_constructor(
-                        expr,
-                        constructor,
-                        original_func_name,
-                    )
-                )
-                if partial_vector_constructor is not None:
-                    return self.glsl_apply_narrow_float_contract(
-                        partial_vector_constructor, original_func_name, expr
-                    )
-                converted_constructor = self.glsl_struct_constructor_conversion(
-                    expr,
-                    constructor,
-                    expr.args,
-                )
-                if converted_constructor is not None:
-                    return converted_constructor
-                integer = (
-                    self.glsl_float_to_integer_conversion_info(expr.args[0])
-                    if len(expr.args) == 1
-                    else None
-                )
-                if self.glsl_integer_float_conversion_applies(integer, constructor):
-                    converted_integer = self.generate_glsl_integer_float_conversion(
-                        expr,
-                        self.generate_expression_with_expected(expr.args[0], None),
-                        integer,
-                        constructor,
-                    )
-                    return self.glsl_apply_narrow_float_contract(
-                        converted_integer, original_func_name, expr
-                    )
-                constructor_fields = list(
-                    self.glsl_struct_member_types(constructor).values()
-                )
-                if re.fullmatch(r"[biud]?vec[234]", str(constructor)):
-                    # Vector constructors take scalars and vectors of any width
-                    # and component type; GLSL converts their components.
-                    constructor_fields = []
-                args = ", ".join(
-                    self.generate_expression_with_expected(
-                        arg,
-                        (
-                            constructor_fields[index]
-                            if index < len(constructor_fields)
-                            else None
-                        ),
-                    )
-                    for index, arg in enumerate(expr.args)
-                )
-                generated_constructor = f"{constructor}({args})"
-                narrowed = self.glsl_apply_narrow_integer_contract(
-                    generated_constructor,
-                    original_func_name,
-                )
-                return self.glsl_apply_narrow_float_contract(
-                    narrowed, original_func_name, expr
-                )
-
-            self.validate_function_structured_buffer_access_arguments(
-                func_name, expr.args
-            )
-            self.validate_function_image_parameter_contract_arguments(
-                func_name, expr.args
-            )
-            self.validate_function_image_access_arguments(func_name, expr.args)
-            resource_specialization = self.glsl_resource_function_call_specialization(
-                resource_lookup_name,
-                resource_call_args,
-                call_node=expr,
-            )
-            # A specialized generic call takes its arguments as the specialization's concrete parameters.
-            argument_func_name = (
-                self.glsl_function_declaration_name(resolved_overload)
-                if resolved_overload is not None
-                else private_materialized_call_name
-                or (
-                    specialized_source_name
-                    if specialized_source_name in self.function_parameter_infos
-                    else original_func_name
-                )
-            )
-            argument_parameter_infos = (
-                self.glsl_function_parameter_infos(resolved_overload)
-                if resolved_overload is not None
-                else (
-                    ()
-                    if self.is_plain_metal_simd_group_helper_name(original_func_name)
-                    else None
-                )
-            )
-            if resource_specialization is not None:
-                func_name = self.glsl_function_declaration_name(resource_specialization)
-                callee = func_name
-                argument_func_name = func_name
-                argument_parameter_infos = None
-                call_args = self.glsl_resource_specialized_call_arguments(
-                    resource_specialization,
-                    resource_call_args,
-                )
-                call_args = self.filter_sampler_arguments(func_name, call_args)
-            else:
-                callee_definition = resolved_overload or self.function_definitions.get(
-                    resource_lookup_name
-                )
-                if (
-                    callee_definition is not None
-                    and self.glsl_function_has_workgroup_pointer_parameter(
-                        callee_definition
-                    )
-                ):
-                    raise OpenGLWorkgroupPointerError(
-                        "OpenGL helper function "
-                        f"'{original_func_name}' requires a workgroup pointer "
-                        "argument with a concrete shared-array backing object",
-                        function_name=original_func_name,
-                        reason="call-backing-unresolved",
-                        source_location=getattr(expr, "source_location", None),
-                    )
-                if (
-                    callee_definition is not None
-                    and self.glsl_function_has_storage_pointer_parameter(
-                        callee_definition
-                    )
-                ):
-                    raise OpenGLStoragePointerError(
-                        "OpenGL helper function "
-                        f"'{original_func_name}' requires a storage pointer "
-                        "argument with a concrete buffer backing object",
-                        function_name=original_func_name,
-                        reason="call-backing-unresolved",
-                        source_location=getattr(expr, "source_location", None),
-                    )
-                call_args = self.filter_sampler_arguments(
-                    argument_func_name, resource_call_args
-                )
-            call_args = self.glsl_padded_array_constructor_arguments(
-                original_func_name, call_args, expr
-            )
-            args = ", ".join(
-                self.generate_function_call_arguments(
-                    argument_func_name,
-                    call_args,
-                    parameter_infos=argument_parameter_infos,
-                )
-            )
-            emitted_call_name = func_name or callee
-            call_target_function = resource_specialization or resolved_overload
-            if call_target_function is None:
-                call_target_function = self.function_definitions.get(
-                    emitted_call_name
-                ) or self.function_definitions.get(original_func_name)
-            self.record_glsl_function_call(
-                emitted_call_name,
-                getattr(expr, "source_location", None),
-                target_function=call_target_function,
-                source_target_name=original_func_name,
-            )
-            if call_target_function is None:
-                glsl_note_call_target(self, emitted_call_name, len(call_args))
-            generated_call = f"{emitted_call_name}({args})"
-            if call_target_function is None and emitted_call_name not in {
-                "abs",
-                "ceil",
-                "floor",
-                "round",
-                "roundEven",
-                "sign",
-                "trunc",
-            }:
-                # These intrinsics compute in the physical float type; their
-                # logical half result must be rounded before any further use.
-                result_type = self.glsl_componentwise_unary_result_type(
-                    original_func_name, expr.args
-                )
-                return self.glsl_apply_narrow_float_contract(
-                    generated_call, result_type, expr
-                )
-            return generated_call
+            return self.generate_glsl_function_call_expression(expr)
         elif hasattr(expr, "__class__") and "MemberAccessNode" in str(type(expr)):
-            structured_storage = self.generate_glsl_hlsl_structured_read(expr)
-            if structured_storage is not None:
-                return structured_storage
-            flattened_member = self.flattened_stage_member_name(expr)
-            if flattened_member is not None:
-                return flattened_member
-            object_type = self.type_name_string(
-                self.expression_result_type(expr.object)
-            )
-            if object_type and object_type.rstrip().endswith("*"):
-                pointer_member = self.glsl_private_pointer_member_expression(
-                    expr.object, expr.member
-                )
-                if pointer_member is None:
-                    pointer_member = self.glsl_workgroup_pointer_member_expression(
-                        expr.object,
-                        expr.member,
-                        getattr(expr, "source_location", None),
-                    )
-                if pointer_member is not None:
-                    return pointer_member
-                pointer_member = self.glsl_storage_pointer_member_expression(
-                    expr.object,
-                    expr.member,
-                    getattr(expr, "source_location", None),
-                )
-                if pointer_member is not None:
-                    return pointer_member
-            if not self.glsl_buffer_block_read_validation_suppression:
-                self.validate_glsl_buffer_block_member_access(expr, "read")
-            obj = self.generate_expression_with_expected(expr.object, None)
-            obj = self.glsl_precise_selected_value(expr.object, obj)
-            member_name = self.glsl_member_access_name(expr.object, str(expr.member))
-            cast_member = self.signed_compute_builtin_member_cast(obj, member_name)
-            if cast_member is not None:
-                return cast_member
-            return f"{obj}.{member_name}"
+            return self.generate_glsl_member_access_expression(expr)
         elif isinstance(expr, PointerAccessNode):
-            pointer_member = self.glsl_private_pointer_member_expression(
-                expr.pointer_expr, expr.member
-            )
-            if pointer_member is None:
-                pointer_member = self.glsl_workgroup_pointer_member_expression(
-                    expr.pointer_expr,
-                    expr.member,
-                    getattr(expr, "source_location", None),
-                )
-            if pointer_member is None:
-                pointer_member = self.glsl_storage_pointer_member_expression(
-                    expr.pointer_expr,
-                    expr.member,
-                    getattr(expr, "source_location", None),
-                )
-            if pointer_member is None:
-                pointer_name = self.expression_name(expr.pointer_expr)
-                if pointer_name in self.glsl_storage_pointer_aliases():
-                    raise OpenGLStoragePointerError(
-                        "OpenGL pointer member access has no concrete storage-buffer "
-                        "backing object",
-                        parameter_name=pointer_name,
-                        reason="pointer-member-backing-unresolved",
-                        source_location=getattr(expr, "source_location", None),
-                    )
-                raise OpenGLWorkgroupPointerError(
-                    "OpenGL pointer member access has no concrete shared-array "
-                    "backing object",
-                    reason="pointer-member-backing-unresolved",
-                    source_location=getattr(expr, "source_location", None),
-                )
-            return pointer_member
+            return self.generate_glsl_pointer_access_expression(expr)
         elif hasattr(expr, "__class__") and "TernaryOpNode" in str(type(expr)):
-            self.reject_glsl_software_subgroup_control_flow(expr)
-            condition = self.glsl_precise_condition(
-                expr.condition, self.generate_glsl_boolean_context(expr.condition)
-            )
-            true_type = self.glsl_source_expression_type(expr.true_expr)
-            false_type = self.glsl_source_expression_type(expr.false_expr)
-            operand_types = self.glsl_binary_operand_conversion_types(
-                true_type,
-                false_type,
-                "?:",
-                source_node=expr,
-                fail_closed=True,
-            )
-            if operand_types is None:
-                true_expr = self.generate_expression(expr.true_expr)
-                false_expr = self.generate_expression(expr.false_expr)
-            else:
-                true_expr = self.generate_expression_with_expected(
-                    expr.true_expr, operand_types[0]
-                )
-                false_expr = self.generate_expression_with_expected(
-                    expr.false_expr, operand_types[1]
-                )
-            true_expr = self.glsl_copied_storage_structure_arm(
-                expr.true_expr, true_expr
-            )
-            false_expr = self.glsl_copied_storage_structure_arm(
-                expr.false_expr, false_expr
-            )
-            selection = self.generate_glsl_float_selection(
-                expr, condition, true_expr, false_expr
-            )
-            if selection is not None:
-                return selection
-            return f"({condition} ? {true_expr} : {false_expr})"
+            return self.generate_glsl_ternary_expression(expr)
         else:
             return str(expr)
 
@@ -12118,6 +11092,9 @@ class GLSLCodeGen(
             texture_name = f"{sampled_type}({texture_name}, {sampler_name})"
         else:
             self.record_glsl_combined_sampler_use(args[0], args[1])
+            texture_name = self.glsl_vulkan_resources.sampled(
+                args, texture_name, sampler_name
+            )
         mapped_args = [texture_name, coord] + [
             self.generate_expression(arg) for arg in extra_args
         ]
