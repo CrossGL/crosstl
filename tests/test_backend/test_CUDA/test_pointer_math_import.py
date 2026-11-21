@@ -72,9 +72,10 @@ def test_pointer_arguments_become_the_values_they_address(
         assert expected in crossgl
 
 
-def test_a_sincosf_statement_keeps_the_libm_bound(tmp_path):
+@pytest.mark.parametrize("language", ["cuda", "hip"])
+def test_a_sincosf_statement_keeps_the_libm_bound(tmp_path, language):
     crossgl = _compact(
-        _translate(tmp_path, "sincosf(x * 2.0f, &s, &c); outp[i] = s + c;")
+        _translate(tmp_path, "sincosf(x * 2.0f, &s, &c); outp[i] = s + c;", language)
     )
 
     assert "s = __cgl_libm_sin((x * 2.0f));" in crossgl
@@ -82,25 +83,30 @@ def test_a_sincosf_statement_keeps_the_libm_bound(tmp_path):
     assert "sincosf" not in crossgl
 
 
-def test_buffer_elements_and_pointer_casts_are_written_in_place(tmp_path):
+@pytest.mark.parametrize("language", ["cuda", "hip"])
+def test_buffer_elements_and_pointer_casts_are_written_in_place(tmp_path, language):
     crossgl = _compact(
-        _translate(tmp_path, "sincosf(x, &outp[i], (float*)&outp[i + 1u]);")
+        _translate(tmp_path, "sincosf(x, &outp[i], (float*)&outp[i + 1u]);", language)
     )
 
     assert "outp[i] = __cgl_libm_sin(x);" in crossgl
     assert "outp[(i + 1u)] = __cgl_libm_cos(x);" in crossgl
 
 
-def test_fast_sincos_takes_the_precision_of_the_target(tmp_path):
-    crossgl = _compact(_translate(tmp_path, "__sincosf(x, &s, &c); outp[i] = s + c;"))
+@pytest.mark.parametrize("language", ["cuda", "hip"])
+def test_fast_sincos_takes_the_precision_of_the_target(tmp_path, language):
+    crossgl = _compact(
+        _translate(tmp_path, "__sincosf(x, &s, &c); outp[i] = s + c;", language)
+    )
 
     assert "s = sin(x);" in crossgl
     assert "c = cos(x);" in crossgl
 
 
-def test_an_operand_with_side_effects_is_evaluated_once(tmp_path):
+@pytest.mark.parametrize("language", ["cuda", "hip"])
+def test_an_operand_with_side_effects_is_evaluated_once(tmp_path, language):
     crossgl = _compact(
-        _translate(tmp_path, "sincosf(x++, &s, &c); outp[i] = s + c + x;")
+        _translate(tmp_path, "sincosf(x++, &s, &c); outp[i] = s + c + x;", language)
     )
 
     assert crossgl.count("x++") == 1
