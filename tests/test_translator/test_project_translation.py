@@ -23612,6 +23612,102 @@ def test_translate_project_runs_pinned_slang_external_corpus_fixture(tmp_path):
     ]
 
 
+def test_translate_project_runs_pinned_wgsl_external_corpus_fixture(tmp_path):
+    support_manifest = json.loads(
+        (ROOT / "tests" / "fixtures" / "external-corpus.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    manifest_entry = next(
+        entry
+        for entry in support_manifest["entries"]
+        if entry["id"] == "wgpu-standalone-hello-compute"
+    )
+    repo = tmp_path / "repo"
+    source_path = repo / manifest_entry["path"]
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        textwrap.dedent("""
+            @group(0) @binding(0)
+            var<storage, read> input: array<f32>;
+            @group(0) @binding(1)
+            var<storage, read_write> output: array<f32>;
+
+            @compute @workgroup_size(64)
+            fn doubleMe(@builtin(global_invocation_id) global_id: vec3<u32>) {
+                let index = global_id.x;
+                let array_length = arrayLength(&input);
+                if (global_id.x >= array_length) {
+                    return;
+                }
+                output[global_id.x] = input[global_id.x] * 2.0;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "name": "Pinned WGSL project fixture",
+                "entries": [manifest_entry],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["examples"]
+            targets = ["cgl"]
+            output_dir = "out"
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    artifact = payload["artifacts"][0]
+    translated = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    assert validation["success"] is True
+    assert payload["summary"]["unitsBySourceBackend"] == {"wgsl": 1}
+    assert payload["summary"]["artifactsBySourceBackend"] == {
+        "wgsl": {"artifactCount": 1, "translatedCount": 1, "failedCount": 0}
+    }
+    assert artifact["source"] == manifest_entry["path"]
+    assert artifact["sourceBackend"] == "wgsl"
+    assert artifact["target"] == "cgl"
+    assert artifact["status"] == "translated"
+    assert artifact["path"] == (
+        "out/cgl/examples/standalone/01_hello_compute/src/shader.cgl"
+    )
+    assert "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;" in (
+        translated
+    )
+    assert "buffer_dimensions(input_)" in translated
+    assert "output_[global_id.x] = (input_[global_id.x] * 2.0);" in translated
+    external_corpus = payload["externalCorpus"]
+    assert external_corpus["status"] == "ok"
+    assert external_corpus["summary"]["entriesBySourceBackend"] == {"wgsl": 1}
+    assert external_corpus["summary"]["presentCount"] == 1
+    assert external_corpus["summary"]["discoveredUnitCount"] == 1
+    assert external_corpus["entries"] == [
+        {
+            **manifest_entry,
+            "present": True,
+            "discovered": True,
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        }
+    ]
+
+
 def test_translate_project_defaults_external_corpus_source_backend_from_discovered_unit(
     tmp_path,
 ):
