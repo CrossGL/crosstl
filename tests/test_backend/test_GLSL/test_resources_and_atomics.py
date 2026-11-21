@@ -4032,7 +4032,9 @@ def test_codegen_mixed_ssbo_unsupported_resource_indices_are_typed_diagnostics()
     )
     glsl = GLSLCodeGen().generate(parse_crossgl(paired))
     assert "layout(binding = 0) uniform sampler2D textures[4];" in glsl
-    assert "layout(rgba32f, binding = 0) uniform image2D outputImage;" in glsl
+    assert (
+        "layout(rgba32f, CROSSGL_BINDING(0, 1, 0)) uniform image2D outputImage;" in glsl
+    )
     assert "layout(std430, binding = 101) buffer UnsupportedResourceIndexBlock" in glsl
     assert "vec4 sampledDirect = texture(textures[resourceBlock.layer], uv);" in glsl
     assert "vec4 sampledUnsigned = texture(textures[resourceBlock.uLayer], uv);" in glsl
@@ -4121,7 +4123,9 @@ def test_codegen_mixed_ssbo_resource_array_helpers_infer_fallback_arg_types():
         MetalCodeGen().generate(parse_crossgl(crossgl))
     glsl = GLSLCodeGen().generate(shader_ast)
     assert "layout(binding = 0) uniform sampler2D textures[4];" in glsl
-    assert "layout(r32ui, binding = 0) uniform uimage2D counters[4];" in glsl
+    assert (
+        "layout(r32ui, CROSSGL_BINDING(0, 1, 0)) uniform uimage2D counters[4];" in glsl
+    )
     assert "vec4 sampleArray(sampler2D texs[4], int layer, vec2 uv)" in glsl
     assert "return texture(texs[layer], uv);" in glsl
     assert (
@@ -7319,7 +7323,7 @@ def test_codegen_control_flow_shadowed_value_types_do_not_leak_to_image_store():
         assert "layout(r32f, binding = 0) uniform image2D scalarImage;" in glsl
         if main_signature == "void main(bool choose)":
             assert re.search(
-                r"layout\(std140, binding = \d+\) uniform main_choose_Args",
+                r"layout\(std140, (?:binding = \d+|CROSSGL_BINDING\(0, \d+, \d+\))\) uniform main_choose_Args",
                 glsl,
             )
             assert "bool main_choose_Args_choose;" in glsl
@@ -7352,7 +7356,7 @@ def test_codegen_entrypoint_parameter_conflict_remap_reaches_control_flow():
 
     glsl = GLSLCodeGen().generate(shader_ast)
 
-    assert "layout(std140, binding = 0) uniform Existing" in glsl
+    assert "layout(std140, CROSSGL_BINDING(0, 2, 0)) uniform Existing" in glsl
     assert "    bool choose;" in glsl
     assert "layout(std140, binding = 1) uniform main_choose_Args" in glsl
     assert "    bool main_choose_Args_choose;" in glsl

@@ -94,7 +94,6 @@ from .enum_utils import (
     infer_enum_constructor_type,
     sanitize_type_name,
 )
-from .exponent_builtins import emit_glsl_exponent_helpers
 from .generic_concrete_call_results import concrete_overload_results_differ
 from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
@@ -115,6 +114,7 @@ from .generic_struct_utils import (
     infer_struct_constructor_type,
 )
 from .glsl_builtin_extensions import require_builtin_extensions
+from .glsl_call_helpers import emit_glsl_call_helpers
 from .glsl_compute_derivative_groups import compute_derivative_group_layout
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
@@ -134,6 +134,7 @@ from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
 from .glsl_invariant_builtins import invariant_builtin_redeclarations
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
+from .glsl_quad_lane_reads import glsl_quad_lane_read_call, quad_lane_read_needs_helper
 from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
     glsl_ray_query_constant_expression,
@@ -149,6 +150,7 @@ from .glsl_stage_entries import refuse_repeated_stage_entries
 from .glsl_stage_input_values import stage_input_struct_value_declarations
 from .glsl_stage_output_values import (
     flattened_stage_output_assignment,
+    refuse_unwritten_entry_return,
     render_flattened_stage_output_store,
     render_stage_struct_value_return,
 )
@@ -644,6 +646,7 @@ class GLSLCodeGen(
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_metal_math_helpers = set()
         self.glsl_exponent_helpers = {}
+        self.glsl_quad_lane_read_helpers = {}
         self.glsl_half_helper_names = {}
         self.glsl_half_bitcast_helper_names = {}
         self.glsl_bfloat_helper_names = {}
@@ -4532,7 +4535,7 @@ class GLSLCodeGen(
             + self.generate_glsl_trailing_zero_helpers()
             + self.generate_glsl_boolean_order_helpers()
             + self.generate_glsl_metal_math_helpers()
-            + emit_glsl_exponent_helpers(self)
+            + emit_glsl_call_helpers(self)
             + self.generate_glsl_half_helpers()
             + self.generate_glsl_half_bitcast_helpers()
             + self.generate_glsl_bfloat_helpers()
@@ -9299,6 +9302,7 @@ class GLSLCodeGen(
                         + distance_output_epilogue(self, indent_str)
                         + f"{indent_str}return;\n"
                     )
+                refuse_unwritten_entry_return(self, stmt.value)
                 value = self.generate_expression_with_expected(stmt.value, None)
                 return (
                     self.generate_glsl_statement_code(value, indent)
@@ -10821,6 +10825,9 @@ class GLSLCodeGen(
             mask = self.generate_expression(arguments[1])
             helper = self.GLSL_WAVE_MULTI_PREFIX_HELPERS[operation]
             return f"{helper}({value}, {mask})"
+
+        if quad_lane_read_needs_helper(operation, arguments):
+            return glsl_quad_lane_read_call(self, arguments)
 
         mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
         if mapped is None:

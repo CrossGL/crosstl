@@ -6251,7 +6251,8 @@ def test_opengl_texture_and_image_bindings_are_independent():
     generated = generate_code(parse_code(tokenize_code(code)))
 
     assert "layout(binding = 0) uniform sampler2D tex;" in generated
-    assert "layout(rgba32f, binding = 0) uniform image2D img;" in generated
+    # OpenGL keeps image unit 0; Vulkan has one descriptor type per binding, so img takes binding 1 there.
+    assert "layout(rgba32f, CROSSGL_BINDING(0, 1, 0)) uniform image2D img;" in generated
 
 
 def test_opengl_auto_bindings_are_independent_between_resource_namespaces():
@@ -6268,8 +6269,14 @@ def test_opengl_auto_bindings_are_independent_between_resource_namespaces():
     generated = generate_code(parse_code(tokenize_code(code)))
 
     assert "layout(std430, binding = 0) buffer valuesBuffer" in generated
-    assert "layout(binding = 0) uniform sampler2D textures[2];" in generated
-    assert "layout(rgba32f, binding = 0) uniform image2D images[3];" in generated
+    # Each class starts at OpenGL binding 0; for Vulkan the texture and image arrays leave the buffers' binding.
+    assert (
+        "layout(CROSSGL_BINDING(0, 1, 0)) uniform sampler2D textures[2];" in generated
+    )
+    assert (
+        "layout(rgba32f, CROSSGL_BINDING(0, 4, 0)) uniform image2D images[3];"
+        in generated
+    )
     assert "layout(binding = 2) uniform sampler2D afterTexture;" in generated
     assert "layout(rgba32f, binding = 3) uniform image2D afterImage;" in generated
 
@@ -6307,14 +6314,27 @@ def test_opengl_auto_bindings_skip_later_explicit_global_bindings():
 
     generated = GLSLCodeGen().generate_stage(crosstl.translator.parse(code), "fragment")
 
+    # OpenGL bindings are per class. In Vulkan the storage blocks keep set 0 bindings 0 and 1, and the other
+    # classes move past every binding the program uses.
     assert "layout(std430, binding = 1) buffer autoBufferBuffer" in generated
-    assert "layout(binding = 1) uniform sampler2D autoTexture;" in generated
-    assert "layout(rgba32f, binding = 1) uniform image2D autoImage;" in generated
-    assert "layout(std140, binding = 1) uniform AutoBlock" in generated
+    assert (
+        "layout(CROSSGL_BINDING(0, 2, 1)) uniform sampler2D autoTexture;" in generated
+    )
+    assert (
+        "layout(rgba32f, CROSSGL_BINDING(0, 3, 1)) uniform image2D autoImage;"
+        in generated
+    )
+    assert "layout(std140, CROSSGL_BINDING(0, 6, 1)) uniform AutoBlock" in generated
     assert "layout(std430, binding = 0) buffer explicitBufferBuffer" in generated
-    assert "layout(binding = 0) uniform sampler2D explicitTexture;" in generated
-    assert "layout(rgba32f, binding = 0) uniform image2D explicitImage;" in generated
-    assert "layout(std140, binding = 0) uniform ExplicitBlock" in generated
+    assert (
+        "layout(CROSSGL_BINDING(0, 4, 0)) uniform sampler2D explicitTexture;"
+        in generated
+    )
+    assert (
+        "layout(rgba32f, CROSSGL_BINDING(0, 5, 0)) uniform image2D explicitImage;"
+        in generated
+    )
+    assert "layout(std140, CROSSGL_BINDING(0, 7, 0)) uniform ExplicitBlock" in generated
 
 
 def test_structured_buffer_fixed_width_aliases_lower_to_standard_ssbo_types():
@@ -14175,8 +14195,9 @@ def test_opengl_fixed_array_mutation_cache_isolated_by_exact_overload(tmp_path):
 
     generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "void step(float values[1])" in generated
-    assert "void step(inout int values[1])" in generated
+    # A user function named like the built-in step() is renamed in GLSL output.
+    assert "void step_(float values[1])" in generated
+    assert "void step_(inout int values[1])" in generated
     assert "void wrapper(float values[1])" in generated
     assert "void wrapper(inout float values[1])" not in generated
     assert "wrapper(total);" in generated
@@ -20484,7 +20505,9 @@ def test_glsl_cbuffer_and_storage_buffer_bindings_are_independent():
 
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "layout(std140, binding = 0) uniform Constants" in generated_code
+    assert (
+        "layout(std140, CROSSGL_BINDING(0, 1, 0)) uniform Constants" in generated_code
+    )
     assert "layout(std430, binding = 0) buffer valuesBuffer" in generated_code
 
 
@@ -30697,9 +30720,18 @@ def test_opengl_array_handling(array_test_data):
         int indices[10];
     };
 
+    struct VSInput {
+        vec3 position @ POSITION;
+    };
+
+    struct VSOutput {
+        vec4 position @ gl_Position;
+    };
+
     vertex {
         VSOutput main(VSInput input) {
             VSOutput output;
+            output.position = vec4(input.position, 1.0);
 
             // Array access in various forms
             float value = weights[2];
@@ -31168,7 +31200,7 @@ def test_opengl_version_330_keeps_resource_bindings_with_420pack_extension():
     assert "#version 330" in generated_code
     assert "#extension GL_ARB_shading_language_420pack : require" in generated_code
     assert "layout(binding = 0) uniform sampler2D texture0;" in generated_code
-    assert "layout(std140, binding = 0) uniform Uniforms" in generated_code
+    assert "layout(std140, CROSSGL_BINDING(0, 1, 0)) uniform Uniforms" in generated_code
 
 
 def test_opengl_rejects_non_resource_shadow_of_global_resource():
@@ -38255,7 +38287,10 @@ def test_opengl_storage_image_format_layouts():
     generated_code = GLSLCodeGen().generate(ast)
 
     assert "layout(binding = 0) uniform sampler2D sampledColor;" in generated_code
-    assert "layout(rgba32f, binding = 0) uniform image2D colorOut;" in generated_code
+    assert (
+        "layout(rgba32f, CROSSGL_BINDING(0, 9, 0)) uniform image2D colorOut;"
+        in generated_code
+    )
     assert "layout(rgba32f, binding = 1) uniform image3D volumeOut;" in generated_code
     assert (
         "layout(rgba32f, binding = 2) uniform image2DArray layerOut;" in generated_code
@@ -38798,7 +38833,9 @@ def test_opengl_formatted_image_arrays_preserve_format_metadata():
     assert (
         "layout(r32ui, binding = 7) uniform uimage2D afterCounters;" in generated_code
     )
-    assert "layout(binding = 0) uniform sampler2D sampled;" in generated_code
+    assert (
+        "layout(CROSSGL_BINDING(0, 1, 0)) uniform sampler2D sampled;" in generated_code
+    )
     assert (
         "uint touchCounters(uimage2D images[2], ivec2 pixel, uint value)"
         in generated_code
@@ -39869,7 +39906,9 @@ def test_opengl_formatted_image_arrays_preserve_expression_sizes():
     assert (
         "layout(r32ui, binding = 7) uniform uimage2D afterCounters;" in generated_code
     )
-    assert "layout(binding = 0) uniform sampler2D sampled;" in generated_code
+    assert (
+        "layout(CROSSGL_BINDING(0, 1, 0)) uniform sampler2D sampled;" in generated_code
+    )
     assert (
         "uint touchCounters(uimage2D images[((1 + 1) * 2)], ivec2 pixel, uint value)"
         in generated_code
@@ -41327,7 +41366,10 @@ def test_opengl_multisample_storage_image_samples_queries_keep_image_samples_bui
 
     generated_code = GLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "layout(rgba32f, binding = 0) uniform image2DMS u0;" in generated_code
+    assert (
+        "layout(rgba32f, CROSSGL_BINDING(0, 4, 0)) uniform image2DMS u0;"
+        in generated_code
+    )
     assert "layout(rgba32f, binding = 1) uniform image2DMSArray u1;" in generated_code
     assert "layout(r32i, binding = 2) uniform iimage2DMS u2;" in generated_code
     assert "layout(r32ui, binding = 3) uniform uimage2DMSArray u3;" in generated_code
@@ -43931,7 +43973,7 @@ def test_opengl_user_overload_result_width_precedes_builtin(tmp_path):
     }
     """
     generated = GLSLCodeGen().generate(crosstl.translator.parse(shader))
-    assert "vec4 result = vec4(sin(value), sin(value));" in generated
+    assert "vec4 result = vec4(sin_(value), sin_(value));" in generated
     assert_glsl_compute_validates_if_available(generated, tmp_path, "user_builtin")
 
 
@@ -49325,8 +49367,9 @@ def test_opengl_boolean_min_max_respect_user_defined_functions():
 
     generated = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "bool min(bool left, bool right)" in generated
-    assert "return min(left, right);" in generated
+    # The user min() keeps its calls under the name GLSL output gives it (min_).
+    assert "bool min_(bool left, bool right)" in generated
+    assert "return min_(left, right);" in generated
     assert "return ((left) && (right));" not in generated
 
 

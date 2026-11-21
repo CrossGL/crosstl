@@ -2240,7 +2240,7 @@ def test_codegen_resource_array_functions_keep_array_receivers():
     assert "imageStore(images[index], ivec2(1, 2), (c + r))" in crossgl
 
     glsl = GLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "layout(binding = 0) uniform sampler2D textures[2];" in glsl
+    assert "layout(CROSSGL_BINDING(0, 1, 0)) uniform sampler2D textures[2];" in glsl
     assert "layout(rgba32f, binding = 0) uniform image2D images[2];" in glsl
 
 

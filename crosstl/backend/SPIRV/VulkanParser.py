@@ -1183,6 +1183,12 @@ class VulkanParser(
         self.spirv_module_execution_models = sorted(
             {entry["execution_model"] for entry in entry_points}
         )
+        function_names = frozenset(
+            names.get(result_id)
+            or self.spirv_function_name_fallback(result_id, entry_points_by_id)
+            for result_id, opcode, _operands, _line in instructions
+            if opcode == "OpFunction"
+        )
         entry_instruction = None
         raw_instructions = []
         for result_id, opcode, operands, line_number in instructions:
@@ -1200,7 +1206,7 @@ class VulkanParser(
 
             function_id, _opcode, function_operands, _start_line = entry_instruction
             module_names = names
-            names = function_local_names(raw_instructions, module_names)
+            names = function_local_names(raw_instructions, module_names, function_names)
             return_type_id = function_operands[0] if function_operands else None
             function_control = (
                 function_operands[1] if len(function_operands) >= 2 else None

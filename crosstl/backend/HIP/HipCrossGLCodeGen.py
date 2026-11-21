@@ -43,6 +43,7 @@ from .crossgl_codegen.statements import HipStatementMixin
 from .crossgl_codegen.surfaces import HipSurfaceMixin
 from .crossgl_codegen.textures import HipTextureMixin
 from .crossgl_codegen.type_conversion import HipTypeConversionMixin
+from .crossgl_codegen.union_layouts import HipUnionLayoutMixin
 from .HipAst import (
     ArrayAccessNode,
     EnumNode,
@@ -104,6 +105,7 @@ class HipToCrossGLConverter(
     HipExpressionMixin,
     HipStatementMixin,
     HipTypeConversionMixin,
+    HipUnionLayoutMixin,
     ImportRefusalMixin,
 ):
     """Serialize HIP backend AST nodes back into CrossGL source.
@@ -700,9 +702,11 @@ class HipToCrossGLConverter(
         self.prepare_global_resource_bindings(ast_node)
         self.reference_parameters = ReferenceParameters(ast_node)
         self.emitted_buffer_layouts = EmittedBufferLayouts("HIP")
+        self.begin_union_layout_contracts()
         self.block_votes = BlockVoteLibrary(self.source_identifier_names)
         self.directed_rounding = DirectedRoundingLibrary(self.source_identifier_names)
         self.visit(ast_node)
+        self.apply_union_layout_contracts()
         self.emitted_buffer_layouts.apply(self.output)
         insert_block_vote_functions(
             self.output, self.block_votes, "// HIP to CrossGL conversion"

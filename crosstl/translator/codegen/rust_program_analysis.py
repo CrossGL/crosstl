@@ -33,10 +33,24 @@ from ..ast import (
     WhileNode,
 )
 from .array_utils import prepend_array_dimension
+from .rust_gpu_interface import (
+    STORAGE_SLICE_KIND,
+    UNIFORM_VALUE_KIND,
+    WORKGROUP_KIND,
+    builtin_input_infos,
+    is_uniform_value,
+    is_workgroup_array,
+    slice_type_name,
+    storage_slice_parts,
+    workgroup_type_name,
+)
+from .rust_gpu_layouts import STD140, STD430, layout_mismatch
+from .rust_gpu_storage import PADDED_ELEMENTS
 from .rust_resource_bindings import (
     PROMOTABLE_RESOURCE_KINDS,
     resource_parameters,
 )
+from .specialization_constants import declares_specialization_id
 from .stage_utils import normalize_stage_name
 
 
@@ -202,10 +216,58 @@ class RustProgramAnalysisMixin:
                 continue
             declared.add(name)
             type_name = self.rust_variable_source_type(node)
+            interface = self.rust_gpu_interface_info(node, type_name)
+            if interface is not None:
+                resources[name] = interface
+                continue
             if not self.can_promote_rust_entry_resource(node, type_name):
                 continue
             resources[name] = {"node": node, "type_name": type_name}
+        for name, info in builtin_input_infos(ast).items():
+            if name not in declared:
+                resources[name] = info
+        for name, info in self.rust_spec_constant_infos.items():
+            resources[name] = info
         return resources
+
+    def rust_gpu_interface_info(self, node, type_name):
+        """The entry-parameter record of a storage buffer pointer, uniform value or workgroup variable, else None."""
+        slice_parts = storage_slice_parts(node)
+        if slice_parts is not None:
+            pointee, writable = slice_parts
+            element = self.convert_type_node_to_string(pointee)
+            if element not in PADDED_ELEMENTS:
+                self.refuse_rust_gpu_layout(
+                    node, element, STD430, element_of_slice=True
+                )
+            return {
+                "node": node,
+                "type_name": slice_type_name(element, writable),
+                "kind": STORAGE_SLICE_KIND,
+            }
+        if is_workgroup_array(node):
+            return {
+                "node": node,
+                "type_name": workgroup_type_name(self.type_name_string(type_name)),
+                "kind": WORKGROUP_KIND,
+            }
+        if is_uniform_value(node, self.type_name_string(type_name)):
+            self.refuse_rust_gpu_layout(
+                node, self.type_name_string(type_name), STD140, element_of_slice=False
+            )
+            return {"node": node, "type_name": type_name, "kind": UNIFORM_VALUE_KIND}
+        return None
+
+    def refuse_rust_gpu_layout(self, node, type_name, rule, element_of_slice):
+        """Refuse a buffer binding whose rust-gpu layout is not the CrossGL ``rule`` layout (:mod:`.rust_gpu_layouts`)."""
+        reason = layout_mismatch(self, type_name, rule, element_of_slice)
+        if reason is not None and getattr(node, "name", None) in getattr(
+            self, "rust_referenced_names", ()
+        ):
+            kind = "storage buffer" if element_of_slice else "uniform"
+            self.refuse_lowering(
+                f"resource: {kind} '{getattr(node, 'name', '?')}': {reason}"
+            )
 
     def can_promote_rust_entry_resource(self, node, type_name):
         """Return whether a resource can be an entry parameter, with its explicit or assigned binding.
@@ -283,6 +345,27 @@ class RustProgramAnalysisMixin:
             entry_functions, helpers, resources
         )
         return params_by_function
+
+    def is_rust_gpu_interface_declaration(self, node):
+        """Whether ``node`` is a buffer pointer, uniform value, workgroup variable or specialization constant, which
+        only entry-point parameters declare: a module-level declaration of one would be a mutable or defaulted static.
+        """
+        if getattr(node, "name", None) is None:
+            return False
+        if node.name in self.rust_spec_constant_infos and declares_specialization_id(
+            node
+        ):
+            return True
+        type_name = self.rust_variable_source_type(node)
+        if self.rust_gpu_interface_info(node, type_name) is None:
+            return False
+        if not self.is_promoted_rust_entry_resource(node) and (
+            node.name in self.rust_referenced_names
+        ):
+            self.refuse_lowering(
+                f"resource: '{node.name}' is referenced where no rust-gpu entry-point parameter reaches"
+            )
+        return True
 
     def is_promoted_rust_entry_resource(self, node):
         """Return whether a global resource is emitted as an entry parameter."""
@@ -789,6 +872,12 @@ class RustProgramAnalysisMixin:
             traits.append("Copy")
         if include_default:
             traits.append("Default")
+        if not any(
+            self.enum_variant_payload_types(variant)
+            for variant in getattr(node, "variants", []) or []
+        ):
+            # CrossGL compares enum values with == and switches on them.
+            traits.extend(["PartialEq", "Eq"])
         return ", ".join(traits)
 
     def collect_non_copy_type_names(self, node):
