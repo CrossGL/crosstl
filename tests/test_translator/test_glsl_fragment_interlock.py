@@ -124,10 +124,10 @@ void main() {
 """
 
 
-def _translate(tmp_path, name, source):
+def _translate(tmp_path, name, source, backend="opengl"):
     path = tmp_path / name
     path.write_text(source)
-    return crosstl.translate(str(path), backend="opengl", format_output=False)
+    return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
 def _glslang(tmp_path, code):
@@ -199,8 +199,24 @@ def test_declared_interlock_mode_and_calls_are_kept(tmp_path):
 
 
 def test_glsl_es_has_no_interlock(tmp_path):
+    with pytest.raises(
+        OpenGLLoweringRefused,
+        match="GLSL ES has no form of the extension GL_ARB_fragment_shader_interlock",
+    ):
+        _translate(tmp_path, "probe.frag", GLSL_ES, backend="gles")
+    without_extension = GLSL_ES.replace(
+        "#extension GL_ARB_fragment_shader_interlock : require\n", ""
+    )
     with pytest.raises(OpenGLLoweringRefused, match="does not exist in GLSL ES"):
-        _translate(tmp_path, "probe.frag", GLSL_ES)
+        _translate(tmp_path, "probe.frag", without_extension, backend="gles")
+
+
+def test_glsl_es_source_interlock_gives_desktop_glsl(tmp_path):
+    # The opengl target writes desktop GLSL, which has the extension, from the GLSL ES source.
+    code = _translate(tmp_path, "probe.frag", GLSL_ES)
+    assert code.startswith("#version 450 core\n")
+    assert "#extension GL_ARB_fragment_shader_interlock : require" in code
+    _glslang(tmp_path, code)
 
 
 def test_interlock_layout_needs_glsl_450():

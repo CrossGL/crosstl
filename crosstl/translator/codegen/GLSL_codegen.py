@@ -37,7 +37,6 @@ from ..ast import (
     PointerAccessNode,
     PointerReinterpretNode,
     PointerType,
-    PreprocessorNode,
     PrimitiveType,
     RangeNode,
     RayQueryOpNode,
@@ -141,6 +140,10 @@ from .glsl_ray_queries import (
     glsl_ray_query_constant_expression,
 )
 from .glsl_refusals import input_attachment_refusal_reason
+from .glsl_source_directives import (
+    glsl_source_directives,
+    glsl_target_profile_is_es,
+)
 from .glsl_specialization_dependents import (
     constant_source_name,
     partition_constants_by_specialization_dependency,
@@ -376,6 +379,8 @@ class GLSLCodeGen(
 
     # Desktop GLSL converts integer literals to float and uint implicitly.
     GLSL_IMPLICIT_LITERAL_CONVERSIONS = True
+    # Whether every program is written as GLSL ES, whatever its ``#version`` line (:mod:`.glsl_source_directives`).
+    GLSL_ES_OUTPUT = False
     GLSL_UNAVAILABLE_BUILTINS = OPENGL_UNAVAILABLE_BUILTINS
     GLSL_WAVE_ADDITIONAL_EXTENSION_REQUIREMENTS = {
         "WaveMatch",
@@ -416,8 +421,12 @@ class GLSLCodeGen(
         software_subgroup_width=None,
         private_pointer_out_of_bounds_read="error",
         cooperative_matrix_mma_profile=None,
+        target_profile=None,
     ):
         """Initialize GLSL type maps and per-generation stage/resource state."""
+        self.glsl_es_target = self.GLSL_ES_OUTPUT or glsl_target_profile_is_es(
+            target_profile
+        )
         self.float_atomic_storage = FloatAtomicStorage(self)
         self.metadata_preconditions = []
         self.immutable_storage = []
@@ -3340,32 +3349,7 @@ class GLSLCodeGen(
         self.validate_glsl_software_subgroup_contract(ast, target_stage)
         self.enforce_concrete_glsl_types = True
         code = ""
-        preprocessors = getattr(ast, "preprocessors", []) or []
-        version_line = None
-        extra_lines = []
-        for directive in preprocessors:
-            if not self.should_emit_glsl_preprocessor_directive(directive):
-                continue
-            if isinstance(directive, PreprocessorNode):
-                if directive.directive == "precision":
-                    line = (
-                        f"precision {directive.content};"
-                        if directive.content
-                        else "precision;"
-                    )
-                else:
-                    line = f"#{directive.directive} {directive.content}".strip()
-            else:
-                line = str(directive).strip()
-            if line.startswith("#version") and version_line is None:
-                version_line = line
-            elif line and self.should_emit_glsl_preprocessor_line(line):
-                extra_lines.append(line)
-        if version_line is None:
-            version_line = self.default_glsl_version_line(ast, target_stage)
-        required_version_line = getattr(self, "glsl_required_version_line", None)
-        if required_version_line is not None:
-            version_line = required_version_line
+        version_line, extra_lines = glsl_source_directives(self, ast, target_stage)
         self.glsl_raised_version_line = None
         self.glsl_emission_requirements = []
         self.glsl_descriptor_binding_macro_used = False
