@@ -241,8 +241,12 @@ def test_unknown_format_on_storage_image_parameter_is_refused(tmp_path):
     [
         ("directx", "RWTexture2D<unorm float4> img : register(u1);"),
         (
+            # In Vulkan the image moves off binding 0, which the output SSBO keeps.
             "opengl",
-            "layout(rgba8, binding = 0) coherent restrict uniform highp image2D img;",
+            re.compile(
+                r"layout\(rgba8, CROSSGL_BINDING\(0, 1, 0\)\)\s+coherent\s+restrict"
+                r"\s+uniform\s+highp\s+image2D\s+img;"
+            ),
         ),
         ("vulkan", re.compile(r"OpTypeImage %\w+ 2D 0 0 0 2 Rgba8\b")),
         (

@@ -32,6 +32,7 @@ from ..ast import (
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    WaveOpNode,
     WhileNode,
 )
 from ..refusals import WGSLRefusal
@@ -121,6 +122,7 @@ from .wgsl_struct_initializers import (
     wgsl_struct_array_initializer,
     wgsl_struct_initializer,
 )
+from .wgsl_subgroup_operations import wgsl_wave_operation, wgsl_wave_result_type
 from .wgsl_texture_calls import WGSLTextureCallMixin
 from .wgsl_type_names import WGSLTypeNameMixin
 from .wgsl_uniform_registers import wgsl_uniform_register_load
@@ -1406,6 +1408,8 @@ class WGSLCodeGen(
             )
         if isinstance(expr, RangeNode):
             raise WGSLRefusal("WGSL target does not support range expressions")
+        if isinstance(expr, WaveOpNode):
+            return wgsl_wave_operation(self, expr)
         if isinstance(expr, AssignmentNode):
             self.reject_unordered_side_effect(expr)
         raise WGSLRefusal(
@@ -1774,6 +1778,8 @@ class WGSLCodeGen(
         return dict(sorted(specializations.items()))
 
     def expression_type(self, expr):
+        if isinstance(expr, WaveOpNode):
+            return wgsl_wave_result_type(self, expr)
         if isinstance(expr, IdentifierNode):
             if expr.name in self._enum_variant_constants:
                 return "i32"
