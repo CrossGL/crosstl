@@ -30,13 +30,18 @@ class OpenGLGroupVoteMixin:
     GLSL_GROUP_VOTE_EXTENSION = "GL_ARB_shader_group_vote"
 
     def glsl_group_vote_suffix(self, ast, target_stage=None):
-        """The suffix the stage's votes take as GL_ARB_shader_group_vote functions: ``"ARB"`` below GLSL 4.60, ``""``
-        from 4.60, where they are core. ``None`` keeps them GL_KHR_shader_subgroup_vote calls: the stage uses another
-        subgroup operation or built-in, or votes on a value this check cannot show is a bool (#3009).
+        """The suffix the stage's votes take as GL_ARB_shader_group_vote functions: ``"ARB"`` from GLSL 4.30 to 4.50,
+        ``""`` from 4.60, where they are core. ``None`` keeps them GL_KHR_shader_subgroup_vote calls: the version is
+        below 4.30, the stage uses another subgroup operation or built-in, or it votes on a value this check cannot
+        show is a bool (#3009).
         """
         version_line = getattr(self, "current_glsl_version_line", None)
+        # GL_ARB_shader_group_vote requires OpenGL 4.3, and glslang declares its functions only from #version 430.
+        version_number = self.glsl_version_number(version_line)
         if (
-            self.software_subgroup_width is not None
+            version_number is None
+            or version_number < 430
+            or self.software_subgroup_width is not None
             or self.glsl_version_is_es(version_line)
             or self.GLSL_GROUP_VOTE_EXTENSION in getattr(
                 self, "current_glsl_disabled_extensions", set()
@@ -92,7 +97,7 @@ class OpenGLGroupVoteMixin:
                     and self.glsl_is_bool_vote_operand(node.arguments[0], bool_names)
                 ):
                     return None
-        return "" if (self.glsl_version_number(version_line) or 0) >= 460 else "ARB"
+        return "" if version_number >= 460 else "ARB"
 
     def uses_glsl_subgroup_extension_builtin(self, roots):
         """Whether ``roots`` read a built-in a GL_KHR_shader_subgroup extension declares, such as

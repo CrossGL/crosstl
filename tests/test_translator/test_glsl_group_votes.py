@@ -44,11 +44,11 @@ def _opengl(source):
     return GLSLCodeGen().generate(parse(source))
 
 
-def _glslang(tmp_path, code):
+def _glslang(tmp_path, code, name="vote.comp"):
     validator = shutil.which("glslangValidator")
     if validator is None:
         pytest.skip("glslangValidator is not installed")
-    path = tmp_path / "vote.comp"
+    path = tmp_path / name
     path.write_text(code, encoding="utf-8")
     result = subprocess.run([validator, str(path)], capture_output=True, text=True)
     assert result.returncode == 0, result.stdout + result.stderr
@@ -188,3 +188,28 @@ void main() {
     assert KHR_VOTE in generated and ARB_VOTE not in generated
     assert "bool r = subgroupAll(odd);" in generated
     _glslang(tmp_path, generated)
+
+
+@pytest.mark.parametrize("version", ["420 core", "330 core"])
+def test_glsl_below_430_keeps_khr_subgroup_vote(tmp_path, version):
+    # GL_ARB_shader_group_vote requires OpenGL 4.3: glslang declares allInvocationsARB and the other votes only from
+    # #version 430, so an older source keeps its GL_KHR_shader_subgroup_vote calls.
+    source = f"""#version {version}
+#extension GL_KHR_shader_subgroup_basic : require
+#extension GL_KHR_shader_subgroup_vote : require
+layout(location = 0) in float v;
+layout(location = 0) out vec4 o;
+void main() {{
+    bool a = v > 0.5;
+    bool b = subgroupAny(a);
+    o = subgroupAll(a) && b ? vec4(1.0) : vec4(0.0);
+}}
+"""
+    generated = _translate(tmp_path, "vote.frag", source)
+
+    # The generator may raise the version line (to 410 for the input location), but not to 430.
+    assert generated.startswith("#version ") and int(generated.split()[1]) < 430
+    assert KHR_VOTE in generated and ARB_VOTE not in generated
+    assert "ARB(" not in generated
+    assert "subgroupAll(a)" in generated and "subgroupAny(a)" in generated
+    _glslang(tmp_path, generated, "out.frag")
