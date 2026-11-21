@@ -15,6 +15,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import (
     row_reduction_layout,
     runtime,
@@ -650,7 +651,7 @@ def test_small_row_ci_requires_native_execution_on_all_targets():
     assert job is workflow["jobs"]["small-row-reductions"]
     assert job["needs"] == ["ci-plan", "portable-host"]
     assert (
-        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
+        job["if"] == job_condition("small-row-reductions")
         and "continue-on-error" not in job
     )
     assert {

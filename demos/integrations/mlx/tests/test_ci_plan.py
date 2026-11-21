@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from demos.integrations.mlx import ci_legs, smoke_canary
+from demos.integrations.mlx import ci_conditions, ci_legs, smoke_canary
 from demos.integrations.mlx.ci_plan import (
     PLAN_JOB,
     _without_plan_job,
@@ -27,7 +27,8 @@ from demos.integrations.mlx.tests.upstream_checkouts import (
 
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github/workflows/demo-project-testing.yml"
-EVERY_LEG = sorted(ci_legs.workflow_legs(yaml.safe_load(WORKFLOW.read_text())))
+REAL_WORKFLOW = yaml.safe_load(WORKFLOW.read_text())
+EVERY_LEG = sorted(ci_legs.workflow_legs(REAL_WORKFLOW))
 
 
 @pytest.fixture(autouse=True)
@@ -37,16 +38,18 @@ def _planned_workflow(monkeypatch):
 
 
 def _outputs(path):
-    """Return the step outputs a plan wrote, with ``legs`` decoded."""
+    """Return the step outputs a plan wrote, with ``legs`` and ``jobs`` decoded."""
     outputs = dict(line.split("=", 1) for line in path.read_text().splitlines())
     outputs["legs"] = json.loads(outputs["legs"])
+    outputs["jobs"] = json.loads(outputs["jobs"])
     return outputs
 
 
 def _tier(heavy, smoke, legs=None):
     if legs is None:
         legs = EVERY_LEG if heavy == "true" else []
-    return {"heavy": heavy, "smoke": smoke, "legs": legs}
+    jobs = ci_legs.selected_jobs(REAL_WORKFLOW, legs) if legs else []
+    return {"heavy": heavy, "smoke": smoke, "legs": legs, "jobs": jobs}
 
 
 @pytest.mark.parametrize("event", ["pull_request", "push"])
@@ -136,6 +139,7 @@ def test_full_events_do_not_require_changed_paths(tmp_path, event, capsys):
         "heavy": True,
         "smoke": False,
         "legs": len(EVERY_LEG),
+        "jobs": sorted({ci_legs.job_of(leg) for leg in EVERY_LEG}),
     }
 
 
@@ -395,7 +399,7 @@ def test_planner_changes_need_only_the_smoke_tier(event, path):
 def test_plan_job_split_removes_exactly_the_plan_job():
     text = WORKFLOW.read_text()
     workflow = yaml.safe_load(text)
-    remaining = yaml.safe_load("\n".join(_without_plan_job(text)) + "\n")
+    remaining = _without_plan_job(text)
     del workflow["jobs"]["ci-plan"]
     assert remaining == workflow
 
@@ -456,6 +460,73 @@ def test_workflow_change_confined_to_plan_job_skips_full_tier(
     assert _outputs(output) == _tier(heavy, "true", legs)
 
 
+_ANCHORED_WORKFLOW = """name: Demo
+on:
+  push:
+    branches: [main]
+jobs:
+  ci-plan:
+    runs-on: ubuntu-24.04
+    steps:
+      - &step-shared
+        run: echo {shared}
+  native:
+    needs: ci-plan
+    if: needs.ci-plan.outputs.heavy == 'true'
+    runs-on: windows-2025
+    steps:
+      - *step-shared
+"""
+
+
+@pytest.mark.parametrize(
+    "plan,shared,heavy,legs",
+    [
+        # A comment in the plan job changes nothing outside it.
+        ("# planner", "shared", "false", []),
+        # The plan job anchors a step that another job reuses: editing the
+        # anchor edits that job too.
+        ("", "shared-two", "true", ["native"]),
+    ],
+)
+def test_anchored_plan_job_step_reaches_the_jobs_that_alias_it(
+    tmp_path, monkeypatch, plan, shared, heavy, legs
+):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    workflow = tmp_path / ".github/workflows/demo-project-testing.yml"
+    monkeypatch.setenv("MLX_CI_WORKFLOW", str(workflow))
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(_ANCHORED_WORKFLOW.format(shared="shared"))
+    base = _commit("Start")
+    changed = _ANCHORED_WORKFLOW.format(shared=shared)
+    workflow.write_text(
+        changed.replace("    steps:\n", f"    steps:\n      {plan}\n", 1)
+    )
+    head = _commit("Edit workflow")
+    paths = classify_workflow_change(base, head, changed_paths(base, head))
+    assert paths == (
+        (PLAN_JOB,) if heavy == "false" else (str(WORKFLOW.relative_to(ROOT)),)
+    )
+    output = tmp_path.parent / f"{tmp_path.name}-output"
+    arguments = ["--event", "merge_group", "--base", base, "--head", head]
+    assert main([*arguments, "--output", str(output)]) == 0
+    assert _outputs(output) == _tier(heavy, "true", legs)
+
+
+def test_unparsable_workflow_keeps_the_full_tier(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    workflow = tmp_path / ".github/workflows/demo-project-testing.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(_PLANNED_WORKFLOW.format(plan="planner", native="native"))
+    base = _commit("Start")
+    workflow.write_text(workflow.read_text() + "  broken: [\n")
+    head = _commit("Break workflow")
+    paths = changed_paths(base, head)
+    assert classify_workflow_change(base, head, paths) == paths
+
+
 def test_added_workflow_keeps_the_full_tier(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     subprocess.run(["git", "init", "-q"], check=True)
@@ -493,7 +564,7 @@ def test_every_heavy_job_obeys_the_full_tier():
         needs = job["needs"]
         assert "ci-plan" in (needs if isinstance(needs, list) else [needs]), name
         if name != "mlx-full-corpus-scout":
-            assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'", name
+            assert job["if"] == ci_conditions.job_condition(name), name
     assert workflow[True]["schedule"] == [{"cron": "31 4 * * *"}]
     plan = jobs["ci-plan"]
     tier = next(step for step in plan["steps"] if step.get("id") == "plan")
@@ -501,7 +572,8 @@ def test_every_heavy_job_obeys_the_full_tier():
         "${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}"
     )
     assert plan["runs-on"] == "ubuntu-24.04"
-    assert plan["outputs"].keys() == {"heavy", "smoke", "legs"}
+    assert plan["outputs"].keys() == {"heavy", "smoke", "legs", "jobs"}
+    assert plan["outputs"]["jobs"] == "${{ steps.plan.outputs.jobs }}"
     assert plan["outputs"]["legs"] == "${{ steps.plan.outputs.legs }}"
     checkout = next(
         step
