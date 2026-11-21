@@ -218,7 +218,10 @@ def test_a_cell_lowers_each_source_with_its_own_language(monkeypatch, tmp_path):
     monkeypatch.setattr(execution, "as_spirv", as_spirv)
     mad = CATALOG["hlsl"][0]
     result = Result(mad, PAIR, "supported", sources=("a", "b"), into="glsl")
-    assert execution._execute("hlsl", [(0, result)], {}, tmp_path, True) == {}
+    assert execution._execute("hlsl", [(0, result)], {}, tmp_path, True) == (
+        {},
+        {0: "dxc and glslangValidator write no SPIR-V for it"},
+    )
     assert lowered == ["hlsl", "glsl"]
 
 
@@ -227,14 +230,14 @@ def test_run_executes_a_cell_as_spirv_and_skips_one_on_two_runtimes(monkeypatch)
 
     def run_pass(language, items, runtimes, root, workers, via_spirv):
         passes.append((language, [r.into for _, r in items], root.name, via_spirv))
-        return {}, ""
+        return {}, "", {}
 
     monkeypatch.setattr(execution, "_pass", run_pass)
     mad = CATALOG["hlsl"][0]
     supported = Result(mad, PAIR, "supported", sources=(GLSL_SOURCE,) * 2)
     cells = [replace(supported, into="glsl"), replace(supported, into="metal")]
     results, used = execution.run(cells)
-    assert passes == [("hlsl", ["glsl"], "hlsl-to-glsl", True)]
+    assert passes == [("hlsl", ["glsl"], "hlsl-to-glsl-spirv", True)]
     assert (results, used) == (cells, [])
 
 
@@ -307,13 +310,14 @@ def test_each_end_of_a_cell_runs_in_the_environment_of_its_own_spirv(
     monkeypatch.setattr(harness, "run_suite", run_suite)
     mad = CATALOG["hlsl"][0]
     cell = Result(mad, PAIR, "supported", sources=(GLSL_SOURCE,) * 2, into="slang")
-    found = execution._execute("hlsl", [(0, cell)], {}, tmp_path, True)
+    found, skipped = execution._execute("hlsl", [(0, cell)], {}, tmp_path, True)
     assert runs == [
         ("vulkan1.1", ["00000-native"]),
         ("vulkan1.2", ["00000-translated"]),
     ]
     native, translated = found[0][:2]
     assert native["outcome"] == translated["outcome"] == "preserved"
+    assert skipped == {}
 
 
 def _loaded(language):

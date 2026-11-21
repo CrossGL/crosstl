@@ -15,6 +15,7 @@ from ..ast import (
     UnaryOpNode,
 )
 from ..refusals import MojoRefusal
+from ..semantics.builtin_type_names import BUILTIN_TYPE_NAMES
 from .char_literals import char_literal_code
 from .lowering_refusals import refuse_unsupported
 from .mojo_exact_lookups import (
@@ -27,6 +28,47 @@ from .mojo_tables import (
     MOJO_RESOURCE_TYPE_MAPPING,
     MOJO_VECTOR_ARITHMETIC_OPS,
 )
+from .written_type_names import sized_float_spelling, sized_vector_parts
+
+# Sized scalar names (HLSL ``float16_t``, ``int32_t2``; CrossGL ``float16``) and HLSL one-lane vectors, spelled by the
+# names the Mojo type table maps.
+_SIZED_SCALARS = {
+    "float16": "half",
+    "float16_t": "half",
+    "float32": "float",
+    "float32_t": "float",
+    "float64": "double",
+    "float64_t": "double",
+    "int32": "int",
+    "int32_t": "int",
+    "uint32": "uint",
+    "uint32_t": "uint",
+}
+_SIZED_VECTOR_COMPONENTS = {
+    "int8_t": "i8vec",
+    "uint8_t": "u8vec",
+    "int16_t": "short",
+    "uint16_t": "ushort",
+    "int32_t": "int",
+    "uint32_t": "uint",
+}
+_ONE_LANE = re.compile(r"(bool|int|uint|half|float|double)1")
+
+
+def mojo_sized_type_spelling(name):
+    """``name`` spelled by the scalar, vector or matrix name the Mojo type table maps, or ``name`` unchanged."""
+    if name in _SIZED_SCALARS:
+        return _SIZED_SCALARS[name]
+    sized_float = sized_float_spelling(name)
+    if sized_float != name:
+        return sized_float
+    parts = sized_vector_parts(name)
+    if parts is not None and parts[0] in _SIZED_VECTOR_COMPONENTS:
+        return f"{_SIZED_VECTOR_COMPONENTS[parts[0]]}{parts[1]}"
+    one_lane = _ONE_LANE.fullmatch(name)
+    if one_lane is not None:
+        return one_lane.group(1)
+    return name
 
 
 class MojoValueMixin:
@@ -143,13 +185,14 @@ class MojoValueMixin:
 
     def vector_components_for_expression(self, expr, target_dtype=None):
         if isinstance(expr, MemberAccessNode):
-            obj = self.generate_expression(expr.object)
             swizzle_indices = self.get_swizzle_indices(expr.member)
-            if swizzle_indices is not None:
-                source_info = self.vector_type_info(
-                    self.expression_result_type(expr.object)
-                )
-                source_dtype = source_info[0] if source_info is not None else None
+            # A struct member named like a swizzle (``p.a``) is a member, not a component of a vector.
+            source_info = self.vector_type_info(
+                self.expression_result_type(expr.object)
+            )
+            if swizzle_indices is not None and source_info is not None:
+                obj = self.generate_expression(expr.object)
+                source_dtype = source_info[0]
                 return [
                     self.cast_vector_component(
                         f"{obj}[{index}]", source_dtype, target_dtype
@@ -334,9 +377,8 @@ class MojoValueMixin:
         else:
             vtype_str = str(vtype)
 
-        pointee_type = self.parse_pointer_type_name(vtype_str)
-        if pointee_type is not None:
-            return f"UnsafePointer[{self.map_type(pointee_type)}]"
+        if self.is_pointer_type_name(vtype_str):
+            return self.mojo_pointer_type(vtype_str.strip()[:-1].strip())
 
         geometry_stream_type = self.geometry_stream_mapped_type(vtype_str)
         if geometry_stream_type is not None:
@@ -350,7 +392,7 @@ class MojoValueMixin:
             base_type, size = self.parse_array_type_name(vtype_str)
             base_mapped = self.map_type(base_type)
             if size:
-                return f"InlineArray[{base_mapped}, {size}]"
+                return f"StaticTuple[{base_mapped}, {size}]"
             else:
                 return f"List[{base_mapped}]"
 
@@ -392,6 +434,21 @@ class MojoValueMixin:
         if mojo_generic_type is not None:
             return mojo_generic_type
 
+        sized_spelling = mojo_sized_type_spelling(vtype_str)
+        if sized_spelling != vtype_str:
+            return self.map_type(sized_spelling)
+        if (
+            vtype_str in BUILTIN_TYPE_NAMES
+            and vtype_str not in getattr(self, "program_type_names", ())
+            and not self.is_mojo_resource_type(vtype_str)
+        ):
+            # A built-in type of another language, such as Metal's ``visible_function_table``, has no Mojo type.
+            return refuse_unsupported(
+                "Mojo",
+                "type",
+                f"the built-in type '{vtype_str}' has no Mojo spelling",
+                vtype_str,
+            )
         mapped_type = vtype_str
         if self.is_mojo_resource_type(mapped_type):
             self.required_resource_types.add(mapped_type)

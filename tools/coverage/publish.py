@@ -59,6 +59,8 @@ def _executed_cell(row: dict) -> str:
         return "compile-only"
     if "executed" not in row:
         return "not run"
+    if len(row.get("executions", {})) > 1:
+        return ", ".join(f"{n} on {name}" for name, n in row["executions"].items())
     if row.get("runtime"):
         return f"{row['executed']} on {row['runtime']}"
     return str(row["executed"])
@@ -159,7 +161,9 @@ def _executed() -> list[str]:
         "on the GPU or on Mesa's software drivers. A supported compute probe whose translation reads the native "
         "probe's input buffers runs next to the native probe on the same inputs, and a translation that binds "
         "other resources or writes other results is wrong. HLSL, Slang, WGSL and Rust probes run as the SPIR-V "
-        "their reference compiler writes for them, and so do GLSL probes that llvmpipe's OpenGL rejects. The "
+        "their reference compiler writes for them, and so do GLSL probes that llvmpipe's OpenGL rejects. HLSL probes "
+        "also run as HLSL on Direct3D 12 WARP, and a row that ran on more than one runtime counts its probes per "
+        "runtime; a probe that diverges on either is wrong. The "
         "harness has no runtime for the language of a compile-only row, so the reference tool alone decides its "
         "score; 0 means that no supported probe of the row could run.",
         "",
@@ -235,8 +239,31 @@ def _untested(row: dict) -> list[str]:
     return lines
 
 
+def _unrun(row: dict) -> tuple[int, list[str]]:
+    """How many supported probes of ``row`` a runtime did not run, and one list item per reason, most shared first.
+
+    A probe that two runtimes left out is listed under each one's reason.
+    """
+    found: dict[str, list[str]] = {}
+    count = 0
+    for feature in sorted(row["features"], key=lambda f: f["name"]):
+        if feature["outcome"] != "supported" or not feature.get("unrun"):
+            continue
+        count += 1
+        for reason in feature["unrun"]:
+            found.setdefault(reason.splitlines()[0].strip(), []).append(feature["name"])
+    lines = []
+    for reason, names in sorted(
+        found.items(), key=lambda item: (-len(item[1]), item[0])
+    ):
+        tally = f" ({len(names)})" if len(names) > 1 else ""
+        lines.append(f"- {_code(reason)}{tally}: " + ", ".join(f"`{n}`" for n in names))
+    return count, lines
+
+
 def _gaps(row: dict, repository: str, heading: str = "") -> list[str]:
-    """The refused and wrong features of one row grouped by cause, and the untested ones grouped by reason.
+    """The refused and wrong features of one row grouped by cause, the untested ones grouped by reason, and the
+    supported compute probes a runtime did not run, grouped by the reason it gave.
 
     The wrong results are grouped as the bug issues are (:func:`.causes.grouped`), so each item is one bug. A
     translation matrix cell is passed as a row of its source language, with its own ``heading``; the coverage
@@ -247,7 +274,8 @@ def _gaps(row: dict, repository: str, heading: str = "") -> list[str]:
     untested = Counter(
         f["category"] for f in row["features"] if f["outcome"] == "untested"
     )
-    if not counts["refused"] and not counts["wrong"] and not untested:
+    unrun, reasons = _unrun(row)
+    if not counts["refused"] and not counts["wrong"] and not untested and not unrun:
         return []
     lines = [heading or f"### {language} {direction}", ""]
     if counts["refused"] or counts["wrong"]:
@@ -274,6 +302,16 @@ def _gaps(row: dict, repository: str, heading: str = "") -> list[str]:
             f"<summary>{sum(untested.values())} untested: {tally}</summary>",
             "",
             *_untested(row),
+            "",
+            "</details>",
+            "",
+        ]
+    if unrun:
+        lines += [
+            "<details>",
+            f"<summary>{unrun} supported compute probe{'s' if unrun > 1 else ''} a runtime did not run</summary>",
+            "",
+            *reasons,
             "",
             "</details>",
             "",

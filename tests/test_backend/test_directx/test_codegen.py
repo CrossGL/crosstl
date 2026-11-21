@@ -4028,8 +4028,10 @@ def test_codegen_is_helper_lane_round_trips_to_hlsl():
             outp[id.x] = r ? 1 : 0;
         }
     """)
+    # Outside pixel shaders IsHelperLane() is false (Shader Model 6.6), which the importer writes as is.
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(compute))
-    assert "bool r = IsHelperLane();" in hlsl
+    assert "bool r = false;" in hlsl
+    assert "IsHelperLane" not in hlsl
     assert "gl_HelperInvocation" not in hlsl
 
 
@@ -7914,7 +7916,10 @@ def test_codegen_linalg_using_alias_post_type_attributes_from_dxc_reparse():
 
     assert "typedef __builtin_LinAlgMatrix MyHandleT;" in output
     assert "@ numthreads(4, 4, 4)" in output
-    assert "MyMatrix MatA = MyMatrix::Splat(1.0);" in output
+    # The class imports as a struct whose static method becomes a function.
+    assert "struct MyMatrix {" in output
+    assert "MyMatrix MyMatrix_Splat(float Val) {" in output
+    assert "MyMatrix MatA = MyMatrix_Splat(1.0);" in output
     parse_crossgl(output)
 
 

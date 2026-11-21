@@ -175,14 +175,74 @@ def test_cuda_kernel_with_a_prototype_keeps_the_declaration_order(tmp_path, back
     assert declarations[0][0] < _first_call(code, "twice", "quadruple")
 
 
+GENERIC_EXPLICIT = """
+    float quadruple(float x) { return twice<float>(twice<float>(x)); }
+    generic<T> T twice(T x) { return x + x; }
+"""
+
+GENERIC_IMPLICIT = """
+    float quadruple(float x) { return twice(x) + float(twice(int(x))); }
+    generic<T> T twice(T x) { return x + x; }
+"""
+
+GENERIC_CHAIN = """
+    float quadruple(float x) { return twice(x); }
+    generic<T> T twice(T x) { return halve(x) * T(4); }
+    generic<T> T halve(T x) { return x / T(2); }
+"""
+
+
+@pytest.mark.parametrize("backend", sorted(GENERATORS))
+@pytest.mark.parametrize("source", [GENERIC_EXPLICIT, GENERIC_IMPLICIT])
+def test_generic_specialization_called_before_its_definition_is_declared_first(
+    backend, source
+):
+    code = _generate(backend, _program(source))
+
+    declarations = _declarations(code, "twice_float")
+    assert [d for _i, d in declarations] == [False, True]
+    assert declarations[0][0] < _first_call(code, "twice_float", "quadruple")
+    assert "__device__ float twice_float(float x);" in code
+
+
+@pytest.mark.parametrize("backend", sorted(GENERATORS))
+def test_every_later_specialization_of_a_called_generic_is_declared(backend):
+    code = _generate(backend, _program(GENERIC_IMPLICIT))
+
+    assert [d for _i, d in _declarations(code, "twice_int")] == [False, True]
+
+
+@pytest.mark.parametrize("backend", sorted(GENERATORS))
+def test_specialization_calling_a_later_generic_declares_it(backend):
+    code = _generate(backend, _program(GENERIC_CHAIN))
+
+    halve = _declarations(code, "halve_float")
+    twice_definition = [i for i, d in _declarations(code, "twice_float") if d]
+    assert [d for _i, d in halve] == [False, True]
+    assert halve[0][0] < twice_definition[0]
+
+
+@pytest.mark.parametrize("backend", sorted(GENERATORS))
+def test_generic_called_after_its_definition_gets_no_prototype(backend):
+    source = """
+    generic<T> T twice(T x) { return x + x; }
+    float quadruple(float x) { return twice<float>(x); }
+"""
+    code = _generate(backend, _program(source))
+
+    assert [d for _i, d in _declarations(code, "twice_float")] == [True]
+
+
 COMPILED = _program(
     CALLER_FIRST
     + MUTUAL
-    + OVERLOADS.replace("quadruple", "octuple").replace("twice", "doubled"),
+    + OVERLOADS.replace("quadruple", "octuple").replace("twice", "doubled")
+    + GENERIC_IMPLICIT.replace("quadruple", "sextuple").replace("twice", "tripled")
+    + GENERIC_CHAIN.replace("quadruple", "sedecuple"),
     STAGE_FUNCTIONS,
     body=(
         "out_[i] = quadruple(inp[i]) + octuple(inp[i]) + scaled(inp[i])"
-        " + float(is_odd(uint(inp[i])));"
+        " + float(is_odd(uint(inp[i]))) + sextuple(inp[i]) + sedecuple(inp[i]);"
     ),
 )
 

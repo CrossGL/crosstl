@@ -9,6 +9,8 @@ dist/
 # Generated locally
 .hypothesis/
 docs/_build/
+# Written from the published coverage report at build time (docs/source/_ext/coverage_pages.py).
+docs/source/languages/
 examples/output/
 /coverage.json
 /probes/
