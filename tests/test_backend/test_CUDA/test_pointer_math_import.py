@@ -172,6 +172,15 @@ def test_pure_expressions(text, pure):
     assert is_pure_expression(_expression(text)) is pure
 
 
+def test_every_pointer_math_function_names_its_crossgl_function():
+    from crosstl.backend.CUDA.pointer_math_import import (
+        CROSSGL_NAMES,
+        POINTER_OUTPUT_FUNCTIONS,
+    )
+
+    assert sorted(CROSSGL_NAMES) == sorted(POINTER_OUTPUT_FUNCTIONS)
+
+
 def test_the_dereference_node_is_built_with_the_given_type():
     from crosstl.backend.CUDA.pointer_math_import import pointed_value
 

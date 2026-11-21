@@ -33,8 +33,20 @@ POINTER_OUTPUT_FUNCTIONS = {
     "remquo": (3, (2,)),
     "remquof": (3, (2,)),
 }
-# The CrossGL name of each function whose CUDA name it does not keep.
-CROSSGL_NAMES = {"frexpf": "frexp", "modff": "modf"}
+# The CrossGL name of each function: frexpf and modff become frexp and modf, the others keep their CUDA names.
+CROSSGL_NAMES = {
+    "sincos": "sincos",
+    "sincosf": "sincosf",
+    "__sincosf": "__sincosf",
+    "sincospi": "sincospi",
+    "sincospif": "sincospif",
+    "frexp": "frexp",
+    "frexpf": "frexp",
+    "modf": "modf",
+    "modff": "modf",
+    "remquo": "remquo",
+    "remquof": "remquof",
+}
 # A sine-and-cosine statement -> the CrossGL functions its two assignments call. ``__sincosf`` is the fast intrinsic,
 # so it takes the target's own precision, as ``__sinf`` and ``__cosf`` do.
 SINE_COSINE_SPLITS = {
@@ -89,7 +101,7 @@ def format_pointer_output_call(converter, name, arguments, unary_node_type):
         for index, argument in enumerate(arguments)
     ]
     bare = _bare_name(name)
-    return f"{CROSSGL_NAMES.get(bare, bare)}({', '.join(rendered)})"
+    return f"{CROSSGL_NAMES[bare]}({', '.join(rendered)})"
 
 
 def is_pure_expression(node):
