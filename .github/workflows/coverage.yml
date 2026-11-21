@@ -444,9 +444,10 @@ jobs:
         with:
           persist-credentials: false
 
+      # compushady 0.17.5 publishes Windows wheels up to CPython 3.12, as in conformance.yml's WARP leg.
       - uses: actions/setup-python@v7
         with:
-          python-version: "3.13"
+          python-version: "3.12"
           cache: pip
 
       # compushady finds the WARP adapter; the harness builds its D3D12 buffer-view worker with the image's MSVC.
