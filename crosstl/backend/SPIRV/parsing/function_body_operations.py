@@ -18,16 +18,12 @@ from ..ray_tracing_import import (
 from ..select_import import (
     spirv_select_expression,
 )
-from ..subgroup_import import (
-    OPCODES as SPIRV_SUBGROUP_CALL_OPCODES,
-)
-from ..subgroup_import import (
-    spirv_subgroup_call,
-)
 from ..struct_result_import import (
     spirv_extended_arithmetic_call,
     spirv_struct_result_call,
 )
+from ..subgroup_import import OPCODES as SPIRV_SUBGROUP_CALL_OPCODES
+from ..subgroup_import import spirv_subgroup_call
 from ..VulkanAst import (
     AssignmentNode,
     BinaryOpNode,
