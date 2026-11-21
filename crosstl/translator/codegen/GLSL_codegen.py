@@ -210,6 +210,7 @@ from .opengl_fixed_array_parameters import OpenGLFixedArrayParameterMixin
 from .opengl_function_intervals import OpenGLFunctionIntervalMixin
 from .opengl_function_signatures import OpenGLFunctionSignatureMixin
 from .opengl_global_initializers import OpenGLGlobalInitializerMixin
+from .opengl_group_votes import OpenGLGroupVoteMixin
 from .opengl_image_operations import OpenGLImageOperationMixin
 from .opengl_interface_blocks import OpenGLInterfaceBlockMixin
 from .opengl_local_identifiers import OpenGLLocalIdentifierMixin
@@ -348,6 +349,7 @@ class GLSLCodeGen(
     OpenGLMetalBuiltinMixin,
     OpenGLMetalMathMixin,
     OpenGLWaveOperationMixin,
+    OpenGLGroupVoteMixin,
     OpenGLFunctionSignatureMixin,
     OpenGLCallArgumentMixin,
     OpenGLTextureCallMixin,
@@ -448,6 +450,7 @@ class GLSLCodeGen(
         self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
         self.required_glsl_cooperative_matrix_helpers = set()
         self.current_glsl_exact_subgroup_width = None
+        self.current_glsl_group_vote_suffix = None
         self.sampler_variables = set()
         self.current_sampler_parameters = set()
         self.glsl_resource_binding_records = []
@@ -2730,6 +2733,12 @@ class GLSLCodeGen(
         )
         if self.software_subgroup_width is not None:
             return []
+        group_vote_suffix = getattr(self, "current_glsl_group_vote_suffix", None)
+        if group_vote_suffix is not None:
+            # GLSL 4.60 has the votes without an extension.
+            if not group_vote_suffix:
+                return []
+            return [f"#extension {self.GLSL_GROUP_VOTE_EXTENSION} : require"]
         operations = self.glsl_wave_operations(ast, target_stage)
         lines = []
         if (
@@ -3119,6 +3128,7 @@ class GLSLCodeGen(
         self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
         self.required_glsl_cooperative_matrix_helpers = set()
         self.current_glsl_exact_subgroup_width = None
+        self.current_glsl_group_vote_suffix = None
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.current_structured_buffer_access_parameters = {}
@@ -3379,6 +3389,9 @@ class GLSLCodeGen(
         )
         exact_subgroup_width = self.glsl_stage_exact_subgroup_width(ast, target_stage)
         self.current_glsl_exact_subgroup_width = exact_subgroup_width
+        self.current_glsl_group_vote_suffix = self.glsl_group_vote_suffix(
+            ast, target_stage
+        )
         code += f"{version_line}\n"
         code += source_license_comments(ast, "opengl")
         for line in self.glsl_stage_extension_lines(ast, target_stage):
@@ -10796,7 +10809,14 @@ class GLSLCodeGen(
             helper = self.GLSL_WAVE_MULTI_PREFIX_HELPERS[operation]
             return f"{helper}({value}, {mask})"
 
-        mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
+        group_vote_suffix = getattr(self, "current_glsl_group_vote_suffix", None)
+        if (
+            group_vote_suffix is not None
+            and operation in self.GLSL_GROUP_VOTE_FUNCTIONS
+        ):
+            mapped = self.GLSL_GROUP_VOTE_FUNCTIONS[operation] + group_vote_suffix
+        else:
+            mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
         if mapped is None:
             return self.glsl_wave_diagnostic_expression(
                 diagnostic_operation, "is not recognized by the OpenGL backend"
