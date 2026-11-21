@@ -654,13 +654,22 @@ def test_external_hip_tests_thread_block_tile_shuffle_codegen_reparse():
     assert helper.params[0]["type"] == "cg::thread_block_tile<tileSz> const &"
     assert "cooperative_groups_thread_block_tile_tileSz g" in crossgl
     assert "var sz: i32 = tileSz;" in crossgl
-    assert "WaveReadLaneAt(val, (WaveGetLaneIndex() + (i)))" in crossgl
+    # Each shuffle runs in every lane and selects only its source lane (#4569).
     assert (
-        "WaveReadLaneAt(val, ((WaveGetLaneIndex() - "
-        "(WaveGetLaneIndex() % tileSz)) + ((WaveGetLaneIndex() % tileSz) ^ (i))))"
-        in crossgl
-    )
-    assert "WaveReadLaneAt(val, (WaveGetLaneIndex() - (i)))" in crossgl
+        "WaveReadLaneAt(val, ((((WaveGetLaneIndex() % tileSz) + (i)) < tileSz) ? "
+        "(WaveGetLaneIndex() + (i)) : WaveGetLaneIndex()))"
+    ) in crossgl
+    assert (
+        "WaveReadLaneAt(val, ((((WaveGetLaneIndex() % tileSz) ^ (i)) < tileSz) ? "
+        "((WaveGetLaneIndex() - (WaveGetLaneIndex() % tileSz)) + "
+        "((WaveGetLaneIndex() % tileSz) ^ (i))) : WaveGetLaneIndex()))"
+    ) in crossgl
+    assert (
+        "WaveReadLaneAt(val, (((WaveGetLaneIndex() % tileSz) >= (i)) ? "
+        "(WaveGetLaneIndex() - (i)) : WaveGetLaneIndex()))"
+    ) in crossgl
+    assert "? WaveReadLaneAt(" not in crossgl
+    assert ": WaveReadLaneAt(" not in crossgl
     assert (
         "cooperative_groups thread_block_tile.shfl_down not directly supported"
         not in crossgl

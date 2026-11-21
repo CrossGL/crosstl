@@ -120,6 +120,7 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32})
     BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_", "webgl_", "_webgl_")
+    GLSL_RESERVES_BUILTIN_FUNCTION_NAMES = True
     UNSUPPORTED_VERTEX_OUTPUT_BUILTINS = {"gl_ClipDistance", "gl_CullDistance"}
     UNSUPPORTED_STAGE_NAMES = (
         {

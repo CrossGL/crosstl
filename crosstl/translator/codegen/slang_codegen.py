@@ -109,7 +109,12 @@ from .slang_expression_parts import SlangExpressionPartsMixin
 from .slang_function_parts import SlangFunctionPartsMixin
 from .slang_geometry_stages import SlangGeometryStagesMixin
 from .slang_glsl_buffer_access import SlangGlslBufferAccessMixin
+from .slang_glsl_ray_interfaces import lower_slang_glsl_ray_interfaces
 from .slang_image_resources import SlangImageResourcesMixin
+from .slang_integer_promotion import (
+    SlangIntegerPromotionMixin,
+    source_promotes_narrow_scalars,
+)
 from .slang_mesh_outputs import SlangMeshOutputsMixin
 from .slang_numeric_types import slang_unrepresentable_type_reason
 from .slang_pointer_declarations import refuse_slang_pointer_declarations
@@ -179,6 +184,7 @@ class SlangCodeGen(
     SlangCallExpressionMixin,
     SlangExpressionNodeMixin,
     SlangFunctionPartsMixin,
+    SlangIntegerPromotionMixin,
 ):
     """Emit Slang shader source from the shared CrossGL AST."""
 
@@ -437,10 +443,12 @@ class SlangCodeGen(
         if self._generating:
             return self.generate_program(ast)
         refuse_cooperative_matrices(ast, label="Slang", target="slang")
+        self.slang_narrow_scalars_promote = source_promotes_narrow_scalars(ast)
         ast = lower_union_storage(ast, "slang")
         # Slang textures are separate objects, as in HLSL: a separate CrossGL texture declares the same Texture2D.
         ast = canonicalize_separate_textures(ast)
         ast = lower_slang_storage_instances(ast)
+        lower_slang_glsl_ray_interfaces(ast, self)
         try:
             return self.refusals.run(self.generate_checked_program, ast)
         finally:
@@ -927,7 +935,8 @@ class SlangCodeGen(
             for qualifier in getattr(node, "qualifiers", []) or []
         }
         constant = bool(qualifiers & {"const", "constant"})
-        if not (constant or "static" in qualifiers) or qualifiers & {
+        private = bool(qualifiers & {"private", "static", "thread"})
+        if not (constant or private) or qualifiers & {
             "uniform",
             "groupshared",
             "shared",
@@ -1301,6 +1310,8 @@ class SlangCodeGen(
         if isinstance(expr, BinaryOpNode):
             return self.binary_expression_result_type(expr)
         if isinstance(expr, UnaryOpNode):
+            if self.slang_promotes_unary(expr):
+                return "int"
             operand_type = self.expression_result_type(expr.operand)
             if expr.op == "&" and operand_type is not None:
                 operand_type = (
@@ -1564,9 +1575,14 @@ class SlangCodeGen(
     def generate_binary_expression(self, node):
         left = self.generate_expression(node.left)
         right = self.generate_expression(node.right)
-        if self.binary_child_needs_parentheses(node.op, node.left):
+        promoted = self.slang_promoted_operands(node) or (False, False)
+        if promoted[0]:
+            left = f"int({left})"
+        elif self.binary_child_needs_parentheses(node.op, node.left):
             left = f"({left})"
-        if self.binary_child_needs_parentheses(node.op, node.right, True):
+        if promoted[1]:
+            right = f"int({right})"
+        elif self.binary_child_needs_parentheses(node.op, node.right, True):
             right = f"({right})"
         if node.op == "*" and self.binary_requires_slang_mul(
             self.expression_result_type(node.left),

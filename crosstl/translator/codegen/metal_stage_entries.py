@@ -15,6 +15,7 @@ from .array_utils import (
 from .metal_conservative_depth import metal_conservative_depth_semantic
 from .metal_exact_lookups import metal_semantic_index
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
+from .metal_intersection_tags import metal_intersection_tags
 from .metal_post_tessellation import post_tessellation_plan
 from .metal_stage_refusals import refuse_metal_stages
 from .resource_array_bounds import DynamicIndexSizes
@@ -846,7 +847,8 @@ class MetalStageEntryMixin:
         primitive_type = self.metal_ray_intersection_primitive_type(
             func, raw_return_type
         )
-        return f"[[intersection({primitive_type})]]"
+        tags = metal_intersection_tags(self, func, primitive_type)
+        return f"[[intersection({', '.join([primitive_type, *tags])})]]"
 
     def metal_ray_intersection_primitive_type(self, func, raw_return_type):
         for attr in getattr(func, "attributes", []) or []:

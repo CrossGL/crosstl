@@ -9,6 +9,7 @@ import pytest
 import crosstl
 from crosstl.translator import ast as A
 from crosstl.translator import parse
+from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from crosstl.translator.semantics import PartitionedWaveUnsupportedError
 from crosstl.translator.semantics.hub_types import call_name
 from crosstl.translator.semantics.partitioned_waves import (
@@ -330,8 +331,14 @@ def test_metal_output_of_every_operation_compiles(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-@pytest.mark.parametrize("backend", ["directx", "cuda", "hip", "slang", "rust"])
+@pytest.mark.parametrize("backend", ["directx", "cuda", "hip", "slang"])
 def test_other_targets_translate_every_operation(tmp_path, backend):
     output = translate(tmp_path, ALL_OPERATIONS, backend)
     assert "crossgl_WaveMultiPrefixInclusiveMin_vec4" in output
     assert not re.search(r"\bWaveMulti(Sum|Min|Max|Product|Bit\w+)\s*\(", output)
+
+
+def test_rust_output_refuses_every_operation(tmp_path):
+    # Rust output writes rust-gpu kernels, which do not lower subgroup operations yet: a typed refusal.
+    with pytest.raises(RustLoweringRefused, match="subgroup operations"):
+        translate(tmp_path, ALL_OPERATIONS, "rust")

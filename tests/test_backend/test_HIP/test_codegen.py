@@ -1700,11 +1700,40 @@ class TestHipCodeGen:
         assert "__ldlu" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
-    def test_hip_ldg_non_address_operand_emits_expression_safe_diagnostic(self):
+    def test_hip_cache_load_family_pointer_operands_import_as_loads(self):
         code = """
-        __global__ void read_only(float* input, float* output) {
-            int idx = threadIdx.x;
-            output[idx] = __ldg(input + idx);
+        __global__ void cached_loads(const float* input, float* output, int idx) {
+            const float* ptr = input + idx;
+            output[0] = __ldg(input + idx);
+            output[1] = __ldg(input);
+            output[2] = __ldg(ptr);
+            output[3] = __ldca(input + idx);
+            output[4] = __ldcg(input + idx);
+            output[5] = __ldcs(input + idx);
+            output[6] = __ldlu(input + idx);
+            output[7] = __ldcv(input + idx);
+        }
+        """
+        lexer = HipLexer(code)
+        tokens = lexer.tokenize()
+        parser = HipParser(tokens)
+        ast = parser.parse()
+
+        result = HipToCrossGLConverter().generate(ast)
+
+        assert "output[0] = (*(input + idx));" in result
+        assert "output[1] = (*input);" in result
+        assert "output[2] = (*ptr);" in result
+        for slot in range(3, 8):
+            assert f"output[{slot}] = (*(input + idx));" in result
+        for name in ("__ldg", "__ldca", "__ldcg", "__ldcs", "__ldlu", "__ldcv"):
+            assert name not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_hip_cache_load_with_two_arguments_is_still_refused(self):
+        code = """
+        __global__ void cached_loads(float* input, float* output, int idx) {
+            output[idx] = __ldg(input, idx);
         }
         """
         lexer = HipLexer(code)
@@ -1716,29 +1745,37 @@ class TestHipCodeGen:
             HipToCrossGLConverter().generate, ast
         )
 
-        assert "HIP load cache intrinsic __ldg((input + idx))" in message
-        assert "__ldg(input + idx)" not in result
+        assert "HIP load cache intrinsic __ldg(input, idx)" in message
+        assert "CrossGL loads take one address" in message
+        assert "__ldg(input, idx)" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
-    def test_hip_cache_load_family_non_address_operand_emits_safe_diagnostic(self):
-        code = """
-        __global__ void cached_loads(float* input, float* output) {
-            int idx = threadIdx.x;
-            output[idx] = __ldcg(input + idx);
-        }
-        """
-        lexer = HipLexer(code)
-        tokens = lexer.tokenize()
-        parser = HipParser(tokens)
-        ast = parser.parse()
-
-        result, message = hip_import_partial_output(
-            HipToCrossGLConverter().generate, ast
+    @pytest.mark.parametrize(
+        ("backend", "loads"),
+        [
+            ("cgl", ["o[0] = (*(x + i));", "o[1] = x[i];", "o[2] = (*x);"]),
+            ("opengl", ["o[0] = x[i];", "o[1] = x[i];", "o[2] = x[0];"]),
+            ("metal", ["o[0] = *(x + i);", "o[1] = x[i];", "o[2] = *x;"]),
+        ],
+    )
+    def test_hip_pointer_cache_loads_translate_to_targets(
+        self, tmp_path, backend, loads
+    ):
+        source = tmp_path / "ldg.hip"
+        source.write_text(
+            "#include <hip/hip_runtime.h>\n"
+            "__global__ void k(const float* x, float* o, int i) {\n"
+            "    o[0] = __ldg(x + i);\n"
+            "    o[1] = __ldg(&x[i]);\n"
+            "    o[2] = __ldg(x);\n"
+            "}\n"
         )
 
-        assert "HIP load cache intrinsic __ldcg((input + idx))" in message
-        assert "__ldcg(input + idx)" not in result
-        CrossGLParser(CrossGLLexer(result).tokens).parse()
+        result = translate(str(source), backend=backend, format_output=False)
+
+        for load in loads:
+            assert load in result
+        assert "__ldg" not in result
 
     def test_warp_vote_and_shuffle_intrinsics_do_not_leak_raw_hip_calls(self):
         code = """
@@ -1851,23 +1888,27 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
+        # up/down select the source lane and shuffle in every lane: a shuffle in
+        # one arm of ?: reads lanes that are inactive there (#4569).
         assert (
-            "(WaveGetLaneIndex() >= (delta)) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() - (delta))) : value"
+            "WaveReadLaneAt(value, ((WaveGetLaneIndex() >= (delta)) ? "
+            "(WaveGetLaneIndex() - (delta)) : WaveGetLaneIndex()))"
         ) in result
         # The default width and an explicit warpSize are both the wavefront width, which is 32 or 64 lanes
         # depending on the device, so neither may become the constant 32.
         assert (
             result.count(
-                "((WaveGetLaneIndex() + (delta)) < WaveGetLaneCount()) ? "
-                "WaveReadLaneAt(value, (WaveGetLaneIndex() + (delta))) : value"
+                "WaveReadLaneAt(value, (((WaveGetLaneIndex() + (delta)) < WaveGetLaneCount()) ? "
+                "(WaveGetLaneIndex() + (delta)) : WaveGetLaneIndex()))"
             )
             == 2
         )
         assert (
-            "(((WaveGetLaneIndex() % 32) + (1)) < 32) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (1))) : value"
+            "WaveReadLaneAt(value, ((((WaveGetLaneIndex() % 32) + (1)) < 32) ? "
+            "(WaveGetLaneIndex() + (1)) : WaveGetLaneIndex()))"
         ) in result
+        assert "? WaveReadLaneAt(" not in result
+        assert ": WaveReadLaneAt(" not in result
         assert "hip warp intrinsic __shfl_up_sync" not in result
         assert "hip warp intrinsic __shfl_down_sync" not in result
         assert "__shfl_up_sync" not in result
@@ -17690,9 +17731,13 @@ class TestHipCodeGen:
 
         result = translate(str(source_path), backend="rust", format_output=False)
 
+        # The HIP importer binds the plain value as a uniform; the pointers are storage-buffer slices.
         assert (
-            "pub fn kernel(mut data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
+            "pub fn kernel(#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] data: &mut [f32], "
+            "#[spirv(storage_buffer, descriptor_set = 0, binding = 1)] indices: &[i32], "
+            "#[spirv(uniform, descriptor_set = 0, binding = 2)] value: &f32)" in result
         )
+        assert "let value: f32 = *value;" in result
         assert "data[indices[0] as usize] = value;" in result
 
     def test_native_kernel_roundtrip_to_hip_emits_native_types_and_builtins(

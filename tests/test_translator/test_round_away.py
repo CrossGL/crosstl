@@ -36,14 +36,18 @@ OPENCL = """__kernel void k(__global const float *a, __global float *o, __global
 HELPER = HELPERS["__cgl_round_away"].name
 
 
-def translate(tmp_path, source, suffix, backend):
+def translate(tmp_path, source, suffix, backend, **options):
     path = tmp_path / f"kernel{suffix}"
     path.write_text(source, encoding="utf-8")
-    return crosstl.translate(str(path), backend=backend, format_output=False)
+    return crosstl.translate(str(path), backend=backend, format_output=False, **options)
 
 
-def cuda(tmp_path, call, backend="cgl", suffix=".cu"):
-    return translate(tmp_path, CUDA.format(call=call), suffix, backend)
+def cuda(tmp_path, call, backend="cgl", suffix=".cu", **options):
+    return translate(tmp_path, CUDA.format(call=call), suffix, backend, **options)
+
+
+# rust-gpu takes the workgroup size as literals, so a CUDA kernel's host-chosen block size is given.
+RUST_BLOCK_SIZE = {"source_options": {"threadgroup_size": 32}}
 
 
 @pytest.mark.parametrize("suffix", [".cu", ".hip"])
@@ -81,7 +85,8 @@ def test_sources_declare_the_family():
 )
 def test_targets_without_a_proven_round_use_the_helper(tmp_path, backend):
     assert TARGET_ENTRIES[(ROUND_AWAY, backend)].kind == "polyfill"
-    output = cuda(tmp_path, "roundf(a[i])", backend=backend)
+    options = RUST_BLOCK_SIZE if backend == "rust" else {}
+    output = cuda(tmp_path, "roundf(a[i])", backend=backend, **options)
     if backend == "vulkan":
         # The SPIR-V helper has no OpName; it calls Trunc and never the implementation-defined Round.
         assert "OpFunctionCall" in output and " Trunc " in output

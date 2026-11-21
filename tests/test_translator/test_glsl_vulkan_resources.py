@@ -196,11 +196,13 @@ def test_shared_sampler_stays_separate_for_vulkan(tmp_path):
     glsl = translate(tmp_path, SHARED, "shared.cgl")
     assert "#ifdef VULKAN\n#define CROSSGL_SAMPLED(vulkan, opengl) vulkan\n" in glsl
     assert "#else\n#define CROSSGL_SAMPLED(vulkan, opengl) opengl\n#endif\n" in glsl
+    # The buffers take bindings 0 and 1 and the textures 0 and 1, so the sampler takes the lowest free one. In
+    # Vulkan a binding has one descriptor type, so the textures then leave the buffers' bindings for 3 and 4
+    # (glsl_vulkan_binding_classes), and OpenGL keeps units 0 and 1.
     assert (
-        "#ifdef VULKAN\nlayout(binding = 0) uniform texture2D texa;\n#else\n"
+        "#ifdef VULKAN\nlayout(binding = 3) uniform texture2D texa;\n#else\n"
         "layout(binding = 0) uniform sampler2D texa;\n#endif\n"
     ) in glsl
-    # The buffers take bindings 0 and 1 and the textures 0 and 1, so the sampler takes the lowest free one.
     assert "#ifdef VULKAN\nlayout(binding = 2) uniform sampler smp;\n#endif\n" in glsl
     assert "textureLod(CROSSGL_SAMPLED(sampler2D(texa, smp), texa)," in glsl
     assert "textureLod(CROSSGL_SAMPLED(sampler2D(texb, smp), texb)," in glsl
@@ -256,8 +258,9 @@ def test_a_sampler_keeps_its_set_and_binding(tmp_path):
 @pytest.mark.parametrize("source", [SIZE_QUERY, HELPER], ids=["size-query", "helper"])
 def test_other_uses_keep_the_combined_form(tmp_path, source):
     glsl = translate(tmp_path, source, "other.cgl")
-    assert "VULKAN" not in glsl
-    assert "uniform sampler2D texa;" in glsl
+    assert "CROSSGL_SAMPLED" not in glsl and "texture2D" not in glsl
+    # Only the binding differs between the APIs: texa leaves outp's set 0 binding for Vulkan.
+    assert "layout(CROSSGL_BINDING(0, 1, 0)) uniform sampler2D texa;" in glsl
     compile_both(tmp_path, glsl)
 
 
@@ -267,8 +270,9 @@ def test_unsized_texture_array_is_a_runtime_array_for_vulkan(tmp_path):
         "#ifdef VULKAN\n#extension GL_EXT_nonuniform_qualifier : require\n#endif\n"
         in glsl
     )
+    # Vulkan gives the array a binding of its own, past the buffers' 0 and 1; OpenGL keeps texture units 0 and 1.
     assert (
-        "#ifdef VULKAN\nlayout(binding = 0) uniform sampler2D tex[];\n#else\n"
+        "#ifdef VULKAN\nlayout(binding = 2) uniform sampler2D tex[];\n#else\n"
         "layout(binding = 0) uniform sampler2D tex[2];\n#endif\n"
     ) in glsl
     assembly = compile_both(tmp_path, glsl)
@@ -282,8 +286,8 @@ def test_an_array_used_without_an_index_stays_sized(tmp_path):
         "outp[i] = textureLod(tex[k], vec2(fin[i], 0.5), 0.0).x + float(tex.length());",
     )
     glsl = translate(tmp_path, source, "length.cgl")
-    assert "VULKAN" not in glsl
-    assert "uniform sampler2D tex[2];" in glsl
+    assert "GL_EXT_nonuniform_qualifier" not in glsl and "tex[];" not in glsl
+    assert "layout(CROSSGL_BINDING(0, 2, 0)) uniform sampler2D tex[2];" in glsl
 
 
 def test_vulkan_glsl_round_trips_its_separate_resources(tmp_path):

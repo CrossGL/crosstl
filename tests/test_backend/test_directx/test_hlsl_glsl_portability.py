@@ -160,10 +160,11 @@ def test_storage_textures_take_the_format_of_the_bound_image(tmp_path):
 
     assert "@ format(unknown)" in generate_crossgl(SAMPLING_HLSL)
     assert "#extension GL_EXT_shader_image_load_formatted : require" in code
-    # Written only: no format and no extension requirement for the image.
-    assert "layout(binding = 0) writeonly uniform image2D output_;" in code
+    # Written only: no format and no extension requirement for the image. In
+    # Vulkan the storage images move off the bindings the textures keep.
+    assert "layout(CROSSGL_BINDING(0, 5, 0)) writeonly uniform image2D output_;" in code
     # Read and written: formatless, loaded through the bound image format.
-    assert "layout(binding = 1) uniform image2D history;" in code
+    assert "layout(CROSSGL_BINDING(0, 6, 1)) uniform image2D history;" in code
     assert "layout(binding = 2) uniform iimage1D ids;" in code
     # Atomics require the single-channel 32-bit format.
     assert "layout(r32ui, binding = 3) uniform uimage2D counters;" in code

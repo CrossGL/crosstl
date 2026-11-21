@@ -68,6 +68,8 @@ from .generic_struct_utils import (
     generic_struct_specialized_fields,
     generic_struct_specialized_type_name,
 )
+from .glsl_builtin_functions import called_builtin_spellings, reset_builtin_spellings
+from .glsl_call_helpers import reset_glsl_call_helpers
 from .glsl_exact_lookups import glsl_undeclared_call_reasons
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_refusals import stageless_entry_refusal_reason
@@ -75,6 +77,7 @@ from .glsl_string_literals import string_literal_reasons
 from .glsl_target_builtins import unavailable_builtin_reasons
 from .glsl_tessellation_modes import program_control_sources
 from .glsl_view_index import lower_view_index
+from .glsl_vulkan_binding_classes import with_distinct_vulkan_bindings
 from .loop_induction import (
     checked_induction_value,
     init_less_counter_loops,
@@ -1276,23 +1279,25 @@ class OpenGLProgramStructureMixin:
         whose early returns cannot be proven uniform is rendered once more
         with ``converge_subgroup_early_exits``; programs that validate as
         written keep their output, and a failed retry reports the original
-        error.
+        error. A set 0 binding that several Vulkan descriptor types share
+        then moves for the Vulkan compilation (:mod:`.glsl_vulkan_binding_classes`).
         """
         retry = self.software_subgroup_width is not None and has_subgroup_early_exits(
             ast, self.walk_ast
         )
         pristine = deepcopy(ast) if retry else None
         try:
-            return self._generate_program_with_vulkan_forms(ast, target_stage, False)
+            code = self._generate_program_with_vulkan_forms(ast, target_stage, False)
         except OpenGLSoftwareSubgroupError as error:
             if not retry or error.reason not in self.GLSL_EARLY_EXIT_RETRY_REASONS:
                 raise
             try:
-                return self._generate_program_with_vulkan_forms(
+                code = self._generate_program_with_vulkan_forms(
                     pristine, target_stage, True
                 )
             except OpenGLSoftwareSubgroupError:
                 raise error from None
+        return with_distinct_vulkan_bindings(code, self.glsl_source_written_bindings())
 
     def _generate_program_with_vulkan_forms(self, ast, target_stage, early_exits):
         """Render the program, again without each Vulkan resource form that a use outside it would break.
@@ -1300,10 +1305,21 @@ class OpenGLProgramStructureMixin:
         :mod:`.glsl_vulkan_resources` plans its forms from the uses it can see in the AST; a texture that the
         rendering still names outside them, or a runtime array it names without an index, keeps the combined
         OpenGL form in both compilations.
+
+        It also renders the program again with every built-in function name reserved that a program identifier
+        spelled and the rendering calls (:mod:`.glsl_builtin_functions`), so the identifier no longer hides it.
         """
         self.glsl_vulkan_resource_exclusions = frozenset()
+        reset_builtin_spellings(self)
         while True:
+            reset_glsl_call_helpers(self)
             code = self._generate_program_attempt(ast, target_stage, early_exits)
+            shadowed = called_builtin_spellings(self, code)
+            if shadowed:
+                self.glsl_shadowed_builtin_names = (
+                    self.glsl_shadowed_builtin_names | shadowed
+                )
+                continue
             unwrapped = self.glsl_vulkan_resources.unwrapped(code)
             if not unwrapped:
                 return code
