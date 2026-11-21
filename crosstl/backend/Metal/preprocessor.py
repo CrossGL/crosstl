@@ -130,6 +130,10 @@ from .simd_group_template_overloads import (
 )
 from .source_analysis_cache import SourceAnalysisCache
 from .specialized_member_types import specialized_member_type_template_names
+from .method_struct_carriers import (
+    lower_late_member_functions,
+    method_struct_template_names,
+)
 from .static_member_constants import (
     materialized_struct_for_template_id,
     static_member_constant_substituter,
@@ -421,6 +425,9 @@ class MetalPreprocessor(
             processed = self._materialize_explicit_template_struct_instantiations(
                 processed
             )
+            # A carrier body that names a functor struct template (`Less<T> op; op(a, b)`) spells it concretely
+            # only now; member lowering lowers the members of the specializations it has just produced.
+            processed = lower_late_member_functions(self, processed)
         processed = self._prune_unreferenced_materialized_function_templates(processed)
         # A constrained overload nothing calls would reach CrossGL without its constraint.
         processed = prune_unreferenced_constrained_templates(self, processed)
@@ -495,10 +502,13 @@ class MetalPreprocessor(
             or (simd_group_overloads and overloads_simd_group_function(template))
         ]
         # Templates whose result is a decltype of their parameters are carriers (dependent_result_templates.py),
-        # and so are templates that name a member type a specialization may redefine (specialized_member_types.py).
-        dependent_results = dependent_result_template_names(
-            self, code, templates
-        ) | specialized_member_type_template_names(self, code, templates)
+        # and so are templates that name a member type a specialization may redefine (specialized_member_types.py)
+        # or a struct template with member functions at their own arguments (method_struct_carriers.py).
+        dependent_results = (
+            dependent_result_template_names(self, code, templates)
+            | specialized_member_type_template_names(self, code, templates)
+            | method_struct_template_names(self, code, templates)
+        )
         if not constrained and not dependent_results:
             return code
 
