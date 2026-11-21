@@ -5,19 +5,159 @@ from crosstl.translator import parse
 from crosstl.translator.codegen.glsl_refusals import WebGLLoweringRefused
 from crosstl.translator.codegen.stage_refusals import StageUnsupportedError
 from crosstl.translator.codegen.webgl_codegen import WebGLCodeGen
+from crosstl.translator.semantics.builtin_values import BuiltinValueUnsupportedError
 
 
-def _fragment(expression, helpers=""):
+def _fragment(expression, helpers="", *, statements=""):
     return f"""
     shader Probe {{
         {helpers}
         fragment {{
             vec4 main(vec4 pos @ gl_FragCoord) @ gl_FragColor {{
+                {statements}
                 return vec4({expression}, 0.0, 0.0, 1.0);
             }}
         }}
     }}
     """
+
+
+def _assert_refuses_without_output(tmp_path, source, *names):
+    output = tmp_path / "out.frag"
+    with pytest.raises(WebGLLoweringRefused) as caught:
+        crosstl.translate(
+            str(source), backend="webgl", save_shader=str(output), format_output=False
+        )
+    for name in names:
+        assert f"'{name}'" in str(caught.value)
+    assert not output.exists()
+
+
+@pytest.mark.parametrize(
+    "barrier, desktop_spelling",
+    [
+        ("subgroupBarrier", "subgroupBarrier"),
+        ("subgroupExecutionBarrier", "subgroupBarrier"),
+        ("subgroupMemoryBarrier", "subgroupMemoryBarrier"),
+        ("subgroupMemoryBarrierBuffer", "subgroupMemoryBarrierBuffer"),
+        ("subgroupMemoryBarrierShared", "subgroupMemoryBarrierShared"),
+        ("subgroupMemoryBarrierImage", "subgroupMemoryBarrierImage"),
+    ],
+)
+def test_webgl_refuses_subgroup_barriers(tmp_path, barrier, desktop_spelling):
+    source = tmp_path / "barrier.cgl"
+    source.write_text(_fragment("pos.x", statements=f"{barrier}();"), encoding="utf-8")
+
+    desktop = crosstl.translate(str(source), backend="opengl", format_output=False)
+    assert f"{desktop_spelling}();" in desktop
+    assert "#extension GL_KHR_shader_subgroup_basic : require" in desktop
+    _assert_refuses_without_output(tmp_path, source, barrier)
+
+
+@pytest.mark.parametrize(
+    "name",
+    ["subgroupBarrier", "subgroupExecutionBarrier", "subgroupMemoryBarrierImage"],
+)
+def test_webgl_keeps_user_function_with_subgroup_barrier_name(name):
+    source = _fragment(f"{name}()", f"float {name}() {{ return 0.5; }}")
+
+    code = WebGLCodeGen().generate(parse(source))
+
+    assert f"float {name}()" in code
+    assert f"vec4({name}()," in code
+    assert "GL_KHR_shader_subgroup" not in code
+
+
+@pytest.mark.parametrize(
+    "name, component",
+    [
+        ("gl_SubgroupSize", ""),
+        ("gl_SubgroupInvocationID", ""),
+        ("gl_SubgroupEqMask", ".x"),
+        ("gl_SubgroupGeMask", ".x"),
+        ("gl_SubgroupGtMask", ".x"),
+        ("gl_SubgroupLeMask", ".x"),
+        ("gl_SubgroupLtMask", ".x"),
+    ],
+)
+def test_webgl_refuses_subgroup_builtin_reads(tmp_path, name, component):
+    source = tmp_path / "builtin.cgl"
+    source.write_text(_fragment(f"float({name}{component})"), encoding="utf-8")
+
+    _assert_refuses_without_output(tmp_path, source, name)
+
+
+@pytest.mark.parametrize("name", ["gl_NumSubgroups", "gl_SubgroupID"])
+def test_webgl_refuses_compute_subgroup_builtins_in_fragment(tmp_path, name):
+    source_code = _fragment(f"float({name})")
+    source = tmp_path / "compute_builtin.cgl"
+    source.write_text(source_code, encoding="utf-8")
+    output = tmp_path / "out.frag"
+
+    with pytest.raises(BuiltinValueUnsupportedError, match=name):
+        crosstl.translate(
+            str(source), backend="webgl", save_shader=str(output), format_output=False
+        )
+    assert not output.exists()
+
+    with pytest.raises(WebGLLoweringRefused, match=f"'{name}'"):
+        WebGLCodeGen().generate(parse(source_code))
+
+
+@pytest.mark.parametrize(
+    "members, expression, names",
+    [
+        (
+            "uint size @gl_SubgroupSize; uint lane @gl_SubgroupInvocationID;",
+            "fi.size + fi.lane",
+            ("gl_SubgroupSize", "gl_SubgroupInvocationID"),
+        ),
+        (
+            "uvec4 mask @gl_SubgroupEqMask;",
+            "fi.mask.x",
+            ("gl_SubgroupEqMask",),
+        ),
+    ],
+)
+def test_webgl_refuses_subgroup_builtin_input_members(
+    tmp_path, members, expression, names
+):
+    source = tmp_path / "inputs.cgl"
+    source.write_text(
+        f"""
+        shader Inputs {{
+            struct FI {{ vec4 colour; {members} }};
+            fragment {{
+                vec4 main(FI fi) @gl_FragColor {{
+                    return fi.colour + vec4(float({expression}));
+                }}
+            }}
+        }}
+        """,
+        encoding="utf-8",
+    )
+
+    desktop = crosstl.translate(str(source), backend="opengl", format_output=False)
+    assert all(name in desktop for name in names)
+    _assert_refuses_without_output(tmp_path, source, *names)
+
+
+def test_webgl_reports_canonical_operation_for_combined_metal_aliases(tmp_path):
+    source = tmp_path / "aliases.metal"
+    source.write_text(
+        """#include <metal_stdlib>
+using namespace metal;
+fragment float4 colour(float4 pos [[position]]) {
+    return float4(simd_shuffle_xor(pos.y, ushort(1)) + simd_sum(pos.x));
+}
+""",
+        encoding="utf-8",
+    )
+    desktop = crosstl.translate(str(source), backend="opengl", format_output=False)
+    assert "subgroupShuffleXor(" in desktop
+    assert "subgroupAdd(" in desktop
+
+    _assert_refuses_without_output(tmp_path, source, "WaveActiveSum")
 
 
 @pytest.mark.parametrize(
@@ -136,19 +276,27 @@ def test_webgl_keeps_user_function_with_simd_alias_name():
     assert "GL_KHR_shader_subgroup" not in code
 
 
-def test_webgl_checks_only_emitted_stages_for_subgroup_intrinsics():
-    ast = parse("""
-    shader MixedStages {
-        vertex {
-            vec4 main() @ gl_Position { return vec4(1.0); }
-        }
-        fragment {
-            vec4 main() @ gl_FragColor { return vec4(WaveGetLaneCount()); }
-        }
-        compute {
-            void main() { uint count = WaveGetLaneCount(); }
-        }
-    }
+@pytest.mark.parametrize(
+    "body, name",
+    [
+        ("return vec4(WaveGetLaneCount());", "WaveGetLaneCount"),
+        ("subgroupExecutionBarrier(); return vec4(1.0);", "subgroupExecutionBarrier"),
+        ("return vec4(float(gl_SubgroupSize));", "gl_SubgroupSize"),
+    ],
+)
+def test_webgl_checks_only_emitted_stages_for_subgroup_intrinsics(body, name):
+    ast = parse(f"""
+    shader MixedStages {{
+        vertex {{
+            vec4 main() @ gl_Position {{ return vec4(1.0); }}
+        }}
+        fragment {{
+            vec4 main() @ gl_FragColor {{ {body} }}
+        }}
+        compute {{
+            void main() {{ uint count = WaveGetLaneCount(); }}
+        }}
+    }}
     """)
     generator = WebGLCodeGen()
 
@@ -157,7 +305,30 @@ def test_webgl_checks_only_emitted_stages_for_subgroup_intrinsics():
     assert "gl_SubgroupSize" not in vertex
     with pytest.raises(StageUnsupportedError):
         generator.generate_program(ast, target_stage="compute")
-    with pytest.raises(
-        WebGLLoweringRefused, match="subgroup intrinsic 'WaveGetLaneCount'"
-    ):
+    with pytest.raises(WebGLLoweringRefused, match=f"'{name}'"):
         generator.generate_program(ast)
+
+
+@pytest.mark.parametrize("target_stage", ["fragment", None])
+def test_webgl_does_not_shadow_barrier_with_other_stage_helper(target_stage):
+    ast = parse("""
+    shader MixedStages {
+        vertex {
+            float subgroupBarrier() { return 0.5; }
+            vec4 main() @gl_Position { return vec4(subgroupBarrier()); }
+        }
+        fragment {
+            vec4 main() @gl_FragColor {
+                subgroupBarrier();
+                return vec4(1.0);
+            }
+        }
+    }
+    """)
+    generator = WebGLCodeGen()
+
+    assert "gl_Position = vec4(subgroupBarrier());" in generator.generate_program(
+        ast, target_stage="vertex"
+    )
+    with pytest.raises(WebGLLoweringRefused, match="'subgroupBarrier'"):
+        generator.generate_program(ast, target_stage=target_stage)
