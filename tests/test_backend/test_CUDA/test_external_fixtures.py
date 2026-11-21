@@ -2929,7 +2929,7 @@ def test_cuda_samples_merge_sort_clz_codegen_reparse():
     crossgl = cuda_to_crossgl(source)
 
     assert_crossgl_reparse(crossgl)
-    assert "return (1U << (W - countLeadingZeros((x - 1))));" in crossgl
+    assert "return (1U << (W - (31 - findMSB(u32((x - 1))))));" in crossgl
     assert "__clz" not in crossgl
 
 
@@ -2951,7 +2951,10 @@ def test_cuda_math_api_long_long_integer_intrinsics_codegen_reparse():
     assert body[0].value.name == "__clzll"
     assert body[1].value.name == "__ffsll"
     assert_crossgl_reparse(crossgl)
-    assert "var leading: i32 = countLeadingZeros(x);" in crossgl
+    assert (
+        "var leading: i32 = ((u32(u64(x) >> 32u) != 0u) ? (31 - findMSB(u32(u64(x) >> 32u))) : "
+        "(63 - findMSB(u32(u64(x)))));"
+    ) in crossgl
     assert "var first: i32 = (findLSB(x) + 1);" in crossgl
     assert "__clzll" not in crossgl
     assert "__ffsll" not in crossgl
@@ -2997,7 +3000,7 @@ def test_cuda_cccl_integer_average_intrinsics_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
-def test_cuda_math_api_funnelshift_integer_intrinsics_emit_diagnostics():
+def test_cuda_math_api_funnelshift_integer_intrinsics_codegen_reparse():
     # Upstream source:
     # NVIDIA CUDA Math API v13.2, section 13 Integer Intrinsics.
     # URL:
@@ -3016,25 +3019,25 @@ def test_cuda_math_api_funnelshift_integer_intrinsics_emit_diagnostics():
 
     ast = parse_cuda(source)
     body = ast.functions[0].body
-    crossgl, message = cuda_import_partial_output(
-        CudaToCrossGLConverter().generate, ast
-    )
+    crossgl = CudaToCrossGLConverter().generate(ast)
 
     assert body[0].value.name == "__funnelshift_l"
     assert body[1].value.name == "__funnelshift_lc"
     assert body[2].value.name == "__funnelshift_r"
     assert body[3].value.name == "::__funnelshift_rc"
-    for name in (
-        "__funnelshift_l",
-        "__funnelshift_lc",
-        "__funnelshift_r",
-        "__funnelshift_rc",
-    ):
-        assert (
-            f"CUDA integer intrinsic {name}(lo, hi, shift) has no CrossGL form"
-            in message
-        )
-        assert f"= {name}(lo, hi, shift);" not in crossgl
+    assert_crossgl_reparse(crossgl)
+    left = "((u32(hi) << (u32(shift) & 31u)) | ((u32(lo) >> 1u) >> (31u - (u32(shift) & 31u))))"
+    right = "((u32(lo) >> (u32(shift) & 31u)) | ((u32(hi) << 1u) << (31u - (u32(shift) & 31u))))"
+    assert f"var left: u32 = {left};" in crossgl
+    assert (
+        f"var left_clamped: u32 = ((u32(shift) >= 32u) ? u32(lo) : {left});" in crossgl
+    )
+    assert f"var right: u32 = {right};" in crossgl
+    assert (
+        f"var right_clamped: u32 = ((u32(shift) >= 32u) ? u32(hi) : {right});"
+        in crossgl
+    )
+    assert "__funnelshift" not in crossgl
 
 
 def test_nvidia_hpcg_cuda_kernels_brev_hash_codegen_reparse():
@@ -3197,8 +3200,8 @@ def test_rapids_cudf_hash_byte_perm_endian_swap_codegen_reparse():
     assert body[0].value.name == "__byte_perm"
     assert_crossgl_reparse(crossgl)
     assert (
-        "return ((((x & 0x000000ffu) << 24) | ((x & 0x0000ff00u) << 8)) | "
-        "(((x & 0x00ff0000u) >> 8) | ((x & 0xff000000u) >> 24)));"
+        "return (((u32(x) >> 24u) & 0xffu) | (((u32(x) >> 16u) & 0xffu) << 8u) | "
+        "(((u32(x) >> 8u) & 0xffu) << 16u) | ((u32(x) & 0xffu) << 24u));"
     ) in crossgl
     assert "__byte_perm" not in crossgl
 
