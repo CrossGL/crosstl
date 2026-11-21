@@ -30,6 +30,7 @@ from ..no_contraction import (
 )
 from ..thread_hierarchy import kernel_workgroup_size_attribute
 from .conversions import format_conversion, is_conversion_name
+from .global_variables import refuse_writable_global_variable
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 from .sizeof_scopes import OpenCLSizeofScopeMixin
 
@@ -841,6 +842,7 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
                 self.opencl_sampler_states[name] = state
             self.emit(f"const sampler {output_name} = {state};")
             return
+        refuse_writable_global_variable(node, program_scope=self.indent_level == 0)
         if self.is_opencl_function_scope_constant(node):
             # In `__constant float *p = table;` __constant is the address space
             # p points into. p itself is a private local, like a `__global

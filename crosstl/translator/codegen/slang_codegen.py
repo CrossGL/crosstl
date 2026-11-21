@@ -94,6 +94,7 @@ from .slang_buffer_block_types import SlangBufferBlockTypesMixin
 from .slang_byte_address_words import SlangThreeComponentAccess
 from .slang_call_expressions import SlangCallExpressionMixin
 from .slang_control_flow import SlangControlFlowMixin
+from .slang_cull_distance import slang_cull_distance_member_type
 from .slang_declaration_modifiers import (
     is_slang_declaration_metadata_attribute,
     slang_member_modifier_prefix,
@@ -416,6 +417,8 @@ class SlangCodeGen(
             "workgroupExecutionBarrier": "GroupMemoryBarrierWithGroupSync",
             # GLSL's non-uniform resource index is Slang's NonUniformResourceIndex.
             "nonuniformEXT": "NonUniformResourceIndex",
+            # HLSL 6.9's MaybeReorderThread is Slang's ReorderThread; Slang declares the HLSL name for HLSL only.
+            "MaybeReorderThread": "ReorderThread",
         }
 
     def indent(self):
@@ -1074,6 +1077,7 @@ class SlangCodeGen(
                 f"struct member semantic '{node.name}.{member.name}'",
             )
             semantic_str = self.semantic_suffix(semantic)
+            member_type = slang_cull_distance_member_type(self, member, member_type)
             declaration = (
                 struct_member_location_prefix(
                     self, node, member, default_member_semantics

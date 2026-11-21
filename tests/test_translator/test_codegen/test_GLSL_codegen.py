@@ -18326,7 +18326,7 @@ def test_glsl_tessellation_evaluation_outputtopology_metadata_lowers_layout_part
 @pytest.mark.parametrize(
     ("domain", "topology", "message"),
     [
-        ("isoline", "triangle_cw", "triangle_cw requires triangles domain"),
+        ("isoline", "triangle_cw", "triangle_cw requires a triangles or quads domain"),
         ("triangle", "line", "line requires isolines domain"),
         (
             "triangle",
@@ -31464,10 +31464,10 @@ def test_opengl_rejects_fixed_resource_call_with_too_many_arguments(
             5,
         ),
         (
-            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depth, input.bias))",
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depth, input.bias, input.bias))",
             "textureCompare",
-            4,
             5,
+            6,
         ),
         (
             "textureGather(colorMap, input.uv, input.component, input.component)",
@@ -31476,10 +31476,10 @@ def test_opengl_rejects_fixed_resource_call_with_too_many_arguments(
             4,
         ),
         (
-            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.component)",
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.component, input.component)",
             "textureGatherCompareOffset",
-            5,
             6,
+            7,
         ),
     ],
 )

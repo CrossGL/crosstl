@@ -15,6 +15,7 @@ from .array_utils import (
 )
 from .fragment_output_targets import frag_data_attachment_index
 from .metal_buffer_arrays import expand_entry_buffer_array
+from .metal_conservative_depth import metal_conservative_depth_semantic
 from .metal_entry_return import (
     metal_entry_return_attribute,
     metal_entry_return_semantic_key,
@@ -599,6 +600,9 @@ class MetalStageInterfaceMixin:
 
     def metal_stage_output_parameter_attribute(self, parameter, stage_name):
         if stage_name == "fragment":
+            depth = metal_conservative_depth_semantic(parameter)
+            if depth is not None:
+                return f" [[{depth}]]"
             color = metal_fragment_output_color_semantic(self, parameter)
             if color is not None:
                 return f" [[{color}]]"
