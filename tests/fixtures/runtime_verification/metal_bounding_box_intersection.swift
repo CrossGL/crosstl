@@ -7,6 +7,10 @@
 // whose intersection function table holds FUNCTION, and binds a zeroed buffer of OUTPUT_FLOATS floats to the
 // function's [[buffer(0)]] when OUTPUT_FLOATS is positive. It prints one JSON object: "hits" holds, per ray, whether
 // the intersector returned a bounding-box hit and its distance; "output" holds the buffer's floats.
+//
+// When CROSSGL_INTERSECTOR_TAGS names intersection tags (for example "instancing,world_space_data"), the kernel's
+// intersector, result and function table take those tags. With "instancing" among them the rays trace an instance
+// acceleration structure holding the box once, moved by +1 along z, with user instance ID 7.
 
 import Foundation
 import Metal
@@ -35,11 +39,17 @@ guard let generated = try? String(contentsOfFile: arguments[1], encoding: .utf8)
     fail("cannot read \(arguments[1])")
 }
 
+let tags = (ProcessInfo.processInfo.environment["CROSSGL_INTERSECTOR_TAGS"] ?? "")
+    .split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+let instanced = tags.contains("instancing")
+let tagList = tags.map { "metal::raytracing::\($0)" }.joined(separator: ", ")
+let sceneType = instanced ? "instance_acceleration_structure" : "primitive_acceleration_structure"
+
 let kernelSource = """
 
 kernel void crossgl_trace_rays(
-    primitive_acceleration_structure crossgl_scene [[buffer(0)]],
-    metal::raytracing::intersection_function_table<> crossgl_table [[buffer(1)]],
+    \(sceneType) crossgl_scene [[buffer(0)]],
+    metal::raytracing::intersection_function_table<\(tagList)> crossgl_table [[buffer(1)]],
     device float* crossgl_hits [[buffer(2)]],
     constant float2* crossgl_intervals [[buffer(3)]],
     uint crossgl_index [[thread_position_in_grid]]) {
@@ -48,8 +58,8 @@ kernel void crossgl_trace_rays(
     crossgl_ray.direction = float3(0.0, 0.0, 1.0);
     crossgl_ray.min_distance = crossgl_intervals[crossgl_index].x;
     crossgl_ray.max_distance = crossgl_intervals[crossgl_index].y;
-    metal::raytracing::intersector<> crossgl_intersector;
-    metal::raytracing::intersection_result<> crossgl_result =
+    metal::raytracing::intersector<\(tagList)> crossgl_intersector;
+    metal::raytracing::intersection_result<\(tagList)> crossgl_result =
         crossgl_intersector.intersect(crossgl_ray, crossgl_scene, crossgl_table);
     bool crossgl_hit = crossgl_result.type == metal::raytracing::intersection_type::bounding_box;
     crossgl_hits[2 * crossgl_index] = crossgl_hit ? 1.0 : 0.0;
@@ -121,6 +131,40 @@ builder.endEncoding()
 buildCommands.commit()
 buildCommands.waitUntilCompleted()
 
+var traced: MTLAccelerationStructure = scene
+if instanced {
+    var instance = MTLAccelerationStructureUserIDInstanceDescriptor()
+    instance.transformationMatrix = MTLPackedFloat4x3(columns: (
+        MTLPackedFloat3Make(1, 0, 0), MTLPackedFloat3Make(0, 1, 0), MTLPackedFloat3Make(0, 0, 1),
+        MTLPackedFloat3Make(0, 0, 1)))
+    instance.options = []
+    instance.mask = 0xFF
+    instance.intersectionFunctionTableOffset = 0
+    instance.accelerationStructureIndex = 0
+    instance.userID = 7
+    let instanceBuffer = device.makeBuffer(
+        bytes: &instance, length: MemoryLayout<MTLAccelerationStructureUserIDInstanceDescriptor>.stride,
+        options: .storageModeShared)!
+    let instances = MTLInstanceAccelerationStructureDescriptor()
+    instances.instancedAccelerationStructures = [scene]
+    instances.instanceCount = 1
+    instances.instanceDescriptorBuffer = instanceBuffer
+    instances.instanceDescriptorType = .userID
+    let instanceSizes = device.accelerationStructureSizes(descriptor: instances)
+    guard let top = device.makeAccelerationStructure(size: instanceSizes.accelerationStructureSize),
+        let topScratch = device.makeBuffer(
+            length: max(instanceSizes.buildScratchBufferSize, 16), options: .storageModePrivate)
+    else { fail("cannot allocate the instance acceleration structure") }
+    let topCommands = queue.makeCommandBuffer()!
+    let topBuilder = topCommands.makeAccelerationStructureCommandEncoder()!
+    topBuilder.build(
+        accelerationStructure: top, descriptor: instances, scratchBuffer: topScratch, scratchBufferOffset: 0)
+    topBuilder.endEncoding()
+    topCommands.commit()
+    topCommands.waitUntilCompleted()
+    traced = top
+}
+
 let hitsBuffer = device.makeBuffer(
     length: 2 * rayCount * MemoryLayout<Float>.stride, options: .storageModeShared)!
 let intervalBuffer = device.makeBuffer(
@@ -128,11 +172,12 @@ let intervalBuffer = device.makeBuffer(
 let commands = queue.makeCommandBuffer()!
 let encoder = commands.makeComputeCommandEncoder()!
 encoder.setComputePipelineState(pipeline)
-encoder.setAccelerationStructure(scene, bufferIndex: 0)
+encoder.setAccelerationStructure(traced, bufferIndex: 0)
 encoder.setIntersectionFunctionTable(table, bufferIndex: 1)
 encoder.setBuffer(hitsBuffer, offset: 0, index: 2)
 encoder.setBuffer(intervalBuffer, offset: 0, index: 3)
 encoder.useResource(scene, usage: .read)
+encoder.useResource(traced, usage: .read)
 encoder.useResource(boxBuffer, usage: .read)
 encoder.useResource(outputBuffer, usage: [.read, .write])
 encoder.dispatchThreads(

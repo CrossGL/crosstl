@@ -107,6 +107,7 @@ from .wgsl_matrix_inverse import (
     wgsl_matrix_inverse_call,
 )
 from .wgsl_matrix_resize import wgsl_matrix_resize
+from .wgsl_multisampled_textures import WGSLMultisampledTextureMixin
 from .wgsl_narrow_storage import narrow_storage_word_type
 from .wgsl_parameter_lowering import WGSLParameterLoweringMixin
 from .wgsl_program_collection import WGSLProgramCollectionMixin
@@ -124,6 +125,7 @@ from .wgsl_struct_initializers import (
 )
 from .wgsl_subgroup_operations import wgsl_wave_operation, wgsl_wave_result_type
 from .wgsl_texture_calls import WGSLTextureCallMixin
+from .wgsl_texture_gather import GATHER_OPERATIONS, WGSLTextureGatherMixin
 from .wgsl_type_names import WGSLTypeNameMixin
 from .wgsl_uniform_registers import wgsl_uniform_register_load
 from .wgsl_unsigned_builtin_members import is_int_builtin_member
@@ -168,6 +170,8 @@ class WGSLCodeGen(
     WGSLCallLoweringMixin,
     WGSLMathCallMixin,
     WGSLTextureCallMixin,
+    WGSLTextureGatherMixin,
+    WGSLMultisampledTextureMixin,
     WGSLConstructorMixin,
     WGSLTypeNameMixin,
     WGSLBuiltinOptionMixin,
@@ -628,6 +632,7 @@ class WGSLCodeGen(
         "textureprojoffset",
         "texturequerylevels",
         "texturequerylod",
+        "texturesamples",
         "texturesize",
         "texelfetch",
         "texelfetchoffset",
@@ -858,6 +863,7 @@ class WGSLCodeGen(
         self._pointer_identifier_scopes = []
         self._parameter_plan_stack = []
         self._value_type_scopes = []
+        self._local_mutability_scopes = []
         self._resource_alias_scopes = []
         self._module_identifier_names = {}
         self._function_identifier_names = {}
@@ -879,6 +885,7 @@ class WGSLCodeGen(
         self._module_storage_access_modes = {}
         self._used_access_mode_identifiers = set()
         self._read_only_module_names = set()
+        self._addressable_module_names = set()
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
@@ -1710,6 +1717,12 @@ class WGSLCodeGen(
             return self.generate_texture_sample_compare_level_offset_call(
                 function_name, args
             )
+        if normalized_name in GATHER_OPERATIONS:
+            return self.generate_texture_gather_call(function_name, args)
+        if normalized_name == "texturequerylevels":
+            return self.generate_texture_query_levels_call(function_name, args)
+        if normalized_name == "texturesamples":
+            return self.generate_texture_samples_call(function_name, args)
         if normalized_name == "texturesize":
             return self.generate_texture_dimensions_call(args)
         if normalized_name == "imagesize":
@@ -1819,6 +1832,15 @@ class WGSLCodeGen(
                 self.expression_type(expr.true_expr),
                 self.expression_type(expr.false_expr),
             )
+        if (
+            isinstance(expr, UnaryOpNode)
+            and expr.operator == "*"
+            and not expr.is_postfix
+        ):
+            # A dereferenced pointer local (wgsl_pointer_locals) has its pointee type.
+            pointer_type = self.expression_type(expr.operand)
+            if isinstance(pointer_type, PointerType):
+                return pointer_type.pointee_type
         if (
             isinstance(expr, UnaryOpNode)
             and expr.operator in {"-", "+", "~"}
