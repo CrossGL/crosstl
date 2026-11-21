@@ -183,12 +183,50 @@ extern "C" __global__ void probe(float* outp) { outp[0] = add(outp[0], outp[1]);
     assert "f32 add(f32 a, f32 b) {" in crossgl
 
 
-def test_the_cuda_round_trip_compiles_with_nvcc(tmp_path):
+MEMBER_DEFAULTS = """
+struct D {
+    int a;
+    __device__ int f(int k = 3, int m = 4) const { return a * k + m; }
+};
+__global__ void probe(int* o) {
+    int t = threadIdx.x;
+    D d;
+    d.a = t;
+    o[t * 3 + 0] = d.f();
+    o[t * 3 + 1] = d.f(5);
+    o[t * 3 + 2] = d.f(5, 6);
+}
+"""
+
+
+@pytest.mark.parametrize("backend", ["cgl", "cuda", "metal", "opengl"])
+def test_a_member_call_may_omit_defaulted_arguments(tmp_path, backend):
+    output = _compact(_translate(tmp_path, MEMBER_DEFAULTS, backend))
+
+    if backend == "cgl":
+        assert "i32 D_f(D this_, i32 k = 3, i32 m = 4)" in output
+        assert "D_f(d);" in output
+        assert "D_f(d, 5);" in output
+    else:
+        assert "D_f(d, 3, 4)" in output
+        assert "D_f(d, 5, 4)" in output
+    assert "D_f(d, 5, 6)" in output
+
+
+def test_a_member_call_needs_every_argument_without_a_default(tmp_path):
+    source = MEMBER_DEFAULTS.replace("int k = 3", "int k")
+
+    with pytest.raises(CudaImportRefused, match="takes 0 arguments"):
+        _translate(tmp_path, source)
+
+
+@pytest.mark.parametrize("program", [BLEND, MEMBER_DEFAULTS], ids=["free", "member"])
+def test_the_cuda_round_trip_compiles_with_nvcc(tmp_path, program):
     nvcc = shutil.which("nvcc")
     if nvcc is None:
         pytest.skip("nvcc is not installed")
     source = tmp_path / "round_trip.cu"
-    source.write_text(_translate(tmp_path, BLEND, "cuda"), encoding="utf-8")
+    source.write_text(_translate(tmp_path, program, "cuda"), encoding="utf-8")
     result = subprocess.run(
         [nvcc, "-std=c++17", "-c", str(source), "-o", str(tmp_path / "round_trip.o")],
         capture_output=True,
