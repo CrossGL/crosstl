@@ -106,7 +106,10 @@ def _stage_entries(ast):
 
 def _struct_lists(ast, stage):
     """The structure lists visible in ``stage``: its own first, then the program's."""
-    return [getattr(stage, "local_structs", None) or [], getattr(ast, "structs", None) or []]
+    return [
+        getattr(stage, "local_structs", None) or [],
+        getattr(ast, "structs", None) or [],
+    ]
 
 
 def _find_struct(ast, stage, name):
