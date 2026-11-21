@@ -55,7 +55,7 @@ FOLLOWING_VALUES = (
 def _translate(tmp_path, source, extension, backend):
     path = tmp_path / f"probe{extension}"
     path.write_text(source)
-    return crosstl.translate(os.fspath(path), backend=backend)
+    return crosstl.translate(os.fspath(path), backend=backend, format_output=False)
 
 
 @pytest.mark.parametrize("backend", ["metal", "directx", "slang", "hip"])
