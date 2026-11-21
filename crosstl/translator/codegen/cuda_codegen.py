@@ -35,6 +35,7 @@ from .cuda_function_calls import CudaFunctionCallMixin
 from .cuda_function_parts import CudaFunctionPartsMixin
 from .cuda_function_prototypes import late_called_functions, prototype_of
 from .cuda_gather import CudaGatherMixin
+from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_math_calls import CudaMathCallMixin
 from .cuda_query_metadata import CudaQueryMetadataMixin
@@ -890,6 +891,13 @@ class CudaCodeGen(
                 declaration, node.name, node
             )
             if initial_value is not None:
+                array_initializer = generate_cpp_array_initializer(
+                    self, initial_value, var_type
+                )
+                if array_initializer is not None:
+                    if array_initializer.strip():
+                        declaration += f" = {array_initializer}"
+                    return declaration
                 declaration += f" = {self.visit(initial_value)}"
             return declaration
 
