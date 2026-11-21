@@ -20348,7 +20348,8 @@ def test_rust_generic_operator_function_emits_copy_bound_and_compiles(tmp_path):
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
     assert (
-        "pub fn twice<T: Copy + core::ops::Add<Output = T>>(x: T) -> T" in generated_code
+        "pub fn twice<T: Copy + core::ops::Add<Output = T>>(x: T) -> T"
+        in generated_code
     )
     assert "return (x + x);" in generated_code
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
