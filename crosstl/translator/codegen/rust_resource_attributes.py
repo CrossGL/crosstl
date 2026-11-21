@@ -476,8 +476,11 @@ class RustResourceAttributeMixin:
     def next_available_rust_resource_binding(self, namespace, set_index, count):
         key = (namespace, set_index)
         binding = self.rust_resource_binding_cursors.get(key, 0)
+        # Auto-assignment is always classless, so consult the whole family of
+        # class-scoped reservations the same way CUDA, HIP and Mojo do.
+        base_namespace = namespace.split(":", 1)[0] if ":" in namespace else namespace
         while self.rust_resource_binding_family_conflicts(
-            namespace, set_index, binding, count
+            base_namespace, set_index, binding, count
         ):
             binding += 1
         self.rust_resource_binding_cursors[key] = binding + count
