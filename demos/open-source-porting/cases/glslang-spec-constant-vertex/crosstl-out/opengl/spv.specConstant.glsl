@@ -23,9 +23,9 @@ layout(constant_id = 18) const float spFloat = 3.14;
 const float spFloat = 3.14;
 #endif
 #if defined(GL_SPIRV) || defined(VULKAN)
-layout(constant_id = 19) const double spDouble = double(3.141592653589793);
+layout(constant_id = 19) const double spDouble = 3.141592653589793lf;
 #else
-const double spDouble = double(3.141592653589793);
+const double spDouble = 3.141592653589793lf;
 #endif
 #if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 22) const uint scale = 2;
@@ -48,9 +48,9 @@ layout(constant_id = 118) const float spDupFloat = 3.14;
 const float spDupFloat = 3.14;
 #endif
 #if defined(GL_SPIRV) || defined(VULKAN)
-layout(constant_id = 119) const double spDupDouble = double(3.141592653589793);
+layout(constant_id = 119) const double spDupDouble = 3.141592653589793lf;
 #else
-const double spDupDouble = double(3.141592653589793);
+const double spDupDouble = 3.141592653589793lf;
 #endif
 #if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 122) const uint dupScale = 2;

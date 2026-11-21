@@ -247,6 +247,10 @@ class HipMacroMixin:
             and next_token.type in {"LPAREN", "LBRACE"}
         )
 
+    def is_sign_only_functional_cast(self):
+        next_token = self.peek_non_newline()
+        return next_token is not None and next_token.type == "LPAREN"
+
     def is_builtin_type_token(self, token=None):
         token = token or self.current_token
         if not token:

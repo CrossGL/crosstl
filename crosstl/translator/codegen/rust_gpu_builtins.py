@@ -11,6 +11,8 @@ the call rather than naming a function rust-gpu does not have.
 
 from __future__ import annotations
 
+import re
+
 from .rust_gpu_common_functions import (
     COMMON_FUNCTION_NAMES,
     generate_common_function_call,
@@ -19,6 +21,10 @@ from .rust_gpu_common_functions import (
 _FLOATS = frozenset({"f32", "f64"})
 _SIGNED = frozenset({"i32", "i64"})
 _UNSIGNED = frozenset({"u32", "u64"})
+# A numeric literal without a type suffix, possibly negated and parenthesized: ``3``, ``(-3)``, ``2.5e3``.
+_UNTYPED_LITERAL = re.compile(
+    r"[(\s]*-?[(\s]*\d[\d_]*(?:\.\d[\d_]*)?(?:[eE][+-]?\d+)?[)\s]*"
+)
 _VECTOR_SCALARS = {
     "float": "f32",
     "double": "f64",
@@ -203,20 +209,29 @@ def generate_rust_gpu_builtin_call(generator, name, args):
     return _vector_call(name, shapes, values)
 
 
+def _typed_receiver(value: str, scalar: str) -> str:
+    """``value`` cast to ``scalar`` when it is an unsuffixed literal, whose type Rust cannot infer for a method call
+    (E0689)."""
+    if _UNTYPED_LITERAL.fullmatch(value):
+        return f"({value} as {scalar})"
+    return value
+
+
 def _scalar_call(name, shapes, values):
     scalars = {scalar for scalar, _size in shapes}
     if len(scalars) != 1:
         return None
     (scalar,) = scalars
+    receiver = _typed_receiver(values[0], scalar)
     if scalar in _FLOATS:
         if len(values) == 1 and name in _FLOAT_UNARY:
-            return _method(values[0], _FLOAT_UNARY[name])
+            return _method(receiver, _FLOAT_UNARY[name])
         if len(values) == 2 and name in _FLOAT_BINARY:
-            return _method(values[0], _FLOAT_BINARY[name], values[1])
+            return _method(receiver, _FLOAT_BINARY[name], values[1])
         if name == "fma" and len(values) == 3:
-            return _method(values[0], "mul_add", values[1], values[2])
+            return _method(receiver, "mul_add", values[1], values[2])
         if name == "clamp" and len(values) == 3:
-            return _method(values[0], "clamp", values[1], values[2])
+            return _method(receiver, "clamp", values[1], values[2])
         if name == "mix" and len(values) == 3:
             # GLSL defines mix as x * (1 - a) + y * a.
             x, y, a = values
@@ -228,7 +243,7 @@ def _scalar_call(name, shapes, values):
         prefix = "signed" if scalar in _SIGNED else "unsigned"
         return f"spirv_std::arch::{prefix}_{name}({values[0]}, {values[1]})"
     if scalar in _SIGNED and name == "abs" and len(values) == 1:
-        return _method(values[0], "wrapping_abs")
+        return _method(receiver, "wrapping_abs")
     return None
 
 

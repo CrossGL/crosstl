@@ -120,6 +120,11 @@ def _metal(text, group, constants, input_count):
             textures.append(metal_textures.declaration(parameter))
         elif re.match(r"(?:const\s+)?constant\b[^&*]*&", parameter):
             blocks.append({"slot": slot, "kind": "uniform"})
+        elif (
+            encoded := metal_textures.argument_buffer(parameter, slot, text)
+        ) is not None:
+            # An argument buffer of textures and samplers, which the host fills with their resource IDs.
+            textures.append(encoded)
         else:
             storage.append(slot)
     block = _constants(blocks, constants, "Metal constant buffers")

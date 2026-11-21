@@ -3213,12 +3213,12 @@ def test_wgsl_codegen_lowers_do_while_statement_to_loop_with_break_if():
                 sampler2D colorTex;
                 fragment {
                     vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
-                        return textureGather(colorTex, uv);
+                        return textureGatherOffsets(colorTex, uv, ivec2(0), ivec2(1), ivec2(2), ivec2(3));
                     }
                 }
             }
             """,
-            "WGSL target does not support CrossGL texture function textureGather yet",
+            "WGSL target does not support CrossGL texture function textureGatherOffsets yet",
         ),
     ),
 )
@@ -4799,7 +4799,7 @@ def test_wgsl_codegen_maps_integer_samplers_to_typed_textures(
         "isamplerBuffer",
         "usampler2DRect",
         "isampler1DArray",
-        "usampler2DMS",
+        "usampler2DMSArray",
     ],
 )
 def test_wgsl_codegen_refuses_samplers_without_wgsl_texture_type(sampler_type):
@@ -5180,6 +5180,12 @@ def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic():
                 return;
             }
         }
+        fragment {
+            vec4 main() @ gl_FragColor {
+                sync();
+                return vec4(1.0);
+            }
+        }
     }
     """
 
@@ -5187,7 +5193,7 @@ def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic():
         ValueError,
         match=(
             "WGSL target does not support barrier\\(\\) inside helper function "
-            "sync yet"
+            "sync, which is not reached only from compute entry points"
         ),
     ):
         WGSLCodeGen().generate(parse_shader(shader))

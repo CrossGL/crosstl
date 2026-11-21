@@ -36,6 +36,7 @@ __all__ = [
     "UndeclaredTypeError",
     "dead_function_ids",
     "declared_type_names",
+    "entry_dropped_function_ids",
     "refuse_undeclared_types",
     "undeclared_type_uses",
 ]
@@ -281,6 +282,20 @@ def dead_function_ids(program) -> set:
     return _dead_functions(program)
 
 
+def entry_dropped_function_ids(program, entry_point=None) -> set:
+    """Ids of the functions a translation of ``program`` never writes, which the undeclared-name checks skip.
+
+    A whole-program translation (``entry_point`` is ``None``) writes every plain function and explicit
+    specialization, so none is skipped. A translation that selects one entry writes only the functions that entry
+    reaches (``entry_scoped_ast`` of the DirectX, Metal and OpenGL generators, the only ones that select entries),
+    so the functions no stage entry reaches are skipped: importers leave a call they cannot resolve in such a body
+    unchanged, because no entry evaluates it.
+    """
+    if entry_point is None:
+        return set()
+    return _dead_functions(program)
+
+
 def _type_references(node, skip):
     """The base names of the types and callees named under ``node``, not descending into the nodes in ``skip``."""
     names = set()
@@ -414,7 +429,7 @@ def _call_type_argument_names(call, generic_functions):
     ]
 
 
-def undeclared_type_uses(program, target=None):
+def undeclared_type_uses(program, target=None, entry_point=None):
     """``(name, node)`` for each plain type name in ``program`` that is neither declared nor built in.
 
     Every function body is read: no generator drops a plain function or an explicit specialization no stage entry
@@ -423,11 +438,12 @@ def undeclared_type_uses(program, target=None):
     generic functions no code calls are read too, for every target — the Rust generator writes even those, and
     for the others the type pass prefers the single read-everything shape the plain functions impose. For a
     ``target`` in :data:`INSTANTIATING_TARGETS`, the generic structures nothing names are not read either,
-    because those generators never emit them.
+    because those generators never emit them. A translation that selects ``entry_point`` skips the functions no
+    stage entry reaches (:func:`entry_dropped_function_ids`).
     """
     declared, bounds, values, declared_values = _type_use_context(program)
     uses = []
-    skip = bounds | values
+    skip = bounds | values | entry_dropped_function_ids(program, entry_point)
     if str(target or "").lower() in INSTANTIATING_TARGETS:
         skip |= _uninstantiated_templates(program, skip)
     generic_functions = _generic_function_names(program)
@@ -466,9 +482,9 @@ def undeclared_type_uses(program, target=None):
     return uses
 
 
-def refuse_undeclared_types(program, target):
+def refuse_undeclared_types(program, target, entry_point=None):
     """Raise :class:`UndeclaredTypeError` for the first undeclared plain type name in ``program``."""
-    for name, node in undeclared_type_uses(program, target):
+    for name, node in undeclared_type_uses(program, target, entry_point):
         raise UndeclaredTypeError(
             target, name, source_location=getattr(node, "source_location", None)
         )

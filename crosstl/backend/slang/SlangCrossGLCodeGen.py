@@ -16,6 +16,7 @@ from ..storage_image_texels import (
 )
 from .float_literals import check_float_literal_range
 from .slang_matrix_import import SlangMatrixImportMixin
+from .slang_narrow_arithmetic import SlangNarrowArithmeticMixin
 from .slang_specialization_import import (
     specialization_ids,
     specialized_workgroup_sizes,
@@ -62,7 +63,9 @@ class UnsupportedSlangConformanceError(ValueError):
         )
 
 
-class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMixin):
+class SlangToCrossGLConverter(
+    SlangMatrixImportMixin, SlangStorageImageAccessMixin, SlangNarrowArithmeticMixin
+):
     """Serialize Slang backend AST nodes back into CrossGL source."""
 
     BINARY_PRECEDENCE = {
@@ -582,6 +585,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             ),
         }
         self.user_function_names = set()
+        self.narrow_function_returns = {}
         self.function_name_map = {}
         self.sampleable_resource_scopes = [set()]
         self.sampleable_resource_type_scopes = [{}]
@@ -753,6 +757,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         )
         self.user_function_names = {getattr(func, "name", None) for func in functions}
         self.user_function_names.discard(None)
+        self.collect_narrow_function_returns(functions)
         self.function_name_map = self.collect_function_name_map(functions)
         resource_types = self.collect_sampleable_resource_types(ast)
         storage_image_types = self.collect_storage_image_resource_types(ast)
@@ -1912,7 +1917,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             return texel_store
         self.refuse_storage_image_texel_write(node.left)
         lhs = self.generate_expression(node.left, is_main)
-        rhs = self.generate_expression(node.right, is_main)
+        rhs = self.narrow_compound_right(
+            node, self.generate_expression(node.right, is_main)
+        )
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
@@ -2245,16 +2252,25 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         )
 
     def generate_binary_expression(self, expr, is_main):
-        left = self.generate_expression(expr.left, is_main)
-        right = self.generate_expression(expr.right, is_main)
-        if self.binary_child_needs_parentheses(expr.op, expr.left):
+        raw_left = self.generate_expression(expr.left, is_main)
+        raw_right = self.generate_expression(expr.right, is_main)
+        left, right = self.narrow_binary_operands(expr, raw_left, raw_right)
+        if (
+            left is raw_left
+            and not self.narrow_result_wrapped(expr.left)
+            and self.binary_child_needs_parentheses(expr.op, expr.left)
+        ):
             left = f"({left})"
-        if self.binary_child_needs_parentheses(expr.op, expr.right, True):
+        if (
+            right is raw_right
+            and not self.narrow_result_wrapped(expr.right)
+            and self.binary_child_needs_parentheses(expr.op, expr.right, True)
+        ):
             right = f"({right})"
         product = self.matrix_product_expression(expr, left, right)
         if product is not None:
             return product
-        return f"{left} {expr.op} {right}"
+        return self.narrow_binary_result(expr, f"{left} {expr.op} {right}")
 
     def maybe_parenthesize_expression(self, expr, rendered):
         if isinstance(expr, (AssignmentNode, BinaryOpNode, TernaryOpNode)):
@@ -2348,6 +2364,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             self.refuse_storage_image_texel_write(expr.left)
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
+            right = self.narrow_compound_right(expr, right)
             return f"{left} {expr.operator} {right}"
         elif isinstance(expr, CastNode):
             matrix_cast = self.matrix_cast_expression(expr, is_main)
@@ -2384,7 +2401,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 return f"++{operand}"
             if expr.op == "PRE_DECREMENT":
                 return f"--{operand}"
-            return f"{expr.op}{operand}"
+            return self.narrow_unary_result(expr, f"{expr.op}{operand}")
         elif isinstance(expr, FunctionCallNode):
             function_name, is_hlsl_namespace_builtin = (
                 self.canonical_function_call_name(expr.name)
@@ -2543,6 +2560,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 true_expr = f"({true_expr})"
             if isinstance(expr.false_expr, AssignmentNode):
                 false_expr = f"({false_expr})"
+            true_expr, false_expr = self.narrow_conditional_operands(
+                expr, true_expr, false_expr
+            )
             return f"({condition} ? {true_expr} : {false_expr})"
         elif isinstance(expr, InitializerListNode):
             elements = ", ".join(

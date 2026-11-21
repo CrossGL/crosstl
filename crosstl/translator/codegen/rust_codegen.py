@@ -30,6 +30,7 @@ from .rust_global_declarations import RustGlobalDeclarationMixin
 from .rust_gpu_constants import rust_integer_constants
 from .rust_gpu_entry_buffers import normalize_rust_gpu_buffers
 from .rust_gpu_interface import RUST_GPU_PRELUDE, UNIFORM_VALUE_KIND
+from .rust_gpu_slice_length import RustGpuSliceLengthMixin
 from .rust_gpu_spec_constants import (
     SPEC_CONSTANT_KIND,
     spec_constant_infos,
@@ -94,6 +95,7 @@ class RustCodeGen(
     RustResourceAttributeMixin,
     RustOutputParameterMixin,
     RustGpuPaddedSliceMixin,
+    RustGpuSliceLengthMixin,
     RustGpuStageIoMixin,
     LoweringRefusalMixin,
     RustBuiltinResultTypeMixin,

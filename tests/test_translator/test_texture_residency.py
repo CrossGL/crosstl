@@ -322,8 +322,17 @@ def test_glsl_es_profile_refuses_sparse_functions(tmp_path):
     source = GLSL_FRAGMENT.replace(
         "#version 450", "#version 310 es\nprecision highp float;"
     )
+    # The gles target writes GLSL ES; opengl writes desktop GLSL from a GLSL ES source. GLSL ES has neither the
+    # extension the source enables nor the sparse functions.
+    with pytest.raises(
+        Exception, match="GLSL ES has no form of the extension GL_ARB_sparse_texture2"
+    ):
+        _translate(tmp_path, source, ".frag", "gles")
+    without_extension = re.sub(
+        r"#extension GL_ARB_sparse_texture\w*[^\n]*\n", "", source
+    )
     with pytest.raises(Exception, match="does not exist in GLSL ES"):
-        _translate(tmp_path, source, ".frag", "opengl")
+        _translate(tmp_path, without_extension, ".frag", "gles")
 
 
 def test_glsl_sparse_function_with_no_matching_overload_is_refused(tmp_path):
