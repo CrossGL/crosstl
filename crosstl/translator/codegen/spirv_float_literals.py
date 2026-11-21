@@ -11,7 +11,6 @@ constant of that value (``OpConstant %double 0.1``) instead of an ``OpFConvert``
 
 from __future__ import annotations
 
-
 from ..ast import FLOAT_LITERAL_SUFFIX
 from .spirv_values import SpirvId
 

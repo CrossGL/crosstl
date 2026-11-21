@@ -12,6 +12,7 @@ from ..ast import (
 from ..refusals import HipRefusal
 from .assignment_values import assignment_value_expression
 from .c_float_literals import c_float_literal_text
+from .cuda_hip_array_copies import generate_cpp_array_copy
 from .enum_utils import enum_value_expression
 from .for_initializers import join_for_initializer
 from .gpu_subgroup_builtins import (
@@ -39,6 +40,16 @@ class HipStatementMixin:
         """Render and append one statement node when it produces code."""
         if node is None:
             return
+
+        if isinstance(node, AssignmentNode):
+            operator = getattr(node, "operator", getattr(node, "op", "="))
+            if operator == "=":
+                target = getattr(node, "target", getattr(node, "left", None))
+                value = getattr(node, "value", getattr(node, "right", None))
+                array_copy = generate_cpp_array_copy(self, target, value)
+                if array_copy is not None:
+                    self.add_generated_code(array_copy)
+                    return
 
         result = self.visit_discarded_expression(node)
         if isinstance(result, str) and result.strip():
@@ -406,7 +417,19 @@ class HipStatementMixin:
         return f"{helper_name}()"
 
     def visit_ExpressionStatementNode(self, node) -> str:
-        expr = self.visit_discarded_expression(node.expression)
+        expression = node.expression
+        if isinstance(expression, AssignmentNode):
+            operator = getattr(expression, "operator", getattr(expression, "op", "="))
+            if operator == "=":
+                target = getattr(
+                    expression, "target", getattr(expression, "left", None)
+                )
+                value = getattr(expression, "value", getattr(expression, "right", None))
+                array_copy = generate_cpp_array_copy(self, target, value)
+                if array_copy is not None:
+                    self.add_generated_code(array_copy)
+                    return ""
+        expr = self.visit_discarded_expression(expression)
         self.add_line(f"{expr};")
         return ""
 

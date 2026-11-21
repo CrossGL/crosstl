@@ -12,6 +12,7 @@ from ..aggregate_scalar_conversions import (
 from ..implicit_constructor_conversions import convert_user_call_arguments
 from ..instance_static_members import render_instance_static_struct_member
 from ..matrix_columns import MetalMatrixColumnsError, matrix_columns_object
+from ..member_aggregates import promoted_member_access
 from ..MetalAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -555,6 +556,9 @@ class MetalExpressionMixin:
 
     def generate_member_access_expression(self, expr, is_main=False):
         """Render a Metal member access as CrossGL syntax."""
+        promoted = promoted_member_access(self, expr)
+        if promoted is not None:
+            return self.generate_member_access_expression(promoted, is_main)
         if expr.member == "value" and isinstance(expr.object, VariableNode):
             constant = self.render_integral_constant_binding(expr.object.name)
             if constant is not None:
