@@ -2140,9 +2140,10 @@ def test_global_static_const_array_initializer_generates_crossgl():
     ] == [0.25, 0.75]
 
 
-def test_codegen_global_const_initializer_preserves_const_from_hlsl_variable_syntax():
-    # Source: Microsoft Learn HLSL variable syntax documents const type modifiers.
-    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-variable-syntax
+def test_codegen_global_const_without_static_is_a_host_bound_constant():
+    # A const global without static is a $Globals member: DXC loads it from the
+    # constant buffer (cbufferLoadLegacy) and ignores its initializer, so CrossGL
+    # declares it as a program constant without the initializer.
     output = generate_crossgl("""
         const float ExposureScale = 1.25f;
 
@@ -2152,8 +2153,9 @@ def test_codegen_global_const_initializer_preserves_const_from_hlsl_variable_syn
     """)
 
     lines = {line.strip() for line in output.splitlines()}
-    assert "const float ExposureScale = 1.25;" in lines
-    assert "float ExposureScale = 1.25;" not in lines
+    assert "float ExposureScale;" in lines
+    assert "@ hlsl_program_constant" in lines
+    assert not any("1.25" in line for line in lines)
     parse_crossgl(output)
 
 

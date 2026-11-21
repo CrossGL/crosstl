@@ -1786,10 +1786,13 @@ EXTERNAL_FIXTURES = [
                 return float4(g_pre_uni_con_init, 0.0f, 0.0f, 1.0f);
             }
         """).strip(),
+        # A uniform global is a $Globals member, whose initializer DXC ignores, so the
+        # shader reads the value the host binds.
         contains=(
-            "precise const float g_pre_uni_con_init = 1.0;",
+            "@ hlsl_program_constant\n    precise float g_pre_uni_con_init;",
             "return vec4(g_pre_uni_con_init, 0.0, 0.0, 1.0);",
         ),
+        absent=("g_pre_uni_con_init = 1.0",),
     ),
     ExternalFixture(
         name="unity_builtin_shaderlab_shadowcaster_unexpanded_statement_macros",
