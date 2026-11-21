@@ -27,6 +27,7 @@ from .comma_expressions import (
     is_comma_expression,
 )
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
+from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_bindings import CudaBindingMixin
 from .cuda_buffer_calls import CudaBufferCallMixin
 from .cuda_expression_types import CudaExpressionTypeMixin
@@ -890,6 +891,13 @@ class CudaCodeGen(
                 declaration, node.name, node
             )
             if initial_value is not None:
+                array_initializer = generate_cpp_array_initializer(
+                    self, initial_value, var_type
+                )
+                if array_initializer is not None:
+                    if array_initializer.strip():
+                        declaration += f" = {array_initializer}"
+                    return declaration
                 declaration += f" = {self.visit(initial_value)}"
             return declaration
 

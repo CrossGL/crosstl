@@ -34,6 +34,7 @@ from .comma_expressions import (
     is_comma_expression,
 )
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
+from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_unions import NativeUnions
 from .enum_utils import infer_enum_constructor_type
@@ -579,6 +580,13 @@ class HipCodeGen(
             declaration = f"{' '.join(qualifiers)} {declaration}"
 
         if initial_value is not None:
+            array_initializer = generate_cpp_array_initializer(
+                self, initial_value, var_type
+            )
+            if array_initializer is not None:
+                if array_initializer.strip():
+                    declaration += f" = {array_initializer}"
+                return declaration
             declaration += f" = {self.visit(initial_value)}"
 
         return declaration
