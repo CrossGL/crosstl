@@ -46,6 +46,27 @@ _LANES = {
     "quad_shuffle_rotate_down": "(({lane} + {operand}) & 3u)",
 }
 _INTEGER = re.compile(r"(0[xX][0-9a-fA-F]+|[0-9]+)[uUlL]*")
+# The value bits each integer scalar type keeps of a converted constant.
+_INTEGER_MASKS = {
+    **dict.fromkeys(("char", "uchar", "int8_t", "uint8_t"), 0xFF),
+    **dict.fromkeys(("short", "ushort", "int16_t", "uint16_t"), 0xFFFF),
+    **dict.fromkeys(("int", "uint", "int32_t", "uint32_t"), 0xFFFFFFFF),
+    **dict.fromkeys(("long", "ulong", "int64_t", "uint64_t", "size_t"), (1 << 64) - 1),
+}
+
+
+def _converted_operand(argument: Any) -> tuple[str, Any] | None:
+    """``(type, operand)`` of a conversion of one operand to an integer scalar type, ``T(x)`` or ``(T)x``."""
+    args = getattr(argument, "args", None)
+    type_name = getattr(argument, "vector_type", None)
+    if type_name is not None and isinstance(args, list) and len(args) == 1:
+        operand = args[0]
+    elif hasattr(argument, "target_type") and hasattr(argument, "expression"):
+        type_name, operand = argument.target_type, argument.expression
+    else:
+        return None
+    type_name = _unqualified(getattr(type_name, "name", type_name))
+    return (type_name, operand) if type_name in _INTEGER_MASKS else None
 
 
 def _unqualified(name: Any) -> str:
@@ -54,6 +75,12 @@ def _unqualified(name: Any) -> str:
 
 
 def _integer_literal(argument: Any) -> int | None:
+    """The value of an integer literal, also one converted to an integer type, as ``ushort(2)`` or ``(uint)1``."""
+    converted = _converted_operand(argument)
+    if converted is not None:
+        type_name, operand = converted
+        value = _integer_literal(operand)
+        return None if value is None else value & _INTEGER_MASKS[type_name]
     if isinstance(argument, bool) or not isinstance(argument, (str, int)):
         return None
     if isinstance(argument, int):

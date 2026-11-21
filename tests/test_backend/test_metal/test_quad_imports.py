@@ -90,6 +90,22 @@ def test_quad_function_imports_as_crossgl_quad_operation(tmp_path, name):
     assert "quad_" not in crossgl
 
 
+@pytest.mark.parametrize(
+    ("call", "expected"),
+    [
+        ("quad_shuffle_xor(v, ushort(2))", "QuadReadAcrossY(v)"),
+        ("quad_shuffle_xor(v, (ushort)3)", "QuadReadAcrossDiagonal(v)"),
+        # uchar(257) is 1.
+        ("quad_shuffle_xor(v, uchar(257))", "QuadReadAcrossX(v)"),
+        ("quad_broadcast(v, ushort(1))", "QuadReadLaneAt(v, 1u)"),
+        ("quad_shuffle(v, uint(65538))", "QuadReadLaneAt(v, 2u)"),
+    ],
+)
+def test_a_converted_constant_lane_stays_a_constant(tmp_path, call, expected):
+    crossgl = _translate(tmp_path, _kernel(call), "cgl")
+    assert expected in crossgl
+
+
 def test_user_function_named_like_a_quad_function_is_called(tmp_path):
     source = HEADER + """
 uint quad_shuffle_xor(uint value, uint mask) { return value + mask; }
