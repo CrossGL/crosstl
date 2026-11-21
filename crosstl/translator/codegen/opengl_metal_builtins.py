@@ -1,7 +1,5 @@
 """Metal built-ins in the GLSL generator: statement termination, float selection and SIMD helpers, atomic fences, function bodies and floating remainder calls."""
 
-import re
-
 from ..ast import (
     ArrayAccessNode,
     AssignmentNode,
