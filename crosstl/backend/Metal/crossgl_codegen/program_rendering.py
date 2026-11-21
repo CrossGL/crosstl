@@ -28,6 +28,7 @@ from ..unused_generic_definitions import (
     raise_referenced_deferred_definitions,
     render_generic_definition,
 )
+from ..vote_masks import generate_vote_mask_support_code
 
 
 class MetalProgramRenderingMixin:
@@ -47,6 +48,7 @@ class MetalProgramRenderingMixin:
         self.wide_vector_compound_helpers = set()
         self.wide_vector_reserved_names = set()
         self.metal_precise_math_helper_names = {}
+        self.required_metal_vote_masks = set()
         self.required_metal_precise_acos_widths = set()
         self.required_metal_precise_asin_widths = set()
         self.required_metal_precise_acosh_widths = set()
@@ -367,9 +369,8 @@ class MetalProgramRenderingMixin:
                         static_member_types=static_member_types,
                         semantic_context=(
                             {"kind": "fetched_member"}
-                            if struct_node.name in getattr(
-                                self, "metal_fetched_struct_names", ()
-                            )
+                            if struct_node.name
+                            in getattr(self, "metal_fetched_struct_names", ())
                             else None
                         ),
                     )
@@ -417,9 +418,8 @@ class MetalProgramRenderingMixin:
 
         globals_list = [
             glob
-            for glob in getattr(ast, "global_variables", []) or getattr(
-                ast, "global_vars", []
-            )
+            for glob in getattr(ast, "global_variables", [])
+            or getattr(ast, "global_vars", [])
             if id(glob) not in self.metal_atomic_fence_transport_declaration_ids
         ]
         if globals_list:
@@ -653,7 +653,8 @@ class MetalProgramRenderingMixin:
             + self.generate_metal_remainder_support_code(indent=1)
             + self.generate_metal_additive_support_code(indent=1)
             + self.generate_metal_multiplication_support_code(indent=1)
-            + self.generate_metal_precise_math_support_code(indent=1),
+            + self.generate_metal_precise_math_support_code(indent=1)
+            + generate_vote_mask_support_code(self, indent=1),
             1,
         )
         code = code.replace(
