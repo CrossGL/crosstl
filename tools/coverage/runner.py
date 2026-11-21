@@ -76,6 +76,12 @@ def _first_line(error: BaseException, scratch: str) -> str:
     return f"{type(error).__name__}: {text[0][:300] if text else ''}".rstrip(": ")
 
 
+# How the reference compilers read each native probe, told to the importer that reads it. DXC compiles every HLSL
+# probe with -enable-16bit-types (validators.py and lowering.py), under which ``half`` is binary16; without it the
+# importer reads ``half`` as DXC does by default, as binary32 (crosstl/backend/DirectX/half_width.py).
+SOURCE_OPTIONS = {"directx": {"enable_16bit_types": True}}
+
+
 def translate(source: str, suffix: str, backend: str, source_backend: str) -> str:
     """Translate ``source`` with CrossTL, raising :class:`Refused` or :class:`Broken` on failure.
 
@@ -93,6 +99,7 @@ def translate(source: str, suffix: str, backend: str, source_backend: str) -> st
                 backend=backend,
                 source_backend=source_backend,
                 format_output=False,
+                source_options=SOURCE_OPTIONS.get(source_backend),
             )
         except Exception as error:  # noqa: BLE001 - every failure is classified
             code = getattr(error, "project_diagnostic_code", None)

@@ -214,6 +214,8 @@ def test_16_bit_scalars_are_read_and_stored_through_32_bit_buffers():
     asint16, asuint16 = HLSL_BY_NAME["asint16"], HLSL_BY_NAME["asuint16"]
     source = probes.build(asint16, "hlsl").source
     assert "RWStructuredBuffer<int2> outp : register(u1);" in source
+    # An HLSL probe converts a 16-bit argument from a value binary16 holds (probes._TOWARD_ZERO); this feature is
+    # GLSL's, so it reads the input itself.
     assert "half2 a0 = half2((half)fin[i + 0u], (half)fin[i + 1u]);" in source
     assert "int16_t2 r = asint16(a0);" in source
     assert "outp[i] = (int2)r;" in source

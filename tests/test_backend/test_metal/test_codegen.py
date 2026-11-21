@@ -6709,7 +6709,7 @@ def test_codegen_raytracing_qualifiers_output():
         )
 
 
-def test_codegen_msl_intersection_function_with_tags_is_refused():
+def test_codegen_msl_intersection_function_tags_import_as_entry_attributes():
     code = """
     #include <metal_stdlib>
     using namespace metal;
@@ -6731,14 +6731,15 @@ def test_codegen_msl_intersection_function_with_tags_is_refused():
         return hit;
     }
     """
+    crossgl = convert(code)
+
+    assert "@bounding_box @triangle_data @instancing {" in crossgl
+
     with pytest.raises(
         MetalImportRefused,
-        match=(
-            "Metal intersection function 'sphere' names intersection tags "
-            "triangle_data, instancing; CrossGL has no spelling for intersection tags"
-        ),
+        match="Metal intersection function 'sphere' names intersection tag 'not_a_tag'",
     ):
-        convert(code)
+        convert(code.replace("instancing)]]", "not_a_tag)]]"))
 
 
 def test_codegen_raytracing_namespace_alias_resolves_to_crossgl_type():

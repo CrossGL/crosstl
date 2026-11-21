@@ -14,6 +14,7 @@ from ..matrix_arithmetic import (
     matrix_arithmetic_shape,
 )
 from ..matrix_columns import matrix_columns_object
+from ..member_aggregates import promoted_member_access
 from ..MetalAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -967,6 +968,9 @@ class MetalExpressionTypeMixin:
                 )
             return selection["selected_type"]
         if isinstance(expr, MemberAccessNode):
+            promoted = promoted_member_access(self, expr)
+            if promoted is not None:
+                return self.expression_metal_type(promoted)
             object_type = self.expression_metal_type(expr.object)
             if object_type is None:
                 return None

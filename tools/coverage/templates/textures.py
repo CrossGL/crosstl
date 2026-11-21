@@ -111,8 +111,10 @@ METAL = {
         )
         for name, (texture, arguments) in _METAL_SHAPES.items()
     },
+    # The texel index converts the input as the CrossGL probe's texelFetch(tex, int(fin[i])) does: through int, so a
+    # negative input reads out of bounds instead of saturating to texel 0.
     "texel-buffer": Template(
-        "outp[i] = tex.read(uint(fin[i])).x;",
+        "outp[i] = tex.read(uint(int(fin[i]))).x;",
         params="texture_buffer<float> tex [[texture(0)]]",
     ),
 }

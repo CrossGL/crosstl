@@ -3078,6 +3078,12 @@ class MetalCodeGen(
             return self.generate_metal_member_access_expression(expr)
         elif isinstance(expr, PointerAccessNode):
             pointer = self.generate_expression_with_expected(expr.pointer_expr, None)
+            if isinstance(
+                expr.pointer_expr, (BinaryOpNode, TernaryOpNode, UnaryOpNode)
+            ) and not self.metal_expression_is_parenthesized(pointer):
+                # `->` binds tighter than every operator, so `(s + 1)->a` must
+                # not become `s + 1->a`.
+                pointer = f"({pointer})"
             return f"{pointer}->{expr.member}"
         elif isinstance(expr, TernaryOpNode):
             return self.generate_metal_ternary_expression(expr)
@@ -3457,7 +3463,11 @@ class MetalCodeGen(
 
     def stage_entry_base_name(self, stage_name, func):
         func_name = getattr(func, "name", None) or "main"
-        if self.function_has_explicit_stage_entry_attribute(func):
+        # Metal rejects an entry function called `main`, so it is renamed like
+        # an entry without the attribute.
+        if func_name != "main" and self.function_has_explicit_stage_entry_attribute(
+            func
+        ):
             return func_name
         if stage_name == "vertex":
             return f"vertex_{func_name}"
