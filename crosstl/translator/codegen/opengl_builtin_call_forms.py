@@ -17,6 +17,7 @@ from .extended_arithmetic_builtins import (
 from .generic_function_utils import (
     generate_static_generic_numeric_call,
 )
+from .glsl_double_literals import binary64_constructor_argument
 from .glsl_tessellation_input_arrays import (
     tessellation_input_length,
 )
@@ -367,7 +368,8 @@ class OpenGLBuiltinCallFormMixin:
                 # and component type; GLSL converts their components.
                 constructor_fields = []
             args = ", ".join(
-                self.generate_expression_with_expected(
+                binary64_constructor_argument(constructor, arg)
+                or self.generate_expression_with_expected(
                     arg,
                     (
                         constructor_fields[index]

@@ -29,6 +29,7 @@ from .wgsl_frexp_modf import (
 from .wgsl_generic_functions import (
     WGSLGenericFunctionSpecializer,
 )
+from .wgsl_helper_stages import helper_stage_names
 from .wgsl_matrix_inverse import (
     wgsl_matrix_inverse_helpers,
 )
@@ -182,6 +183,9 @@ class WGSLProgramSectionMixin:
             ast, target_stage
         )
         helper_function_nodes = list(self._helper_functions(ast, target_stage))
+        self._helper_stage_names = helper_stage_names(
+            ast, self._stage_nodes(ast, target_stage)
+        )
         all_function_nodes = list(helper_function_nodes)
         all_function_nodes.extend(
             stage_node.entry_point

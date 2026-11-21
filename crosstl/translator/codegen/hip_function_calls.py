@@ -22,6 +22,7 @@ from .generic_function_utils import (
     generic_function_call_name,
     reject_unresolved_generic_function_call,
 )
+from .hip_cuda_warps import hip_cuda_warp_call
 from .hip_library_calls import (
     ffs64_argument,
     generate_hip_library_call,
@@ -31,7 +32,6 @@ from .hip_tables import (
     HIP_64BIT_BITCAST_FUNCTIONS,
     HIP_BITCAST_FUNCTION_TARGETS,
     HIP_INTEGER_BIT_FUNCTION_ALIASES,
-    HIP_WARP_SYNC_BUILTIN_ARITIES,
     HIP_WAVE_OP_ARITIES,
 )
 
@@ -720,49 +720,4 @@ class HipFunctionCallMixin:
         return value
 
     def generate_warp_sync_builtin_call(self, func_name, raw_args, args):
-        expected_counts = HIP_WARP_SYNC_BUILTIN_ARITIES.get(func_name)
-        if expected_counts is None:
-            return None
-        if len(raw_args) not in expected_counts:
-            expected_list = " or ".join(str(count) for count in expected_counts)
-            raise HipRefusal(
-                f"HIP warp sync builtin {func_name} requires {expected_list} "
-                f"arguments, got {len(raw_args)}"
-            )
-        if func_name == "__shfl_down_sync":
-            helper_name = self.require_hip_shfl_down_sync_helper(
-                raw_args[1],
-                has_width=len(raw_args) == 4,
-            )
-            return f"{helper_name}({', '.join(args)})"
-        return None
-
-    def require_hip_shfl_down_sync_helper(self, value_arg, has_width=False):
-        value_type = self.map_type(self.expression_result_type(value_arg) or "uint")
-        width_suffix = "_width" if has_width else ""
-        helper_name = (
-            f"cgl_hip_shfl_down_sync{width_suffix}_"
-            f"{self.wave_type_suffix(value_type)}"
-        )
-        if helper_name in self.helper_functions:
-            return helper_name
-
-        width_param = ", int width" if has_width else ""
-        width_arg = ", width" if has_width else ""
-        width_ignore = "    (void)width;\n" if has_width else ""
-        helper = (
-            f"__device__ inline {value_type} {helper_name}"
-            f"(unsigned long long mask, {value_type} value, int offset{width_param})\n"
-            "{\n"
-            "#if defined(__HIP_DEVICE_COMPILE__) && defined(HIP_ENABLE_WARP_SYNC_BUILTINS)\n"
-            f"    return __shfl_down_sync(mask, value, offset{width_arg});\n"
-            "#else\n"
-            "    (void)mask;\n"
-            "    (void)offset;\n"
-            f"{width_ignore}"
-            "    return value;\n"
-            "#endif\n"
-            "}"
-        )
-        self.helper_functions[helper_name] = helper
-        return helper_name
+        return hip_cuda_warp_call(self, func_name, raw_args, args)

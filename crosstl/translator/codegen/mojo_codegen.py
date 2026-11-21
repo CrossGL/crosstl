@@ -146,6 +146,7 @@ from .mojo_type_declarations import MojoTypeDeclarationMixin
 from .mojo_types import MojoTypeMixin
 from .mojo_values import MojoValueMixin
 from .mojo_vector_ops import MojoVectorOpMixin
+from .mojo_wave_ops import MOJO_WAVE_IMPORTS, MojoWaveOpMixin
 from .precise_evaluation import refuse_precise_evaluation
 from .sampler_pairs import canonicalize_separate_textures
 from .written_function_names import (
@@ -243,6 +244,7 @@ class MojoCodeGen(
     MojoStatementMixin,
     MojoMatchMixin,
     MojoExpressionMixin,
+    MojoWaveOpMixin,
     MojoBuiltinCallMixin,
     MojoTargetShapeMixin,
     MojoResourceCallMixin,
@@ -330,6 +332,7 @@ class MojoCodeGen(
         self.requires_atomic_import = False
         self.requires_shared_memory_imports = False
         self.required_bit_imports = set()
+        self.required_wave_helpers = {}
         self.required_ray_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
@@ -630,6 +633,7 @@ class MojoCodeGen(
         self.requires_atomic_import = False
         self.requires_shared_memory_imports = False
         self.required_bit_imports = set()
+        self.required_wave_helpers = {}
         self.required_ray_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
@@ -816,9 +820,12 @@ class MojoCodeGen(
             header += (
                 f"from std.bit import {', '.join(sorted(self.required_bit_imports))}\n"
             )
+        wave_helpers = self.mojo_wave_helper_source()
+        if wave_helpers:
+            header += MOJO_WAVE_IMPORTS
         header += "\n"
 
-        return header + self.generate_required_helpers() + code
+        return header + self.generate_required_helpers() + wave_helpers + code
 
     def reject_parameterized_generic_enum_specializations(self, ast):
         if not self.generic_enum_struct_definitions:
