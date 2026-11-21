@@ -1054,7 +1054,6 @@ class HLSLCodeGen(
         }
         # Typed binary16 loads, stores and selections may change NaN payloads.
         ast = lower_half_private_storage(ast, self.map_type)
-        validate_hlsl_call_cycles(ast)
         self.hlsl_groupshared_variable_names = hlsl_groupshared_variable_names(ast)
         target_stage = requested_stage_name(target_stage)
         self.directx_cooperative_matrix_lowerings = {}
@@ -1718,6 +1717,8 @@ class HLSLCodeGen(
             self.collect_unsupported_glsl_buffer_block_functions(functions)
         )
         self.prepare_hlsl_software_subgroup_contract(ast, target_stage)
+        # After the software subgroup contract, whose recursive-helper diagnostic is more specific.
+        validate_hlsl_call_cycles(ast)
         self.validate_global_resource_shadows(ast)
         self.global_mixed_sampler_names = self.collect_global_mixed_sampler_names(ast)
         self.global_mixed_sampler_aliases = {
