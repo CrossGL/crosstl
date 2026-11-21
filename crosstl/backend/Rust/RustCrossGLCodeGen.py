@@ -9,6 +9,7 @@ from .control_flow import RustControlFlowMixin
 from .declarations import RustDeclarationMixin
 from .default_values import RustDefaultValueMixin
 from .enums import RustEnumMixin
+from .exact_methods import RustExactMethodMixin
 from .execution_modes import RustExecutionModeMixin
 from .expression_results import RustExpressionResultMixin
 from .expressions import RustExpressionMixin
@@ -28,6 +29,7 @@ from .import_tables import (
 from .loop_control import RustLoopControlMixin
 from .match_lowering import RustMatchMixin
 from .operator_spelling import RustOperatorSpellingMixin
+from .reference_locals import RustReferenceLocalMixin
 from .RustAst import *
 from .RustLexer import *
 from .RustParser import *
@@ -45,6 +47,8 @@ class RustToCrossGLConverter(
     RustDeclarationMixin,
     RustExpressionResultMixin,
     RustTryOperatorMixin,
+    RustExactMethodMixin,
+    RustReferenceLocalMixin,
     RustCallMixin,
     RustControlFlowMixin,
     RustMatchMixin,

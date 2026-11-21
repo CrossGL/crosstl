@@ -3306,7 +3306,8 @@ def test_scalar_math_method_conversion():
         assert "e = degrees(angle);" in result
         assert "f = pow(x, y);" in result
         assert "g = pow(x, n);" in result
-        assert "h = fract(x);" in result
+        # Rust's fract truncates: x - x.trunc().
+        assert "h = (x - trunc(x));" in result
         assert "i = clamp(x, 0.0, 1.0);" in result
         assert "j = clamp(x, y, angle);" in result
         assert "k = min(x, y);" in result
@@ -3424,7 +3425,7 @@ def test_unary_math_intrinsic_calls_convert_to_crossgl_intrinsics():
     assert "trunc(value)" in result
     assert "roundEven(value)" in result
     assert "scalar_root = sqrt(scalar);" in result
-    assert "scalar_fraction = fract(scalar);" in result
+    assert "scalar_fraction = (scalar - trunc(scalar));" in result
     assert "crate::math::sqrt" not in result
     assert "rsqrt(value)" not in result
     assert "crate::math::fract" not in result
@@ -3656,10 +3657,17 @@ def test_rust_gpu_shadertoy_step_and_rem_euclid_methods_codegen():
     result = parse_and_generate(code)
 
     assert "vec3 repeat_tile(vec3 point, float face_blend, float delta)" in result
-    assert "repeated = (mod(point, vec3(6.0)) - vec3(3.0));" in result
+    # rem_euclid is never negative: fmod, plus the divisor's magnitude when the remainder is negative.
     assert (
-        "angle = (mod((face_blend + (delta * 22.5)), (delta * 45.0)) "
-        "- (delta * 22.5));" in result
+        "repeated = (vec3(((fmod(point.x, vec3(6.0).x) < 0.0) ? "
+        "(fmod(point.x, vec3(6.0).x) + abs(vec3(6.0).x)) : fmod(point.x, vec3(6.0).x)), "
+        in result
+    )
+    assert (
+        "angle = (((fmod((face_blend + (delta * 22.5)), (delta * 45.0)) < 0.0) ? "
+        "(fmod((face_blend + (delta * 22.5)), (delta * 45.0)) + abs((delta * 45.0))) : "
+        "fmod((face_blend + (delta * 22.5)), (delta * 45.0))) - (delta * 22.5));"
+        in result
     )
     assert "scalar_gate = step(0.5, face_blend);" in result
     assert "vector_gate = step(vec3(0.0, 0.0, 0.0), point);" in result
@@ -5605,7 +5613,8 @@ def test_unary_operations_conversion():
         assert "(-5)" in result
         assert "(!true)" in result
         assert "shared_ = value;" in result
-        assert "writable = value;" in result
+        # A mutable reference local names the place it borrows: no copy is declared.
+        assert "writable" not in result
         assert "pointed = ptr;" in result
         assert "&value" not in result
         assert "&mut value" not in result

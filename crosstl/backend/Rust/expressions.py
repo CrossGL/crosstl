@@ -339,7 +339,7 @@ class RustExpressionMixin:
             return self.format_crossgl_binary(expr, left, right)
         elif isinstance(expr, UnaryOpNode):
             operand = self.generate_expression(expr.operand)
-            return f"({self.crossgl_unary_operator(expr)}{operand})"
+            return self.format_crossgl_unary(expr, operand)
         elif isinstance(expr, FunctionCallNode):
             method_call = self.format_method_call(expr)
             if method_call is not None:

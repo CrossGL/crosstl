@@ -450,7 +450,15 @@ class RustValueTypeMixin:
             return "bool"
 
         left_type = self.infer_value_type(expression.left)
+        # A shift has its left operand's type, whatever the shift amount's (core::ops::Shl, Shr).
+        if expression.op in {"<<", ">>"} and left_type:
+            return left_type
         right_type = self.infer_value_type(expression.right)
+        # An unsuffixed literal takes the type of the other operand (The Rust Reference, "Literal expressions").
+        if left_type and _is_unsuffixed_numeric_literal(expression.right):
+            return left_type
+        if right_type and _is_unsuffixed_numeric_literal(expression.left):
+            return right_type
         if left_type and right_type:
             return self.common_inferred_value_type([left_type, right_type])
         return left_type or right_type
@@ -1274,3 +1282,12 @@ class RustValueTypeMixin:
         for name, replacement in substitutions.items():
             result = self.replace_type_identifier(result, name, replacement)
         return result
+
+
+def _is_unsuffixed_numeric_literal(expression):
+    if isinstance(expression, UnaryOpNode) and expression.op == "-":
+        expression = expression.operand
+    if not isinstance(expression, str):
+        return False
+    match = RUST_NUMERIC_LITERAL_RE.match(expression.strip())
+    return match is not None and not match.group("suffix")

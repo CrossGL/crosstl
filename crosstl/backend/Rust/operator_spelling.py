@@ -8,6 +8,10 @@
 - glam's ``v.is_nan()`` is true when any component is NaN and ``v.is_finite()`` when every component is finite;
   CrossGL's ``isnan`` and ``isfinite`` are componentwise, so they are reduced with ``any`` and ``all``. The
   ``_mask`` forms are the componentwise results themselves.
+- Rust computes ``i8``, ``u8``, ``i16`` and ``u16`` arithmetic in the operand type and wraps the result (The Rust
+  Reference, "Overflow"; rust-gpu builds without overflow checks), where CrossGL promotes narrow operands to
+  ``int`` as C does. The importer converts each arithmetic result and each negation or complement of a narrow
+  operand back to its type, so ``v * v`` on an ``i8`` is written ``int8_t((v * v))``.
 """
 
 from __future__ import annotations
@@ -19,6 +23,9 @@ _INTEGER_TYPE_RE = re.compile(
 )
 _VECTOR_TYPE_RE = re.compile(r"^(?:[dhiub]|i64|u64)?vec[234]$")
 _VECTOR_REDUCTIONS = {"==": "all", "!=": "any"}
+_NARROW_INTEGER_TYPES = {"int8_t", "uint8_t", "int16_t", "uint16_t"}
+# The operators whose C result can leave a narrow operand type's range; & | ^ of in-range operands cannot.
+_WRAPPING_BINARY_OPERATORS = {"+", "-", "*", "/", "%", "<<", ">>"}
 _FLOAT_VECTOR_TYPE_RE = re.compile(r"^(?:[dh]?vec[234]|D?Vec(?:[234]|3A))$")
 # glam's float-vector predicates: (the reduction of the componentwise result, the CrossGL function).
 _VECTOR_PREDICATES = {
@@ -41,10 +48,33 @@ class RustOperatorSpellingMixin:
             return "~"
         return op
 
+    def format_crossgl_unary(self, expression, operand):
+        """``(op operand)``, converted back to a narrow integer operand's type when it negates or complements."""
+        op = self.crossgl_unary_operator(expression)
+        code = f"({op}{operand})"
+        if op in {"-", "~"}:
+            return self.wrap_narrow_integer_result(
+                self.infer_value_type(getattr(expression, "operand", None)), code
+            )
+        return code
+
+    def wrap_narrow_integer_result(self, value_type, code):
+        """``T(code)`` when ``value_type`` is a narrow integer type ``T``, otherwise ``code``."""
+        if not isinstance(value_type, str) or not value_type:
+            return code
+        mapped = self.map_type(self.normalize_receiver_type(value_type))
+        if isinstance(mapped, str) and mapped.strip() in _NARROW_INTEGER_TYPES:
+            return f"{mapped.strip()}({code})"
+        return code
+
     def format_crossgl_binary(self, expression, left, right):
         """``(left op right)``, reduced with ``all``/``any`` when the operation compares two whole vectors."""
         op = getattr(expression, "op", None)
         code = f"({left} {op} {right})"
+        if op in _WRAPPING_BINARY_OPERATORS:
+            return self.wrap_narrow_integer_result(
+                self.infer_binary_expression_value_type(expression), code
+            )
         reduction = _VECTOR_REDUCTIONS.get(op)
         if reduction is None:
             return code

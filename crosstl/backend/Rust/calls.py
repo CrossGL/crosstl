@@ -1,5 +1,6 @@
 """Rust method, associated-function, constructor, resource and builtin calls as CrossGL calls."""
 
+from .exact_methods import EXACT_METHODS
 from .RustAst import (
     ArrayNode,
     ClosureNode,
@@ -19,6 +20,7 @@ class RustCallMixin:
         args,
         arg_nodes,
         receiver_type=None,
+        receiver_node=None,
     ):
         impl_call = self.format_user_impl_method_call(method_name, obj, args)
         if impl_call is not None:
@@ -57,6 +59,13 @@ class RustCallMixin:
         derivative_method = self.RUST_GPU_DERIVATIVE_METHOD_MAP.get(method_name)
         if derivative_method is not None and not args:
             return f"{derivative_method}({obj})"
+
+        if method_name in EXACT_METHODS:
+            exact_call = self.format_exact_method_call(
+                method_name, obj, args, arg_nodes, receiver_type, receiver_node
+            )
+            if exact_call is not None:
+                return exact_call
 
         vector_predicate = self.format_vector_predicate_call(
             method_name, obj, args, receiver_type
@@ -250,6 +259,8 @@ class RustCallMixin:
         }:
             return True
         if base_method_name in self.RUST_GPU_DERIVATIVE_METHOD_MAP:
+            return True
+        if base_method_name in EXACT_METHODS:
             return True
         if base_method_name in self.SCALAR_ZERO_ARG_METHOD_MAP:
             return True
@@ -1160,6 +1171,7 @@ class RustCallMixin:
             args,
             expr.args,
             receiver_type,
+            receiver_node=expr.name.object,
         )
 
     def format_option_unwrap_or_call(self, receiver, fallback):

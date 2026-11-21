@@ -153,7 +153,7 @@ class RustTryOperatorMixin:
                 indent,
                 loop_contexts,
             )
-            return code, f"({self.crossgl_unary_operator(expression)}{operand})"
+            return code, self.format_crossgl_unary(expression, operand)
 
         if isinstance(expression, FunctionCallNode):
             return self.generate_try_function_call_expression(
@@ -411,6 +411,7 @@ class RustTryOperatorMixin:
                 args,
                 expression.args,
                 self.infer_value_type(expression.name.object),
+                receiver_node=expression.name.object,
             )
             if method_call is not None:
                 return object_code + args_code, method_call
