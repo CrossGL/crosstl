@@ -23,6 +23,7 @@ from .generic_emission_order import (
     mark_generic_function_emitted,
 )
 from .generic_function_utils import (
+    generic_function_definition_name,
     generic_function_emission_list,
     generic_function_parameters,
 )
@@ -227,6 +228,15 @@ class MetalProgramSectionMixin:
         )
         return code, stage_entry_names
 
+    def metal_ordering_callee_name(self, call):
+        """The function a call depends on for emission order.
+
+        The parser keeps an explicit call's type arguments in the callee name (``twice<float>``), so the call names
+        the generic definition ``twice`` once they are removed; otherwise a caller defined before the generic was
+        emitted ahead of the specialization it calls.
+        """
+        return generic_function_definition_name(self, self.function_call_name(call))
+
     def render_metal_program_functions(
         self,
         ast,
@@ -237,7 +247,7 @@ class MetalProgramSectionMixin:
         functions = order_functions_by_dependencies(
             getattr(ast, "functions", []),
             self.iter_ast_nodes,
-            self.function_call_name,
+            self.metal_ordering_callee_name,
             FunctionCallNode,
             include_overloads=True,
         )
@@ -290,7 +300,7 @@ class MetalProgramSectionMixin:
                 for func in order_functions_by_dependencies(
                     getattr(stage, "local_functions", []) or [],
                     self.iter_ast_nodes,
-                    self.function_call_name,
+                    self.metal_ordering_callee_name,
                     FunctionCallNode,
                 ):
                     if generic_function_parameters(func):

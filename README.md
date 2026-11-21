@@ -63,14 +63,17 @@ glsl = crosstl.translate("blur.hlsl", backend="opengl")
 crossgl = crosstl.translate("blur.hlsl", backend="cgl")
 ```
 
-or from the command line:
+or from the command line, where the target comes from the output file's extension:
 
 ```bash
-crosstl translate saxpy.cgl --backend directx --output saxpy.hlsl
+crosstl saxpy.cgl -o saxpy.hlsl
+crosstl blur.hlsl -o blur.metal
 crosstl translate saxpy.cgl --backend vulkan --output -
 ```
 
-`python -m crosstl` is the same command. The `examples/` directory has larger CrossGL programs.
+`--backend` chooses the target explicitly; without it, `-o -` writes CrossGL to standard output. An output file
+name whose extension names no language CrossTL writes is refused. `python -m crosstl` is the same command. The
+`examples/` directory has larger CrossGL programs.
 
 ## Languages
 

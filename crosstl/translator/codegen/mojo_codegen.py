@@ -3,7 +3,6 @@
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
-    ArrayNode,
     AssignmentNode,
     AtomicOpNode,
     BinaryOpNode,
@@ -28,7 +27,9 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
 )
+from ..float_limit_constants import float_limit_constant
 from ..refusals import MojoRefusal
+from ..semantics.declared_types import declared_type_names
 from ..unhandled import UNHANDLED
 from .array_utils import collect_literal_int_constants
 from .comma_expressions import is_comma_expression, refuse_comma_expression
@@ -41,15 +42,18 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
 )
 from .generic_global_types import collect_constant_and_cbuffer_member_types
+from .mojo_arithmetic_conversions import MojoArithmeticConversionMixin
 from .mojo_builtin_calls import MojoBuiltinCallMixin
 from .mojo_call_expressions import MojoCallExpressionMixin
 from .mojo_expression_nodes import MojoExpressionNodeMixin
 from .mojo_expressions import MojoExpressionMixin
 from .mojo_functions import MojoFunctionMixin
 from .mojo_generic_types import MojoGenericTypeMixin
+from .mojo_kernel_arguments import MojoKernelArgumentMixin
 from .mojo_match_lowering import MojoMatchMixin
 from .mojo_math_helpers import MojoMathHelperMixin
 from .mojo_pointer_expressions import MojoPointerExpressionMixin
+from .mojo_private_globals import MojoPrivateGlobalMixin
 from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
     MojoLoweringRefused,
 )
@@ -60,8 +64,11 @@ from .mojo_resource_types import MojoResourceTypeMixin
 from .mojo_result_types import MojoResultTypeMixin
 from .mojo_return_aliases import MojoReturnAliasMixin
 from .mojo_semantics import MojoSemanticMixin
+from .mojo_shared_memory import MojoSharedMemoryMixin
+from .mojo_split_builtins import MojoSplitBuiltinMixin
 from .mojo_stage_contracts import MojoStageContractMixin
 from .mojo_statements import MojoStatementMixin
+from .mojo_storage_blocks import lower_mojo_single_array_storage_blocks
 from .mojo_tables import (
     MOJO_ATOMIC_OP_ALIASES,
     MOJO_BUFFER_COUNTER_METHODS,
@@ -223,6 +230,8 @@ __all__ = [
 
 
 class MojoCodeGen(
+    MojoKernelArgumentMixin,
+    MojoPrivateGlobalMixin,
     MojoStageContractMixin,
     MojoReturnAliasMixin,
     MojoGenericTypeMixin,
@@ -245,6 +254,9 @@ class MojoCodeGen(
     MojoCallExpressionMixin,
     MojoExpressionNodeMixin,
     MojoPointerExpressionMixin,
+    MojoSplitBuiltinMixin,
+    MojoSharedMemoryMixin,
+    MojoArithmeticConversionMixin,
     MojoResultTypeMixin,
 ):
     """Emit Mojo-like shader source from the shared CrossGL AST."""
@@ -261,6 +273,7 @@ class MojoCodeGen(
         self.function_return_resource_field_aliases = {}
         self.function_return_resource_static_field_aliases = {}
         self.stage_local_function_extra_params = {}
+        self.reset_mojo_private_globals()
         self.variable_types = {}
         self.enum_types = {}
         self.enum_variant_aliases = {}
@@ -312,8 +325,11 @@ class MojoCodeGen(
         self.required_tessellation_patch_helpers = set()
         self.required_mesh_helpers = set()
         self.required_reinterpret_helpers = set()
+        self.requires_bitcast_import = False
+        self.requires_threadfence_import = False
+        self.requires_atomic_import = False
+        self.requires_shared_memory_imports = False
         self.required_bit_imports = set()
-        self.required_sync_helpers = set()
         self.required_ray_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
@@ -362,6 +378,9 @@ class MojoCodeGen(
             "min16int": "Int16",
             "short": "Int16",
             "long": "Int64",
+            "i64": "Int64",
+            "int64": "Int64",
+            "int64_t": "Int64",
             "uint": "UInt32",
             "u8": "UInt8",
             "u16": "UInt16",
@@ -373,7 +392,12 @@ class MojoCodeGen(
             "min16uint": "UInt16",
             "ushort": "UInt16",
             "ulong": "UInt64",
+            "u64": "UInt64",
+            "uint64": "UInt64",
+            "uint64_t": "UInt64",
             "f16": "Float16",
+            "f32": "Float32",
+            "f64": "Float64",
             "float": "Float32",
             "double": "Float64",
             "half": "Float16",
@@ -408,10 +432,12 @@ class MojoCodeGen(
                 "Float16",
                 "Float32",
                 "Float64",
+                "Int8",
                 "Int16",
                 "Int32",
                 "Int64",
                 "String",
+                "UInt8",
                 "UInt16",
                 "UInt32",
                 "UInt64",
@@ -517,8 +543,10 @@ class MojoCodeGen(
 
         A call the generator has no lowering for is written as it stands, so the rendered program is refused when
         it still calls a built-in function of another shading language that Mojo does not define and the program
-        does not declare.
+        does not declare. A built-in type of another language that Mojo has no mapping for, such as Metal's
+        ``visible_function_table``, is refused the same way.
         """
+        self.program_type_names = declared_type_names(ast)
         output = self.render_program(ast)
         refuse_written_foreign_calls(
             output, MOJO_CALLABLE_FUNCTION_NAMES, "Mojo", non_calls=MOJO_NON_CALLS
@@ -531,6 +559,8 @@ class MojoCodeGen(
         refuse_precise_evaluation(ast, label="Mojo", target="mojo")
         # A separate CrossGL texture is the same Mojo texture as a combined one sampled with explicit samplers.
         ast = canonicalize_separate_textures(ast)
+        # A storage block holding one runtime-sized array is that array: a pointer argument of the kernel.
+        lower_mojo_single_array_storage_blocks(ast)
         self.struct_types = {}
         self.function_return_types = {}
         self.function_parameter_types = {}
@@ -541,6 +571,8 @@ class MojoCodeGen(
         self.function_return_resource_static_field_aliases = {}
         self.stage_local_function_extra_params = {}
         self.variable_types = {}
+        self.reset_mojo_kernel_arguments()
+        self.reset_mojo_private_globals()
         self.enum_types = {}
         self.enum_variant_aliases = {}
         self.enum_variant_values = {}
@@ -593,8 +625,11 @@ class MojoCodeGen(
         self.required_tessellation_patch_helpers = set()
         self.required_mesh_helpers = set()
         self.required_reinterpret_helpers = set()
+        self.requires_bitcast_import = False
+        self.requires_threadfence_import = False
+        self.requires_atomic_import = False
+        self.requires_shared_memory_imports = False
         self.required_bit_imports = set()
-        self.required_sync_helpers = set()
         self.required_ray_helpers = set()
         self.required_helpers = set()
         self.required_splat_helpers = set()
@@ -629,8 +664,8 @@ class MojoCodeGen(
         self.expression_prelude_stack = []
 
         header = "# Generated Mojo Shader Code\n"
-        header += "from math import *\n"
-        header += "from gpu import *\n"
+        header += "from std.math import *\n"
+        header += "from max.gpu import *\n"
         code = ""
 
         structs = getattr(ast, "structs", [])
@@ -667,64 +702,7 @@ class MojoCodeGen(
 
         global_vars = getattr(ast, "global_variables", [])
         for node in global_vars:
-            if isinstance(node, ArrayNode):
-                code += self.generate_array_declaration(node)
-            else:
-                if hasattr(node, "initial_value") and node.initial_value is not None:
-                    vtype = self.variable_declared_type(node)
-                    self.register_variable_type(
-                        node.name,
-                        vtype or self.expression_result_type(node.initial_value),
-                    )
-                    if (
-                        isinstance(node.initial_value, ArrayLiteralNode)
-                        and vtype is not None
-                        and self.is_array_type_name(vtype)
-                    ):
-                        init_expr = self.generate_array_literal_expression(
-                            node.initial_value, vtype
-                        )
-                    else:
-                        self.validate_expression_target_shape(
-                            node.initial_value, vtype, f"global declaration {node.name}"
-                        )
-                        init_expr = self.generate_expression(node.initial_value)
-                        self.validate_scalar_target_conversion(
-                            node.initial_value, vtype, f"global declaration {node.name}"
-                        )
-                    var_name = self.mojo_identifier(node.name)
-                    if vtype is None:
-                        code += f"var {var_name} = {init_expr}\n"
-                        continue
-                    code += f"var {var_name}: {self.map_type(vtype)} = {init_expr}\n"
-                    continue
-
-                # Handle both old and new AST variable structures
-                vtype = self.variable_declared_type(node) or "float"
-                self.register_variable_type(node.name, vtype)
-                resource_comment = self.generate_resource_metadata_comment(node, vtype)
-                var_name = self.mojo_identifier(node.name)
-                if self.is_array_type_name(vtype):
-                    code += resource_comment
-                    code += (
-                        f"var {var_name} = "
-                        f"{self.array_initial_value_for_type(vtype)}\n"
-                    )
-                elif self.is_struct_type_name(vtype):
-                    code += resource_comment
-                    code += f"var {var_name} = {self.zero_value_for_type(vtype)}\n"
-                elif self.is_resource_type_name(vtype):
-                    code += resource_comment
-                    mapped_type = self.map_type(vtype)
-                    init_value = self.resource_binding_initial_value(
-                        node.name, mapped_type, vtype
-                    )
-                    code += f"var {var_name}: {mapped_type} = " f"{init_value}\n"
-                else:
-                    code += (
-                        f"var {var_name}: {self.map_type(vtype)} = "
-                        f"{self.zero_value_for_type(vtype)}\n"
-                    )
+            code += self.generate_module_variable_declaration(node)
 
         cbuffers = self.get_cbuffer_nodes(ast)
         if cbuffers:
@@ -734,6 +712,14 @@ class MojoCodeGen(
         self.collect_function_return_types(ast)
 
         functions = getattr(ast, "functions", [])
+        # A function that reads a module-scope buffer or uniform value takes it as an extra argument.
+        self.stage_local_function_extra_params = self.mojo_kernel_argument_captures(
+            [*functions, *self.mojo_stage_functions(ast)],
+            {
+                **self.mojo_module_kernel_arguments,
+                **self.mojo_private_global_arguments(),
+            },
+        )
         for func in functions:
             if generic_function_parameters(func):
                 for specialized_func in generic_function_emission_list(self, func):
@@ -771,6 +757,8 @@ class MojoCodeGen(
                 if hasattr(stage, "entry_point"):
                     stage_name = self.stage_type_name(stage_type)
                     self.validate_stage_type(stage_name)
+                    self.mojo_stage_kernel_arguments = {}
+                    self.reset_mojo_stage_private_globals()
                     code += f"# {stage_name.title()} Shader\n"
                     code += self.generate_stage_local_declarations(
                         stage,
@@ -778,10 +766,23 @@ class MojoCodeGen(
                         emitted_stage_local_structs,
                     )
                     previous_extra_params = self.stage_local_function_extra_params
-                    self.stage_local_function_extra_params = {
-                        **previous_extra_params,
-                        **self.stage_local_extra_params(stage),
-                    }
+                    self.stage_local_function_extra_params = (
+                        self.merge_mojo_extra_params(
+                            previous_extra_params,
+                            self.stage_local_extra_params(stage),
+                            self.mojo_kernel_argument_captures(
+                                [
+                                    *functions,
+                                    *self.stage_local_functions_to_emit(stage),
+                                ],
+                                {
+                                    **dict(self.mojo_entry_kernel_arguments()),
+                                    **self.mojo_stage_shared_arguments(stage),
+                                    **self.mojo_private_global_arguments(),
+                                },
+                            ),
+                        )
+                    )
                     for func in self.stage_local_functions_to_emit(stage):
                         signature = self.function_signature_key(func)
                         if signature in emitted_local_functions:
@@ -800,8 +801,17 @@ class MojoCodeGen(
                         stage.entry_point, shader_type=stage_name, stage_node=stage
                     )
                     self.stage_local_function_extra_params = previous_extra_params
-        if self.required_reinterpret_helpers:
-            header += "from memory import bitcast\n"
+        if self.required_reinterpret_helpers or self.requires_bitcast_import:
+            header += "from std.memory import bitcast\n"
+        if self.requires_shared_memory_imports:
+            header += "from std.memory import stack_allocation\n"
+            header += "from max.gpu.memory import AddressSpace\n"
+        if self.requires_atomic_import:
+            header += "from std.atomic import Atomic\n"
+        if self.requires_threadfence_import:
+            header += "from max.gpu.intrinsics import threadfence\n"
+        if "StaticTuple[" in code:
+            header += "from std.utils import StaticTuple\n"
         if self.required_bit_imports:
             header += (
                 f"from std.bit import {', '.join(sorted(self.required_bit_imports))}\n"
@@ -852,7 +862,14 @@ class MojoCodeGen(
         visit(ast)
 
     def generate_expression(self, expr, target_type=None, target_context=None):
-        """Render a CrossGL expression as Mojo expression syntax."""
+        """Render a CrossGL expression as Mojo expression syntax, converted to a numeric ``target_type``."""
+        code = self.generate_expression_value(expr, target_type, target_context)
+        if target_type is None or isinstance(expr, (str, int, float, bool)):
+            return code
+        return self.mojo_converted_to_target(expr, code, target_type)
+
+    def generate_expression_value(self, expr, target_type=None, target_context=None):
+        """Render a CrossGL expression as Mojo expression syntax in its own type."""
         if is_comma_expression(expr):
             return refuse_comma_expression("Mojo", expr)
         if isinstance(expr, str):
@@ -897,6 +914,8 @@ class MojoCodeGen(
                 return self.generate_increment_expression(expr)
             if op == "*":
                 return self.generate_mojo_dereference_expression(expr)
+            if op == "&":
+                return self.generate_mojo_address_of_expression(expr)
             operand = self.generate_expression(expr.operand)
             if op == "not":
                 operand_type = self.expression_result_type(expr.operand)
@@ -1010,7 +1029,6 @@ class MojoCodeGen(
             and not self.required_tessellation_patch_helpers
             and not self.required_mesh_helpers
             and not self.required_reinterpret_helpers
-            and not self.required_sync_helpers
             and not self.required_ray_helpers
             and not self.required_builtin_placeholders
             and not self.required_gpu_builtin_placeholders
@@ -1183,12 +1201,6 @@ class MojoCodeGen(
                 code += self.generate_reinterpret_helper(*key)
             code += "\n"
 
-        if self.required_sync_helpers:
-            code += "# CrossGL synchronization placeholders\n"
-            for helper_name in sorted(self.required_sync_helpers):
-                code += self.generate_sync_helper(helper_name)
-            code += "\n"
-
         if self.required_ray_helpers:
             code += self.generate_ray_helpers()
 
@@ -1260,10 +1272,10 @@ class MojoCodeGen(
 
     def generate_dispatch_mesh_helper(self):
         return (
-            "fn _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType]("
+            "def _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType]("
             "x: X, y: Y, z: Z):\n"
             "    pass\n\n"
-            "fn _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType, "
+            "def _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType, "
             "Payload: AnyType](x: X, y: Y, z: Z, payload: Payload):\n"
             "    pass\n\n"
         )
@@ -1340,6 +1352,8 @@ class MojoCodeGen(
             name = getattr(expr, "name", "")
             if name in MOJO_BUILTIN_PLACEHOLDERS and name not in self.variable_types:
                 return MOJO_BUILTIN_PLACEHOLDERS[name][1]
+            if name not in self.variable_types and float_limit_constant(name):
+                return "float"
             return (
                 self.identifier_replacement_result_type(name)
                 or self.enum_variant_result_types.get(name)

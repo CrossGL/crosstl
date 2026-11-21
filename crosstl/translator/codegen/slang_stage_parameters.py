@@ -11,6 +11,10 @@ from ..ast import (
 from ..refusals import SlangRefusal
 from .array_utils import split_array_type_suffix
 from .ast_walk import walk_ast_values
+from .slang_subgroup_builtins import (
+    SLANG_SUBGROUP_WORKGROUP_BUILTINS,
+    slang_subgroup_builtin_candidates,
+)
 from .slang_workgroup_size import SlangWorkgroupSizeConstants
 
 
@@ -627,6 +631,13 @@ class SlangStageParametersMixin:
                     f"Slang {node.name}: lowered to {intrinsic} only "
                     f"in a compute entry point, not in {where}"
                 )
+            elif node.name in SLANG_SUBGROUP_WORKGROUP_BUILTINS:
+                # GL_KHR_shader_subgroup and Slang's WaveGetNumWaves()/WaveGetWaveIndex() are compute-class only.
+                intrinsic = SLANG_SUBGROUP_WORKGROUP_BUILTINS[node.name][1]
+                self.refuse_lowering(
+                    f"Slang {node.name}: {intrinsic} exists only in compute, mesh "
+                    f"and amplification entry points, not in a {shader_type} entry point"
+                )
         return aliases
 
     def slang_stage_patch_input_aliases(self, body_statements, shader_type, param_list):
@@ -682,6 +693,11 @@ class SlangStageParametersMixin:
 
     def slang_intrinsic_builtin_candidates(self, shader_type):
         shader_stage = self.slang_shader_stage_name(shader_type)
+        candidates = slang_subgroup_builtin_candidates(shader_stage)
+        candidates.update(self.slang_stage_intrinsic_builtin_candidates(shader_stage))
+        return candidates
+
+    def slang_stage_intrinsic_builtin_candidates(self, shader_stage):
         if shader_stage == "compute":
             # Slang has no SV_ system value for the dispatch size; it exposes
             # the number of workgroups through the WorkgroupCount() intrinsic.

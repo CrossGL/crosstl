@@ -102,6 +102,8 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     webgl_program_identifier_names = frozenset()
     # WebGL 2 exposes no GL_EXT_texture_shadow_lod.
     GLSL_SHADOW_LOD_EXTENSION_SUPPORTED = False
+    # WebGL has no Vulkan compilation.
+    GLSL_VULKAN_RESOURCE_FORMS = False
     LOWERING_REFUSAL_TYPE = WebGLLoweringRefused
     GLSL_ARITHMETIC_CONVERSION_ERROR = WebGLArithmeticConversionError
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = WebGLBooleanCompoundAssignmentError

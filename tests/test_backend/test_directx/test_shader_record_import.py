@@ -13,9 +13,7 @@ import pytest
 
 import crosstl
 from crosstl.backend.DirectX.shader_record_import import HLSLShaderRecordError
-from crosstl.translator.semantics.shader_records import (
-    ShaderRecordBufferUnsupportedError,
-)
+from crosstl.translator.codegen.hlsl_shader_records import HlslShaderRecordError
 
 MISS = """struct Payload { float3 hitValue; };
 struct SBT { %s };
@@ -124,9 +122,20 @@ def test_record_reaches_glsl_without_a_binding(tmp_path):
         assert result.returncode == 0, result.stdout
 
 
-def test_record_is_refused_for_direct3d(tmp_path):
-    with pytest.raises(ShaderRecordBufferUnsupportedError, match="shaderRecordEXT"):
+def test_record_hlsl_cannot_lay_out_for_direct3d_is_refused(tmp_path):
+    # Root constants are a constant buffer, whose float array elements are 16 bytes apart.
+    with pytest.raises(
+        HlslShaderRecordError, match="stride of 'c' is 4 bytes under scalar"
+    ):
         _translate(_miss(tmp_path), "directx")
+
+
+def test_record_round_trips_to_hlsl_with_a_local_root_signature(tmp_path):
+    hlsl = _translate(
+        _miss(tmp_path, members="float4 a; float3 b; float c;", use="sbt.b"), "directx"
+    )
+    assert "[[vk::shader_record_ext]] ConstantBuffer<SBT> sbt;" in hlsl
+    assert "RootConstants(num32BitConstants=8, b0, space=1)" in hlsl
 
 
 @pytest.mark.parametrize(

@@ -34,6 +34,7 @@ from ..texture_method_results import (
     is_depth_texture_name,
     texture_method_result_shape,
 )
+from ..vote_masks import vote_mask_call_metal_type
 from .support import (
     MetalAddressProvenanceError,
     MetalArithmeticTypeResolutionError,
@@ -1066,6 +1067,9 @@ class MetalExpressionTypeMixin:
             constructor_type = self.metal_constructor_result_type(expr.name)
             if constructor_type is not None:
                 return constructor_type
+            mask_type = vote_mask_call_metal_type(self, expr)
+            if mask_type is not None:
+                return mask_type
             selected_callable = self.selected_metal_callable(expr)
             if selected_callable is not None:
                 return expression_call_return_type(

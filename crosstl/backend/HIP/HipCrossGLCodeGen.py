@@ -6,6 +6,7 @@ from ...translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ...translator.semantics.warp import ORDERED_WORKGROUP_BARRIER
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..CUDA.keyword_renames import source_identifier_names
+from ..CUDA.pointer_math_import import sine_cosine_statements
 from ..CUDA.reference_parameters import ReferenceParameters
 from ..import_refusals import HipImportRefused, ImportRefusalMixin
 from ..no_contraction import (
@@ -948,6 +949,12 @@ class HipToCrossGLConverter(
             return False
         if self.is_user_defined_function(stmt.name):
             return False
+
+        sine_cosine = sine_cosine_statements(self, stmt.name, stmt.args, UnaryOpNode)
+        if sine_cosine is not None:
+            for line in sine_cosine:
+                self.emit(line)
+            return True
 
         runtime_wrapper = self.format_hip_runtime_wrapper_expression(stmt)
         if runtime_wrapper is not None:

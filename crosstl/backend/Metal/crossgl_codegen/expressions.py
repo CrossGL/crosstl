@@ -22,8 +22,14 @@ from ..MetalAst import (
     TernaryOpNode,
     VariableNode,
 )
+from ..ordered_atomics import refuse_unfenced_atomic_call
 from ..sparse_color import METAL_SPARSE_TEXTURE_METHODS, import_sparse_color_member
 from ..static_member_calls import unresolved_static_member_call_owner
+from ..vote_masks import (
+    render_ballot_call,
+    render_vote_mask_conversion,
+    render_vote_mask_method,
+)
 from .support import (
     MetalDivisionProfileError,
     MetalStructMethodCallResolutionError,
@@ -187,6 +193,15 @@ class MetalExpressionMixin:
 
     def generate_function_call_expression(self, expr, is_main=False):
         """Render a Metal free function or constructor call as CrossGL syntax."""
+        if len(getattr(expr, "args", None) or ()) == 1:
+            vote_mask = render_vote_mask_conversion(
+                self, expr.name, expr.args[0], is_main
+            )
+            if vote_mask is not None:
+                return vote_mask
+        ballot = render_ballot_call(self, expr, is_main)
+        if ballot is not None:
+            return ballot
         filled_matrix = self.generate_metal_make_filled_matrix(expr, is_main)
         if filled_matrix is not None:
             return filled_matrix
@@ -266,6 +281,7 @@ class MetalExpressionMixin:
         )
         if sync_call is not None:
             return sync_call
+        refuse_unfenced_atomic_call(self, expr)
         atomic_call = self.metal_atomic_function_call(
             expr.name, expr.args, is_main, getattr(expr, "source_location", None)
         )
@@ -447,6 +463,9 @@ class MetalExpressionMixin:
 
     def generate_method_call_expression(self, expr, is_main=False):
         """Render a Metal method call as CrossGL syntax."""
+        vote_method = render_vote_mask_method(self, expr, is_main)
+        if vote_method is not None:
+            return vote_method
         sparse_member = import_sparse_color_member(self, expr, is_main)
         if sparse_member is not None:
             return sparse_member
@@ -710,6 +729,11 @@ class MetalExpressionMixin:
 
     def generate_cast_expression(self, expr, is_main=False):
         """Render a Metal cast expression as CrossGL syntax."""
+        vote_mask = render_vote_mask_conversion(
+            self, expr.target_type, expr.expression, is_main
+        )
+        if vote_mask is not None:
+            return vote_mask
         compound_literal = self.generate_metal_compound_literal(expr, is_main)
         if compound_literal is not None:
             return compound_literal
@@ -792,6 +816,12 @@ class MetalExpressionMixin:
 
     def generate_vector_constructor_expression(self, expr, is_main=False):
         """Render a Metal vector constructor as CrossGL syntax."""
+        if len(getattr(expr, "args", None) or ()) == 1:
+            vote_mask = render_vote_mask_conversion(
+                self, expr.type_name, expr.args[0], is_main
+            )
+            if vote_mask is not None:
+                return vote_mask
         profiled_constructor = self.generate_metal_half_widening_constructor(
             expr.type_name, expr.args, is_main
         )

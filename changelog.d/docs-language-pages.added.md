@@ -1,0 +1,1 @@
+The documentation has a page per language, written from the published coverage report each time the documentation is built. Each page gives the score and counts of every direction, the reference tool and runtime the probes were checked with, the pinned feature lists, the measured features per category and the gaps grouped by cause.

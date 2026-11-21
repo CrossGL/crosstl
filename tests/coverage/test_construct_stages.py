@@ -103,7 +103,18 @@ def test_tessellation_probes_state_each_languages_domain_spacing_and_patch_value
     crossgl = probes.build(
         construct_feature("hlsl", "tessellation-domain-quads"), "crossgl"
     ).source
-    assert "OutputPatch<ControlPoint, 4> patch) @domain(quad) {\n" in crossgl
+    # A domain probe states the tessellator modes too, so that GLSL output can write them on the evaluation shader.
+    assert (
+        "OutputPatch<ControlPoint, 4> patch) @domain(quad)\n"
+        "            @partitioning(integer) @outputtopology(triangle_ccw) {\n"
+    ) in crossgl
+    isolines = probes.build(
+        construct_feature("hlsl", "tessellation-domain-isolines"), "crossgl"
+    ).source
+    assert (
+        "@domain(isoline)\n            @partitioning(integer) @outputtopology(line) {\n"
+        in isolines
+    )
     crossgl = probes.build(
         construct_feature("hlsl", "tessellation-control-point-mode"), "crossgl"
     )
