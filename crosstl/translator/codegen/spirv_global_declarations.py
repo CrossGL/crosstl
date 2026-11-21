@@ -108,7 +108,9 @@ class SpirvGlobalDeclarationMixin:
         builtin_type = self.variable_value_types.get(builtin.id)
         if builtin_type is not None:
             self.validate_spirv_builtin_semantic_type(
-                semantic, self.crossgl_spelling_of_type(type_id), "interface declaration"
+                semantic,
+                self.crossgl_spelling_of_type(type_id),
+                "interface declaration",
             )
         return builtin
 

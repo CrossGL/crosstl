@@ -168,7 +168,9 @@ def test_pointer_to_a_whole_variable_cannot_move(tmp_path):
 
 
 def test_array_sample_mask_output_compiles_to_spirv(tmp_path):
-    assembly = crosstl.translate(_write(tmp_path, SAMPLE_MASK, "probe.cgl"), backend="vulkan")
+    assembly = crosstl.translate(
+        _write(tmp_path, SAMPLE_MASK, "probe.cgl"), backend="vulkan"
+    )
     assert "BuiltIn SampleMask" in assembly
     assert re.search(r"OpTypeArray %int %(int|uint)_1\b", assembly)
     _validate(tmp_path, assembly)

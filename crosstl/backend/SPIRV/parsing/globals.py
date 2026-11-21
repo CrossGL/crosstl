@@ -13,6 +13,7 @@ from ..ray_tracing_import import (
     SpirvInstructionUnsupportedError,
     ray_variable_locations,
 )
+from ..type_declaration_names import declarable_struct_name
 from ..VulkanAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -25,7 +26,6 @@ from ..VulkanAst import (
     UnaryOpNode,
     VariableNode,
 )
-from ..type_declaration_names import declarable_struct_name
 from ..workgroup_size_import import workgroup_size_component
 
 
