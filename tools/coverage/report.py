@@ -38,7 +38,6 @@ FEATURE_FILE = re.compile(r"features/[a-z0-9]+-[a-z]+\.json")
 # Directions CrossTL does not offer at all; the report lists them so a reader can tell "not offered" from 0 %.
 NOT_OFFERED = {
     ("opencl", "output"): "CrossTL has no OpenCL C generator",
-    ("webgl", "input"): "CrossTL has no WebGL source frontend",
     ("wgsl", "input"): "CrossTL has no WGSL source frontend",
 }
 

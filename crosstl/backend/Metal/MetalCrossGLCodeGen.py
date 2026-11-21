@@ -101,6 +101,7 @@ from .explicit_specialization_annotations import explicit_specialization_annotat
 from .external_functions import refuse_external_function_calls
 from .function_constants import import_function_constant_defaults
 from .library_structs import declare_referenced_library_structs
+from .intersection_import import MetalIntersectionImport
 from .mesh_import import MetalMeshImport
 from .MetalAst import *
 from .MetalLexer import *
@@ -196,6 +197,7 @@ class MetalToCrossGLConverter(
     MetalAlignmentSpecifiers,
     MetalBufferLayoutImport,
     MetalMeshImport,
+    MetalIntersectionImport,
     MetalPostTessellationImport,
     MetalProgramRenderingMixin,
     MetalConverterSetupMixin,
