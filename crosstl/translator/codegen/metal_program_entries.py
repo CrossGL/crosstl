@@ -56,6 +56,7 @@ from .metal_keyword_identifiers import (
 )
 from .metal_library_functions import rename_msl_library_functions
 from .metal_namespace_names import rename_metal_namespace_names
+from .metal_runtime_texture_arrays import lower_runtime_texture_arrays
 from .metal_safe_math import metal_safe_math_requested
 from .metal_specialization_constants import (
     metal_function_constant_type_refusal,
@@ -403,6 +404,7 @@ class MetalProgramEntryMixin:
         )
         ast = lower_byte_address_buffers(ast, self.refuse_lowering)
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
+        ast = lower_runtime_texture_arrays(ast)
         ast = canonicalize_separate_textures(ast, "Metal", depth_for_compares=True)
         ast = bind_combined_samplers(ast)
         validate_pointer_reinterpretation_target(ast, "metal")
