@@ -21,11 +21,13 @@ import posixpath
 import re
 from fnmatch import fnmatchcase
 
+from demos.integrations.mlx.ci_conditions import JOBS_OUTPUT
+
 MLX = "demos/integrations/mlx"
 MODULE = "demos.integrations.mlx"
-# A heavy job runs when the plan's ``legs`` output names it. Before that output
-# existed, the condition was ``HEAVY``, which a workflow change is compared with.
-LEGS_OUTPUT = "needs.ci-plan.outputs.legs"
+# A heavy job runs when the plan's ``jobs`` output names it (``job_condition``).
+# Before that output existed, the condition was ``HEAVY``, which a workflow
+# change is compared with.
 HEAVY = "needs.ci-plan.outputs.heavy == 'true'"
 EVERY_LEG = None
 # Python modules join a directory with further names before they open a file,
@@ -93,6 +95,14 @@ class PathIndex:
         if not folder:
             return set(self.paths)
         return {path for path in self.paths if path.startswith(folder + "/")}
+
+    def folder(self, name):
+        """Return the files below every MLX directory that ``name`` spells.
+
+        ``name`` may be a trailing part of a directory path, so ``kernels``
+        names the files below ``tests/kernels``.
+        """
+        return set(self._folders.get(name.strip("/"), ()))
 
     def module(self, dotted):
         """Return the files that importing a dotted module name executes."""
@@ -216,8 +226,11 @@ def python_references(path, source, index):
         return data_references(source, index)
     package = _package(path)
     assigned, listed, templates, held = {}, [], [], set()
-    strings, modules = [], []
+    strings, modules, joins = [], [], []
     for node in ast.walk(tree):
+        parts = _join_parts(node)
+        if parts is not None:
+            joins.append(parts)
         if id(node) in held:
             continue
         if isinstance(node, _SCOPES):
@@ -258,6 +271,8 @@ def python_references(path, source, index):
                 found |= set(index.paths)
             elif folder.startswith(MLX + "/"):
                 found |= index.under(relative)
+    for parts in joins:
+        found |= _joined_folder(parts, assigned, f"{MLX}/{path}", index)
     for pieces in templates:
         found |= index.template(pieces)
     for text in set(strings):
@@ -363,6 +378,78 @@ def _spell(node, assigned, module, depth=0):
                 joined = _join(joined, part)
             return joined
     return None
+
+
+_JOIN_CALLS = frozenset({"Path", "PurePath", "PurePosixPath", "join", "joinpath"})
+
+
+def _join_parts(node):
+    """Return the parts a path join expression joins, in order, or ``None``.
+
+    A join is ``left / right`` or a ``Path``, ``os.path.join`` or ``joinpath``
+    call with more than one part.
+    """
+    if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Div):
+        return (_join_parts(node.left) or [node.left]) + [node.right]
+    if not isinstance(node, ast.Call):
+        return None
+    function = node.func
+    name = (
+        function.attr
+        if isinstance(function, ast.Attribute)
+        else getattr(function, "id", "")
+    )
+    if name not in _JOIN_CALLS:
+        return None
+    parts = list(node.args)
+    if name == "joinpath" and isinstance(function, ast.Attribute):
+        parts.insert(0, function.value)
+    return parts if len(parts) > 1 else None
+
+
+def _joined_folder(parts, assigned, module, index):
+    """Return the files below an MLX folder that a join can complete to.
+
+    A join that reaches an MLX folder and continues with a part no string
+    spells, such as a variable or a template that names no file, can reach any
+    file below that folder: ``CONTRACTS / f"{name}.json"`` reads a contract
+    whose name only the caller knows. The folder is either the whole spelled
+    prefix, or, after a part such as a ``root`` parameter that cannot be
+    spelled, the constant parts that follow it when they name an MLX folder,
+    as ``"contracts"`` does in ``root / "contracts" / name``.
+    """
+    found, prefix, tail = set(), "", []
+    for part in parts:
+        spelled = _spell(part, assigned, module)
+        if spelled is not None:
+            prefix = None if prefix is None else _join(prefix, spelled)
+            tail.append(spelled)
+            continue
+        if _template_names_files(part, index):
+            # The template names the files this part can complete to.
+            prefix, tail = None, []
+            continue
+        if prefix:
+            folder = prefix.replace("\\", "/")
+            if folder == MLX or folder.startswith(MLX + "/"):
+                relative = _relative(folder)
+                return set(index.paths) if relative is None else index.under(relative)
+        if tail:
+            relative = _relative(posixpath.join(*tail))
+            if relative is None:
+                return set(index.paths)
+            found |= index.folder(relative)
+        prefix, tail = None, []
+    return found
+
+
+def _template_names_files(part, index):
+    """Report whether a formatted part names the files it can complete to."""
+    if isinstance(part, ast.JoinedStr) or (
+        isinstance(part, ast.BinOp) and isinstance(part.op, (ast.Add, ast.Mod))
+    ):
+        return bool(index.template(_template_pieces(part, set())))
+    return False
 
 
 def _join(left, right):
@@ -494,7 +581,7 @@ def workflow_legs(workflow):
     legs = {}
     for name, job in (workflow.get("jobs") or {}).items():
         condition = str(job.get("if", "")).strip()
-        if LEGS_OUTPUT not in condition and condition != HEAVY:
+        if condition != HEAVY and JOBS_OUTPUT not in condition:
             continue
         strategy = job.get("strategy") or {}
         matrix = strategy.get("matrix")
@@ -544,6 +631,28 @@ def _runs_for(step, entry):
 def job_of(leg):
     """Return the workflow job that runs a leg."""
     return leg.split("[", 1)[0]
+
+
+def selected_jobs(workflow, legs):
+    """Return the heavy jobs that must run for ``legs``, sorted.
+
+    A job runs when one of its legs is selected. A heavy job that another
+    selected job ``needs``, such as the one that builds the sources a
+    round-trip job downloads, runs as well: a job whose needs were skipped is
+    skipped itself, which would drop the selected leg without a failure.
+    """
+    jobs = workflow.get("jobs") or {}
+    heavy = {job_of(leg) for leg in workflow_legs(workflow)}
+    selected, stack = set(), sorted({job_of(leg) for leg in legs})
+    while stack:
+        name = stack.pop()
+        if name in selected:
+            continue
+        selected.add(name)
+        needs = (jobs.get(name) or {}).get("needs") or []
+        needs = [needs] if isinstance(needs, str) else needs
+        stack.extend(sorted(need for need in needs if need in heavy))
+    return sorted(selected)
 
 
 def changed_legs(before, after):

@@ -212,14 +212,24 @@ def main(argv=None):
             # which asks for every leg.
             change = (args.base, args.head, paths)
     legs = plan_legs(args.workflow, change) if plan["heavy"] else []
+    jobs = plan_jobs(args.workflow, legs)
     if args.output is not None:
         with args.output.open("a", encoding="utf-8") as output:
             output.writelines(
                 f"{name}={str(value).lower()}\n" for name, value in plan.items()
             )
             output.write(f"legs={json.dumps(legs)}\n")
-    print(json.dumps({**plan, "legs": len(legs)}, sort_keys=True))
+            output.write(f"jobs={json.dumps(jobs)}\n")
+    print(json.dumps({**plan, "legs": len(legs), "jobs": jobs}, sort_keys=True))
     return 0
+
+
+def plan_jobs(workflow, legs):
+    """Return the heavy jobs that run the selected legs, sorted (``ci_legs``)."""
+    if not legs:
+        return []
+    after = yaml.safe_load(Path(workflow).read_text(encoding="utf-8"))
+    return ci_legs.selected_jobs(after, legs)
 
 
 def plan_legs(workflow, change=None):

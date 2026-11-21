@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from demos.integrations.mlx import ci_legs, smoke_canary
+from demos.integrations.mlx import ci_conditions, ci_legs, smoke_canary
 from demos.integrations.mlx.ci_plan import (
     PLAN_JOB,
     _without_plan_job,
@@ -23,7 +23,8 @@ from demos.integrations.mlx.tests.test_ci_legs import TREE as DEMO_TREE
 
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github/workflows/demo-project-testing.yml"
-EVERY_LEG = sorted(ci_legs.workflow_legs(yaml.safe_load(WORKFLOW.read_text())))
+REAL_WORKFLOW = yaml.safe_load(WORKFLOW.read_text())
+EVERY_LEG = sorted(ci_legs.workflow_legs(REAL_WORKFLOW))
 
 
 @pytest.fixture(autouse=True)
@@ -33,16 +34,18 @@ def _planned_workflow(monkeypatch):
 
 
 def _outputs(path):
-    """Return the step outputs a plan wrote, with ``legs`` decoded."""
+    """Return the step outputs a plan wrote, with ``legs`` and ``jobs`` decoded."""
     outputs = dict(line.split("=", 1) for line in path.read_text().splitlines())
     outputs["legs"] = json.loads(outputs["legs"])
+    outputs["jobs"] = json.loads(outputs["jobs"])
     return outputs
 
 
 def _tier(heavy, smoke, legs=None):
     if legs is None:
         legs = EVERY_LEG if heavy == "true" else []
-    return {"heavy": heavy, "smoke": smoke, "legs": legs}
+    jobs = ci_legs.selected_jobs(REAL_WORKFLOW, legs) if legs else []
+    return {"heavy": heavy, "smoke": smoke, "legs": legs, "jobs": jobs}
 
 
 @pytest.mark.parametrize("event", ["pull_request", "push"])
@@ -132,6 +135,7 @@ def test_full_events_do_not_require_changed_paths(tmp_path, event, capsys):
         "heavy": True,
         "smoke": False,
         "legs": len(EVERY_LEG),
+        "jobs": sorted({ci_legs.job_of(leg) for leg in EVERY_LEG}),
     }
 
 
@@ -556,7 +560,7 @@ def test_every_heavy_job_obeys_the_full_tier():
         needs = job["needs"]
         assert "ci-plan" in (needs if isinstance(needs, list) else [needs]), name
         if name != "mlx-full-corpus-scout":
-            assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'", name
+            assert job["if"] == ci_conditions.job_condition(name), name
     assert workflow[True]["schedule"] == [{"cron": "31 4 * * *"}]
     plan = jobs["ci-plan"]
     tier = next(step for step in plan["steps"] if step.get("id") == "plan")
@@ -564,7 +568,8 @@ def test_every_heavy_job_obeys_the_full_tier():
         "${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}"
     )
     assert plan["runs-on"] == "ubuntu-24.04"
-    assert plan["outputs"].keys() == {"heavy", "smoke", "legs"}
+    assert plan["outputs"].keys() == {"heavy", "smoke", "legs", "jobs"}
+    assert plan["outputs"]["jobs"] == "${{ steps.plan.outputs.jobs }}"
     assert plan["outputs"]["legs"] == "${{ steps.plan.outputs.legs }}"
     checkout = next(
         step
