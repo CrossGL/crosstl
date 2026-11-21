@@ -1,9 +1,11 @@
 version: 2
 updates:
   - package-ecosystem: github-actions
-    # "/" covers .github/workflows; composite actions elsewhere are listed by directory.
+    # "/" covers .github/workflows; composite actions elsewhere are listed by
+    # directory (Dependabot accepts globs here).
     directories:
       - /
+      - /.github/actions/*
       - /demos/integrations/mlx/actions/upload-evidence
     schedule:
       interval: weekly
