@@ -28,7 +28,7 @@ from .opaque_structs import _is_opaque
 
 __all__ = ["ComputeEntryResourceError", "TARGETS", "hoist_compute_entry_resources"]
 
-TARGETS = frozenset({"slang"})
+TARGETS = frozenset({"slang", "wgsl"})
 
 
 class ComputeEntryResourceError(TranslationDiagnostic):

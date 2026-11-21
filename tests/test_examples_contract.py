@@ -73,11 +73,6 @@ MOJO_PLACEHOLDER_MARKERS = (
 )
 MOJO_PLACEHOLDER_EXAMPLE_CASES = (
     (
-        "compute/ParticleSimulation.cgl",
-        "mojo",
-        ("# CrossGL synchronization placeholders",),
-    ),
-    (
         "cross_platform/UniversalPBRShader.cgl",
         "mojo",
         ("# CrossGL resource placeholders",),
@@ -86,6 +81,27 @@ MOJO_PLACEHOLDER_EXAMPLE_CASES = (
         "graphics/ComplexShader.cgl",
         "mojo",
         ("# CrossGL resource placeholders",),
+    ),
+)
+# Mojo has no global variables, and a storage block declared outside a function is not a kernel argument yet
+# (#2338), so Mojo output refuses these examples and names the declaration.
+MOJO_MODULE_VARIABLE_EXAMPLE_REFUSALS = (
+    ("compute/ParticleSimulation.cgl", "mojo", "particle_buffer: ParticleBuffer"),
+)
+# Rust output writes rust-gpu kernels and refuses, by construct, what rust-gpu cannot express yet: constant
+# buffers (no std140 uniform-block lowering), uniform structs whose std140 offsets differ from the #[repr(C)] glam
+# layout, storage blocks declared outside an entry point, buffer pointers passed to helpers and warp shuffles.
+RUST_EXAMPLE_REFUSALS = (
+    ("advanced/ArrayTest.cgl", "rust", "constant buffers are not lowered"),
+    (
+        "compute/ParticleSimulation.cgl",
+        "rust",
+        "is not lowered to a rust-gpu entry-point parameter",
+    ),
+    (
+        "gpu_computing/MatrixMultiplication.cgl",
+        "rust",
+        "'__shfl_down_sync' has no rust-gpu lowering",
     ),
 )
 MOJO_PLACEHOLDER_EXAMPLE_CASE_KEYS = {
@@ -100,6 +116,10 @@ FULL_BACKEND_EXAMPLE_CASES = tuple(
     and (relative_path, backend) not in CUDA_WARP_EXAMPLE_DIAGNOSTICS
     and (relative_path, backend) not in MOJO_WARP_EXAMPLE_REFUSALS
     and (relative_path, backend) not in MOJO_PLACEHOLDER_EXAMPLE_CASE_KEYS
+    and (relative_path, backend)
+    not in {(path, name) for path, name, _ in MOJO_MODULE_VARIABLE_EXAMPLE_REFUSALS}
+    and (relative_path, backend)
+    not in {(path, name) for path, name, _ in RUST_EXAMPLE_REFUSALS}
     and (relative_path, backend) not in KERNEL_ONLY_EXAMPLE_REFUSALS
 )
 
@@ -264,6 +284,30 @@ def test_mojo_warp_examples_report_typed_refusals(relative_path, backend):
         )
     assert raised.value.code == "project.translate.mojo-refused"
     assert "warp" in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    "relative_path,backend,declaration", MOJO_MODULE_VARIABLE_EXAMPLE_REFUSALS
+)
+def test_mojo_module_variable_examples_report_typed_refusals(
+    relative_path, backend, declaration
+):
+    with pytest.raises(TranslationDiagnostic) as raised:
+        crosstl.translate(
+            str(_example_path(relative_path)), backend=backend, format_output=False
+        )
+    assert raised.value.code == "project.translate.mojo-refused"
+    assert f"declared outside a function ({declaration})" in str(raised.value)
+
+
+@pytest.mark.parametrize("relative_path,backend,construct", RUST_EXAMPLE_REFUSALS)
+def test_rust_examples_report_typed_refusals(relative_path, backend, construct):
+    with pytest.raises(TranslationDiagnostic) as raised:
+        crosstl.translate(
+            str(_example_path(relative_path)), backend=backend, format_output=False
+        )
+    assert raised.value.code == "project.translate.rust-lowering-unsupported"
+    assert construct in str(raised.value)
 
 
 @pytest.mark.parametrize(

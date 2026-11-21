@@ -8,6 +8,9 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Nightly, the installed package is checked on every operating system and Python version.
+  schedule:
+    - cron: "11 5 * * *"
   workflow_dispatch:
   merge_group:
 
@@ -27,6 +30,7 @@ jobs:
       actions: read
     outputs:
       versions: ${{ steps.select.outputs.versions }}
+      install-legs: ${{ steps.select.outputs.install-legs }}
       tested: ${{ steps.queue.outputs.tested }}
     steps:
       - name: Check whether the merge queue tested this commit
@@ -50,12 +54,29 @@ jobs:
           FULL_PYTHON_VERSIONS: '["3.11", "3.12", "3.13", "3.14", "3.15"]'
           PULL_REQUEST_PYTHON_VERSIONS: '["3.11", "3.15"]'
           FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          # The installed package is checked on every operating system with every
+          # supported version nightly, on dispatch and with ci:full; pull requests
+          # and merge groups check each operating system with the oldest or the
+          # newest version.
+          EVERY_INSTALL: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          INSTALL_LEGS: >-
+            [{"os": "ubuntu-latest", "python-version": "3.11"},
+            {"os": "ubuntu-latest", "python-version": "3.15"},
+            {"os": "macOS-latest", "python-version": "3.11"},
+            {"os": "windows-latest", "python-version": "3.15"}]
         run: |
           if [ "$FULL" = "true" ]; then
             echo "versions=$FULL_PYTHON_VERSIONS" >> "$GITHUB_OUTPUT"
           else
             echo "versions=$PULL_REQUEST_PYTHON_VERSIONS" >> "$GITHUB_OUTPUT"
           fi
+          if [ "$EVERY_INSTALL" = "true" ]; then
+            legs=$(jq -c -n --argjson versions "$FULL_PYTHON_VERSIONS" \
+              '[("ubuntu-latest", "macOS-latest", "windows-latest") as $os | $versions[] | {os: $os, "python-version": .}]')
+          else
+            legs=$(jq -c -n --argjson legs "$INSTALL_LEGS" '$legs')
+          fi
+          echo "install-legs=$legs" >> "$GITHUB_OUTPUT"
 
   test-examples:
     name: Examples - Python ${{ matrix.python-version }} on ${{ matrix.os }}
@@ -96,11 +117,45 @@ jobs:
         run: python examples/test.py
         shell: bash
 
+  installed-package:
+    name: Installed package - Python ${{ matrix.python-version }} on ${{ matrix.os }}
+    needs: python-versions
+    if: needs.python-versions.outputs.tested != 'true'
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.python-versions.outputs.install-legs) }}
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # No pip cache: the clean environment installs only the wheel and its one
+      # dependency, as a new user's would.
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build the wheel
+        run: python -m pip wheel . --no-deps --wheel-dir "$RUNNER_TEMP/dist"
+        shell: bash
+
+      # tools/install_smoke.py installs the wheel in a new virtual environment
+      # without any native validator, then runs the README quickstart and
+      # `crosstl shader.metal -o shader.hlsl` from an empty directory.
+      - name: Run the documented commands from a clean install
+        run: python tools/install_smoke.py "$RUNNER_TEMP/dist"
+        shell: bash
+
   result:
     # The one check per workflow that branch protection and the merge queue require.
     name: Examples Test result
     if: always()
-    needs: [python-versions, test-examples]
+    needs: [python-versions, test-examples, installed-package]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

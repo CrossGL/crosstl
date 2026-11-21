@@ -67,7 +67,7 @@ def test_user_overload_return_type_precedes_builtin(tmp_path):
         compute { void main() {} }
     }"""
     generated = HLSLCodeGen().generate(parse(source))
-    assert "float4 result = float4(sin(value), sin(value));" in generated
+    assert "float4 result = float4(sin_fn(value), sin_fn(value));" in generated
     assert_directx_compute_validates_if_available(generated, tmp_path)
 
 

@@ -37,6 +37,7 @@ from ..standard_constants import standard_math_constant
 from .builtin_type_names import BUILTIN_TYPE_NAMES
 from .declared_types import dead_function_ids, declared_type_names
 from .rewrite import child_slots, get_child
+from .work_graph_nodes import BARRIER_FLAGS
 
 __all__ = [
     "UndeclaredIdentifierError",
@@ -111,6 +112,7 @@ def _is_builtin_value(name):
         name in _LANGUAGE_VALUES
         or name in _FENCE_ARGUMENTS
         or name in RAY_FLAG_CONSTANTS
+        or name in BARRIER_FLAGS
         or name.startswith("gl_")
         or standard_math_constant(name) is not None
         or float_limit_constant(name) is not None

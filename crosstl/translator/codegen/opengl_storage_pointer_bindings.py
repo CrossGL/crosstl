@@ -39,6 +39,25 @@ from .pointer_reinterpret import (
 from .storage_pointer_local_aliases import bind_local_storage_pointers
 from .storage_word_views import reinterpret_source_layout
 
+_WORKGROUP_VIEW_SPACES = (None, "threadgroup", "workgroup", "shared", "groupshared")
+_VIEW_TYPE_QUALIFIERS = {"const", "volatile", "threadgroup", "restrict"}
+
+
+def _same_view_element_type(source_type, view_type):
+    """Whether a pointer view of ``view_type`` keeps the ``source_type`` elements unchanged."""
+    source_layout = scalar_storage_layout(source_type)
+    view_layout = scalar_storage_layout(view_type)
+    if source_layout is not None or view_layout is not None:
+        return source_layout == view_layout
+
+    def unqualified(type_name):
+        words = str(type_name or "").split()
+        return " ".join(word for word in words if word not in _VIEW_TYPE_QUALIFIERS)
+
+    return bool(unqualified(source_type)) and unqualified(source_type) == unqualified(
+        view_type
+    )
+
 
 class OpenGLStoragePointerBindingMixin:
     """Storage pointer binding members of ``GLSLCodeGen``."""
@@ -536,6 +555,11 @@ class OpenGLStoragePointerBindingMixin:
         if intervals is None:
             intervals = getattr(expression, "_glsl_control_flow_intervals", None)
 
+        if isinstance(expression, PointerReinterpretNode):
+            return self.glsl_workgroup_pointer_view_binding(
+                expression, aliases, intervals
+            )
+
         if isinstance(expression, ArrayAccessNode):
             binding = self.glsl_workgroup_pointer_binding(
                 expression.array, aliases, intervals
@@ -647,6 +671,36 @@ class OpenGLStoragePointerBindingMixin:
             return binding
 
         return None
+
+    def glsl_workgroup_pointer_view_binding(self, expression, aliases, intervals):
+        """The binding of ``(threadgroup T*)tile`` when ``T`` is the element type of ``tile``.
+
+        Such a view is the shared array itself. GLSL cannot alias a ``shared`` array, so a view that changes the
+        element type is refused instead of reading the array's values as another type.
+        """
+        target_type = getattr(expression, "target_type", None)
+        if getattr(target_type, "address_space", None) not in _WORKGROUP_VIEW_SPACES:
+            return None
+        binding = self.glsl_workgroup_pointer_binding(
+            expression.expression, aliases, intervals
+        )
+        if binding is None:
+            return None
+        view_type = self.type_name_string(getattr(target_type, "pointee_type", None))
+        source_type = binding.get("source_element_type") or binding.get("element_type")
+        if _same_view_element_type(source_type, view_type):
+            return binding
+        raise PointerReinterpretationError(
+            f"OpenGL cannot view the {source_type} workgroup array "
+            f"'{binding.get('root')}' through a {view_type} pointer: a GLSL "
+            "shared array has one element type and cannot be aliased",
+            source_type=source_type,
+            target_type=view_type,
+            address_space="workgroup",
+            target_backend="opengl",
+            reason="workgroup-view-type-change",
+            source_location=getattr(expression, "source_location", None),
+        )
 
     def glsl_storage_pointer_binding(self, expression, aliases):
         if expression is None:

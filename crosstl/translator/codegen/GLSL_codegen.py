@@ -115,6 +115,7 @@ from .generic_struct_utils import (
     infer_struct_constructor_type,
 )
 from .glsl_builtin_extensions import require_builtin_extensions
+from .glsl_compute_derivative_groups import compute_derivative_group_layout
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_exact_lookups import glsl_call_names_resolving_to
@@ -148,6 +149,7 @@ from .glsl_stage_entries import refuse_repeated_stage_entries
 from .glsl_stage_input_values import stage_input_struct_value_declarations
 from .glsl_stage_output_values import (
     flattened_stage_output_assignment,
+    refuse_unwritten_entry_return,
     render_flattened_stage_output_store,
     render_stage_struct_value_return,
 )
@@ -8739,6 +8741,9 @@ class GLSLCodeGen(
         is_native_stage_entry = (entry_name or "main") == "main"
         if shader_type in {"compute", "mesh", "task"} and is_native_stage_entry:
             code += self.generate_compute_layout(execution_config)
+            code += compute_derivative_group_layout(
+                self, shader_type, stage_layout_qualifiers, execution_config
+            )
 
         if shader_type in stage_entry_types:
             code += f"void {entry_name or 'main'}() {{\n"
@@ -9285,6 +9290,7 @@ class GLSLCodeGen(
                         + distance_output_epilogue(self, indent_str)
                         + f"{indent_str}return;\n"
                     )
+                refuse_unwritten_entry_return(self, stmt.value)
                 value = self.generate_expression_with_expected(stmt.value, None)
                 return (
                     self.generate_glsl_statement_code(value, indent)

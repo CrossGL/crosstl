@@ -1061,6 +1061,74 @@ def _width_check(inp, out, group=64, divergent=False):
     return bad == 0, {"width": int(w), "mismatches": bad, "n": len(x)}
 
 
+def _partition_check(inp, out, group=64):
+    """Oracle for GL_NV_shader_subgroup_partitioned over the partitions of the lanes whose keys ``x & 3`` agree.
+
+    Within each subgroup (consecutive chunks of the reported width w within each workgroup), the lanes whose inputs
+    agree in their low two bits form a partition. A reduction covers the lane's partition, an inclusive scan the
+    partition's lanes up to the lane and an exclusive one those below it; the exclusive max of the first lane is the
+    smallest int, the identity of max.
+    """
+    out = out.astype(np.int64).reshape(-1, 8)
+    widths = set(out[:, 7].tolist())
+    if len(widths) != 1:
+        return False, {"reason": f"non-uniform reported width {sorted(widths)[:5]}"}
+    w = widths.pop()
+    if w <= 0:
+        return False, {"reason": f"reported width {w}"}
+    x = inp.astype(np.int64)
+    bad = 0
+    for i in range(len(x)):
+        t0 = (i // group) * group
+        g0 = t0 + ((i - t0) // w) * w
+        g1 = min(g0 + w, t0 + group)
+        lanes = [j for j in range(g0, g1) if (x[j] & 3) == (x[i] & 3)]
+        part = [int(x[j]) for j in lanes]
+        below = [int(x[j]) for j in lanes if j < i]
+        upto = below + [int(x[i])]
+        xor = 0
+        for value in part:
+            xor ^= value
+        want = (
+            sum(part),
+            min(part),
+            max(part),
+            xor,
+            min(upto),
+            max(below) if below else -(2**31),
+            sum(upto),
+        )
+        bad += int(any(out[i, k] != want[k] for k in range(7)))
+    return bad == 0, {"width": int(w), "mismatches": bad, "n": len(x)}
+
+
+def _rotation_check(inp, out, group=64):
+    """Oracle for GL_KHR_shader_subgroup_rotate in subgroups of the reported width w within each workgroup.
+
+    Lane ``l`` of a subgroup reads lane ``(l + 3) % w`` for ``subgroupRotate(x, 3u)``, lane ``(l + w - 1) % w`` for
+    ``subgroupRotate(x, w - 1u)``, and lane ``(l & ~3) + ((l + 1) & 3)`` for ``subgroupClusteredRotate(x, 1u, 4u)``.
+    """
+    out = out.astype(np.int64).reshape(-1, 4)
+    widths = set(out[:, 3].tolist())
+    if len(widths) != 1:
+        return False, {"reason": f"non-uniform reported width {sorted(widths)[:5]}"}
+    w = widths.pop()
+    if w < 4 or w > group or w & (w - 1):
+        return False, {"reason": f"reported width {w}"}
+    x = inp.astype(np.int64)
+    bad = 0
+    for i in range(len(x)):
+        g0 = (i // w) * w
+        lane = i - g0
+        want = (
+            x[g0 + (lane + 3) % w],
+            x[g0 + (lane & ~3) + ((lane + 1) & 3)],
+            x[g0 + (lane + w - 1) % w],
+        )
+        bad += int(any(out[i, k] != want[k] for k in range(3)))
+    return bad == 0, {"width": int(w), "mismatches": bad, "n": len(x)}
+
+
 RNG = np.random.default_rng(20261016)
 SMALL = RNG.integers(-1000, 1000, 128).astype(np.int32)
 R_SIN = np.concatenate([RNG.uniform(-1e5, 1e5, 48), RNG.uniform(-10, 10, 16)]).astype(
@@ -2207,6 +2275,30 @@ CASES = [
         out_count=256,
         check=lambda i, o: _width_check(i, o),
         readings=BOTH,
+    ),
+    Case(
+        "g_partitioned_waves",
+        "H13",
+        "partitioned add, min, max and xor reductions and min, max and add scans",
+        "GL_NV_shader_subgroup_partitioned: operations over the active lanes of the partition a ballot names",
+        SMALL,
+        np.int32,
+        None,
+        threads=128,
+        out_count=1024,
+        check=lambda i, o: _partition_check(i, o),
+    ),
+    Case(
+        "g_wave_rotations",
+        "H13",
+        "subgroup rotations over the subgroup and within clusters of four lanes",
+        "GL_KHR_shader_subgroup_rotate: lane (id + delta) mod the subgroup or cluster size",
+        SMALL,
+        np.int32,
+        None,
+        threads=128,
+        out_count=512,
+        check=lambda i, o: _rotation_check(i, o),
     ),
     Case(
         "m_simd_divergent",

@@ -39,5 +39,16 @@ jobs:
           pip install -e .
           pip install -r docs/requirements.txt
 
+      # coverage_pages writes one page per language from the report the Coverage workflow publishes.
+      - name: Check out the published coverage report
+        uses: actions/checkout@v7
+        with:
+          ref: coverage
+          path: published-coverage
+          persist-credentials: false
+
       - name: Build Sphinx HTML
+        env:
+          CROSSTL_COVERAGE: ${{ github.workspace }}/published-coverage
+          CROSSTL_COVERAGE_REQUIRED: "1"
         run: make -C docs html
