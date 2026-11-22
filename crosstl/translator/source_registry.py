@@ -366,8 +366,8 @@ HIP_ARTIFACT_UNSUPPORTED_MESSAGE = (
     "(.hip) first."
 )
 WGSL_SOURCE_UNSUPPORTED_MESSAGE = (
-    "WGSL/WebGPU source files (.wgsl, .wesl) are not supported yet; provide a "
-    "registered CrossGL or native backend source file first."
+    "WESL source files (.wesl) and WGSL JSON artifacts (.wgsl.json) are not "
+    "supported; provide the WGSL module (.wgsl) itself."
 )
 WEBGL_SOURCE_UNSUPPORTED_MESSAGE = (
     "WebGL target files (.webgl.glsl) are not read as source by their extension; "
@@ -479,6 +479,12 @@ def _load_spirv():
     from crosstl.backend.SPIRV import VulkanLexer, VulkanParser
 
     return VulkanLexer, VulkanParser
+
+
+def _load_wgsl():
+    from crosstl.backend.WGSL import WgslLexer, WgslParser
+
+    return WgslLexer, WgslParser
 
 
 def _load_mojo():
@@ -687,6 +693,12 @@ def _reverse_spirv():
     return VulkanToCrossGLConverter()
 
 
+def _reverse_wgsl():
+    from crosstl.backend.WGSL.WgslCrossGLCodeGen import WgslToCrossGLConverter
+
+    return WgslToCrossGLConverter()
+
+
 def _reverse_mojo():
     from crosstl.backend.Mojo.MojoCrossGLCodeGen import MojoToCrossGLConverter
 
@@ -829,8 +841,16 @@ def register_default_sources() -> None:
     for ext in (".ptx", ".cubin", ".fatbin"):
         _register_unsupported_extension(ext, CUDA_ARTIFACT_UNSUPPORTED_MESSAGE)
     _register_unsupported_extension(".hsaco", HIP_ARTIFACT_UNSUPPORTED_MESSAGE)
-    for ext in (".wgsl", ".wesl"):
-        _register_unsupported_extension(ext, WGSL_SOURCE_UNSUPPORTED_MESSAGE)
+    _register(
+        SourceSpec(
+            name="wgsl",
+            extensions=(".wgsl",),
+            load_lexer_parser=_load_wgsl,
+            reverse_codegen_factory=_reverse_wgsl,
+            aliases=("wgsl", "webgpu"),
+        )
+    )
+    _register_unsupported_extension(".wesl", WGSL_SOURCE_UNSUPPORTED_MESSAGE)
     _register(
         SourceSpec(
             name="mojo",

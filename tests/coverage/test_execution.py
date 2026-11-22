@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
@@ -7,7 +9,7 @@ from tools.coverage import (
     execution,
     probes,
 )
-from tools.coverage.model import Feature, Param, Result, Signature, Type
+from tools.coverage.model import PAIR, Feature, Param, Result, Signature, Type
 
 from .execution_cases import (
     NATIVE,
@@ -109,6 +111,53 @@ def test_spirv_inputs_are_the_storage_buffers_by_binding_and_scalar_type():
     assert not runs(_module(("fin", "half"), named=True))
     assert not execution.executable(
         Result(spirv, "input", "supported", sources=(_module(("half",), True),) * 2)
+    )
+
+
+def test_a_cell_runs_a_translation_that_renames_the_probe_inputs():
+    # SPIR-V input names a buffer after its variable, which glslang leaves unnamed, so the GLSL translation of a
+    # SPIR-V probe reads `_` where the probe's block member is `fin`.
+    spirv = Feature("spirv", "function", "Ceil", SIN.signature)
+    native = _module(("fin",), named=True)
+    renamed = "layout(std430, binding = 0) buffer _Buffer { float _[]; };\nvoid main() { outp[0] = _[0]; }\n"
+    cell = Result(spirv, PAIR, "supported", sources=(native, renamed), into="glsl")
+    assert execution.executable(cell)
+    # A row keeps comparing the names in its sources, and a cell still needs a native probe with inputs to fill.
+    assert not execution.executable(replace(cell, into=""))
+    assert not execution.executable(
+        replace(cell, sources=(_module(("half",), True), renamed))
+    )
+    # A cell with an end that does not lower to SPIR-V never runs, so it is not executable on renamed inputs.
+    assert not execution.executable(replace(cell, into="metal"))
+
+
+def test_a_cell_compares_the_inputs_its_two_modules_bind():
+    native = _module(("fin", "iin"), named=True)
+    assert execution.bound_inputs([native, _module(("fin", "iin"), False)]) == ""
+    assert execution.bound_inputs([native, _module(("iin", "fin"), True)]) == (
+        "its translation binds the inputs (iin, fin) where its native probe binds (fin, iin)"
+    )
+    assert execution.bound_inputs([native, _module((), True)]) == (
+        "its translation binds the inputs (none) where its native probe binds (fin, iin)"
+    )
+
+
+def test_a_cell_whose_lowered_translation_binds_other_inputs_does_not_run(
+    monkeypatch, tmp_path
+):
+    modules = {"spirv": _module(("fin",), True), "glsl": _module(("iin",), True)}
+    monkeypatch.setattr(execution, "as_spirv", lambda language, _: modules[language])
+    spirv = Feature("spirv", "function", "Ceil", SIN.signature)
+    cell = Result(
+        spirv, PAIR, "supported", sources=(modules["spirv"], "glsl"), into="glsl"
+    )
+    assert execution._execute("spirv", [(0, cell)], {}, tmp_path, True) == (
+        {},
+        {
+            0: (
+                "its translation binds the inputs (iin) where its native probe binds (fin)"
+            )
+        },
     )
 
 
