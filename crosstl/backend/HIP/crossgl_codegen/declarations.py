@@ -139,8 +139,7 @@ class HipDeclarationMixin:
                 node,
                 output_name,
                 var_type,
-                self.global_resource_binding_for(node),
-                "HIP",
+                lambda: self.global_resource_binding_for(node),
             )
             if declaration is not None:
                 if "__managed__" in qualifiers:
