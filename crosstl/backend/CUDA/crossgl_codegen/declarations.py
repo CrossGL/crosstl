@@ -246,8 +246,7 @@ class CudaImportDeclarationMixin:
                 node,
                 output_name,
                 var_type,
-                self.allocate_global_resource_binding(),
-                "CUDA",
+                self.allocate_global_resource_binding,
             )
             if declaration is not None:
                 self.emit(declaration)

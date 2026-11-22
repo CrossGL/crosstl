@@ -145,8 +145,8 @@ FULL = _node(
     members="uvec3 grid @ SV_DispatchGrid;\n        uint value;",
 )
 
+# Targets without node shaders; HLSL output writes them (tests/test_translator/test_hlsl_work_graph_nodes.py).
 ALL_TARGETS = [
-    "directx",
     "metal",
     "opengl",
     "vulkan",

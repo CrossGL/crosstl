@@ -158,6 +158,53 @@ def test_fetch_downloads_the_report_and_every_file_it_names(tmp_path):
     assert docs.pages(data, {}) == docs.pages(_with_cell(), {})
 
 
+def test_a_language_page_lists_the_cells_it_is_the_source_or_target_of():
+    data = _with_cell()
+    data["matrix"] = {"commit": "f" * 40, "date": "2026-11-21T02:00:00Z"}
+    empty = {**data["pairs"][0], "target": "crossgl", "features": [], "score": None}
+    data["pairs"].append(empty)
+    files = docs.pages(data, {})
+    row = "| GLSL | WGSL | [100.0 %]({}pairs/glsl-to-wgsl.md) | 1 | 0 | 0 | 0 | compile-only |"
+    for language in ("glsl", "wgsl"):
+        section = files[f"{language}.md"].split("## Translation pairs", 1)[1]
+        section = section.split("## Gaps", 1)[0]
+        assert "measured on commit [`fffffff`]" in section
+        assert (
+            row.format("https://github.com/CrossGL/crosstl/blob/coverage/") in section
+        )
+        # A cell of two languages that share no feature has no page, so it is not listed.
+        assert "CrossGL IR" not in section
+    assert "## Translation pairs" not in files["crossgl.md"]
+    github = docs.pages(data, {}, github=True)["wgsl.md"]
+    assert row.format("../") in github
+
+
+def test_the_github_pages_need_no_myst():
+    files = docs.pages(_data(), {"glsl": "backends/glsl"}, "fork/crosstl", github=True)
+    assert sorted(files) == ["crossgl.md", "glsl.md", "index.md", "wgsl.md"]
+    for text in files.values():
+        assert text.startswith(docs.GITHUB_HEADER + "\n")
+        assert "{doc}" not in text and "{toctree}" not in text
+        assert docs.COVERAGE_MD not in text
+    assert "| [GLSL](glsl.md) | 75.0 % | 100.0 % |" in files["index.md"]
+    assert "[COVERAGE.md](../COVERAGE.md)" in files["index.md"]
+    assert (
+        "The [backend guide](https://github.com/fork/crosstl/blob/main/docs/source/backends/glsl.rst) "
+        "describes how CrossTL translates GLSL." in files["glsl.md"]
+    )
+    # The rest of the page is the one the documentation builds.
+    sphinx = docs.pages(_data(), {"glsl": "backends/glsl"}, "fork/crosstl")["glsl.md"]
+    assert (
+        files["glsl.md"].split("| Direction |", 1)[1]
+        == sphinx.split("| Direction |", 1)[1]
+    )
+
+
+def test_guides_name_the_backend_guides_of_this_checkout():
+    found = docs.guides(docs.DOCS_SOURCE, ["glsl", "hlsl", "opencl", "crossgl"])
+    assert found == {"glsl": "backends/glsl", "hlsl": "backends/directx"}
+
+
 @pytest.mark.parametrize(
     "name",
     [

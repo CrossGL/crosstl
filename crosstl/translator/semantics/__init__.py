@@ -119,6 +119,10 @@ from .hlsl_stage_interfaces import (
 from .hlsl_tess_factors import TessFactorUnsupportedError, fit_tess_factors_to_domain
 from .hlsl_unsigned_system_values import deliver_unsigned_system_values
 from .implicit_lod import ImplicitLodStageUnsupportedError, legalize_implicit_lod
+from .initializer_shapes import (
+    InitializerShapeMismatchError,
+    refuse_initializer_shape_mismatches,
+)
 from .integer_math import IntegerMathError, lower_integer_math
 from .interface_block_instances import (
     InterfaceBlockInstanceUnsupportedError,
@@ -313,6 +317,7 @@ __all__ = [
     "HlslRayPayloadUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
+    "InitializerShapeMismatchError",
     "IntegerMathError",
     "InterfaceBlockInstanceUnsupportedError",
     "IntersectionResultUnsupportedError",
@@ -585,6 +590,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     orient_row_major_struct_members(program, report.target)
     resolve_static_assertions(program, report.target)
     zero_empty_scalar_initializers(program, report.target)
+    refuse_initializer_shape_mismatches(program, report.source, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_float_relations(program, report.target)
     lower_enum_values(program, report.target)
