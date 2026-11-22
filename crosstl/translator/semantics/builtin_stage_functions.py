@@ -70,7 +70,7 @@ def refuse_misplaced_builtin_functions(program, target) -> int:
                 function_name = getattr(function, "name", "")
                 raise BuiltinValueUnsupportedError(
                     f"{name} in '{function_name}' of the {stage_name} stage is unavailable in GLSL; "
-                    f"GL_KHR_shader_subgroup makes it available only in the {allowed} stages",
+                    f"GLSL declares it only in the {allowed} stages",
                     target_name,
                 )
 

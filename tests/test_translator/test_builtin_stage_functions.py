@@ -3,6 +3,11 @@
 import pytest
 
 import crosstl
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
+from crosstl.translator.semantics.builtin_stage_functions import (
+    refuse_misplaced_builtin_functions,
+)
 from crosstl.translator.semantics.builtin_values import BuiltinValueUnsupportedError
 
 FRAGMENT = """shader Probe {
@@ -116,12 +121,6 @@ def test_other_subgroup_barriers_remain_available_in_fragment(tmp_path, name):
     assert f"{name}();" in output
 
 
-def test_stage_restriction_does_not_apply_to_non_glsl_targets(tmp_path):
-    from crosstl.translator.lexer import Lexer
-    from crosstl.translator.parser import Parser
-    from crosstl.translator.semantics.builtin_stage_functions import (
-        refuse_misplaced_builtin_functions,
-    )
-
+def test_stage_restriction_does_not_apply_to_non_glsl_targets():
     program = Parser(Lexer(FRAGMENT).get_tokens()).parse()
     assert refuse_misplaced_builtin_functions(program, "metal") == 0
