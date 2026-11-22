@@ -40,6 +40,9 @@ from .wgsl_matrix_inverse import (
 from .wgsl_matrix_resize import (
     wgsl_matrix_resize_helpers,
 )
+from .wgsl_nan_aware_min_max import (
+    wgsl_nan_aware_min_max_helpers,
+)
 from .wgsl_pointer_locals import addressable_module_names
 from .wgsl_primitive_index import (
     PRIMITIVE_INDEX_ENABLE_DIRECTIVE,
@@ -113,6 +116,7 @@ class WGSLProgramSectionMixin:
         self._frexp_modf_helpers = {}
         self._matrix_inverse_helpers = {}
         self._matrix_resize_helpers = {}
+        self._nan_aware_min_max_helpers = {}
         self._uniform_registers = None
         self._half_conversion_helpers = {}
         self._constant_values = {}
@@ -471,6 +475,9 @@ class WGSLProgramSectionMixin:
         matrix_resize_helpers = wgsl_matrix_resize_helpers(self)
         if matrix_resize_helpers:
             emitted_sections.append(matrix_resize_helpers)
+        nan_aware_min_max_helpers = wgsl_nan_aware_min_max_helpers(self)
+        if nan_aware_min_max_helpers:
+            emitted_sections.append(nan_aware_min_max_helpers)
         uniform_register_helpers = wgsl_uniform_register_helpers(self)
         if uniform_register_helpers:
             emitted_sections.append(uniform_register_helpers)
