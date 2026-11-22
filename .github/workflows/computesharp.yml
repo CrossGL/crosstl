@@ -1,9 +1,11 @@
 name: ComputeSharp Port Testing
 
-# Pull requests, merge-queue groups and pushes to main always start this
-# workflow, so its result check can be required. The plan job skips the port's
-# jobs when an event changes nothing the port depends on: the demo, this
-# workflow, packaging and the CrossTL modules its HLSL translation imports
+# Pull requests and pushes to main always start this workflow. Its result
+# check is not required, so a merge-queue run could not hold a pull request
+# back and would only take Windows and macOS runners; the push to main tests
+# the commit that landed instead. The plan job skips the port's jobs when an
+# event changes nothing the port depends on: the demo, this workflow, packaging
+# and the CrossTL modules its HLSL translation imports
 # (demos/integrations/computesharp/ci_plan.py; tests/test_workflow.py keeps
 # those paths in step with the modules a translation actually loads). A change
 # confined to the published records (README.md, results.json) runs only the
@@ -13,14 +15,13 @@ on:
     branches: [main]
   push:
     branches: [main]
-  merge_group:
   workflow_dispatch:
 
 permissions:
   contents: read
 
-# A new push replaces the pull request's superseded run; main, merge-queue and
-# dispatched runs use their unique run IDs and always finish.
+# A new push replaces the pull request's superseded run; main and dispatched
+# runs use their unique run IDs and always finish.
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -34,12 +35,10 @@ jobs:
   plan:
     name: ComputeSharp validation plan
     permissions:
-      actions: read
       contents: read
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
-      tested: ${{ steps.queue.outputs.tested }}
       execute: ${{ steps.plan.outputs.execute }}
       run: ${{ steps.plan.outputs.run }}
     steps:
@@ -47,29 +46,6 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
-      - name: Check whether the merge queue tested every pushed commit
-        id: queue
-        if: github.event_name == 'push'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BEFORE: ${{ github.event.before }}
-        run: |
-          # The merge queue moves main to the commits its merge groups tested, so a
-          # push to main would repeat runs that already passed on them. One push can
-          # land several groups, and each group's run selects the port's jobs from
-          # its own change alone, so every pushed commit needs a passing group run.
-          # When a lookup fails, the push runs every job.
-          workflow="${GITHUB_WORKFLOW_REF%@*}"
-          tested=false
-          if commits=$(git rev-list "$BEFORE..$GITHUB_SHA") && [ -n "$commits" ]; then
-            tested=true
-            for sha in $commits; do
-              passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${workflow##*/}/runs?head_sha=$sha&event=merge_group&status=success" --jq .total_count || echo 0)
-              [ "${passed:-0}" -gt 0 ] || { tested=false; break; }
-            done
-          fi
-          echo "tested=$tested" >> "$GITHUB_OUTPUT"
-
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -77,14 +53,14 @@ jobs:
         id: plan
         env:
           COMPUTESHARP_CI_EVENT: ${{ github.event_name }}
-          COMPUTESHARP_CI_BASE: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before }}
-          COMPUTESHARP_CI_HEAD: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+          COMPUTESHARP_CI_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+          COMPUTESHARP_CI_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
         run: python demos/integrations/computesharp/ci_plan.py --event "$COMPUTESHARP_CI_EVENT"
 
   discovery-contract:
     name: Compute discovery contract (Linux)
     needs: plan
-    if: ${{ needs.plan.outputs.tested != 'true' && needs.plan.outputs.run == 'true' }}
+    if: ${{ needs.plan.outputs.run == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -127,7 +103,7 @@ jobs:
   original-directx:
     name: Original compute baseline (Windows WARP)
     needs: plan
-    if: ${{ needs.plan.outputs.tested != 'true' && needs.plan.outputs.execute == 'true' }}
+    if: ${{ needs.plan.outputs.execute == 'true' }}
     runs-on: windows-2025
     timeout-minutes: 45
     env:
@@ -208,13 +184,17 @@ jobs:
           python demos/integrations/computesharp/retained.py run
           --source upstream-computesharp --output evidence/retained
       - name: Evaluate the HLSL intrinsics on WARP
+        # The probe builds the upstream sources, so it runs in their checkout,
+        # whose global.json selects the SDK they pin.
+        working-directory: upstream-computesharp
         shell: pwsh
         run: |
           $probe = Join-Path $env:GITHUB_WORKSPACE "demos/integrations/computesharp/precision/IntrinsicProbe.csproj"
           $root = Join-Path $env:GITHUB_WORKSPACE "upstream-computesharp"
-          dotnet run --project $probe -c Release -p:Platform=x64 "-p:ComputeSharpRoot=$root" -- run warp evidence/precision/directx
+          $evidence = Join-Path $env:GITHUB_WORKSPACE "evidence/precision"
+          dotnet run --project $probe -c Release -p:Platform=x64 "-p:ComputeSharpRoot=$root" -- run warp (Join-Path $evidence "directx")
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          dotnet run --project $probe -c Release -p:Platform=x64 "-p:ComputeSharpRoot=$root" --no-build -- export evidence/precision/shaders
+          dotnet run --project $probe -c Release -p:Platform=x64 "-p:ComputeSharpRoot=$root" --no-build -- export (Join-Path $evidence "shaders")
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - uses: actions/upload-artifact@v7
         if: always()
@@ -226,7 +206,7 @@ jobs:
   adapted-source-parity:
     name: Adapted source parity (Linux)
     needs: [plan, original-directx]
-    if: ${{ needs.plan.outputs.tested != 'true' && !cancelled() && needs.plan.outputs.execute == 'true' }}
+    if: ${{ !cancelled() && needs.plan.outputs.execute == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -282,7 +262,7 @@ jobs:
   translated-metal:
     name: Translated compute tests (macOS Metal)
     needs: plan
-    if: ${{ needs.plan.outputs.tested != 'true' && needs.plan.outputs.execute == 'true' }}
+    if: ${{ needs.plan.outputs.execute == 'true' }}
     runs-on: macos-15
     timeout-minutes: 60
     steps:
@@ -373,7 +353,7 @@ jobs:
   translated-opengl:
     name: Translated compute tests (Linux OpenGL, Mesa llvmpipe)
     needs: plan
-    if: ${{ needs.plan.outputs.tested != 'true' && needs.plan.outputs.execute == 'true' }}
+    if: ${{ needs.plan.outputs.execute == 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     steps:
@@ -469,7 +449,7 @@ jobs:
   qualification:
     name: ComputeSharp port qualification (Linux)
     needs: [plan, original-directx, adapted-source-parity, translated-metal, translated-opengl]
-    if: ${{ needs.plan.outputs.tested != 'true' && !cancelled() && needs.plan.outputs.execute == 'true' }}
+    if: ${{ !cancelled() && needs.plan.outputs.execute == 'true' }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -511,9 +491,8 @@ jobs:
           retention-days: 14
 
   result:
-    # The one ComputeSharp check that branch protection and the merge queue can
-    # require. Jobs the plan skips count as passing; a failed or cancelled job
-    # fails it.
+    # The one ComputeSharp check. Jobs the plan skips count as passing; a failed
+    # or cancelled job fails it.
     name: ComputeSharp validation result
     if: always()
     needs:

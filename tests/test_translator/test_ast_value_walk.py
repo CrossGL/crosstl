@@ -19,9 +19,11 @@ def _recursive_walk(node):
     if not hasattr(node, "__dict__"):
         return
     yield node
+    followed = set()
     for key, value in vars(node).items():
-        if key in {"parent", "annotations"}:
+        if key in {"parent", "annotations"} or id(value) in followed:
             continue
+        followed.add(id(value))
         yield from _recursive_walk(value)
 
 
@@ -149,6 +151,26 @@ def test_walk_allows_shared_values_that_are_not_their_own_ancestors():
     root = Node("root", left=[shared], right=(shared,), again=shared)
     assert _labels(iter_ast_values(root)) == _labels(_recursive_walk(root))
     assert _labels(iter_ast_values(root)).count("leaf") == 3
+
+
+def test_walk_follows_a_value_aliased_by_two_attributes_of_one_node_once():
+    leaf = Node("leaf")
+    arguments = [Node("argument", child=leaf)]
+    call = Node("call", arguments=arguments, args=arguments, same=leaf, other=leaf)
+    assert _labels(iter_ast_values(call)) == ["call", "argument", "leaf", "leaf"]
+
+
+def _nested_calls(depth):
+    expression = Node("x")
+    for level in range(depth):
+        arguments = [expression, Node(f"literal{level}")]
+        expression = Node("call", arguments=arguments, args=arguments)
+    return expression
+
+
+def test_walk_over_nested_calls_is_linear_in_depth():
+    # Before aliases were followed once, every level doubled the walk (2**12 = 4096 copies of the innermost call).
+    assert len(list(iter_ast_values(_nested_calls(12)))) == 2 * 12 + 1
 
 
 SHADER = """

@@ -1,5 +1,6 @@
 """Probes for bindings, textures, images, memory qualifiers, specialization constants and subgroups."""
 
+from tests.conformance import metal_textures
 from tools.coverage import constructs, probes
 from tools.coverage.templates import (
     bindings,
@@ -136,7 +137,7 @@ def test_image_probes_pass_sample_and_index_textures_and_update_an_image_in_plac
         (
             "metal",
             "array-of-textures-nonuniform-index",
-            "uint k = uint(fin[i]) & 1u;\n",
+            "int k = int(fin[i]) & 1;\n",
         ),
         ("rust", "array-of-textures-loop-index", "for k in 0..2 {\n"),
         (
@@ -456,10 +457,10 @@ def test_texture_probes_read_each_shape_of_texture_per_language():
             "texture-cube-array",
             "textureLod(tex, vec4(fin[i], 0.5, 1.0, 1.0), 0.0)",
         ),
-        ("glsl", "texel-buffer", "texelFetch(tex, int(fin[i]))"),
+        ("glsl", "texel-buffer", "texelFetch(tex, int(fin[i]) & 7)"),
         ("webgl", "texture-2d-array", "uniform highp sampler2DArray tex;"),
         ("hlsl", "texture-cube", "TextureCube<float4> tex : register(t1);"),
-        ("hlsl", "texel-buffer", "tex.Load(int(fin[i]))"),
+        ("hlsl", "texel-buffer", "tex.Load(int(fin[i]) & 7)"),
         ("slang", "texture-3d", "Texture3D<float4> tex;"),
         ("metal", "texture-1d", "tex.sample(smp, fin[i]).x"),
         ("metal", "texture-2d-array", "texture2d_array<float> tex [[texture(0)]]"),
@@ -471,7 +472,7 @@ def test_texture_probes_read_each_shape_of_texture_per_language():
             "texture-2d-array",
             "tex2DLayeredLod<float4>(tex, fin[i], 0.5f, 1, 0.0f)",
         ),
-        ("hip", "texel-buffer", "tex1Dfetch<float4>(tex, int(fin[i]))"),
+        ("hip", "texel-buffer", "tex1Dfetch<float4>(tex, int(fin[i]) & 7)"),
         ("opencl", "texel-buffer", "__read_only image1d_buffer_t tex"),
         ("rust", "texture-cube-array", "&Image!(cube, type=f32, sampled, arrayed)"),
         ("rust", "texel-buffer", "OpImageFetch typeof*{color} %image %coordinate"),
@@ -508,6 +509,28 @@ def test_texture_probes_read_each_shape_of_texture_per_language():
     for language, missing in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert listed & names == names - missing, language
+
+
+def test_texel_buffer_probes_fetch_a_texel_inside_the_buffer():
+    # The float input is negative half the time, and a fetch outside a texel buffer is undefined in Metal (and in
+    # Vulkan without robust buffer access), so every dialect masks the fetch index into the first 8 texels.
+    fetches = {
+        "crossgl": "texelFetch(tex, int(fin[i]) & 7)",
+        "glsl": "texelFetch(tex, int(fin[i]) & 7)",
+        "hlsl": "tex.Load(int(fin[i]) & 7)",
+        "slang": "tex.Load(int(fin[i]) & 7)",
+        "metal": "tex.read(uint(int(fin[i]) & 7))",
+        "cuda": "tex1Dfetch<float4>(tex, int(fin[i]) & 7)",
+        "hip": "tex1Dfetch<float4>(tex, int(fin[i]) & 7)",
+        "opencl": "read_imagef(tex, (int)fin[i] & 7)",
+        "rust": "let coordinate = (fin[i] as i32) & 7;",
+    }
+    for language, fetch in fetches.items():
+        native = "glsl" if language == "crossgl" else language
+        probe = probes.build(construct_feature(native, "texel-buffer"), language)
+        assert fetch in probe.source, language
+    # Every runtime that binds a texel buffer for a probe binds at least the 8 texels the index can select.
+    assert metal_textures._SHAPES["texture_buffer"][1] >= 8
 
 
 def test_storage_probes_write_each_shape_of_storage_image_per_language():

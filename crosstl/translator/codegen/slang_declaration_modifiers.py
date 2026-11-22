@@ -145,5 +145,13 @@ def slang_packoffset_suffix(codegen, member) -> str:
         arguments = getattr(attr, "arguments", None) or getattr(attr, "args", None)
         if not arguments:
             continue
-        return f" : packoffset({codegen.attribute_value_to_string(arguments[0])})"
+        return f" : packoffset({_packoffset_register(codegen, arguments[0])})"
     return ""
+
+
+def _packoffset_register(codegen, value) -> str:
+    """``c1`` or ``c0.y``: the CrossGL parser reads a component register as a member access."""
+    member = getattr(value, "member", None)
+    if isinstance(member, str) and getattr(value, "object", None) is not None:
+        return f"{_packoffset_register(codegen, value.object)}.{member}"
+    return codegen.attribute_value_to_string(value)

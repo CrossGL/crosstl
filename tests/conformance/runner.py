@@ -177,6 +177,9 @@ def prepare(
     if failed:
         cell.outcome = {"rejected": "invalid"}.get(failed.status, failed.status)
         return cell
+    if "metal_language" in reflection:
+        # The driver compiles the artifact under the MSL version the offline check accepted it under.
+        abi["metal_language"] = reflection["metal_language"]
     if target == "hlsl":
         try:
             abi["resources"] = _resources(abi, reflection)

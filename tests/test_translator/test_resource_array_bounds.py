@@ -68,9 +68,8 @@ def texture_size(code, backend):
         marker = "array<texture2d<float>, "
         start = code.index(marker) + len(marker)
         return int(code[start : code.index(">", start)])
-    marker = "uniform sampler2D texs["
-    start = code.index(marker) + len(marker)
-    return int(code[start : code.index("]", start)])
+    # A Vulkan compilation declares texs[] unsized; the OpenGL declaration carries the size.
+    return int(re.search(r"uniform sampler2D texs\[(\d+)\];", code).group(1))
 
 
 def block_size(code, backend):
@@ -100,11 +99,21 @@ BOUNDED = [
 ]
 
 
-@pytest.mark.parametrize("backend", TARGETS)
 @pytest.mark.parametrize("body, size", BOUNDED)
-def test_dynamic_texture_indexes_size_the_array(tmp_path, backend, body, size):
-    code = translate(tmp_path, compute(body), backend)
-    assert texture_size(code, backend) == size
+def test_dynamic_texture_indexes_size_the_array(tmp_path, body, size):
+    code = translate(tmp_path, compute(body), "opengl")
+    assert texture_size(code, "opengl") == size
+
+
+def assert_metal_argument_buffer(code):
+    """Metal holds a texture array that a run-time index reaches in an argument buffer, with no size."""
+    assert re.search(r"const device texs_slot ?\* ?texs \[\[buffer\(\d+\)\]\]", code)
+    assert "array<texture2d<float>" not in code
+
+
+@pytest.mark.parametrize("body, size", BOUNDED)
+def test_dynamic_texture_indexes_reach_a_metal_argument_buffer(tmp_path, body, size):
+    assert_metal_argument_buffer(translate(tmp_path, compute(body), "metal"))
 
 
 @pytest.mark.parametrize("backend", TARGETS)
@@ -136,11 +145,15 @@ UNBOUNDED = [
 ]
 
 
-@pytest.mark.parametrize("backend", TARGETS)
 @pytest.mark.parametrize("body", UNBOUNDED)
-def test_unbounded_dynamic_indexes_are_refused(tmp_path, backend, body):
+def test_unbounded_dynamic_indexes_are_refused(tmp_path, body):
     with pytest.raises(ResourceArrayIndexUnboundedError, match="texs"):
-        translate(tmp_path, compute(body), backend)
+        translate(tmp_path, compute(body), "opengl")
+
+
+@pytest.mark.parametrize("body", UNBOUNDED)
+def test_unbounded_dynamic_indexes_reach_a_metal_argument_buffer(tmp_path, body):
+    assert_metal_argument_buffer(translate(tmp_path, compute(body), "metal"))
 
 
 def _metal_compiler_available():
@@ -266,6 +279,8 @@ def test_clamped_stage_input_index_aliases_size_the_array(backend, pattern, size
     )
     code = crossgl_codegen(source, backend)
     if backend == "metal":
-        assert f"array<texture2d<float>, {size}> textures" in code
+        # The textures are an argument buffer; the separate sampler array keeps the inferred size.
+        assert "const device textures_slot* textures" in code
+        assert f"array<sampler, {size}> samplers" in code
     else:
         assert f"uniform sampler2D textures[{size}];" in code

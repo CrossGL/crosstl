@@ -16,11 +16,11 @@ graphics triad expresses this per sample:
 
 CrossGL spells the clamp after every other operand except a bias, in GL_ARB_sparse_texture_clamp order::
 
-    textureClamp(t[, s], P, clamp[, bias])           textureCompareClamp(t[, s], P, ref, clamp)
+    textureClamp(t[, s], P, clamp[, bias])           textureCompareClamp(t[, s], P, ref, clamp[, bias])
     textureOffsetClamp(t[, s], P, offset, clamp[, bias])
     textureGradClamp(t[, s], P, dPdx, dPdy, clamp)  textureCompareGradClamp(t[, s], P, ref, dPdx, dPdy, clamp)
     textureGradOffsetClamp(t[, s], P, dPdx, dPdy, offset, clamp)
-    textureCompareOffsetClamp(t[, s], P, ref, offset, clamp)
+    textureCompareOffsetClamp(t[, s], P, ref, offset, clamp[, bias])
     textureCompareGradOffsetClamp(t[, s], P, ref, dPdx, dPdy, offset, clamp)
 
 Each operation is its unclamped counterpart (``texture``, ``textureOffset``, ... ``textureCompareGradOffset``)
@@ -94,13 +94,16 @@ TEXTURE_LOD_CLAMP_FORMS = {
             gradient=True,
             offset=True,
         ),
-        TextureLodClampForm("textureCompareClamp", "textureCompare", 1, compare=True),
+        TextureLodClampForm(
+            "textureCompareClamp", "textureCompare", 1, compare=True, accepts_bias=True
+        ),
         TextureLodClampForm(
             "textureCompareOffsetClamp",
             "textureCompareOffset",
             2,
             compare=True,
             offset=True,
+            accepts_bias=True,
         ),
         TextureLodClampForm(
             "textureCompareGradClamp",

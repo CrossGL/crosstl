@@ -48,10 +48,26 @@ _WORKGROUP_QUALIFIERS = frozenset({"workgroup", "shared"})
 class WGSLSpecializationPlan:
     """How each specialization-dependent constant of one program is declared in WGSL."""
 
-    def __init__(self, ids: dict[str, int], overrides: set[str], private: set[str]):
+    def __init__(
+        self,
+        ids: dict[str, int],
+        overrides: set[str],
+        private: set[str],
+        types: dict[str, str] | None = None,
+    ):
         self.ids = ids
         self.overrides = overrides
         self.private = private
+        # The WGSL type of each constant with an id.
+        self.types = types or {}
+
+    def identified_overrides(self) -> dict[int, tuple[str, str]]:
+        """``{id: (constant name, WGSL type)}`` of the overrides declared with an ``@id``."""
+        return {
+            spec_id: (name, self.types.get(name, ""))
+            for name, spec_id in sorted(self.ids.items(), key=lambda item: item[1])
+            if name in self.overrides
+        }
 
     @property
     def dependent(self) -> set[str]:
@@ -161,4 +177,9 @@ def plan_wgsl_specialization_constants(
             specialization_id=ids.get(name),
             kind="case-selector",
         )
-    return WGSLSpecializationPlan(ids, overrides, private)
+    types = {
+        node.name: type_name_of(node.const_type)
+        for node in constants
+        if getattr(node, "name", None) in ids
+    }
+    return WGSLSpecializationPlan(ids, overrides, private, types)

@@ -193,6 +193,8 @@ SPELLINGS: dict[str, str | tuple[str, tuple[Param, ...]]] = {
     "Mat4::from_cols": "mat4",
     "Mat4::from_rows": "transpose(mat4({0}, {1}, {2}, {3}))",
     "Mat4::from_cols_array": (f"mat4({_listed(16)})", _floats(16)),
+    # The column arrays hold the same floats in the same order (src/f32/scalar/mat4.rs).
+    "Mat4::from_cols_array_2d": (f"mat4({_listed(16)})", _floats(16)),
     "Mat4::from_rows_array": (f"transpose(mat4({_listed(16)}))", _floats(16)),
     # A slice is the probe's whole input buffer, whose first elements the method reads.
     "Mat4::from_cols_slice": f"mat4({_elements(16)})",

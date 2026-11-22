@@ -501,8 +501,8 @@ PAREN_HLSL = textwrap.dedent("""
     """).strip()
 
 
-def generate_crossgl(code: str) -> str:
-    tokens = HLSLLexer(code).tokenize()
+def generate_crossgl(code: str, **lexer_options) -> str:
+    tokens = HLSLLexer(code, **lexer_options).tokenize()
     ast = HLSLParser(tokens).parse()
     converter = DirectxCrossGLCodeGen.HLSLToCrossGLConverter()
     return converter.generate(ast)
@@ -784,7 +784,11 @@ def test_effect_compile_pixel_shader_wires_opengl_fragment_entry_body():
     )
 
     assert "void main()" in generated
-    assert "vec4 tex = texture(Texture, texCoord);" in generated
+    # An OpenGL compilation reads the combined Texture; a Vulkan one pairs it with TextureSampler.
+    assert (
+        "vec4 tex = texture(CROSSGL_SAMPLED(sampler2D(Texture, TextureSampler), Texture),"
+        " texCoord);"
+    ) in generated
     assert "fragColor = (tex * color);" in generated
 
 
@@ -2136,9 +2140,10 @@ def test_global_static_const_array_initializer_generates_crossgl():
     ] == [0.25, 0.75]
 
 
-def test_codegen_global_const_initializer_preserves_const_from_hlsl_variable_syntax():
-    # Source: Microsoft Learn HLSL variable syntax documents const type modifiers.
-    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-variable-syntax
+def test_codegen_global_const_without_static_is_a_host_bound_constant():
+    # A const global without static is a $Globals member: DXC loads it from the
+    # constant buffer (cbufferLoadLegacy) and ignores its initializer, so CrossGL
+    # declares it as a program constant without the initializer.
     output = generate_crossgl("""
         const float ExposureScale = 1.25f;
 
@@ -2148,8 +2153,9 @@ def test_codegen_global_const_initializer_preserves_const_from_hlsl_variable_syn
     """)
 
     lines = {line.strip() for line in output.splitlines()}
-    assert "const float ExposureScale = 1.25;" in lines
-    assert "float ExposureScale = 1.25;" not in lines
+    assert "float ExposureScale;" in lines
+    assert "@ hlsl_program_constant" in lines
+    assert not any("1.25" in line for line in lines)
     parse_crossgl(output)
 
 
@@ -2236,7 +2242,8 @@ def test_codegen_sizeof_vector_array_operands_from_dxc_unary_sizeof():
     # Source URL: https://github.com/microsoft/DirectXShaderCompiler
     # Commit: 517dd5eb5d8cbb46c15fc1230acac1d2f4779092
     # Path: tools/clang/test/HLSLFileCheck/hlsl/operators/unary/sizeof.hlsl
-    output = generate_crossgl("""
+    output = generate_crossgl(
+        """
         AppendStructuredBuffer<int> buf;
 
         void main() {
@@ -2244,7 +2251,9 @@ def test_codegen_sizeof_vector_array_operands_from_dxc_unary_sizeof():
             buf.Append(sizeof(half3[2]));
             buf.Append(sizeof(int64_t3[2]));
         }
-    """)
+    """,
+        enable_16bit_types=True,
+    )  # The test's RUN line passes -enable-16bit-types: half is 2 bytes.
 
     assert "buffer_append(buf, 24);" in output
     assert "buffer_append(buf, 12);" in output
@@ -2939,20 +2948,18 @@ def test_codegen_node_shader_attribute_reparses_from_dxc_callgraph():
 
     crossgl = generate_crossgl(code)
 
-    assert '@shader("node")' in crossgl
-    assert '@ shader("node")' not in crossgl
+    # [shader("node")] makes main the entry of a CrossGL node stage, and its attributes the node's.
+    assert "node {" in crossgl
+    assert "shader(" not in crossgl
 
     shader_ast = parse_crossgl(crossgl)
-    main = next(
-        function for function in shader_ast.functions if function.name == "main"
-    )
+    main = shader_ast.stages[ShaderStage.NODE].entry_point
 
+    assert main.name == "main"
     assert [
         (attr.name, [arg.value for arg in attr.arguments]) for attr in main.attributes
-    ] == [
-        ("shader", ["node"]),
-        ("NodeLaunch", ["thread"]),
-    ]
+    ] == [("node_launch", ["thread"])]
+    assert [function.name for function in shader_ast.functions] == ["intermediate"]
 
 
 def test_codegen_pascal_case_mesh_attributes_infer_stage():
@@ -3309,8 +3316,9 @@ def test_codegen_canonicalizes_dynamic_render_target_and_depth_semantics():
     """)
 
     assert "vec4 color @ gl_FragData[8];" in output
-    assert "float depth @ gl_FragDepth;" in output
-    assert "out float fallbackDepth @ gl_FragDepth" in output
+    # The direction each semantic promises stays as CrossGL's conservative depth layout.
+    assert "float depth @ gl_FragDepth @ depth_greater;" in output
+    assert "out float fallbackDepth @ gl_FragDepth @ depth_less" in output
     assert "@ SV_Target8" not in output
     assert "@ SV_DEPTHGREATEREQUAL" not in output
     assert "@ SV_DEPTHLESSEQUAL" not in output
@@ -3436,11 +3444,12 @@ def test_codegen_block_scope_typedef_from_dxc_linalg_vectors_reparse():
         }
     """)
 
-    # The 16-lane vector has no CrossGL type; ``vec4`` would drop 12 lanes.
+    # The 16-lane vector has no CrossGL type; ``vec4`` would drop 12 lanes. DXC's linalg tests compile with
+    # -enable-16bit-types.
     with pytest.raises(
         DirectXImportRefused, match=r"vector<half, 16> has 16 components"
     ):
-        generate_crossgl(hlsl)
+        generate_crossgl(hlsl, enable_16bit_types=True)
 
 
 def test_codegen_block_scope_type_aliases_stay_typedefs():
@@ -4023,8 +4032,10 @@ def test_codegen_is_helper_lane_round_trips_to_hlsl():
             outp[id.x] = r ? 1 : 0;
         }
     """)
+    # Outside pixel shaders IsHelperLane() is false (Shader Model 6.6), which the importer writes as is.
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(compute))
-    assert "bool r = IsHelperLane();" in hlsl
+    assert "bool r = false;" in hlsl
+    assert "IsHelperLane" not in hlsl
     assert "gl_HelperInvocation" not in hlsl
 
 
@@ -7909,7 +7920,10 @@ def test_codegen_linalg_using_alias_post_type_attributes_from_dxc_reparse():
 
     assert "typedef __builtin_LinAlgMatrix MyHandleT;" in output
     assert "@ numthreads(4, 4, 4)" in output
-    assert "MyMatrix MatA = MyMatrix::Splat(1.0);" in output
+    # The class imports as a struct whose static method becomes a function.
+    assert "struct MyMatrix {" in output
+    assert "MyMatrix MyMatrix_Splat(float Val) {" in output
+    assert "MyMatrix MatA = MyMatrix_Splat(1.0);" in output
     parse_crossgl(output)
 
 

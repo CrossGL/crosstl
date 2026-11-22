@@ -27,6 +27,7 @@ from crosstl.translator.semantics.rewrite import (
 from crosstl.translator.semantics.sampler_states import (
     FixedSamplerStateUnsupportedError,
 )
+from tests.stage_entry_helpers import translate_each_entry
 
 SOURCE = """shader DuplicateStages {
     struct VOut {
@@ -106,7 +107,14 @@ def test_a_fixed_sampler_in_a_later_block_is_bound_with_its_record(tmp_path, bac
     # Direct3D, Vulkan and OpenGL (through sampler objects) bind fixed sampler state from the host
     # (crosstl.translator.semantics.fixed_samplers); the later block's sampler
     # must reach that pass and its record.
-    records = parse_fixed_sampler_contract(translate(tmp_path, backend))
+    path = tmp_path / "duplicate_stages.cgl"
+    path.write_text(SOURCE, encoding="utf-8")
+    # GLSL holds one fragment entry per unit, so each entry is its own artifact with its own records.
+    records = [
+        record
+        for code in translate_each_entry(path, backend).values()
+        for record in parse_fixed_sampler_contract(code)
+    ]
     assert [record["state"]["mag_filter"] for record in records] == ["linear"]
 
 

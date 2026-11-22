@@ -8,6 +8,11 @@ from typing import Iterator, List, Optional, Tuple
 from crosstl.translator.refusals import DirectXSyntaxError
 
 from ...translator.token_dispatch import ordered_pattern_dispatch
+from .half_width import (
+    ENABLE_16_BIT_MACRO,
+    binary32_half_token,
+    resolve_native_16_bit_types,
+)
 from .preprocessor import HLSLPreprocessor, Macro
 
 # using sets for faster lookup
@@ -590,7 +595,12 @@ class HLSLLexer:
         include_paths: Optional[List[str]] = None,
         defines: Optional[dict] = None,
         strict_preprocessor: bool = False,
+        enable_16bit_types: Optional[bool] = None,
     ):
+        """Read ``code``. ``enable_16bit_types`` states whether the source is compiled with DXC's
+        ``-enable-16bit-types``; ``None`` (the default) assumes it exactly when the source names a native 16-bit type.
+        Without it ``half`` is ``float`` (:mod:`.half_width`).
+        """
         code = code.lstrip("\ufeff")
         code = self._extract_shaderlab_program_blocks(code)
         self._token_dispatch = ordered_pattern_dispatch(TOKENS)
@@ -599,6 +609,8 @@ class HLSLLexer:
         self.include_paths = include_paths or []
         if preprocess:
             preprocessor_defines = dict(DEFAULT_PREPROCESSOR_DEFINES)
+            if enable_16bit_types:
+                preprocessor_defines[ENABLE_16_BIT_MACRO] = "1"
             if defines:
                 preprocessor_defines.update(defines)
             preprocessor = HLSLPreprocessor(
@@ -612,6 +624,7 @@ class HLSLLexer:
         code = code.replace("\ufeff", "")
         self.code = code
         self._length = len(code)
+        self.native_16_bit_types = resolve_native_16_bit_types(code, enable_16bit_types)
 
     def _extract_shaderlab_program_blocks(self, code: str) -> str:
         """Return embedded HLSL/CG blocks from Unity ShaderLab source."""
@@ -706,6 +719,10 @@ class HLSLLexer:
 
             if token_type == "IDENTIFIER" and text in KEYWORDS:
                 token_type = KEYWORDS[text]
+            if not self.native_16_bit_types:
+                binary32 = binary32_half_token(token_type, text)
+                if binary32 is not None:
+                    token_type, text = binary32
 
             if token_type not in SKIP_TOKENS:
                 yield (token_type, text)
