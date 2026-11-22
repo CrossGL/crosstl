@@ -1789,14 +1789,15 @@ def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders(tmp_
 )
 def test_mojo_refuses_dispatch_mesh(stage, dispatch):
     # #4392: DispatchMesh used to call a generated Mojo helper whose body was `pass`, so no mesh workgroups ran.
+    # The payload is a function local: Mojo refuses a program-scope payload before it reaches DispatchMesh.
     code = f"""
     shader Task {{
         struct Payload {{
             uint value;
         }}
-        groupshared Payload payload @ taskPayloadSharedEXT;
         {stage} {{
             void main() @numthreads(1, 1, 1) {{
+                Payload payload;
                 payload.value = 1u;
                 {dispatch}
             }}
