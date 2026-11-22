@@ -236,6 +236,10 @@ from .hlsl_groupshared_word_views import lower_groupshared_word_views
 from .hlsl_half_private_storage import lower_half_private_storage
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_host_workgroup_size import hlsl_entry_local_size
+from .hlsl_initialized_globals import (
+    hlsl_initialized_private_global,
+    hlsl_static_global_initializer,
+)
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_mesh_semantics import collect_hlsl_mesh_output_struct_offsets
 from .hlsl_narrow_integers import HLSLNarrowIntegerMixin
@@ -250,10 +254,6 @@ from .hlsl_texel_buffers import HLSL_TEXEL_BUFFER_TYPES, HLSLTexelBuffers
 from .hlsl_texture_residency import (
     hlsl_texture_residency_call,
     hlsl_texture_resident_call,
-)
-from .hlsl_initialized_globals import (
-    hlsl_initialized_private_global,
-    hlsl_static_global_initializer,
 )
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
 from .hlsl_vk_locations import hlsl_vk_location_prefix

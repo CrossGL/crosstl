@@ -29,7 +29,6 @@ from .directx_values import (
 from .enum_utils import generate_enum_constructor_call
 from .for_in_utils import generate_typed_array_for_in
 from .hlsl_array_list_assignment import generate_hlsl_array_list_assignment
-from .hlsl_struct_list_assignment import generate_hlsl_struct_list_assignment
 from .hlsl_atomic_conditions import (
     condition_has_hlsl_atomic,
     generate_hlsl_atomic_condition_do_while,
@@ -38,6 +37,7 @@ from .hlsl_atomic_conditions import (
     generate_hlsl_atomic_condition_while,
     hlsl_atomic_condition_loop_guard,
 )
+from .hlsl_struct_list_assignment import generate_hlsl_struct_list_assignment
 from .hlsl_word_views import generate_hlsl_word_view_assignment
 from .match_utils import (
     generate_ordered_conditional_match,
