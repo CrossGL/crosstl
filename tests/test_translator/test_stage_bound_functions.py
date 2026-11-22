@@ -5,6 +5,7 @@ A helper that read a stage input became ``input.inUV`` in an HLSL or Metal funct
 Metal compiler reject it), and the SPIR-V generator refused the unknown variable.
 """
 
+import re
 import shutil
 import subprocess
 
@@ -189,6 +190,22 @@ def _flat(code):
     return " ".join(code.split())
 
 
+def _stage_copy_names(flat, backend):
+    """The names of the flip copies that take the vertex and the fragment input structure.
+
+    Metal declares every stage's functions at program scope, so it gives a later stage's copy a name of its own
+    (``flip_1``); HLSL overloads ``flip`` on the input structure.
+    """
+    pattern = r"float2 (flip(?:_\d+)?)\((Vertex|Fragment)Input input\)"
+    names = {stage: name for name, stage in re.findall(pattern, flat)}
+    assert set(names) == {"Vertex", "Fragment"}, flat
+    if backend == "directx":
+        assert names == {"Vertex": "flip", "Fragment": "flip"}
+    else:
+        assert names["Vertex"] != names["Fragment"]
+    return names
+
+
 def _stage(program, name):
     return next(
         stage
@@ -278,16 +295,15 @@ def test_each_calling_stage_gets_its_own_copy():
 @pytest.mark.parametrize("backend", ["directx", "metal"])
 def test_each_stage_copy_reads_its_own_inputs(tmp_path, backend):
     flat = _flat(_translate(tmp_path, TWO_STAGES, backend))
-    assert "float2 flip(VertexInput input)" in flat
-    assert "float2 flip(FragmentInput input)" in flat
+    _stage_copy_names(flat, backend)
 
 
 @pytest.mark.parametrize("backend", ["directx", "metal"])
 def test_same_named_stage_helpers_take_their_own_stage_input(tmp_path, backend):
     code = _translate(tmp_path, STAGE_LOCAL_TWINS, backend)
     flat = _flat(code)
-    assert "float2 flip(VertexInput input)" in flat
-    assert "float2 flip(FragmentInput input)" in flat
+    names = _stage_copy_names(flat, backend)
+    assert f"{names['Fragment']}(input)" in flat
     if backend == "directx" and shutil.which("dxc"):
         (tmp_path / "out.hlsl").write_text(code)
         _run(["dxc", "-T", "vs_6_0", "-E", "VSMain", "out.hlsl"], tmp_path)
