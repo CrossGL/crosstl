@@ -533,23 +533,37 @@ def reject_unresolved_generic_function_call(generator, func_name, target_name):
 
 
 def generic_function_value_arguments(generator, func_name, args):
-    """Return value arguments after any leading explicit generic type arguments."""
-    definitions = getattr(generator, "generic_function_definitions", {}) or {}
-    func = definitions.get(func_name)
-    if func is None:
-        return list(args or [])
+    """Return value arguments after any leading explicit generic type arguments.
 
-    generic_params = generic_function_parameters(func)
-    param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
-    explicit_substitutions, value_args = _explicit_generic_call_parts(
-        generator,
-        generic_params,
-        param_list,
-        list(args or []),
-    )
-    if explicit_substitutions is None:
-        return list(args or [])
-    return value_args
+    ``bump(vec2, w, w)`` names ``T`` with its first argument; the specialization takes only ``(w, w)``. The
+    overload chosen is the one ``generic_function_call_key`` resolves the call to.
+    """
+    args = list(args or [])
+    if is_reserved_generic_function_builtin_name(func_name):
+        return args
+    definitions = getattr(generator, "generic_function_definitions", {}) or {}
+    candidates = definitions.get(func_name) or []
+    matches = [
+        match
+        for match in (
+            _generic_function_candidate_call_match(generator, func, func_name, args)
+            for func in candidates
+        )
+        if match is not None
+    ]
+    if not getattr(generator, "collecting_generic_function_specializations", False):
+        specializations = (
+            getattr(generator, "generic_function_specializations", {}) or {}
+        )
+        matches = [
+            match
+            for match in matches
+            if not match["leading_type_arguments"] or match["key"] in specializations
+        ]
+    if not matches:
+        return args
+    matches.sort(key=lambda match: match["rank"], reverse=True)
+    return list(matches[0]["value_arguments"])
 
 
 def generic_function_call_key(generator, func_name, args):
@@ -835,6 +849,7 @@ def _generic_function_candidate_call_match(
         "leading_type_arguments": (
             explicit_types is None and value_args is not call_args
         ),
+        "value_arguments": value_args,
         "rank": (
             matched_params,
             exact_matches,
