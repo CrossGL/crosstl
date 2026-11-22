@@ -1,0 +1,1 @@
+Metal input: a mesh primitive member marked `[[primitive_culled]]` imports as the CrossGL built-in `gl_CullPrimitiveEXT`, so GLSL, SPIR-V, HLSL and Slang output write their own cull flag instead of a user varying or a refusal.
