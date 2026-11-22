@@ -13,7 +13,7 @@ import re
 import struct
 from pathlib import Path
 
-from . import metal_textures
+from . import directx_resources, metal_textures
 from .process import run
 
 CONSTANTS = "constants.bin"
@@ -363,7 +363,8 @@ def d3d12_request(job, shader):
 
     A ``ByteAddressBuffer`` gets a raw view (``R32_TYPELESS`` with the raw flag) and a ``StructuredBuffer`` a
     structured view of its reflected stride, as HLSL requires; the constants block becomes a constant-buffer view
-    padded to 256 bytes. Returns the request bytes and the buffer files in allocation order.
+    padded to 256 bytes. The job's other resources (``extras``) follow as :mod:`.directx_resources` encodes them.
+    Returns the request bytes, the buffer files in allocation order and the size of every allocation.
     """
     directory = Path(job["directory"])
     allocations, views, files = [], [], []
@@ -392,14 +393,21 @@ def d3d12_request(job, shader):
         padded = data.ljust(max(256, -(-len(data) // 256) * 256), b"\0")
         views.append((D3D12_CBV, block["slot"], len(allocations), 0, 0, len(padded)))
         allocations.append(padded)
+    encoded = [struct.pack("<4I2Q", *view) for view in views]
+    # Textures, samplers and the other resources go last, in the worker's extended views.
+    extra_allocations, extra_views = directx_resources.views(
+        job.get("extras", []), len(allocations)
+    )
+    allocations += extra_allocations
+    encoded += extra_views
     parts = [struct.pack("<II", D3D12_REQUEST, len(allocations))]
     for allocation in allocations:
         parts += [struct.pack("<Q", len(allocation)), allocation]
     parts += [
         struct.pack("<IQ", 1, len(shader)),
         shader,
-        struct.pack("<4I", _groups(job), 1, 1, len(views)),
-        *(struct.pack("<4I2Q", *view) for view in views),
+        struct.pack("<4I", _groups(job), 1, 1, len(encoded)),
+        *encoded,
     ]
     return b"".join(parts), files, [len(allocation) for allocation in allocations]
 
