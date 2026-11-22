@@ -44,11 +44,17 @@ void main(uint3 id : SV_DispatchThreadID) {
 """
 
 
+# DXC reads HLSL ``half`` as binary16 only under -enable-16bit-types; these sources test binary16 ``half``.
+HLSL_16_BIT = {"enable_16bit_types": True}
+
+
 @pytest.fixture
 def metal(tmp_path):
     path = tmp_path / "vectors.hlsl"
     path.write_text(SHADER)
-    return crosstl.translate(str(path), backend="metal", format_output=False)
+    return crosstl.translate(
+        str(path), backend="metal", format_output=False, source_options=HLSL_16_BIT
+    )
 
 
 @pytest.mark.parametrize(

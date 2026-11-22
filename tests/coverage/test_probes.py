@@ -141,7 +141,9 @@ def test_an_interpolant_is_read_straight_from_a_shader_input():
     assert "layout(location = 0) in vec2 a0;" in glsl
     assert "vec2 r = interpolateAtCentroid(a0);" in glsl
     crossgl = probes.build(centroid, "crossgl").source
-    assert "        vec2 uv;\n        vec2 a0;\n    }" in crossgl
+    # The interpolant is the probe's only input, as in the native probe, so it links at location 0 in both.
+    assert "    struct FragmentInput {\n        vec2 a0;\n    }" in crossgl
+    assert "FragmentOutput main(FragmentInput input) {" in crossgl
     assert "vec2 r = interpolateAtCentroid(input.a0);" in crossgl
     hlsl = Feature(
         "hlsl",
@@ -214,6 +216,8 @@ def test_16_bit_scalars_are_read_and_stored_through_32_bit_buffers():
     asint16, asuint16 = HLSL_BY_NAME["asint16"], HLSL_BY_NAME["asuint16"]
     source = probes.build(asint16, "hlsl").source
     assert "RWStructuredBuffer<int2> outp : register(u1);" in source
+    # An HLSL probe converts a 16-bit argument from a value binary16 holds (probes._TOWARD_ZERO); this feature is
+    # GLSL's, so it reads the input itself.
     assert "half2 a0 = half2((half)fin[i + 0u], (half)fin[i + 1u]);" in source
     assert "int16_t2 r = asint16(a0);" in source
     assert "outp[i] = (int2)r;" in source

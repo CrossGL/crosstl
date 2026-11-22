@@ -125,3 +125,69 @@ def test_cli_reports_github_errors(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(github.GitHub, "managed", fail)
     assert cli.main(["issues", str(path)]) == 2
     assert "HTTP 401" in capsys.readouterr().err
+
+
+class _Answering(github.GitHub):
+    """A client whose GraphQL queries return ``answer`` and whose REST calls return ``status``."""
+
+    def __init__(self, answer=None, status="ahead"):
+        super().__init__("o/r")
+        self.answer = answer
+        self.status = status
+        self.calls = []
+
+    def _query(self, query, variables):
+        self.calls.append(("graphql", variables))
+        return self.answer
+
+    def _api(self, method, path, payload=None):
+        self.calls.append((method, path))
+        return {"status": self.status}
+
+
+def _closed_by(*closers):
+    nodes = [{"closer": closer} for closer in closers]
+    return {"repository": {"issue": {"timelineItems": {"nodes": nodes}}}}
+
+
+@pytest.mark.parametrize(
+    "answer, commit",
+    [
+        (_closed_by({"mergeCommit": {"oid": "abc"}}), "abc"),
+        (_closed_by({"oid": "def"}), "def"),
+        (_closed_by(None), ""),
+        (_closed_by({}), ""),
+        (_closed_by(), ""),
+    ],
+)
+def test_github_names_the_commit_that_closed_an_issue(answer, commit):
+    client = _Answering(answer)
+    assert client.closing_commit(12) == commit
+    assert client.calls == [("graphql", {"owner": "o", "name": "r", "number": 12})]
+
+
+@pytest.mark.parametrize(
+    "status, contained",
+    [("ahead", True), ("identical", True), ("behind", False), ("diverged", False)],
+)
+def test_github_tells_whether_a_commit_contains_another(status, contained):
+    client = _Answering(status=status)
+    assert client.contains("head", "fix") is contained
+    assert client.calls == [("GET", "compare/fix...head?per_page=1")]
+
+
+def test_github_queries_send_their_variables(monkeypatch):
+    sent = []
+
+    def run(command, **kwargs):
+        sent.append((command, json.loads(kwargs["input"])))
+        return github.subprocess.CompletedProcess(command, 0, '{"data": {"x": 1}}', "")
+
+    monkeypatch.setattr(github.subprocess, "run", run)
+    assert github.GitHub("o/r")._query("q", {"n": 1}) == {"x": 1}
+    assert sent == [
+        (
+            ["gh", "api", "graphql", "--input", "-"],
+            {"query": "q", "variables": {"n": 1}},
+        )
+    ]

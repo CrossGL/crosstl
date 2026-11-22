@@ -53,6 +53,7 @@ from .portability import FAMILY as _PORTABILITY
 from .portability import GLSL as _PORTABILITY_GLSL
 from .portability import WEBGL as _PORTABILITY_WEBGL
 from .primitives import WEBGL as _PRIMITIVES
+from .promotion import ELSEWHERE as _PROMOTION
 from .qualifiers import WEBGL as _QUALIFIERS
 from .rasterization import WEBGL as _RASTERIZATION
 from .rays import WEBGL as _RAYS
@@ -67,6 +68,7 @@ from .subgroups import WEBGL as _SUBGROUPS
 from .tasks import WEBGL as _TASKS
 from .tessellation import WEBGL as _TESSELLATION
 from .textures import WEBGL as _TEXTURES
+from .unions import ELSEWHERE as _UNIONS
 from .values import FAMILY as _VALUES
 from .vectors import GLSL as _VECTORS
 from .vertices import WEBGL as _VERTICES
@@ -154,6 +156,8 @@ WEBGL = {
     **_COMPONENTS,
     **_POINTERS,
     **_MEMORY,
+    **_UNIONS,
+    **_PROMOTION,
     **_SUBGROUPS,
     **_SPECIALIZATIONS,
     **_QUALIFIERS,

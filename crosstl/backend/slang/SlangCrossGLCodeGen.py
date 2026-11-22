@@ -15,23 +15,37 @@ from ..storage_image_texels import (
     texel_attribute_arguments,
 )
 from .float_literals import check_float_literal_range
+from .slang_clock_import import SLANG_CLOCK_IMPORTS
 from .slang_matrix_import import SlangMatrixImportMixin
+from .slang_narrow_arithmetic import SlangNarrowArithmeticMixin
 from .slang_specialization_import import (
     specialization_ids,
     specialized_workgroup_sizes,
 )
 from .slang_stage_roles import (
+    slang_geometry_primitive,
     slang_mesh_parameter_role,
     slang_mesh_stage_attributes,
+    slang_patch_constant_function_names,
+    slang_primitive_stage_attributes,
     slang_ray_parameter_role,
 )
 from .slang_storage_image_access import (
     SlangStorageImageAccessMixin,
     texel_element_shape,
 )
+from .slang_wave_import import crossgl_slang_wave_call
 from .SlangAst import *
 from .SlangLexer import *
 from .SlangParser import *
+
+# Slang declares these three for its CUDA target only (``hlsl.meta.slang``), returning CUDA's ``threadIdx``,
+# ``blockIdx`` and ``blockDim``. CrossGL names the same values for every target.
+CUDA_THREAD_BUILTINS = {
+    "cudaThreadIdx": "gl_LocalInvocationID",
+    "cudaBlockIdx": "gl_WorkGroupID",
+    "cudaBlockDim": "gl_WorkGroupSize",
+}
 
 
 class UnsupportedSlangConformanceError(ValueError):
@@ -54,7 +68,9 @@ class UnsupportedSlangConformanceError(ValueError):
         )
 
 
-class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMixin):
+class SlangToCrossGLConverter(
+    SlangMatrixImportMixin, SlangStorageImageAccessMixin, SlangNarrowArithmeticMixin
+):
     """Serialize Slang backend AST nodes back into CrossGL source."""
 
     BINARY_PRECEDENCE = {
@@ -574,6 +590,8 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             ),
         }
         self.user_function_names = set()
+        self.patch_constant_function_names = frozenset()
+        self.narrow_function_returns = {}
         self.function_name_map = {}
         self.sampleable_resource_scopes = [set()]
         self.sampleable_resource_type_scopes = [{}]
@@ -663,6 +681,12 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             "SV_StartInstanceLocation": "gl_BaseInstance",
             "SV_DrawIndex": "gl_DrawID",
             "SV_PrimitiveID": "gl_PrimitiveID",
+            # Geometry and tessellation values, as the HLSL importer maps them.
+            "SV_GSInstanceID": "gl_InvocationID",
+            "SV_OutputControlPointID": "gl_InvocationID",
+            "SV_TessFactor": "gl_TessLevelOuter",
+            "SV_InsideTessFactor": "gl_TessLevelInner",
+            "SV_DomainLocation": "gl_TessCoord",
             "SV_CullPrimitive": "gl_CullPrimitiveEXT",
             # Vertex outputs. The clip position is the built-in, as the HLSL
             # importer maps it; a fragment input is gl_FragCoord (map_semantic).
@@ -745,6 +769,10 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         )
         self.user_function_names = {getattr(func, "name", None) for func in functions}
         self.user_function_names.discard(None)
+        self.patch_constant_function_names = slang_patch_constant_function_names(
+            functions
+        )
+        self.collect_narrow_function_returns(functions)
         self.function_name_map = self.collect_function_name_map(functions)
         resource_types = self.collect_sampleable_resource_types(ast)
         storage_image_types = self.collect_storage_image_resource_types(ast)
@@ -757,6 +785,11 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         self.generated_temp_index = 0
         self.register_global_identifier_renames(ast)
         self.variable_type_scopes = [self.collect_global_variable_types(ast)]
+        self.enumerator_names = {
+            enum.name: {member_name for member_name, _ in enum.members}
+            for enum in getattr(ast, "enums", []) or []
+            if isinstance(enum, EnumNode)
+        }
         self.specialization_constant_ids = specialization_ids(
             ast.global_vars,
             exported=[
@@ -813,6 +846,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 for member in node.members:
                     code += self.matrix_layout_attributes(member, 2)
                     code += f"        {self.generate_struct_member(node, member)};\n"
+                code += self.generate_struct_methods(node)
                 code += "    }\n"
         for node in ast.global_vars:
             code += self.generate_global_variable(node)
@@ -821,6 +855,10 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             code += self.generate_cbuffers(ast)
 
         for func in [*ast.functions, *extension_methods]:
+            if getattr(func, "is_declaration", False):
+                # A prototype (``float f(float x);``) declares nothing CrossGL needs: CrossGL functions may be
+                # called before their definition, and each generator writes the prototypes its target wants.
+                continue
             qualifier = self.effective_function_qualifier(func)
             if qualifier == "vertex":
                 code += "    vertex {\n"
@@ -828,6 +866,12 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 code += "    }\n\n"
             elif qualifier == "fragment":
                 code += "    fragment {\n"
+                if any(
+                    str(attribute.get("name", "")).lower() == "earlydepthstencil"
+                    for attribute in getattr(func, "attributes", None) or []
+                ):
+                    # [earlydepthstencil] is CrossGL's early_fragment_tests stage layout.
+                    code += "        layout(early_fragment_tests) in;\n"
                 code += self.generate_function(func)
                 code += "    }\n\n"
 
@@ -839,6 +883,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             elif qualifier:
                 code += f"    {qualifier} {{\n"
                 code += slang_mesh_stage_attributes(func, qualifier)
+                code += slang_primitive_stage_attributes(func, qualifier)
                 code += self.generate_function(func)
                 code += "    }\n\n"
             else:
@@ -1216,9 +1261,17 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                     code += self.generate_glsl_storage_block(node)
                     continue
                 metadata = self.format_variable_metadata(node)
+                packoffsets = [
+                    self.member_packoffset(member) for member in node.members
+                ]
+                if any(packoffsets):
+                    # slangc places a packoffset member where DXC does, as the HLSL import reads it.
+                    code += "    @ buffer_layout(hlsl_cbuffer)\n"
                 code += f"    cbuffer {node.name}{metadata} {{\n"
-                for member in node.members:
+                for member, packoffset in zip(node.members, packoffsets):
                     member_name = self.format_struct_member_name(node, member.name)
+                    if packoffset:
+                        code += f"        @ packoffset({packoffset})\n"
                     code += self.matrix_layout_attributes(member, 2)
                     code += (
                         f"        {self.map_type(member.vtype)} {member_name}"
@@ -1227,6 +1280,15 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                     )
                 code += "    }\n"
         return code
+
+    @staticmethod
+    def member_packoffset(member):
+        """The register a constant-buffer member's ``: packoffset(c<N>[.<component>])`` names, or None."""
+        match = re.fullmatch(
+            r"\s*packoffset\s*\(\s*(c\d+(?:\.[xyzw])?)\s*\)\s*",
+            str(getattr(member, "semantic", None) or ""),
+        )
+        return match.group(1) if match else None
 
     @staticmethod
     def format_member_offset(member):
@@ -1267,11 +1329,15 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         function_qualifier = self.effective_function_qualifier(func)
         preserve_parameter_qualifiers = self.is_entry_like_function(func)
         unnamed_parameter_names = self.collect_unnamed_parameter_names(func.params)
+        parameter_stage = function_qualifier
+        if parameter_stage is None and func.name in self.patch_constant_function_names:
+            # A hull stage's patch constant function reads the stage's InputPatch and OutputPatch.
+            parameter_stage = "tessellation_control"
         params = ", ".join(
             self.generate_parameter(
                 p,
                 preserve_parameter_qualifiers,
-                function_qualifier,
+                parameter_stage,
                 unnamed_parameter_names.get(id(p)),
                 parameter_index=index,
             )
@@ -1340,6 +1406,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         role = slang_mesh_parameter_role(param, function_qualifier)
         if role is not None:
             qualifier_prefix = f"@ {role} {qualifier_prefix}"
+        primitive = slang_geometry_primitive(param, function_qualifier)
+        if primitive is not None:
+            qualifier_prefix = f"{primitive} {qualifier_prefix}"
         parameter_name = param.name or fallback_name or "_param"
         parameter_type = self.map_parameter_type(param.vtype, function_qualifier)
         array_suffix = self.format_array_suffixes(param)
@@ -1534,8 +1603,84 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 code += "discard;\n"
             elif isinstance(stmt, TypedefNode):
                 code += f"{self.generate_typedef(stmt)}\n"
+            elif isinstance(stmt, BlockNode):
+                code += self.generate_scoped_block(
+                    stmt, indent, is_main, [*deferred_scopes, deferred_statements]
+                )
         code += self.generate_deferred_bodies(deferred_statements, indent, is_main)
         return code
+
+    def generate_scoped_block(self, node, indent, is_main, deferred_scopes):
+        """Write a nested ``{ ... }`` as a CrossGL block, so its declarations end with it."""
+        self.push_identifier_scope()
+        self.push_variable_type_scope(())
+        self.push_sampleable_resource_scope(())
+        self.push_storage_image_resource_scope(())
+        try:
+            body = self.generate_function_body(
+                node.statements, indent + 1, is_main, deferred_scopes
+            )
+        finally:
+            self.pop_storage_image_resource_scope()
+            self.pop_sampleable_resource_scope()
+            self.pop_variable_type_scope()
+            self.pop_identifier_scope()
+        return "{\n" + body + "    " * indent + "}\n"
+
+    def generate_struct_methods(self, node):
+        """Write a structure's member functions as CrossGL member functions.
+
+        CrossGL's struct_methods pass gives every target each one as a free function taking the receiver, which
+        it passes ``inout`` when the body writes a member, as a ``[mutating]`` Slang method may. Constructors
+        (``__init``) and operators (``operator()``) keep their own handling: a call of an operator CrossGL does
+        not declare is refused where it is written.
+        """
+        code = ""
+        for method in getattr(node, "methods", None) or []:
+            if getattr(method, "is_subscript", False) or method.name == "__init":
+                continue
+            if not re.fullmatch(r"[A-Za-z_]\w*", str(method.name)):
+                continue
+            if getattr(method, "is_declaration", False):
+                continue
+            if getattr(method, "generic_parameters", None) or getattr(
+                method, "is_generic", False
+            ):
+                raise SlangImportRefused(
+                    [
+                        f"member function '{method.name}' of Slang structure '{node.name}' is generic, "
+                        "and a CrossGL member function takes no generic parameters"
+                    ]
+                )
+            # The body reads the receiver's members by name, and calls name the method as written.
+            function_names = self.function_name_map
+            self.function_name_map = {**function_names, method.name: method.name}
+            self.push_variable_type_scope(node.members)
+            try:
+                method_code = self.generate_function(method, indent=1)
+            finally:
+                self.pop_variable_type_scope()
+                self.function_name_map = function_names
+            if "static" in (getattr(method, "qualifiers", None) or []):
+                method_code = re.sub(r"^(\s*)", r"\1static ", method_code, count=1)
+            code += "".join(
+                f"    {line}\n" if line.strip() else "\n"
+                for line in method_code.rstrip("\n").splitlines()
+            )
+        return code
+
+    def enumerator_reference(self, expr):
+        """``E::A`` for Slang's ``E.A``: CrossGL names an enumerator through its enumeration with ``::``."""
+        enum = expr.object
+        if not isinstance(enum, VariableNode) or getattr(enum, "vtype", None):
+            return None
+        members = getattr(self, "enumerator_names", {}).get(enum.name)
+        if not members or expr.member not in members:
+            return None
+        if self.lookup_variable_type(enum.name):
+            # A variable named like the enumeration hides it.
+            return None
+        return f"{enum.name}::{expr.member}"
 
     def refuse_struct_subscripts(self, node):
         """Refuse a ``__subscript`` declaration: ``value[i, j]`` would then index a structure CrossGL cannot index."""
@@ -1795,12 +1940,46 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             return texel_store
         self.refuse_storage_image_texel_write(node.left)
         lhs = self.generate_expression(node.left, is_main)
-        rhs = self.generate_expression(node.right, is_main)
+        rhs = self.narrow_compound_right(
+            node, self.generate_expression(node.right, is_main)
+        )
         op = node.operator
         return f"{lhs} {op} {rhs}"
 
+    SHADER_RECORD_ATTRIBUTES = frozenset({"vk::shader_record", "shader_record"})
+
+    def generate_shader_record(self, node):
+        """``[[vk::shader_record]] ConstantBuffer<T> name;`` as CrossGL's shader record block, or None.
+
+        slangc places the record in the ShaderRecordBufferKHR storage class with std140 offsets, the layout of
+        its constant buffers (slangc 2026.20). It does not know DXC's ``vk::shader_record_ext`` spelling.
+        """
+        if not any(
+            str(attribute.get("name", "")).lower() in self.SHADER_RECORD_ATTRIBUTES
+            for attribute in getattr(node, "attributes", None) or []
+        ):
+            return None
+        match = re.fullmatch(
+            r"\s*ConstantBuffer\s*<\s*(\w+)\s*>\s*", str(getattr(node, "vtype", ""))
+        )
+        if isinstance(node, AssignmentNode) or match is None or node.array_sizes:
+            raise SlangImportRefused(
+                [
+                    f"shader record '{getattr(node, 'name', node)}' is not a ConstantBuffer<T>, the only "
+                    "shader record declaration CrossGL reads"
+                ]
+            )
+        record_type = self.map_type(match.group(1))
+        name = self.format_identifier(node.name)
+        return (
+            f"    {record_type} {name} @glsl_buffer_block(shaderRecordEXT, std140);\n"
+        )
+
     def generate_global_variable(self, node):
         declaration = node.left if isinstance(node, AssignmentNode) else node
+        shader_record = self.generate_shader_record(declaration)
+        if shader_record is not None:
+            return shader_record
         layout = self.matrix_layout_attributes(declaration, 1)
         self.track_specialization_dependence(node)
         if isinstance(node, AssignmentNode):
@@ -1886,6 +2065,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         declaration = (
             f"{qualifiers}{self.map_type(member.vtype)} {member_name}"
             f"{self.format_array_suffixes(member)}"
+            f"{self.format_member_offset(member)}"
         )
         if getattr(member, "value", None) is not None:
             declaration += f" = {self.generate_expression(member.value)}"
@@ -2095,16 +2275,25 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
         )
 
     def generate_binary_expression(self, expr, is_main):
-        left = self.generate_expression(expr.left, is_main)
-        right = self.generate_expression(expr.right, is_main)
-        if self.binary_child_needs_parentheses(expr.op, expr.left):
+        raw_left = self.generate_expression(expr.left, is_main)
+        raw_right = self.generate_expression(expr.right, is_main)
+        left, right = self.narrow_binary_operands(expr, raw_left, raw_right)
+        if (
+            left is raw_left
+            and not self.narrow_result_wrapped(expr.left)
+            and self.binary_child_needs_parentheses(expr.op, expr.left)
+        ):
             left = f"({left})"
-        if self.binary_child_needs_parentheses(expr.op, expr.right, True):
+        if (
+            right is raw_right
+            and not self.narrow_result_wrapped(expr.right)
+            and self.binary_child_needs_parentheses(expr.op, expr.right, True)
+        ):
             right = f"({right})"
         product = self.matrix_product_expression(expr, left, right)
         if product is not None:
             return product
-        return f"{left} {expr.op} {right}"
+        return self.narrow_binary_result(expr, f"{left} {expr.op} {right}")
 
     def maybe_parenthesize_expression(self, expr, rendered):
         if isinstance(expr, (AssignmentNode, BinaryOpNode, TernaryOpNode)):
@@ -2198,6 +2387,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             self.refuse_storage_image_texel_write(expr.left)
             left = self.generate_expression(expr.left, is_main)
             right = self.generate_expression(expr.right, is_main)
+            right = self.narrow_compound_right(expr, right)
             return f"{left} {expr.operator} {right}"
         elif isinstance(expr, CastNode):
             matrix_cast = self.matrix_cast_expression(expr, is_main)
@@ -2220,7 +2410,11 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             }:
                 self.refuse_storage_image_texel_write(expr.operand)
             operand = self.generate_expression(expr.operand, is_main)
-            if isinstance(expr.operand, (AssignmentNode, BinaryOpNode)):
+            if isinstance(expr.operand, (AssignmentNode, BinaryOpNode)) or (
+                # -(-x) written --x would read as a decrement; !(!b) and ~(~k) keep their parentheses too.
+                isinstance(expr.operand, UnaryOpNode)
+                and expr.op not in {"POST_INCREMENT", "POST_DECREMENT"}
+            ):
                 operand = f"({operand})"
             if expr.op == "POST_INCREMENT":
                 return f"{operand}++"
@@ -2230,7 +2424,7 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 return f"++{operand}"
             if expr.op == "PRE_DECREMENT":
                 return f"--{operand}"
-            return f"{expr.op}{operand}"
+            return self.narrow_unary_result(expr, f"{expr.op}{operand}")
         elif isinstance(expr, FunctionCallNode):
             function_name, is_hlsl_namespace_builtin = (
                 self.canonical_function_call_name(expr.name)
@@ -2261,6 +2455,28 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             if bitcast_call is not None:
                 return bitcast_call
             args = ", ".join(rendered_args)
+            if is_hlsl_namespace_builtin or expr.name not in self.user_function_names:
+                wave_call = crossgl_slang_wave_call(function_name, rendered_args)
+                if wave_call is not None:
+                    return wave_call
+            if (
+                function_name in CUDA_THREAD_BUILTINS
+                and not expr.args
+                and (
+                    is_hlsl_namespace_builtin
+                    or expr.name not in self.user_function_names
+                )
+            ):
+                return CUDA_THREAD_BUILTINS[function_name]
+            if (
+                function_name in SLANG_CLOCK_IMPORTS
+                and not expr.args
+                and (
+                    is_hlsl_namespace_builtin
+                    or expr.name not in self.user_function_names
+                )
+            ):
+                return SLANG_CLOCK_IMPORTS[function_name]
             if (
                 function_name == "saturate"
                 and len(expr.args) == 1
@@ -2281,6 +2497,17 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 value = self.generate_expression(expr.args[0], is_main)
                 value = self.maybe_parenthesize_expression(expr.args[0], value)
                 return f"(1.0 / {value})"
+            if (
+                function_name == "select"
+                and len(expr.args) == 3
+                and (
+                    is_hlsl_namespace_builtin
+                    or expr.name not in self.user_function_names
+                )
+            ):
+                # Slang select(cond, t, f) is HLSL's; CrossGL select(f, t, cond) is MSL's.
+                condition, true_value, false_value = rendered_args
+                return f"select({false_value}, {true_value}, {condition})"
             generic_type_name = self.map_generic_vector_or_matrix_type(function_name)
             if not is_hlsl_namespace_builtin and expr.name in self.user_function_names:
                 name = self.format_function_name(expr.name)
@@ -2331,6 +2558,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             qualified_name = self.member_access_qualified_name(expr)
             if qualified_name and self.lookup_variable_type(qualified_name):
                 return self.format_identifier(qualified_name)
+            enumerator = self.enumerator_reference(expr)
+            if enumerator is not None:
+                return enumerator
             matrix_member = self.matrix_member_expression(expr, is_main)
             if matrix_member is not None:
                 return matrix_member
@@ -2366,6 +2596,9 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 true_expr = f"({true_expr})"
             if isinstance(expr.false_expr, AssignmentNode):
                 false_expr = f"({false_expr})"
+            true_expr, false_expr = self.narrow_conditional_operands(
+                expr, true_expr, false_expr
+            )
             return f"({condition} ? {true_expr} : {false_expr})"
         elif isinstance(expr, InitializerListNode):
             elements = ", ".join(
@@ -2914,6 +3147,8 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 visit_statements(getattr(statement, "unlabeled_statements", []) or [])
             elif isinstance(statement, DeferNode):
                 visit_statements(statement.body)
+            elif isinstance(statement, BlockNode):
+                visit_statements(statement.statements)
 
         def visit_statements(statements):
             if not statements:
@@ -3944,10 +4179,16 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
                 )
         if mapped_semantic is None:
             depth_match = re.fullmatch(
-                r"SV_DEPTH(?:GREATEREQUAL|LESSEQUAL)?", str(semantic).upper()
+                r"SV_DEPTH(GREATEREQUAL|LESSEQUAL)?", str(semantic).upper()
             )
             if depth_match:
-                mapped_semantic = "gl_FragDepth"
+                # SV_DepthGreaterEqual and SV_DepthLessEqual are conservative depth: CrossGL's depth_greater and
+                # depth_less on gl_FragDepth, as the HLSL import writes them.
+                mapped_semantic = {
+                    None: "gl_FragDepth",
+                    "GREATEREQUAL": "gl_FragDepth @ depth_greater",
+                    "LESSEQUAL": "gl_FragDepth @ depth_less",
+                }[depth_match.group(1)]
         if mapped_semantic is None:
             for hlsl_prefix, crossgl_semantic in (
                 ("SV_CLIPDISTANCE", "gl_ClipDistance"),

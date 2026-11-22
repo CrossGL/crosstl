@@ -172,7 +172,8 @@ def test_shader_record_reaches_glsl_without_a_binding(tmp_path, source):
         assert result.returncode == 0, result.stdout
 
 
-@pytest.mark.parametrize("backend", ["directx", "metal"])
+# HLSL declares the record through a local root signature (tests/test_translator/test_hlsl_shader_records.py).
+@pytest.mark.parametrize("backend", ["metal"])
 def test_shader_record_is_refused_without_a_shader_binding_table(tmp_path, backend):
     with pytest.raises(ShaderRecordBufferUnsupportedError, match="shaderRecordEXT"):
         crosstl.translate(

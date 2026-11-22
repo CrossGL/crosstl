@@ -1,6 +1,6 @@
-"""The dialect of each language a probe can be written in. GLSL, Metal, WGSL and WebGL are here. HLSL and Slang are
-in :mod:`.hlsl`, CUDA, HIP, Mojo and Rust in :mod:`.kernels`, OpenCL C in :mod:`.opencl` and CrossGL in
-:mod:`.crossgl`."""
+"""The dialect of each language a probe can be written in. GLSL, GLSL ES, Metal, WGSL and WebGL are here. HLSL and
+Slang are in :mod:`.hlsl`, CUDA, HIP and Mojo in :mod:`.kernels`, Rust in :mod:`.rust`, OpenCL C in :mod:`.opencl` and
+CrossGL in :mod:`.crossgl`."""
 
 from __future__ import annotations
 
@@ -8,9 +8,13 @@ from .crossgl import DIALECT as CROSSGL
 from .crossgl import ES_DIALECT as CROSSGL_ES
 from .dialect import UNIFORM_ARRAY_LENGTH, Buffer, Dialect, ProbeError, uniform_read
 from .hlsl import HLSL, Slang
-from .kernels import CUDA, HIP, Mojo, Rust
+from .kernels import CUDA, HIP, Mojo
 from .model import Type
 from .opencl import OpenCL
+from .rust import Rust
+from .templates.gles import PRECISION as ES_PRECISION
+from .templates.gles import VERSION as ES_VERSION
+from .templates.gles import with_precisions
 
 
 class GLSL(Dialect):
@@ -18,6 +22,12 @@ class GLSL(Dialect):
     suffix = ".comp"
     fragment_suffix = ".frag"
     geometry_suffix = ".geom"
+    version = "#version 460"
+    # Default precision statements, which follow the extensions a probe enables.
+    precision: tuple[str, ...] = ()
+
+    def _head(self, parts: dict) -> list[str]:
+        return [self.version, *parts.get("prelude", ()), *self.precision]
 
     def _globals(self, buffers: list[Buffer], parts: dict) -> list[str]:
         lines = [
@@ -40,8 +50,7 @@ class GLSL(Dialect):
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lanes = parts.get("lanes", 1)
         lines = [
-            "#version 460",
-            *parts.get("prelude", ()),
+            *self._head(parts),
             f"layout(local_size_x = {lanes}, local_size_y = 1, local_size_z = 1) in;",
             *self._globals(buffers, parts),
         ]
@@ -51,8 +60,7 @@ class GLSL(Dialect):
 
     def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lines = [
-            "#version 460",
-            *parts.get("prelude", ()),
+            *self._head(parts),
             *self._globals(buffers, parts),
             *(
                 f"layout(location = {location}) in {kind} {name};"
@@ -67,8 +75,7 @@ class GLSL(Dialect):
 
     def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
         lines = [
-            "#version 460",
-            *parts.get("prelude", ()),
+            *self._head(parts),
             "layout(points) in;",
             "layout(points, max_vertices = 1) out;",
             *self._globals(buffers, parts),
@@ -77,6 +84,37 @@ class GLSL(Dialect):
         ]
         lines += [f"    {line}" for line in body]
         return "\n".join(lines + ["}"]) + "\n"
+
+
+class GLES(GLSL):
+    """GLSL ES 3.20, the shading language of OpenGL ES 3.2. A probe is GLSL's under its version, with the default
+    precision of floats and integers declared, since a fragment shader has none for floats, and with a precision on
+    every opaque uniform, since most opaque types have no default (GLSL ES 3.20, section 4.7.4).
+    """
+
+    language = "gles"
+    version = ES_VERSION
+    precision = ES_PRECISION
+
+    def scalar(self, scalar: str) -> str:
+        if scalar == "double":
+            raise ProbeError("GLSL ES 3.20 has no double type")
+        return super().scalar(scalar)
+
+    def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        return with_precisions(super().kernel(buffers, body, **parts))
+
+    def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        return with_precisions(super().fragment(buffers, body, **parts))
+
+    def geometry(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        return with_precisions(super().geometry(buffers, body, **parts))
+
+    def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
+        layout = (
+            f"{qualifier}, binding = {binding}" if qualifier else f"binding = {binding}"
+        )
+        return f"layout({layout}) uniform highp {spelling} {name};"
 
 
 class Metal(Dialect):
@@ -321,6 +359,7 @@ DIALECTS: dict[str, Dialect] = {
     for d in (
         CROSSGL,
         CUDA(),
+        GLES(),
         GLSL(),
         HIP(),
         HLSL(),

@@ -39,11 +39,20 @@ _CALLEE_FIELDS = frozenset({"function", "name"})
 
 
 def _children(node):
+    """The field values of ``node`` that can hold nodes, each distinct object once.
+
+    A node keeps some children under two field names (``FunctionCallNode.arguments`` and ``args``,
+    ``AssignmentNode.target`` and ``left``); yielding both would make every walk visit them twice, which doubles
+    the work with every level of nested calls.
+    """
+    seen = set()
+    call = isinstance(node, A.FunctionCallNode)
     for field, value in vars(node).items():
-        if field in _SKIPPED:
+        if field in _SKIPPED or (call and field in _CALLEE_FIELDS):
             continue
-        if isinstance(node, A.FunctionCallNode) and field in _CALLEE_FIELDS:
+        if id(value) in seen:
             continue
+        seen.add(id(value))
         yield value
 
 
@@ -82,6 +91,35 @@ def _declared(program):
     return names
 
 
+def _hazard(node) -> bool:
+    """Whether ``node`` declares a local whose initializer reads the name it declares."""
+    value = node.initial_value
+    return value is not None and node.name in _names(value)
+
+
+def _has_hazard(roots) -> bool:
+    """Whether any declaration under ``roots`` is a hazard.
+
+    The walk reaches every declaration :class:`_Renamer` visits, so without a hazard the renamer would change
+    nothing, and the pass can skip its two walks over the whole program and its recursive walk of every body.
+    """
+    stack = list(roots)
+    while stack:
+        item = stack.pop()
+        if isinstance(item, list):
+            stack.extend(item)
+        elif isinstance(item, A.ASTNode) and not isinstance(item, A.IdentifierNode):
+            if isinstance(item, A.VariableNode) and _hazard(item):
+                return True
+            call = isinstance(item, A.FunctionCallNode)
+            for field, child in vars(item).items():
+                if isinstance(child, (list, A.ASTNode)) and not (
+                    field in _SKIPPED or (call and field in _CALLEE_FIELDS)
+                ):
+                    stack.append(child)
+    return False
+
+
 class _Renamer:
     def __init__(self, taken):
         self.taken = taken
@@ -106,9 +144,8 @@ class _Renamer:
 
     def declaration(self, node, renames):
         """``node`` declares a name in the scope ``renames`` describes, which it updates."""
-        value = node.initial_value
-        hazard = value is not None and node.name in _names(value)
-        self.visit(value, renames)
+        hazard = _hazard(node)
+        self.visit(node.initial_value, renames)
         self.visit(getattr(node, "var_type", None), renames)
         if hazard:
             renames[node.name] = node.name = self.fresh(node.name)
@@ -144,11 +181,12 @@ class _Renamer:
                 self.visit(getattr(node, field, None), scope)
             return
         for child in _children(node):
-            if isinstance(child, list) and any(
-                isinstance(c, A.VariableNode) for c in child
-            ):
-                self.statements(child, renames)
-            else:
+            if isinstance(child, list):
+                if any(isinstance(c, A.VariableNode) for c in child):
+                    self.statements(child, renames)
+                else:
+                    self.visit(child, renames)
+            elif isinstance(child, A.ASTNode):
                 self.visit(child, renames)
 
 
@@ -160,11 +198,16 @@ def separate_initializer_scopes(program, source, target) -> int:
         return 0
     if not isinstance(program, A.ShaderNode):
         return 0
-    renamer = _Renamer(_names(program) | _declared(program))
+    bodies = []
     for function in iter_functions(program):
         body = getattr(function, "body", None)
         if isinstance(body, A.BlockNode):
-            renamer.statements(body.statements or [], {})
+            bodies.append(body.statements or [])
         elif isinstance(body, list):
-            renamer.statements(body, {})
+            bodies.append(body)
+    if not _has_hazard(bodies):
+        return 0
+    renamer = _Renamer(_names(program) | _declared(program))
+    for statements in bodies:
+        renamer.statements(statements, {})
     return renamer.count

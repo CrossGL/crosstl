@@ -93,7 +93,7 @@ def test_crossgl_scalar_min_max_calls_disambiguate_mojo_helper_overloads():
 
     assert "max(Float32(dot_product(n, l)), Float32(0.0))" in generated_code
     assert "max(Float32(denom), Float32(eps))" in generated_code
-    assert "fn max(a: Int32, b: Int32) -> Int32:" in generated_code
+    assert "def max(a: Int32, b: Int32) -> Int32:" in generated_code
     assert "var bucket: Int32 = max(Int32(1), Int32(2))" in generated_code
 
 
@@ -134,8 +134,11 @@ def test_crossgl_compute_builtin_aliases_emit_mojo_parameters():
 
     assert "# CrossGL GPU builtin placeholders" not in generated_code
     assert "struct _CrossGLGpuBuiltinU32Vec3" not in generated_code
+    # Mojo reads the invocation index from global_idx, so the kernel declares the alias instead of taking it.
+    assert "def compute_main() -> None:" in generated_code
     assert (
-        "fn compute_main(global_idx_uint: SIMD[DType.uint32, 4]) -> None:"
+        "    var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+        "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
     ) in generated_code
     assert "global_idx_uint[0]" in generated_code
     assert "global_idx_uint[1]" in generated_code

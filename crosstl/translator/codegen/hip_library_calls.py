@@ -10,10 +10,13 @@ with argument types that a call of another type cannot reach unambiguously:
 - ``norm``/``rnorm`` of an array: CrossGL spells both precisions without the ``f`` suffix. HIP's ``norm`` and
   ``rnorm`` take ``const double*`` and ``normf`` and ``rnormf`` take ``const float*``, so the name is chosen from
   the element type of the array, and an array of any other element type is refused.
+- ``powi``: CrossGL's integer power, which HIP spells ``powif`` for ``float`` and ``powi`` for ``double``
+  (:mod:`.cuda_integer_powers`).
 """
 
 from __future__ import annotations
 
+from .cuda_integer_powers import integer_power_call
 from .hip_refusals import HipLoweringRefused
 
 __all__ = [
@@ -49,6 +52,11 @@ def generate_hip_library_call(codegen, func_name, raw_args, args):
     """
     if func_name == "__ffsll" and len(args) == 1:
         return f"__ffsll({ffs64_argument(args[0], _hip_type(codegen, raw_args[0]))})"
+    integer_power = integer_power_call(
+        codegen, func_name, raw_args, args, HipLoweringRefused
+    )
+    if integer_power is not None:
+        return integer_power
     if func_name in _EUCLIDEAN_NORM_FUNCTIONS and len(args) == 2:
         name = _euclidean_norm_name(codegen, func_name, raw_args[1])
         return f"{name}({', '.join(args)})"

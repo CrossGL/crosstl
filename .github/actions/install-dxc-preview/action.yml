@@ -1,0 +1,50 @@
+name: Install the DXC Shader Model 6.10 preview
+description: >-
+  Install DXC's Shader Model 6.10 preview (v1.10.2605.37) for Linux from its official release asset, verify the
+  archive checksum and the compiler version, and point the coverage validators at it with
+  CROSSTL_COVERAGE_DXC_PREVIEW. The pinned release stays the dxc on PATH.
+
+runs:
+  using: composite
+  steps:
+    - name: Download and activate the DXC preview
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        url="https://github.com/microsoft/DirectXShaderCompiler/releases/download/v1.10.2605.37/linux_dxc_2026_08_11.x86_64.tar.gz"
+        archive="$RUNNER_TEMP/dxc-preview.tar.gz"
+        root="$RUNNER_TEMP/dxc-preview"
+
+        curl -fsSLo "$archive" \
+          --retry 8 \
+          --retry-all-errors \
+          --retry-connrefused \
+          --retry-delay 10 \
+          --retry-max-time 240 \
+          --connect-timeout 30 \
+          "$url"
+        echo "dea02d61c0548a6163a5fb45daa9263faeb5334e35d25a30b0293a32d089ceae  $archive" | sha256sum --check --strict
+
+        rm -rf "$root"
+        mkdir -p "$root"
+        tar -xzf "$archive" -C "$root"
+        rm -f "$archive"
+        if [ ! -x "$root/bin/dxc" ]; then
+          echo "dxc was not found in the extracted preview archive" >&2
+          exit 1
+        fi
+
+        # The preview binary loads its own libdxcompiler.so through its run path, ahead of the pinned release's
+        # library on LD_LIBRARY_PATH. The version it reports is the library's, so this check fails if it loads the
+        # wrong one.
+        version="$("$root/bin/dxc" --version)"
+        echo "$version"
+        case "$version" in
+          *"1.10(5373-c4d8f4f9)"*) ;;
+          *)
+            echo "expected the DXC v1.10.2605.37 preview (1.10.0.5373, c4d8f4f9)" >&2
+            exit 1
+            ;;
+        esac
+        echo "CROSSTL_COVERAGE_DXC_PREVIEW=$root/bin/dxc" >> "$GITHUB_ENV"

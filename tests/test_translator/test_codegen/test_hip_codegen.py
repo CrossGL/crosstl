@@ -5054,8 +5054,8 @@ class TestHipCodeGen:
         assert ")[1]" not in hip_code
         assert ")[2]" not in hip_code
 
-    def test_compute_builtin_subscripts_refuse_non_constant_index_and_writes(self):
-        non_constant_source = """
+    def test_compute_builtin_subscripts_read_runtime_index_and_refuse_writes(self):
+        runtime_index_source = """
         shader TestShader {
             compute {
                 void main(uint i) {
@@ -5064,8 +5064,16 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(HipLoweringRefused, match="non-constant index"):
-            HipCodeGen().generate(Parser(Lexer(non_constant_source).tokens).parse())
+        code = HipCodeGen().generate(Parser(Lexer(runtime_index_source).tokens).parse())
+        assert (
+            "cgl_builtin_component(i, (blockIdx.x * blockDim.x + threadIdx.x), "
+            "(blockIdx.y * blockDim.y + threadIdx.y), "
+            "(blockIdx.z * blockDim.z + threadIdx.z))"
+        ) in code
+
+        out_of_range_source = runtime_index_source.replace("[i]", "[3]")
+        with pytest.raises(HipLoweringRefused, match="with index 3"):
+            HipCodeGen().generate(Parser(Lexer(out_of_range_source).tokens).parse())
 
         write_source = """
         shader TestShader {
@@ -13347,7 +13355,9 @@ class TestHipCodeGen:
         assert "WaveOpNode(" not in hip_code
         assert "Unsupported HIP wave intrinsic" not in hip_code
 
-    def test_direct_shfl_down_sync_lowers_to_guarded_hip_helper(self):
+    def test_direct_shfl_down_sync_lowers_to_a_32_lane_hip_shuffle(self):
+        # CUDA warps are 32 lanes; hipcc 5.7 declares no __shfl_down_sync, and HIP's __shfl_down with width 32
+        # keeps the source lane inside the caller's 32-lane segment of a 32- or 64-lane wavefront.
         source_code = """
         shader HipDirectShuffle {
             compute {
@@ -13362,28 +13372,24 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
         assert (
-            "__device__ inline float "
-            "cgl_hip_shfl_down_sync_float(unsigned long long mask, float value, "
-            "int offset)" in hip_code
+            "__device__ inline T cgl_cuda_shfl_down_sync(unsigned int mask, T value, "
+            "unsigned int lane, int width = 32) {" in hip_code
         )
+        assert "    return __shfl_down(value, lane & 31u, width);" in hip_code
         assert (
-            "#if defined(__HIP_DEVICE_COMPILE__) && "
-            "defined(HIP_ENABLE_WARP_SYNC_BUILTINS)" in hip_code
+            "float reduced = cgl_cuda_shfl_down_sync(4294967295u, partial, 16);"
+            in hip_code
         )
-        assert (
-            "float reduced = cgl_hip_shfl_down_sync_float"
-            "(4294967295u, partial, 16);" in hip_code
-        )
+        assert "HIP_ENABLE_WARP_SYNC_BUILTINS" not in hip_code
+        assert "return value;" not in hip_code
 
-    def test_direct_shfl_down_sync_width_lowers_to_guarded_hip_helper(self):
-        # ROCm HIP documents __shfl_down_sync with optional width=warpSize.
-        # Source: https://rocm.docs.amd.com/projects/HIP/en/docs-7.0.1/reference/kernel_language.html#warp-shuffle-functions
+    def test_direct_shfl_down_sync_width_lowers_to_a_32_lane_hip_shuffle(self):
         source_code = """
         shader HipDirectShuffleWidth {
             compute {
                 void main() {
                     uint partial = 7u;
-                    uint reduced = __shfl_down_sync(0xffffffffffffffff, partial, 1, 32);
+                    uint reduced = __shfl_down_sync(0xffffffffu, partial, 1, 16);
                 }
             }
         }
@@ -13392,16 +13398,10 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
         assert (
-            "__device__ inline unsigned int "
-            "cgl_hip_shfl_down_sync_width_uint(unsigned long long mask, "
-            "unsigned int value, int offset, int width)" in hip_code
+            "unsigned int reduced = cgl_cuda_shfl_down_sync(4294967295u, partial, 1, 16);"
+            in hip_code
         )
-        assert "return __shfl_down_sync(mask, value, offset, width);" in hip_code
-        assert "(void)width;" in hip_code
-        assert (
-            "unsigned int reduced = cgl_hip_shfl_down_sync_width_uint"
-            "(18446744073709551615, partial, 1, 32);" in hip_code
-        )
+        assert hip_code.count("cgl_cuda_shfl_down_sync(unsigned int mask") == 1
 
     def test_direct_shfl_down_sync_rejects_invalid_arity(self):
         source_code = """
@@ -13418,7 +13418,7 @@ class TestHipCodeGen:
 
         with pytest.raises(
             ValueError,
-            match=r"HIP warp sync builtin __shfl_down_sync requires 3 or 4 "
+            match=r"CUDA warp intrinsic __shfl_down_sync takes 3 or 4 "
             r"arguments, got 2",
         ):
             HipCodeGen().generate(ast)
@@ -14885,3 +14885,32 @@ def test_hip_const_match_expression_local_stays_assignable():
     assert "int value;" in hip_code
     assert "value = 10;" in hip_code
     assert "value = -1;" in hip_code
+
+
+def test_hip_cbuffer_vector_member_uses_vector_helpers(tmp_path):
+    source_code = """
+    shader P {
+        buffer float* outp;
+        cbuffer Params {
+            vec3 scale;
+        };
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec3 v = vec3(outp[i]);
+                vec3 a = v - scale / 2.0;
+                outp[i] = a.x + dot(scale, v);
+            }
+        }
+    }
+    """
+
+    ast = Parser(Lexer(source_code).tokens).parse()
+    hip_code = HipCodeGen().generate(ast)
+
+    assert "__constant__ float3 scale;" in hip_code
+    assert "cgl_float3_sub(v, cgl_float3_div_scalar(scale, 2.0f))" in hip_code
+    assert "cgl_float3_sub_scalar" not in hip_code
+    assert "cgl_float3_dot(scale, v)" in hip_code
+    compile_hip_if_hipcc_available(hip_code, tmp_path)

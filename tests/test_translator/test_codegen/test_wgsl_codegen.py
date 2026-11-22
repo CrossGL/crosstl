@@ -3213,12 +3213,12 @@ def test_wgsl_codegen_lowers_do_while_statement_to_loop_with_break_if():
                 sampler2D colorTex;
                 fragment {
                     vec4 main(vec2 uv @ TEXCOORD0) @ gl_FragColor {
-                        return textureGather(colorTex, uv);
+                        return textureGatherOffsets(colorTex, uv, ivec2(0), ivec2(1), ivec2(2), ivec2(3));
                     }
                 }
             }
             """,
-            "WGSL target does not support CrossGL texture function textureGather yet",
+            "WGSL target does not support CrossGL texture function textureGatherOffsets yet",
         ),
     ),
 )
@@ -4812,7 +4812,7 @@ def test_wgsl_codegen_maps_integer_samplers_to_typed_textures(
         "isamplerBuffer",
         "usampler2DRect",
         "isampler1DArray",
-        "usampler2DMS",
+        "usampler2DMSArray",
     ],
 )
 def test_wgsl_codegen_refuses_samplers_without_wgsl_texture_type(sampler_type):
@@ -5193,6 +5193,12 @@ def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic():
                 return;
             }
         }
+        fragment {
+            vec4 main() @ gl_FragColor {
+                sync();
+                return vec4(1.0);
+            }
+        }
     }
     """
 
@@ -5200,7 +5206,7 @@ def test_wgsl_codegen_rejects_barriers_in_helpers_with_specific_diagnostic():
         ValueError,
         match=(
             "WGSL target does not support barrier\\(\\) inside helper function "
-            "sync yet"
+            "sync, which is not reached only from compute entry points"
         ),
     ):
         WGSLCodeGen().generate(parse_shader(shader))
@@ -6513,7 +6519,7 @@ def test_wgsl_codegen_half_conversion_converts_integer_operands(tmp_path):
     assert "pack2x16float(vec2<f32>(f32(k), 0.0))" in generated
     assert "pack2x16float(vec2<f32>(f32(2), 0.0))" in generated
     assert "crosstl_pack2x16float_vec3(vec3<f32>(i3in[0]))" in generated
-    assert "unpack2x16float(pack2x16float(vec2<f32>(f32(k), 0.0))).x" in generated
+    assert "quantizeToF16(f32(k))" in generated
     assert "unpack2x16float(u32(k)).x" in generated
     validate_wgsl_with_naga(tmp_path, generated)
 
@@ -6741,9 +6747,9 @@ def test_wgsl_codegen_half_conversion_array_indexing_side_effects(tmp_path):
         ("f2_out[0]", "crosstl_unpack2x16float_vec2", "u2_arr"),
         ("f3_out[0]", "crosstl_unpack2x16float_vec3", "u3_arr"),
         ("f4_out[0]", "crosstl_unpack2x16float_vec4", "u4_arr"),
-        ("f2_out[1]", "unpack2x16float(pack2x16float", "v2_arr"),
-        ("f3_out[1]", "crosstl_unpack_pack2x16float_vec3", "v3_arr"),
-        ("f4_out[1]", "crosstl_unpack_pack2x16float_vec4", "v4_arr"),
+        ("f2_out[1]", "quantizeToF16", "v2_arr"),
+        ("f3_out[1]", "quantizeToF16", "v3_arr"),
+        ("f4_out[1]", "quantizeToF16", "v4_arr"),
     ]
 
     # Verify each i++ statement follows the exact sequence:

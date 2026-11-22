@@ -1,4 +1,4 @@
-"""CUDA warp shuffles in CrossGL programs: an exact workgroup-memory emulation for targets without CUDA warps.
+"""CUDA warp intrinsics in CrossGL programs: an exact workgroup-memory emulation for targets without CUDA warps.
 
 CrossGL programs may call the CUDA warp shuffles ``__shfl_sync``, ``__shfl_up_sync``, ``__shfl_down_sync`` and
 ``__shfl_xor_sync`` directly. CUDA defines them over a warp: 32 threads of consecutive linear thread index, the
@@ -8,32 +8,47 @@ and WebGPU subgroups have an implementation-defined size and no specified mappin
 so a shuffle cannot be lowered to subgroup operations without changing which lanes exchange values. The emitters
 used to print the CUDA names verbatim.
 
-For a compute entry point whose declared workgroup holds at most one warp (``W = x * y * z <= 32``), the warp is
-the workgroup and a lane's index is ``gl_LocalInvocationIndex``. CUDA requires every lane named in the mask to
-execute the same shuffle, so with a mask that names all ``W`` lanes every invocation of the workgroup reaches each
-shuffle, and a workgroup barrier there is valid. This pass then rewrites each shuffle into::
+A compute entry point's declared workgroup of ``W = x * y * z`` invocations holds ``ceil(W / 32)`` warps: warp
+``k`` is the invocations whose ``gl_LocalInvocationIndex`` lies in ``[32 k, 32 k + 32)``, and a lane's index is
+``gl_LocalInvocationIndex & 31``. CUDA requires every lane named in the mask to execute the same shuffle. When the
+workgroup is one warp (``W <= 32``), a mask that names all ``W`` lanes therefore brings every invocation of the
+workgroup to each shuffle, and a workgroup barrier there is valid. When it holds several warps, different warps
+may take different paths, so the shuffle must also be at a point a conservative uniformity check proves
+workgroup-uniform: every condition that controls it, and every jump before it, depends only on constants,
+uniforms and workgroup-uniform built-ins. This pass then rewrites each shuffle into::
 
-    T value = <value>;                    uint source = <PTX source lane, or own lane>;
+    T value = <value>;                    uint source = <warp base + PTX source lane, or own index>;
     exchange[gl_LocalInvocationIndex] = value;   barrier();
     T result = exchange[source];          barrier();
 
-which returns exactly the value CUDA returns: lane ``source``'s value when PTX's range check passes and the lane
-exists, and the caller's own value otherwise (a lane at or past ``W`` is inactive; CUDA leaves that result
-undefined). The second barrier keeps the next exchange from overwriting a slot still being read.
+which returns exactly the value CUDA returns, on any subgroup size: lane ``source``'s value when PTX's range check
+passes and the lane exists, and the caller's own value otherwise (a lane at or past ``W`` is inactive; CUDA leaves
+that result undefined). The second barrier keeps the next exchange from overwriting a slot still being read.
+Subgroup operations cannot replace it: Vulkan, Direct3D, Metal, OpenGL and WebGPU subgroups have an
+implementation-defined size (lavapipe's is 4 or 8, WARP's 4) and no specified mapping from invocations to subgroups.
 
-Every other use is refused with :class:`CudaWarpIntrinsicUnsupportedError`: a workgroup of more than one warp
-(warps may diverge, so a workgroup barrier is not valid where a warp shuffle is), an undeclared workgroup size, a
-mask that is not a literal naming every lane, a width that is not a literal power of two up to 32, a shuffle
-outside a compute entry point, in a conditionally evaluated operand, or in a statement whose other operands have
-side effects, and the other warp intrinsics (votes, reductions, matches, ``__syncwarp``). WGSL rejects a barrier
-outside uniform control flow (WGSL section 15.2, uniformity analysis), so for WGSL the shuffle must also be at a
-point a conservative uniformity check proves uniform.
+The votes (``__ballot_sync``, ``__any_sync``, ``__all_sync``), the integer reductions (``__reduce_*_sync``) and
+``__match_any_sync`` use the same exchange: each lane stores its operand, a barrier publishes it, each lane folds
+its warp's slots in lane order (a partial last warp folds only the lanes that exist), and a second barrier frees
+the exchange. ``__syncwarp()`` orders the global and shared memory accesses of the lanes it waits for, so it
+becomes a workgroup barrier with a workgroup-scope fence over all memory on each side. CUDA lets the lanes of one
+warp meet at different ``__syncwarp`` calls (PTX ``bar.warp.sync``), so an entry point that calls it needs
+workgroup-uniform control flow at every warp intrinsic.
+
+Every other use is refused with :class:`CudaWarpIntrinsicUnsupportedError`: an intrinsic of a multi-warp workgroup
+at a point not proved uniform, an undeclared workgroup size, a mask that is not a literal naming every lane of a
+warp, a width that is not a literal power of two up to 32, an intrinsic outside a compute entry point, in a
+conditionally evaluated operand, or in a statement whose other operands have side effects, and the intrinsics this
+pass does not emulate (``__activemask``, ``__match_all_sync``, ``__uni_sync`` and the forms without a mask).
+WGSL rejects a barrier outside uniform control flow (WGSL section 15.2, uniformity analysis), so for WGSL a
+one-warp workgroup's intrinsic must be at a uniform point too.
 """
 
 from __future__ import annotations
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from ..host_workgroup_size import is_compute_function_entry
 from .hub_types import (
     TypeScope,
     call_name,
@@ -41,6 +56,7 @@ from .hub_types import (
     iter_functions,
     type_from_name,
 )
+from .local_bindings import local_bindings
 from .rewrite import (
     call,
     child_slots,
@@ -52,6 +68,7 @@ from .rewrite import (
 )
 
 __all__ = [
+    "ORDERED_WORKGROUP_BARRIER",
     "SHUFFLES",
     "WARP_TARGETS",
     "CudaWarpIntrinsicUnsupportedError",
@@ -65,6 +82,28 @@ SHUFFLES = {
     "__shfl_down_sync": "down",
     "__shfl_xor_sync": "bfly",
 }
+# Votes: the predicate's truth per lane, combined over the warp (CUDA "Warp Vote Functions").
+VOTES = {"__ballot_sync": "ballot", "__any_sync": "any", "__all_sync": "all"}
+# Reductions over a warp's 32-bit integers (CUDA "Warp Reduce Functions"); and, or and xor take unsigned values.
+REDUCTIONS = {
+    "__reduce_add_sync": "+",
+    "__reduce_min_sync": "min",
+    "__reduce_max_sync": "max",
+    "__reduce_and_sync": "&",
+    "__reduce_or_sync": "|",
+    "__reduce_xor_sync": "^",
+}
+MATCH_ANY = "__match_any_sync"
+SYNCWARP = "__syncwarp"
+# CrossGL for a barrier that waits for the workgroup and orders all of its memory: a workgroup-scope fence over
+# buffer, image and shared memory (groupMemoryBarrier, GLSL 4.60 section 8.16) on each side of the execution barrier.
+# CUDA's __syncthreads and __syncwarp order global memory as well as shared memory for the threads they wait for
+# (CUDA C++ Programming Guide, "Synchronization Functions"), and workgroupBarrier alone orders shared memory only.
+ORDERED_WORKGROUP_BARRIER = (
+    "groupMemoryBarrier",
+    "workgroupBarrier",
+    "groupMemoryBarrier",
+)
 OTHER_WARP_INTRINSICS = frozenset(
     {
         "__shfl",
@@ -131,6 +170,10 @@ class CudaWarpIntrinsicUnsupportedError(TranslationDiagnostic):
 
 def _uint(value):
     return A.LiteralNode(int(value), A.PrimitiveType("uint"))
+
+
+def _zero(kind):
+    return A.LiteralNode(0, A.PrimitiveType("int" if kind == "i" else "uint"))
 
 
 def _binary(left, op, right):
@@ -215,12 +258,16 @@ class WarpLegalizer:
             if isinstance(value, str)
         }
         self.lanes = 0
+        self.strict = False
         self.exchanges = {}
         self.declarations = []
         self.uniform_here = True
         self.tainted = False
+        self.left_divergently = False
         self.locals = frozenset()
+        self.bindings = {}
         self.nonuniform = set()
+        self.nonuniform_names = set()
         self.uniform_globals = set()
 
     # Program structure ------------------------------------------------------------------------------------------
@@ -259,6 +306,9 @@ class WarpLegalizer:
             self.uniform_globals.add(constant.name)
         self._declare_globals(getattr(self.program, "global_variables", None) or [])
         for function in getattr(self.program, "functions", None) or []:
+            if is_compute_function_entry(function) and self.mentions(function):
+                self.entry(function, function)
+                continue
             self._refuse_inside(function, "a function other than a compute entry point")
         stages = getattr(self.program, "stages", None) or {}
         for stage in stages.values() if isinstance(stages, dict) else stages:
@@ -286,8 +336,11 @@ class WarpLegalizer:
             )
 
     def workgroup_lanes(self, stage, entry):
-        config = getattr(stage, "execution_config", None) or {}
+        config = dict(getattr(stage, "execution_config", None) or {})
         keys = ("local_size_x", "local_size_y", "local_size_z")
+        numthreads = config.get("numthreads")
+        if isinstance(numthreads, (list, tuple)) and not any(k in config for k in keys):
+            config.update(zip(keys, numthreads))
         if not any(key in config for key in keys):
             self.refuse(
                 "a CUDA warp shuffle in an entry point with no declared workgroup size",
@@ -305,31 +358,46 @@ class WarpLegalizer:
                     entry,
                 )
             lanes *= value
-        if lanes > WARP_SIZE:
-            self.refuse(
-                f"a CUDA warp shuffle in a workgroup of {lanes} invocations: its warps may "
-                "diverge, so a workgroup barrier cannot emulate one warp's exchange",
-                "multiple-warps",
-                entry,
-            )
         return lanes
 
     def entry(self, stage, entry):
         self.lanes = self.workgroup_lanes(stage, entry)
+        # Several warps may take different paths, so their shared barrier needs workgroup-uniform control flow. CUDA
+        # lets the lanes of one warp meet at different __syncwarp calls (PTX bar.warp.sync, sm_70 and later), so an
+        # entry that calls it needs uniform control flow at every warp intrinsic too.
+        self.strict = (
+            self.target == "wgsl"
+            or self.lanes > WARP_SIZE
+            or any(
+                isinstance(node, A.FunctionCallNode) and call_name(node) == SYNCWARP
+                for node in entry.walk()
+            )
+        )
         self.exchanges, self.declarations = {}, []
         self.scope.push()
         self._declare_globals(getattr(stage, "local_variables", None) or [])
         for parameter in entry.parameters or []:
             self.scope.declare(parameter.name, getattr(parameter, "param_type", None))
-        if self.target == "wgsl":
+        if self.strict:
             self.nonuniform = self.nonuniform_locals(entry.body)
-        self.uniform_here, self.tainted = True, False
+        self.uniform_here, self.tainted, self.left_divergently = True, False, False
         if isinstance(entry.body, list):
             entry.body[:] = self.statements(entry.body)
         else:
             entry.body = self.branch(entry.body)
         self.scope.pop()
-        stage.local_variables = list(stage.local_variables or []) + self.declarations
+        if stage is entry:
+            # A top-level ``@ compute fn`` entry declares its workgroup memory in its body.
+            for declaration in self.declarations:
+                declaration.qualifiers = ["workgroup"]
+            if isinstance(entry.body, list):
+                entry.body[:0] = self.declarations
+            else:
+                entry.body.statements[:0] = self.declarations
+        else:
+            stage.local_variables = (
+                list(stage.local_variables or []) + self.declarations
+            )
 
     # Statements -------------------------------------------------------------------------------------------------
     def statements(self, items):
@@ -364,6 +432,10 @@ class WarpLegalizer:
             self.scope.declare(node.name, node.var_type)
             return prelude + [node]
         if isinstance(node, A.ExpressionStatementNode):
+            if self.is_warp_call(node.expression) and (
+                call_name(node.expression) == SYNCWARP
+            ):
+                return self.syncwarp(node.expression)
             return self.eager(node, "expression", node) + [node]
         if isinstance(node, A.AssignmentNode):
             return self.eager_all(node, ("target", "value")) + [node]
@@ -387,9 +459,11 @@ class WarpLegalizer:
         return [node]
 
     def escape(self, node):
-        """A jump at a non-uniform point makes everything after it non-uniform (conservatively, for WGSL)."""
+        """A jump at a non-uniform point makes everything after it non-uniform (conservatively, in strict mode)."""
         if not self.uniform_here:
             self.tainted = True
+            if not isinstance(node, (A.BreakNode, A.ContinueNode)):
+                self.left_divergently = True
 
     def if_statement(self, node):
         prelude = self.eager(node, "condition", node)
@@ -406,6 +480,7 @@ class WarpLegalizer:
 
     def loop(self, node):
         prelude = []
+        tainted = self.tainted
         uniform = not self.divergent_exit(node.body)
         self.scope.push()
         if isinstance(node, A.ForNode) and node.init is not None:
@@ -419,7 +494,12 @@ class WarpLegalizer:
                 uniform = uniform and self.is_uniform_statement(part)
         set_child(node, "body", None, self.branch(node.body, uniform))
         self.scope.pop()
-        if not uniform:
+        if self.target != "wgsl":
+            # Every invocation that does not return leaves the loop, so a divergent condition, break or continue
+            # in it does not reach past it: GLSL 4.60 section 8.16 (and Vulkan, Direct3D and Metal) ask only that
+            # the conditions that lead to a barrier be dynamically uniform, and the loop's do not.
+            self.tainted = tainted or self.left_divergently
+        elif not uniform:
             self.tainted = True
         return prelude + [node]
 
@@ -480,7 +560,7 @@ class WarpLegalizer:
                 self.expression(argument, prelude, results)
                 for argument in node.arguments or []
             ]
-            result = self.shuffle(node, arguments, prelude)
+            result = self.collective(node, arguments, prelude)
             results.add(id(result))
             return result
         operator = getattr(node, "op", None)
@@ -498,19 +578,55 @@ class WarpLegalizer:
                 set_child(node, field, key, replacement)
         return node
 
+    def collective(self, node, arguments, prelude):
+        name = call_name(node)
+        if name in SHUFFLES:
+            return self.shuffle(node, arguments, prelude)
+        if name in VOTES or name in REDUCTIONS or name == MATCH_ANY:
+            return self.warp_combine(name, node, arguments, prelude)
+        self.refuse(f"CUDA warp intrinsic {name}", "intrinsic", node)
+
+    def require_convergence(self, name, node):
+        if not self.strict or not (self.tainted or not self.uniform_here):
+            return
+        if self.target == "wgsl":
+            why = "where WGSL forbids the workgroup barrier its emulation needs (WGSL section 15.2)"
+        elif self.lanes > WARP_SIZE:
+            why = (
+                f"and the workgroup of {self.lanes} invocations holds several warps that may diverge "
+                "there, so not every invocation reaches the workgroup barrier its emulation needs"
+            )
+        else:
+            why = (
+                "in an entry point that calls __syncwarp, whose lanes may meet at different calls (PTX "
+                "bar.warp.sync), so not every invocation reaches the workgroup barrier its emulation needs"
+            )
+        self.refuse(
+            f"{name} outside uniform control flow, {why}",
+            "non-uniform-control-flow",
+            node,
+        )
+
+    def syncwarp(self, node):
+        """``__syncwarp()`` waits for every lane of the warp and orders their global and shared memory accesses; at a
+        point every invocation of the workgroup reaches, a workgroup barrier fenced over all memory does both for
+        each warp. Returns the replacement statements.
+        """
+        arguments = node.arguments or []
+        if len(arguments) > 1:
+            self.refuse(
+                f"{SYNCWARP} with {len(arguments)} arguments", "arguments", node
+            )
+        if arguments:
+            self.check_mask(SYNCWARP, arguments[0])
+        self.require_convergence(SYNCWARP, node)
+        return [_statement(call(name, [])) for name in ORDERED_WORKGROUP_BARRIER]
+
     def shuffle(self, node, arguments, prelude):
         name = call_name(node)
-        if name not in SHUFFLES:
-            self.refuse(f"CUDA warp intrinsic {name}", "intrinsic", node)
         if len(arguments) not in (3, 4):
             self.refuse(f"{name} with {len(arguments)} arguments", "arguments", node)
-        if self.target == "wgsl" and (self.tainted or not self.uniform_here):
-            self.refuse(
-                f"{name} outside uniform control flow, where WGSL forbids the workgroup "
-                "barrier its emulation needs (WGSL section 15.2)",
-                "non-uniform-control-flow",
-                node,
-            )
+        self.require_convergence(name, node)
         mask, value, operand = arguments[:3]
         self.check_mask(name, mask)
         width = self.width(name, arguments[3] if len(arguments) == 4 else None)
@@ -541,15 +657,137 @@ class WarpLegalizer:
         self.scope.declare(result_name, value_type)
         return _ident(result_name)
 
+    # Votes, reductions and matches -----------------------------------------------------------------------------
+    def warp_combine(self, name, node, arguments, prelude):
+        """Each invocation stores its operand in the exchange, then folds its warp's slots in lane order: lane ``k``
+        of warp ``w`` is slot ``32 w + k``, and a partial last warp folds only the lanes that exist.
+        """
+        if len(arguments) != 2:
+            self.refuse(f"{name} with {len(arguments)} arguments", "arguments", node)
+        self.require_convergence(name, node)
+        mask, value = arguments
+        self.check_mask(name, mask)
+        operation = VOTES.get(name) or REDUCTIONS.get(name) or "match"
+        kind = self.scalar_kind(name, value, votes=name in VOTES)
+        uint = A.PrimitiveType("uint")
+        if name in VOTES:
+            truth = value if kind == "b" else _binary(value, "!=", _zero(kind))
+            stored, slot_type = A.TernaryOpNode(truth, _uint(1), _uint(0)), uint
+        elif operation in ("match", "min", "max"):
+            stored, slot_type = value, A.PrimitiveType("int" if kind == "i" else "uint")
+        else:
+            # Unsigned sums wrap on every target, as CUDA's do; and, or and xor take unsigned values (CUDA).
+            stored, slot_type = (value if kind == "u" else call("uint", [value])), uint
+        own = self.fresh("cgl_warp_value")
+        prelude.append(A.VariableNode(own, clone_type(slot_type), stored))
+        self.scope.declare(own, slot_type)
+        exchange = self.exchange(slot_type)
+        prelude.extend(
+            [
+                _statement(
+                    A.AssignmentNode(
+                        A.ArrayAccessNode(_ident(exchange), _ident(_LANE)), _ident(own)
+                    )
+                ),
+                _statement(call("barrier", [])),
+            ]
+        )
+        base = None
+        if self.lanes > WARP_SIZE:
+            within = _binary(_ident(_LANE), "&", _uint(WARP_SIZE - 1))
+            base = self.temporary(_binary(_ident(_LANE), "-", within), prelude)
+
+        def slot(index):
+            position = index if base is None else _binary(_ident(base), "+", index)
+            return A.ArrayAccessNode(_ident(exchange), position)
+
+        lane = self.fresh("cgl_warp_lane")
+        folds = {
+            "ballot": (_uint(0), _binary(slot(_ident(lane)), "<<", _ident(lane))),
+            "any": (_uint(0), slot(_ident(lane))),
+            "all": (_uint(1), slot(_ident(lane))),
+            "match": (
+                _uint(0),
+                A.TernaryOpNode(
+                    _binary(slot(_ident(lane)), "==", _ident(own)),
+                    _binary(_uint(1), "<<", _ident(lane)),
+                    _uint(0),
+                ),
+            ),
+        }
+        result = self.fresh("cgl_warp_result")
+        if operation in folds:
+            initial, item = folds[operation]
+            start = 0
+            accumulator_type = uint
+        else:
+            initial, item, start = slot(_uint(0)), slot(_ident(lane)), 1
+            accumulator_type = slot_type
+        if operation in ("min", "max"):
+            folded = call(operation, [_ident(result), item])
+        else:
+            # Votes and matches fold their bits; the integer reductions fold with their own operator.
+            joiner = {"ballot": "|", "any": "|", "all": "&", "match": "|"}
+            joiner.update({op: op for op in ("+", "&", "|", "^")})
+            folded = _binary(_ident(result), joiner[operation], item)
+        prelude.extend(
+            [
+                A.VariableNode(result, clone_type(accumulator_type), initial),
+                A.ForNode(
+                    A.VariableNode(lane, A.PrimitiveType("uint"), _uint(start)),
+                    _binary(_ident(lane), "<", self.warp_lane_count(base)),
+                    A.UnaryOpNode("++", _ident(lane), is_postfix=True),
+                    A.BlockNode([_statement(A.AssignmentNode(_ident(result), folded))]),
+                ),
+                _statement(call("barrier", [])),
+            ]
+        )
+        self.scope.declare(result, accumulator_type)
+        if operation in ("any", "all") or (operation == "+" and kind == "i"):
+            return call("int", [_ident(result)])
+        return _ident(result)
+
+    def warp_lane_count(self, base):
+        """The lanes of the caller's warp that exist: ``W`` in a one-warp workgroup, else up to 32."""
+        if base is None:
+            return _uint(self.lanes)
+        if self.lanes % WARP_SIZE == 0:
+            return _uint(WARP_SIZE)
+        remaining = _binary(_uint(self.lanes), "-", _ident(base))
+        return call("min", [_uint(WARP_SIZE), remaining])
+
+    def scalar_kind(self, name, value, votes):
+        """``i`` or ``u`` for a 32-bit integer operand, or ``b`` for a vote's bool predicate; else a refusal."""
+        hub = self.scope.infer(value)
+        if hub is None:
+            declared = self.scope.node_type(value)
+            if isinstance(declared, A.PrimitiveType):
+                hub = type_from_name(declared.name)
+        allowed = ("b", "i", "u") if votes else ("i", "u")
+        if (
+            hub is None
+            or hub.lanes != 1
+            or hub.kind not in allowed
+            or (hub.kind != "b" and hub.bits != 32)
+        ):
+            what = "a 32-bit integer or bool" if votes else "a 32-bit integer"
+            self.refuse(
+                f"{name} of a value that is not {what}, which CUDA defines it for",
+                "value-type",
+                value,
+            )
+        return hub.kind
+
     def check_mask(self, name, mask):
         value = _literal_int(mask)
         if mask is not None and isinstance(mask, A.IdentifierNode):
             value = self.constants.get(mask.name)
-        lanes = (1 << self.lanes) - 1
+        count = min(self.lanes, WARP_SIZE)
+        lanes = (1 << count) - 1
         if value is None or value & lanes != lanes:
             self.refuse(
-                f"{name} with a mask that is not a literal naming all {self.lanes} lanes of "
-                "the workgroup, so not every invocation reaches the emulation's barrier",
+                f"{name} with a mask that is not a literal naming all {count} lanes of "
+                "a warp, so not every invocation reaches the emulation's barrier",
                 "mask",
                 mask,
             )
@@ -605,17 +843,29 @@ class WarpLegalizer:
         return self.exchanges[key]
 
     def source_lane(self, mode, operand, width, prelude):
-        """Declare the lane to read: PTX's source lane when its range check passes and the lane exists, else own."""
+        """Declare the exchange slot to read: the warp's base plus PTX's source lane when its range check passes and
+        the lane exists, else the caller's own slot."""
+        if self.lanes <= WARP_SIZE:
+            return self.warp_source_lane(mode, operand, width, prelude, _LANE)
+        own = self.temporary(_binary(_ident(_LANE), "&", _uint(WARP_SIZE - 1)), prelude)
+        lane = self.warp_source_lane(mode, operand, width, prelude, own)
+        base = _binary(_ident(_LANE), "-", _ident(own))
+        return self.temporary(_binary(base, "+", _ident(lane)), prelude)
+
+    def warp_source_lane(self, mode, operand, width, prelude, own):
+        """The source lane within the warp, from the caller's lane ``own``; ``self.lanes`` bounds the lanes that exist
+        in a one-warp workgroup, and a multi-warp workgroup's last warp is bounded by ``W``.
+        """
         segment = (WARP_SIZE - width) & (WARP_SIZE - 1)
         low = width - 1
-        lane = _ident(_LANE)
+        lane = _ident(own)
         if mode == "up":
             delta = self.temporary(
                 _binary(call("uint", [operand]), "&", _uint(31)), prelude
             )
-            keep = _binary(_binary(_ident(_LANE), "&", _uint(low)), ">=", _ident(delta))
+            keep = _binary(_binary(_ident(own), "&", _uint(low)), ">=", _ident(delta))
             chosen = A.TernaryOpNode(
-                keep, _binary(lane, "-", _ident(delta)), _ident(_LANE)
+                keep, _binary(lane, "-", _ident(delta)), _ident(own)
             )
             return self.temporary(chosen, prelude)
         if mode == "idx":
@@ -631,19 +881,27 @@ class WarpLegalizer:
         source = self.temporary(candidate, prelude)
         checks = []
         if mode != "idx" and segment:
-            limit = _binary(
-                _binary(_ident(_LANE), "&", _uint(segment)), "|", _uint(low)
-            )
+            limit = _binary(_binary(_ident(own), "&", _uint(segment)), "|", _uint(low))
             checks.append(_binary(_ident(source), "<=", limit))
-        if mode == "down" or self.lanes < WARP_SIZE or segment:
-            checks.append(_binary(_ident(source), "<", _uint(self.lanes)))
+        if self.lanes <= WARP_SIZE:
+            if mode == "down" or self.lanes < WARP_SIZE or segment:
+                checks.append(_binary(_ident(source), "<", _uint(self.lanes)))
+        else:
+            if mode == "down":
+                checks.append(_binary(_ident(source), "<", _uint(WARP_SIZE)))
+            if self.lanes % WARP_SIZE:
+                # The last warp is partial: its lanes at or past W do not exist.
+                first = _binary(_ident(_LANE), "-", _ident(own))
+                checks.append(
+                    _binary(_binary(first, "+", _ident(source)), "<", _uint(self.lanes))
+                )
         if not checks:
             return source
-        condition = (
-            checks[0] if len(checks) == 1 else _binary(checks[0], "&&", checks[1])
-        )
+        condition = checks[0]
+        for check in checks[1:]:
+            condition = _binary(condition, "&&", check)
         return self.temporary(
-            A.TernaryOpNode(condition, _ident(source), _ident(_LANE)), prelude
+            A.TernaryOpNode(condition, _ident(source), _ident(own)), prelude
         )
 
     def temporary(self, value, prelude):
@@ -652,32 +910,33 @@ class WarpLegalizer:
         self.scope.declare(name, A.PrimitiveType("uint"))
         return name
 
-    # Uniformity (WGSL) ------------------------------------------------------------------------------------------
+    # Uniformity (WGSL, and multi-warp workgroups) -------------------------------------------------------------
     def is_uniform(self, node):
-        return self.target != "wgsl" or self._uniform_expression(node)
+        return not self.strict or self._uniform_expression(node)
 
     def is_uniform_statement(self, node):
-        if self.target != "wgsl":
+        if not self.strict:
             return True
         if isinstance(node, A.VariableNode):
             return node.initial_value is None or self.is_uniform(node.initial_value)
         if isinstance(node, A.ExpressionStatementNode):
             node = node.expression
         if isinstance(node, A.AssignmentNode):
-            root = _root_name(node.target)
-            return root not in self.nonuniform and self.is_uniform(node.value)
+            root = _root_identifier(node.target)
+            return not self._is_nonuniform(root) and self.is_uniform(node.value)
         if isinstance(node, A.UnaryOpNode):
-            return _root_name(node.operand) not in self.nonuniform
+            return not self._is_nonuniform(_root_identifier(node.operand))
         return self.is_uniform(node)
 
     def _uniform_expression(self, node):
         if node is None or isinstance(node, A.LiteralNode):
             return True
         if isinstance(node, A.IdentifierNode):
-            if node.name in self.nonuniform:
+            if self._is_nonuniform(node):
                 return False
             return (
-                node.name in self.uniform_globals
+                self._variable_key(node) != node.name
+                or node.name in self.uniform_globals
                 or node.name in _UNIFORM_BUILTINS
                 or node.name in self.locals
             )
@@ -706,17 +965,43 @@ class WarpLegalizer:
         return False
 
     def nonuniform_locals(self, body):
-        """Locals of the entry point that may hold different values in different invocations (a fixed point)."""
+        """Variables of the entry point that may hold different values in different invocations (a fixed point).
+
+        A local is keyed by its declaration (``local_bindings``), so locals that share a name in different scopes
+        are told apart; a name that resolves to no local of the original body (a global, a parameter, or a node
+        this pass created) is keyed by the name, and is non-uniform when any variable of that name is.
+        """
         declared = {
             node.name for node in _walk(body) if isinstance(node, A.VariableNode)
         }
         self.locals = frozenset(declared)
+        self.bindings = local_bindings(body)
         self.nonuniform = set()
+        self.nonuniform_names = set()
         while True:
             before = len(self.nonuniform)
             self._writes(body, False)
             if len(self.nonuniform) == before:
                 return self.nonuniform
+
+    def _variable_key(self, identifier):
+        """The declaration a resolved identifier names (as its id), or the identifier's name."""
+        entry = self.bindings.get(id(identifier))
+        if entry is not None and entry[0] is identifier:
+            return id(entry[1])
+        return identifier.name
+
+    def _is_nonuniform(self, identifier):
+        if identifier is None:
+            return False
+        key = self._variable_key(identifier)
+        if key == identifier.name:
+            return identifier.name in self.nonuniform_names
+        return key in self.nonuniform
+
+    def _mark_nonuniform(self, key, name):
+        self.nonuniform.add(key)
+        self.nonuniform_names.add(name)
 
     def _writes(self, node, divergent):
         if node is None:
@@ -730,19 +1015,19 @@ class WarpLegalizer:
                 node.initial_value is not None
                 and not self._uniform_expression(node.initial_value)
             ):
-                self.nonuniform.add(node.name)
+                self._mark_nonuniform(id(node), node.name)
         elif isinstance(node, A.AssignmentNode):
-            root = _root_name(node.target)
-            if root and (
+            root = _root_identifier(node.target)
+            if root is not None and (
                 divergent
                 or not self._uniform_expression(node.value)
                 or not self._uniform_expression(node.target)
             ):
-                self.nonuniform.add(root)
+                self._mark_nonuniform(self._variable_key(root), root.name)
         elif isinstance(node, A.UnaryOpNode) and node.op in ("++", "--"):
-            root = _root_name(node.operand)
-            if root and divergent:
-                self.nonuniform.add(root)
+            root = _root_identifier(node.operand)
+            if root is not None and divergent:
+                self._mark_nonuniform(self._variable_key(root), root.name)
         nested = divergent
         if isinstance(node, A.IfNode):
             nested = divergent or not all(
@@ -762,8 +1047,8 @@ class WarpLegalizer:
             self._writes(child, nested if field != "condition" else divergent)
 
     def divergent_exit(self, body):
-        """True when a break, continue or return in ``body`` sits under a non-uniform condition (WGSL only)."""
-        if self.target != "wgsl":
+        """True when a break, continue or return in ``body`` sits under a non-uniform condition (strict mode only)."""
+        if not self.strict:
             return False
 
         def search(node, divergent):
@@ -795,14 +1080,14 @@ def _walk(node):
         yield from _descendants(node)
 
 
-def _root_name(node):
+def _root_identifier(node):
     while isinstance(node, (A.ArrayAccessNode, A.MemberAccessNode, A.SwizzleNode)):
         node = (
             getattr(node, "array_expr", None)
             or getattr(node, "object_expr", None)
             or getattr(node, "vector_expr", None)
         )
-    return node.name if isinstance(node, A.IdentifierNode) else None
+    return node if isinstance(node, A.IdentifierNode) else None
 
 
 def clone_type(node):
