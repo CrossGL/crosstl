@@ -2444,6 +2444,16 @@ CASES = [
         integer_cases.extended_arithmetic_reference,
     ),
     Case(
+        "x_integer_combinatorics",
+        "integer",
+        "gcd, lcm, factorial, comb and perm of 8-, 16-, 32- and 64-bit integers, scalar and vector",
+        "CrossGL integer combinatorics: exact greatest common divisors, least common multiples, factorials, "
+        "binomial coefficients and permutation counts wherever the result fits the type",
+        integer_cases.combinatorics_inputs(),
+        np.uint32,
+        integer_cases.combinatorics_reference,
+    ),
+    Case(
         "s_extended_arithmetic",
         "integer",
         "OpIAddCarry, OpISubBorrow, OpUMulExtended and OpSMulExtended read by OpCompositeExtract",
