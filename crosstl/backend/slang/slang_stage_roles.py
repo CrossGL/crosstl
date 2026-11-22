@@ -34,7 +34,9 @@ _MESH_ROLES = {
     "payload": "mesh_payload",
 }
 _HIT_STAGES = frozenset({"ray_closest_hit", "ray_any_hit"})
-_GEOMETRY_PRIMITIVES = frozenset({"point", "line", "triangle", "lineadj", "triangleadj"})
+_GEOMETRY_PRIMITIVES = frozenset(
+    {"point", "line", "triangle", "lineadj", "triangleadj"}
+)
 # The stage attributes of each primitive-processing stage, which slangc reads as HLSL's.
 _PRIMITIVE_STAGE_ATTRIBUTES = {
     "geometry": frozenset({"maxvertexcount", "instance"}),
@@ -133,7 +135,9 @@ def slang_primitive_stage_attributes(func, function_qualifier):
         )
         prefix = "@" if name == "domain" else "@ "
         lines.append(
-            f"    {prefix}{name}({arguments})\n" if arguments else f"    {prefix}{name}\n"
+            f"    {prefix}{name}({arguments})\n"
+            if arguments
+            else f"    {prefix}{name}\n"
         )
     return "".join(lines)
 
