@@ -31,6 +31,7 @@ from .builtin_output_writes import (
     convert_signed_builtin_outputs,
     declare_builtin_outputs,
 )
+from .builtin_stage_functions import refuse_misplaced_builtin_functions
 from .builtin_stage_identifiers import refuse_misplaced_builtin_identifiers
 from .builtin_stages import refuse_misplaced_builtins
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
@@ -552,6 +553,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     resolve_builtin_names(program, report.target)
     refuse_misplaced_builtins(program, report.target)
     refuse_misplaced_builtin_identifiers(program, report.target)
+    refuse_misplaced_builtin_functions(program, report.target)
     lower_relative_vertex_ids(program, report.target)
     lower_spirv_instance_ids(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)
