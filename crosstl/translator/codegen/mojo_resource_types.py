@@ -325,9 +325,10 @@ class MojoResourceTypeMixin:
             arguments = getattr(attr, "arguments", []) or []
             if not arguments:
                 continue
-            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
-                binding = self.binding_index_value(arguments[0], ("b", "s", "t", "u"))
-            elif attr_name == "register":
+            if (
+                attr_name in {"binding", "buffer", "sampler", "texture", "uav"}
+                or attr_name == "register"
+            ):
                 binding = self.binding_index_value(arguments[0], ("b", "s", "t", "u"))
             else:
                 binding = None
@@ -508,10 +509,43 @@ class MojoResourceTypeMixin:
             return "buffer"
         return kind
 
+    def mojo_resource_register_class(self, node):
+        """Return the HLSL register class letter from an explicit ``register`` attribute."""
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "register":
+                continue
+            arguments = getattr(attr, "arguments", []) or []
+            if not arguments:
+                continue
+            raw_value = self.attribute_value_to_string(arguments[0]) or ""
+            raw_value = str(raw_value).strip().lower()
+            if (
+                raw_value
+                and raw_value[0] in ("b", "s", "t", "u")
+                and raw_value[1:].isdigit()
+            ):
+                return raw_value[0]
+        return None
+
+    def mojo_resource_binding_namespace_with_class(self, kind, node):
+        namespace = self.mojo_resource_binding_namespace(kind)
+        register_class = self.mojo_resource_register_class(node)
+        if register_class is not None:
+            return f"{namespace}:{register_class}"
+        return namespace
+
+    def resource_binding_family_keys(self, base_namespace, set_index):
+        """Yield the unscoped key and all class-scoped keys for a base namespace."""
+        yield (base_namespace, set_index)
+        for cls in ("b", "s", "t", "u"):
+            yield (f"{base_namespace}:{cls}", set_index)
+
     def next_available_resource_binding(self, namespace, set_index, count):
         key = (namespace, set_index)
         binding = self.mojo_resource_binding_cursors.get(key, 0)
-        while self.resource_binding_range_conflicts(key, binding, count):
+        while self.resource_binding_family_conflicts(
+            namespace, set_index, binding, count
+        ):
             binding += 1
         self.mojo_resource_binding_cursors[key] = binding + count
         return binding
@@ -523,19 +557,39 @@ class MojoResourceTypeMixin:
                 return True
         return False
 
+    def resource_binding_family_conflicts(
+        self, base_namespace, set_index, binding, count
+    ):
+        for key in self.resource_binding_family_keys(base_namespace, set_index):
+            if self.resource_binding_range_conflicts(key, binding, count):
+                return True
+        return False
+
     def reserve_resource_binding(self, namespace, set_index, binding, count, name):
         key = (namespace, set_index)
         end = binding + count - 1
-        for used_start, used_end, used_name in self.mojo_used_resource_bindings.get(
-            key, []
-        ):
-            if binding <= used_end and used_start <= end:
-                raise MojoRefusal(
-                    "Conflicting Mojo resource binding for "
-                    f"'{name}': {namespace} set {set_index} binding "
-                    f"{binding}-{end} overlaps '{used_name}' binding "
-                    f"{used_start}-{used_end}"
-                )
+        base_namespace = namespace.split(":", 1)[0] if ":" in namespace else namespace
+
+        # Register-class resources only conflict with the same class, but still
+        # conflict with classless resources in the unscoped namespace. Classless
+        # resources conflict with every class-scoped range in the same family.
+        if ":" in namespace:
+            keys_to_check = [(namespace, set_index), (base_namespace, set_index)]
+        else:
+            keys_to_check = self.resource_binding_family_keys(base_namespace, set_index)
+
+        for check_key in keys_to_check:
+            for used_start, used_end, used_name in self.mojo_used_resource_bindings.get(
+                check_key, []
+            ):
+                if binding <= used_end and used_start <= end:
+                    raise MojoRefusal(
+                        "Conflicting Mojo resource binding for "
+                        f"'{name}': {base_namespace} set {set_index} binding "
+                        f"{binding}-{end} overlaps '{used_name}' binding "
+                        f"{used_start}-{used_end}"
+                    )
+
         self.mojo_used_resource_bindings.setdefault(key, []).append(
             (binding, end, name)
         )

@@ -30,6 +30,7 @@ from .slang_storage_image_access import (
     SlangStorageImageAccessMixin,
     texel_element_shape,
 )
+from .slang_wave_import import crossgl_slang_wave_call
 from .SlangAst import *
 from .SlangLexer import *
 from .SlangParser import *
@@ -2432,6 +2433,10 @@ class SlangToCrossGLConverter(
             if bitcast_call is not None:
                 return bitcast_call
             args = ", ".join(rendered_args)
+            if is_hlsl_namespace_builtin or expr.name not in self.user_function_names:
+                wave_call = crossgl_slang_wave_call(function_name, rendered_args)
+                if wave_call is not None:
+                    return wave_call
             if (
                 function_name in CUDA_THREAD_BUILTINS
                 and not expr.args

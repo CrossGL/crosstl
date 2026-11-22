@@ -8,6 +8,19 @@ from ..ast import (
     UnaryOpNode,
 )
 
+# The system-scoped atomics HIP does not declare, and the helper that performs each.
+HIP_SYSTEM_WRAPPING_ATOMICS = {
+    "atomicInc_system": "cgl_hip_atomicInc_system",
+    "atomicDec_system": "cgl_hip_atomicDec_system",
+}
+# The value each helper stores in place of ``assumed``.
+HIP_SYSTEM_WRAPPING_ATOMIC_UPDATES = {
+    "cgl_hip_atomicInc_system": "(assumed >= limit) ? 0u : assumed + 1u",
+    "cgl_hip_atomicDec_system": (
+        "((assumed == 0u) || (assumed > limit)) ? limit : assumed - 1u"
+    ),
+}
+
 
 class HipBufferCallMixin:
     """Buffer call members of ``HipCodeGen``."""
@@ -321,13 +334,19 @@ class HipBufferCallMixin:
         }
         # HIP's system-scoped atomics (atomicAdd_system, atomicCAS_system, ...)
         # take the same operands as the device-wide intrinsic they are named
-        # after. HIP declares no atomicInc_system or atomicDec_system.
+        # after. HIP declares no atomicInc_system or atomicDec_system: a
+        # compare-and-swap loop on atomicCAS_system performs them
+        # (HIP_SYSTEM_WRAPPING_ATOMICS).
         for intrinsic, arg_count, kinds, kinds_label in list(operations.values()):
-            if intrinsic in {"atomicInc", "atomicDec"}:
-                continue
+            system_name = f"{intrinsic}_system"
+            system_intrinsic = (
+                HIP_SYSTEM_WRAPPING_ATOMICS[system_name]
+                if system_name in HIP_SYSTEM_WRAPPING_ATOMICS
+                else system_name
+            )
             operations.setdefault(
                 f"{intrinsic}_system",
-                (f"{intrinsic}_system", arg_count, kinds, kinds_label),
+                (system_intrinsic, arg_count, kinds, kinds_label),
             )
         # HIP's atomicAddNoRet adds to a float and returns nothing; it has no
         # system-scoped form.
@@ -386,6 +405,7 @@ class HipBufferCallMixin:
 
         target_expr = args[0]
         value_args = ", ".join(args[1:])
+        self.require_hip_system_wrapping_atomic_helper(intrinsic)
         return f"{intrinsic}(&{target_expr}, {value_args})"
 
     def generate_plain_atomic_call(self, func_name, raw_args, args):
@@ -473,7 +493,33 @@ class HipBufferCallMixin:
         else:
             target_pointer = f"&{target_code}"
         value_args = ", ".join(args[1:])
+        self.require_hip_system_wrapping_atomic_helper(intrinsic)
         return f"{intrinsic}({target_pointer}, {value_args})"
+
+    def require_hip_system_wrapping_atomic_helper(self, intrinsic):
+        """Register the compare-and-swap loop that performs a system-scoped ``atomicInc``/``atomicDec``.
+
+        CUDA's ``atomicInc_system(address, limit)`` stores ``(old >= limit) ? 0 : old + 1`` and
+        ``atomicDec_system(address, limit)`` stores ``((old == 0) || (old > limit)) ? limit : old - 1``, atomically
+        for the host and peer devices too, and both return ``old`` (CUDA C++ Programming Guide, "Atomic
+        Functions"). The loop retries ``atomicCAS_system`` until no other thread changed the word in between, the
+        construction the guide gives for atomics the hardware lacks.
+        """
+        update = HIP_SYSTEM_WRAPPING_ATOMIC_UPDATES.get(intrinsic)
+        if update is None or intrinsic in self.helper_functions:
+            return
+        self.helper_functions[intrinsic] = (
+            f"__device__ inline unsigned int {intrinsic}(unsigned int* address, unsigned int limit)\n"
+            "{\n"
+            "    unsigned int old = *address;\n"
+            "    unsigned int assumed;\n"
+            "    do {\n"
+            "        assumed = old;\n"
+            f"        old = atomicCAS_system(address, assumed, {update});\n"
+            "    } while (old != assumed);\n"
+            "    return old;\n"
+            "}"
+        )
 
     def is_plain_atomic_lvalue(self, expr):
         """Return whether an expression can be addressed for a HIP atomic."""

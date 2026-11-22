@@ -5,7 +5,7 @@ import xml.etree.ElementTree as ElementTree
 from urllib.parse import unquote
 
 from tools.coverage import __main__ as cli
-from tools.coverage import chart, issues, publish, report
+from tools.coverage import chart, docs, issues, publish, report
 from tools.coverage.causes import grouped
 
 SVG = "{http://www.w3.org/2000/svg}"
@@ -350,9 +350,22 @@ def test_publish_command_writes_every_file_of_the_coverage_branch(tmp_path):
         "features/glsl-input.json",
         "features/glsl-output.json",
         "history.csv",
+        "languages/crossgl.md",
+        "languages/glsl.md",
+        "languages/index.md",
+        "languages/wgsl.md",
         "trend.svg",
     ]
     assert report.load(site / "coverage.json") == _report()
+    # The language pages are GitHub's Markdown, linked relative to the branch, with the backend guide on main.
+    glsl = (site / "languages/glsl.md").read_text()
+    assert glsl.startswith(docs.GITHUB_HEADER)
+    assert "[COVERAGE.md](../COVERAGE.md)" in glsl
+    assert (
+        "[backend guide](https://github.com/CrossGL/crosstl/blob/main/docs/source/backends/glsl.rst)"
+        in glsl
+    )
+    assert "](languages/index.md)" in (site / "COVERAGE.md").read_text()
     assert {r["commit"] for r in _history_rows((site / "history.csv").read_text())} == {
         "old",
         "0123456789abcdef",

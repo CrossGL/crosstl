@@ -95,6 +95,7 @@ class MetalFunctionPartsMixin:
         self.current_metal_value_array_locals = self.metal_value_array_returned_locals(
             func
         )
+        self.current_metal_value_array_names = set()
         self.current_address_space_variables = {}
         self.current_metal_native_width_local_array_declaration_ids = (
             self.metal_native_width_local_array_declaration_ids(func)

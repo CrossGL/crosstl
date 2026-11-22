@@ -22,6 +22,7 @@ name: Coverage
 # the native probes of every source language straight to its own languages, as the published rows define the cells.
 # The publish job writes the matrix to coverage.json (its features in features/pairs/<source>-to-<target>.json), to
 # COVERAGE.md and to one pairs/<source>-to-<target>.md page of gaps per cell; a push to main keeps the last matrix.
+# It also writes one languages/<language>.md page per language, linked from the README (tools/coverage/docs.py).
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
 # only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the Metal,
@@ -327,6 +328,19 @@ jobs:
           BACKEND: ${{ matrix.backend }}
         run: python -m tools.coverage run --strict --jobs 4 --backend "$BACKEND" --output "coverage-$BACKEND.json"
 
+      # A spirv-to-X cell's SPIR-V probe is compiled from a GLSL probe, or an HLSL one for a construct GLSL cannot
+      # spell, and disassembled (tools/coverage/spirv_input.py). The nightly run installs those compilers after the
+      # rows, which do not use them.
+      - name: Install pinned glslang and SPIRV-Tools for the matrix
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/install-shader-validators
+
+      - name: Install pinned Linux DXC for the matrix
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/install-linux-dxc
+        with:
+          pinned: "true"
+
       # The nightly run also measures the translation matrix into this leg's languages (tools/coverage/pairs.py). The
       # rows of the published report define its cells, and the report job reconciles them with this run's rows.
       - name: Measure the translation matrix
@@ -515,6 +529,12 @@ jobs:
       - name: Measure coverage
         timeout-minutes: 30
         run: python -m tools.coverage run --strict --execute --jobs 3 --backend metal --output coverage-metal.json
+
+      # A spirv-to-metal probe is compiled from a GLSL probe and disassembled (tools/coverage/spirv_input.py). macOS has
+      # no DXC, so the few constructs only HLSL spells stay untested in that cell.
+      - name: Install pinned glslang and SPIRV-Tools for the matrix
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/install-shader-validators
 
       # The nightly run also measures the translation matrix into this leg's languages (tools/coverage/pairs.py). The
       # rows of the published report define its cells, and the report job reconciles them with this run's rows.
@@ -726,22 +746,57 @@ jobs:
             status="$(gh api "repos/$GITHUB_REPOSITORY/compare/$published...$GITHUB_SHA" --jq .status || echo ahead)"
           fi
           # A run that finishes after a run for a newer commit must not replace the newer data.
-          if [ "$status" = behind ]; then
-            echo "The coverage branch already holds $published, which is newer than $GITHUB_SHA."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          else
+          if [ "$status" != behind ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "The coverage branch already holds $published, which is newer than $GITHUB_SHA."
+          # The nightly matrix takes longer than a push's rows, so on a busy main a push publishes newer rows first.
+          # Those rows stay, and the matrix this run measured replaces the one they carry if that one is older.
+          measured="$(python -c 'import json; print("pairs" in json.load(open("coverage.json")))')"
+          carried="$(git show FETCH_HEAD:coverage.json | python -c 'import json, sys; print(json.load(sys.stdin).get("matrix", {}).get("commit", ""))' || true)"
+          newer=ahead
+          if [ "$measured" != True ] || [ "$carried" = "$GITHUB_SHA" ]; then
+            newer=no
+          elif [ -n "$carried" ]; then
+            newer="$(gh api "repos/$GITHUB_REPOSITORY/compare/$carried...$GITHUB_SHA" --jq .status || echo ahead)"
+          fi
+          if [ "$newer" = ahead ]; then
+            echo "This run's translation matrix replaces the one measured at ${carried:-no commit}."
+            echo "publish=matrix" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build the published files
-        if: steps.published.outputs.publish == 'true'
+        if: steps.published.outputs.publish != 'false'
+        env:
+          PUBLISH: ${{ steps.published.outputs.publish }}
         run: |
-          python -m tools.coverage publish coverage.json --history previous-history.csv \
-            --previous "$RUNNER_TEMP/previous/coverage.json" --output-dir "$RUNNER_TEMP/site" \
-            --repository "$GITHUB_REPOSITORY"
+          set -euo pipefail
+          if [ "$PUBLISH" = matrix ]; then
+            # The published rows, with this run's matrix.
+            python -m tools.coverage publish "$RUNNER_TEMP/previous/coverage.json" --matrix coverage.json \
+              --history previous-history.csv --output-dir "$RUNNER_TEMP/site" --repository "$GITHUB_REPOSITORY"
+          else
+            python -m tools.coverage publish coverage.json --history previous-history.csv \
+              --previous "$RUNNER_TEMP/previous/coverage.json" --output-dir "$RUNNER_TEMP/site" \
+              --repository "$GITHUB_REPOSITORY"
+          fi
+
+      # The issues job reconciles what was published, the rows and the matrix it carries.
+      - name: Keep the published report
+        if: steps.published.outputs.publish != 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-published
+          path: |
+            ${{ runner.temp }}/site/coverage.json
+            ${{ runner.temp }}/site/features
+          retention-days: 7
 
       - name: Replace the coverage branch
-        if: steps.published.outputs.publish == 'true'
+        if: steps.published.outputs.publish != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         working-directory: ${{ runner.temp }}/site
@@ -750,7 +805,7 @@ jobs:
           git init --quiet --initial-branch=coverage
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add coverage.json features coverage.svg COVERAGE.md history.csv trend.svg
+          git add coverage.json features coverage.svg COVERAGE.md history.csv trend.svg languages
           if [ -d pairs ]; then git add pairs; fi
           git commit --quiet -m "Coverage for ${GITHUB_SHA::12}"
           # The branch is one commit by design, so each publication replaces it.
@@ -761,7 +816,7 @@ jobs:
     name: Reconcile coverage issues
     needs: publish
     # Runs only after this run's results were published, so issues never fall back to older data.
-    if: "!cancelled() && needs.publish.outputs.published == 'true'"
+    if: "!cancelled() && needs.publish.result == 'success' && needs.publish.outputs.published != 'false'"
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -780,16 +835,19 @@ jobs:
         with:
           python-version: "3.13"
 
+      # The published report: this run's rows, or a newer push's rows when this run published only its matrix, with
+      # the matrix the coverage branch now carries, whose cells have the pair tracking issues.
       - uses: actions/download-artifact@v8
         with:
-          name: coverage
+          name: coverage-published
+          path: published
 
       - name: Update the tracking and bug issues
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python -m tools.coverage issues coverage.json --repository "$GITHUB_REPOSITORY" | tee changes.txt
+          python -m tools.coverage issues published/coverage.json --repository "$GITHUB_REPOSITORY" | tee changes.txt
           {
             echo "### Issue changes"
             echo
