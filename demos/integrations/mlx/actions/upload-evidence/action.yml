@@ -1,0 +1,79 @@
+name: Upload MLX evidence
+description: >-
+  Upload a workflow artifact like actions/upload-artifact, with up to three attempts. Nightly MLX runs lost evidence
+  to transient network errors (ENOTFOUND, ETIMEDOUT and ECONNRESET in CreateArtifact and FinalizeArtifact), and each
+  lost upload failed its job. A failed attempt is retried after a pause and replaces whatever the failed attempt left
+  behind. The third attempt fails the step exactly as a single upload would, so a missing path still fails under
+  if-no-files-found error. Artifact names in the MLX workflow are unique per leg (demos/integrations/mlx/tests/
+  test_ci_evidence_uploads.py), so a retry never replaces another leg's artifact.
+
+inputs:
+  name:
+    description: Artifact name.
+    required: true
+  path:
+    description: Files, directories or wildcard patterns to upload, one per line.
+    required: true
+  if-no-files-found:
+    description: warn, error or ignore, as for actions/upload-artifact.
+    required: false
+    default: warn
+  retention-days:
+    description: Days to keep the artifact; empty keeps the repository default.
+    required: false
+    default: ""
+  include-hidden-files:
+    description: Whether to upload files and directories whose names start with a dot.
+    required: false
+    default: "false"
+
+runs:
+  using: composite
+  steps:
+    # Inside a composite action the default condition reads the job status, and the caller usually runs this step
+    # after a failure with if: always(). Every step therefore states its own condition.
+    - name: Upload the artifact
+      id: first
+      if: always()
+      continue-on-error: true
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ${{ inputs.if-no-files-found }}
+        retention-days: ${{ inputs.retention-days }}
+        include-hidden-files: ${{ inputs.include-hidden-files }}
+
+    - name: Wait before the second attempt
+      if: always() && steps.first.outcome == 'failure'
+      shell: bash
+      run: sleep 20
+
+    - name: Upload the artifact again
+      id: second
+      if: always() && steps.first.outcome == 'failure'
+      continue-on-error: true
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ${{ inputs.if-no-files-found }}
+        retention-days: ${{ inputs.retention-days }}
+        include-hidden-files: ${{ inputs.include-hidden-files }}
+        overwrite: true
+
+    - name: Wait before the last attempt
+      if: always() && steps.second.outcome == 'failure'
+      shell: bash
+      run: sleep 60
+
+    - name: Upload the artifact a last time
+      if: always() && steps.second.outcome == 'failure'
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ inputs.path }}
+        if-no-files-found: ${{ inputs.if-no-files-found }}
+        retention-days: ${{ inputs.retention-days }}
+        include-hidden-files: ${{ inputs.include-hidden-files }}
+        overwrite: true

@@ -22,6 +22,10 @@ from demos.integrations.mlx.ci_plan import (
 )
 from demos.integrations.mlx.tests.test_ci_legs import DEMO_WORKFLOW
 from demos.integrations.mlx.tests.test_ci_legs import TREE as DEMO_TREE
+from demos.integrations.mlx.tests.upstream_checkouts import (
+    KERNEL_TREE,
+    upstream_fetches,
+)
 
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github/workflows/demo-project-testing.yml"
@@ -639,10 +643,10 @@ def test_smoke_runs_the_complete_family_canary():
     canary = job["steps"][names.index("Run complete-family canary")]
     assert names.index("Install pinned Linux DXC") < names.index(canary["name"])
     assert names.index(canary["name"]) < names.index("Upload smoke diagnostics")
-    assert 'fetch --depth=1 origin "$MLX_CORPUS_COMMIT"' in checkout["run"]
-    assert "sparse-checkout set mlx/backend/metal/kernels" in checkout["run"]
     directory = "mlx-canary-upstream"
-    assert f"git init {directory}" in checkout["run"]
+    assert upstream_fetches(checkout["run"]) == [
+        (directory, "$MLX_CORPUS_COMMIT", KERNEL_TREE)
+    ]
     assert canary["env"] == {
         smoke_canary.ROOT_ENV: f"${{{{ github.workspace }}}}/{directory}"
     }

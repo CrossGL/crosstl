@@ -17,6 +17,7 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
     ROW_ENTRIES,
     ROW_WIDTHS,
 )
+from demos.integrations.mlx.tests.upstream_checkouts import upstream_fetches
 from tests.ci_helpers import assert_paths_covered
 
 
@@ -446,9 +447,7 @@ def test_ci_requires_shards_and_complete_native_gates():
         steps["Retain row translation evidence"]["with"]["include-hidden-files"] is True
     )
     checkout = steps["Check out pinned MLX kernels"]["run"]
-    assert checkout.index("config core.autocrlf false") < checkout.index(
-        "checkout --detach"
-    )
+    assert upstream_fetches(checkout) == [("mlx-upstream", "$MLX_COMMIT", ())]
     job = workflow["jobs"]["reductions"]
     assert job["needs"] == ["ci-plan", "portable-host", "row-packages"]
     native = {step.get("name"): step for step in job["steps"]}

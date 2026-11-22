@@ -25,6 +25,7 @@ from demos.integrations.mlx.portable_host import (
     verify,
     view_workloads,
 )
+from demos.integrations.mlx.tests.upstream_checkouts import upstream_fetches
 from tests.ci_helpers import assert_paths_covered
 
 
@@ -2369,17 +2370,10 @@ def test_ci_preserves_upstream_checkout_bytes_in_every_job(job_name):
         ).read_text()
     )
     job = workflow["jobs"][job_name]
-    checkouts = [
-        step for step in job["steps"] if "git init mlx-upstream" in step.get("run", "")
-    ]
+    checkouts = [step for step in job["steps"] if upstream_fetches(step.get("run", ""))]
     assert len(checkouts) == 1
     step = checkouts[0]
-    commands = [line.strip() for line in step["run"].splitlines()]
-    assert (
-        commands.index("git init mlx-upstream")
-        < commands.index("git -C mlx-upstream config core.autocrlf false")
-        < commands.index("git -C mlx-upstream checkout --detach FETCH_HEAD")
-    )
+    assert upstream_fetches(step["run"]) == [("mlx-upstream", "$MLX_COMMIT", ())]
     if job_name == "portable-host":
         assert " ".join(step["if"].split()) == (
             "${{ !cancelled() && (steps.portable-host-contracts.outcome == 'success' || "
@@ -2448,7 +2442,7 @@ def test_ci_requires_all_native_platforms_and_retains_evidence():
         "if: always()",
         "include-hidden-files: true",
         "Get-FileHash",
-        "core.autocrlf false",
+        'python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"',
     ):
         assert required in workflow
     assert "continue-on-error" not in workflow
