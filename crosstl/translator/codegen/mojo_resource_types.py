@@ -281,9 +281,15 @@ class MojoResourceTypeMixin:
         return buffer_type
 
     def register_buffer_resource_type(self, buffer_type):
+        """Refuse an HLSL buffer object the generator would spell as a placeholder type.
+
+        A structured or byte-address buffer declared outside a function is a pointer argument of the kernel
+        (mojo_buffer_objects) and never reaches here; the placeholder types and helpers the generator wrote for
+        every other buffer object did not compile.
+        """
         buffer_type = self.canonical_buffer_resource_type(buffer_type)
         if buffer_type in MOJO_BUFFER_RESOURCE_TYPES:
-            self.required_buffer_resource_types.add(buffer_type)
+            self.refuse_mojo_buffer_object_type(buffer_type)
 
     def attribute_value_to_string(self, value):
         if value is None:

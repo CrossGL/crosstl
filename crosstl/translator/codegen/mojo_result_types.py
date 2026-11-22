@@ -119,6 +119,9 @@ class MojoResultTypeMixin:
         expr,
     ):
         """Result type of a function call."""
+        buffer_object_type = self.mojo_buffer_object_result_type(expr)
+        if buffer_object_type is not None:
+            return buffer_object_type
         if isinstance(expr, FunctionCallNode):
             member_result_type = self.member_function_result_type(expr)
             if member_result_type is not None:
