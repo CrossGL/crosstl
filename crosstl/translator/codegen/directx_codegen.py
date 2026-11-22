@@ -257,6 +257,7 @@ from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
     hlsl_wave_extension_call,
 )
+from .hlsl_work_graph_nodes import HlslWorkGraphNodeMixin, is_hlsl_work_graph_attribute
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -376,6 +377,7 @@ class HLSLCodeGen(
     DirectXCooperativeMatrixMixin,
     DirectXComputeBuiltinMixin,
     DirectXWaveIntrinsicMixin,
+    HlslWorkGraphNodeMixin,
     DirectXResourceGlobalMixin,
     DirectXStageParameterMixin,
     DirectXRayTracingMixin,
@@ -4426,6 +4428,11 @@ class HLSLCodeGen(
                 )
             param_type = self.directx_resource_declaration_type(param_type)
             self.current_hlsl_parameter_resource_types[p.name] = param_type
+            if node_declaration := self.hlsl_work_graph_parameter_declaration(
+                p, param_type, effective_shader_type, param_list
+            ):
+                params.append(node_declaration)
+                continue
             if self.is_texture_type(raw_param_type) or self.is_image_type(
                 raw_param_type
             ):
@@ -4699,6 +4706,10 @@ class HLSLCodeGen(
                     f"uint {subgroup_id_local} = "
                     f"{helper_name}({group_index_name});",
                 )
+        elif effective_shader_type == "node":
+            params_str = self.append_hlsl_node_builtin_parameters(
+                func, params_str, param_names
+            )
         elif effective_shader_type == "vertex":
             explicit_stage_builtins = self.explicit_hlsl_vertex_builtin_parameters(
                 param_list
@@ -4771,6 +4782,7 @@ class HLSLCodeGen(
             "ray_any_hit": "anyhit",
             "ray_miss": "miss",
             "ray_callable": "callable",
+            "node": "node",
         }
 
         if isinstance(getattr(func, "return_type", None), PointerType):
@@ -5007,10 +5019,8 @@ class HLSLCodeGen(
             code += self.generate_stage_numthreads(
                 func, effective_shader_type, execution_config
             )
-            code += self.generate_hlsl_stage_attributes(
-                func,
-                effective_shader_type,
-                stage_node=stage_node,
+            code += self.generate_hlsl_entry_attributes(
+                func, effective_shader_type, stage_node, execution_config, entry_name
             )
             code += wave_size_attribute
             code += waveops_helper_lanes_attribute
@@ -5799,6 +5809,9 @@ class HLSLCodeGen(
         # directx_specialization_constant_attributes. On a resource parameter it makes the binding conditional
         # (MSL specification section 5.8); it never names a semantic.
         if self.directx_is_specialization_constant_attribute(attr):
+            return True
+        # Work-graph node and record attributes are written as HLSL attributes (hlsl_work_graph_nodes).
+        if is_hlsl_work_graph_attribute(attr):
             return True
         return str(getattr(attr, "name", "")).lower() in metadata
 

@@ -74,6 +74,7 @@ from .texel_buffers import HLSLTexelBufferMixin
 from .trigonometric_reduction import HLSLTrigonometricReductionMixin
 from .unorm_store_rounding import HLSLUnormStoreRoundingMixin
 from .value_shapes import HLSLValueShapeMixin
+from .work_graph_import import NODE_STAGE, crossgl_work_graph_record_attribute
 
 # Namespaced HLSL types that CrossGL keeps under the same scoped spelling.
 _SCOPED_BUILTIN_TYPE_NAMES = frozenset({"dx::HitObject"})
@@ -823,6 +824,7 @@ class HLSLToCrossGLConverter(
                 continue
             if isinstance(node, StructNode):
                 prefix = struct_template_prefix(self, node)
+                code += crossgl_work_graph_record_attribute(node)
                 code += (
                     f"    {prefix}struct {self.render_type_identifier(node.name)} {{\n"
                 )
@@ -880,6 +882,7 @@ class HLSLToCrossGLConverter(
             "ray_miss": "ray_miss",
             "ray_any_hit": "ray_any_hit",
             "ray_callable": "ray_callable",
+            NODE_STAGE: NODE_STAGE,
         }
         functions_by_name = {
             func.name: func
