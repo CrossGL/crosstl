@@ -11,7 +11,8 @@ Program nodes
 global variables, constants, imports, preprocessors, and constant buffers.
 
 ``StageNode`` represents a pipeline stage such as vertex, fragment, compute,
-mesh, task, or ray-tracing stages. Each stage points at an entry-point
+mesh, task, ray-tracing stages, or a D3D12 work-graph ``node`` (see
+``crosstl.translator.semantics.work_graph_nodes``). Each stage points at an entry-point
 ``FunctionNode`` and can carry execution metadata such as workgroup size.
 
 Type nodes

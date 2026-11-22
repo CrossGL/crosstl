@@ -1,0 +1,1 @@
+Metal input spends less time in two preprocessing scans, with unchanged output. The free-operator template scan stops each operator search at the end of the declaration instead of the end of the source and no longer copies the rest of the source for every `template <`. The temporary-functor check skips from one identifier to the next instead of stopping at every character.

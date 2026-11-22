@@ -48,6 +48,7 @@ TEXTURE_INTRINSIC_MIN_ARGUMENTS = {
     "textureQueryLevels": 1,
     "textureSize": 1,
     "textureSamples": 1,
+    "textureSamplePosition": 2,
     "texelFetch": 3,
     "texelFetchOffset": 4,
     "imageLoad": 2,
@@ -126,14 +127,14 @@ TEXTURE_INTRINSIC_MAX_ARGUMENTS = {
     "textureProjLodOffset": 4,
     "textureProjGrad": 4,
     "textureProjGradOffset": 5,
-    "textureCompare": 3,
-    "textureCompareOffset": 4,
+    "textureCompare": 4,
+    "textureCompareOffset": 5,
     "textureCompareLod": 4,
     "textureCompareLodOffset": 5,
     "textureCompareGrad": 5,
     "textureCompareGradOffset": 6,
-    "textureCompareProj": 3,
-    "textureCompareProjOffset": 4,
+    "textureCompareProj": 4,
+    "textureCompareProjOffset": 5,
     "textureCompareProjLod": 4,
     "textureCompareProjLodOffset": 5,
     "textureCompareProjGrad": 5,
@@ -141,12 +142,13 @@ TEXTURE_INTRINSIC_MAX_ARGUMENTS = {
     "textureGather": 3,
     "textureGatherOffset": 4,
     "textureGatherOffsets": 7,
-    "textureGatherCompare": 3,
-    "textureGatherCompareOffset": 4,
+    "textureGatherCompare": 4,
+    "textureGatherCompareOffset": 5,
     "textureQueryLod": 2,
     "textureQueryLevels": 1,
     "textureSize": 2,
     "textureSamples": 1,
+    "textureSamplePosition": 2,
     "texelFetch": 3,
     "texelFetchOffset": 4,
     "imageLoad": 3,
@@ -165,8 +167,8 @@ TEXTURE_INTRINSIC_MAX_ARGUMENTS = {
     "textureOffsetClamp": 5,
     "textureGradClamp": 5,
     "textureGradOffsetClamp": 6,
-    "textureCompareClamp": 4,
-    "textureCompareOffsetClamp": 5,
+    "textureCompareClamp": 5,
+    "textureCompareOffsetClamp": 6,
     "textureCompareGradClamp": 6,
     "textureCompareGradOffsetClamp": 7,
 }
@@ -744,6 +746,11 @@ BIAS_ARGUMENT_INDEX_OFFSETS = {
     "textureOffset": 2,
     "textureProj": 1,
     "textureProjOffset": 2,
+    # A depth comparison's bias follows its reference (and offset), as the non-compare bias follows the coordinate.
+    "textureCompare": 2,
+    "textureCompareOffset": 3,
+    "textureCompareProj": 2,
+    "textureCompareProjOffset": 3,
 }
 
 MIP_LEVEL_ARGUMENT_INDICES = {
@@ -756,6 +763,9 @@ GATHER_COMPONENT_INTRINSIC_NAMES = {
     "textureGather",
     "textureGatherOffset",
     "textureGatherOffsets",
+    "textureGatherCompare",
+    "textureGatherCompareOffset",
+    "textureGatherCompareOffsets",
 }
 
 
@@ -922,6 +932,15 @@ def texture_gather_component_argument_index(
         return coord_index + 1 if extra_count >= 1 else None
     if func_name == "textureGatherOffset":
         return coord_index + 2 if extra_count >= 2 else None
+    if func_name == "textureGatherCompare":
+        return coord_index + 2 if extra_count >= 2 else None
+    if func_name == "textureGatherCompareOffset":
+        return coord_index + 3 if extra_count >= 3 else None
+    if func_name == "textureGatherCompareOffsets":
+        # The reference, then one offset array or four offsets, then the component.
+        if extra_count in (3, 6):
+            return coord_index + extra_count
+        return None
     if extra_count == 2:
         return coord_index + 2
     if extra_count == 5:

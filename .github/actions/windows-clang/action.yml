@@ -1,0 +1,20 @@
+name: Use Visual Studio's Clang
+description: >-
+  Put the Clang that Visual Studio installs first on PATH, so tests that compile C++ with clang++ use the Clang the
+  MSVC standard library headers were released with. The standalone LLVM on the Windows image can be older than those
+  headers accept: MSVC 14.52's yvals_core.h stops any Clang before 22 with error STL1000.
+
+runs:
+  using: composite
+  steps:
+    - name: Put Visual Studio's Clang on PATH
+      shell: pwsh
+      run: |
+        $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+        $vs = & $vswhere -latest -products * -property installationPath
+        $bin = Join-Path $vs 'VC\Tools\Llvm\x64\bin'
+        if (-not (Test-Path (Join-Path $bin 'clang++.exe'))) {
+          throw "Visual Studio at '$vs' has no Clang in $bin"
+        }
+        Add-Content -Path $env:GITHUB_PATH -Value $bin
+        & (Join-Path $bin 'clang++.exe') --version

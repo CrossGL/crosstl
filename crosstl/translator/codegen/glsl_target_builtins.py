@@ -1,22 +1,19 @@
 """Built-in variables and functions a GLSL target profile does not have.
 
-Imported programs name built-ins of the language they came from: Vulkan GLSL's ``gl_ViewIndex`` (HLSL's
-``SV_ViewID``), or GLSL 4.x variables that GLSL ES 3.00 lacks. Emitting them for a profile without them yields a shader its compiler rejects, so the OpenGL and
+Imported programs name built-ins of the language they came from: Vulkan GLSL's ``gl_DeviceIndex``, or GLSL 4.x
+variables that GLSL ES 3.00 lacks. Emitting them for a profile without them yields a shader its compiler rejects, so the OpenGL and
 WebGL emitters scan the rendered program and refuse each one with the reason the profile cannot express it.
 """
 
 import re
 
-_VIEW_INDEX = (
-    "the multiview view index exists only in Vulkan GLSL (GL_EXT_multiview); "
-    "GL_OVR_multiview also needs the view count (layout(num_views)), which the source does not state"
-)
+from .glsl_builtin_extensions import BUILTIN_EXTENSIONS
 
 _QUAD_GROUP = "GLSL has no quad-group index; only a compute shader derives it, from gl_LocalInvocationIndex"
 
 # Desktop OpenGL GLSL 4.60 (GL_KHR_vulkan_glsl section "Removed features" lists the Vulkan-only additions).
+# The multiview view index is spelled per profile and stage by ``glsl_view_index``.
 OPENGL_UNAVAILABLE_BUILTINS = {
-    "gl_ViewIndex": _VIEW_INDEX,
     "gl_DeviceIndex": (
         "the device-group index exists only in Vulkan GLSL (GL_EXT_device_group)"
     ),
@@ -55,6 +52,14 @@ WEBGL_UNAVAILABLE_BUILTINS = {
     "gl_DrawID": "GLSL ES 3.00 has no draw index",
     "gl_BaseVertex": "GLSL ES 3.00 has no base vertex",
     "gl_BaseInstance": "GLSL ES 3.00 has no base instance",
+    **{
+        name: f"GLSL ES 3.00 has no subgroup built-in variables ({extension})"
+        for name, extension in BUILTIN_EXTENSIONS.items()
+        if extension in {
+            "GL_KHR_shader_subgroup_basic",
+            "GL_KHR_shader_subgroup_ballot",
+        }
+    },
     # GL_EXT_fragment_invocation_density and GL_EXT_fragment_shading_rate are not WebGL 2 extensions.
     "gl_FragSizeEXT": _ES_DENSITY,
     "gl_FragInvocationCountEXT": _ES_DENSITY,

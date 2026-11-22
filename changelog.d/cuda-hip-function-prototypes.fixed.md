@@ -1,0 +1,1 @@
+CUDA and HIP output declare a function before the first function that calls it when the call comes earlier in the source than the definition, at file scope and inside a stage. nvcc and hipcc used to reject such a program because the callee was undeclared at the call.

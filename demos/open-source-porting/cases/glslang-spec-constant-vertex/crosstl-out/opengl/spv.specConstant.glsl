@@ -1,5 +1,13 @@
 #version 400
 #if defined(GL_SPIRV) || defined(VULKAN)
+#if !defined(GL_ES) && __VERSION__ < 410
+#extension GL_ARB_separate_shader_objects : require
+#endif
+#define CROSSGL_LOCATION(n) layout(location = n)
+#else
+#define CROSSGL_LOCATION(n)
+#endif
+#if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 16) const int arraySize = 5;
 #else
 const int arraySize = 5;
@@ -15,9 +23,9 @@ layout(constant_id = 18) const float spFloat = 3.14;
 const float spFloat = 3.14;
 #endif
 #if defined(GL_SPIRV) || defined(VULKAN)
-layout(constant_id = 19) const double spDouble = double(3.141592653589793);
+layout(constant_id = 19) const double spDouble = 3.141592653589793lf;
 #else
-const double spDouble = double(3.141592653589793);
+const double spDouble = 3.141592653589793lf;
 #endif
 #if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 22) const uint scale = 2;
@@ -40,9 +48,9 @@ layout(constant_id = 118) const float spDupFloat = 3.14;
 const float spDupFloat = 3.14;
 #endif
 #if defined(GL_SPIRV) || defined(VULKAN)
-layout(constant_id = 119) const double spDupDouble = double(3.141592653589793);
+layout(constant_id = 119) const double spDupDouble = 3.141592653589793lf;
 #else
-const double spDupDouble = double(3.141592653589793);
+const double spDupDouble = 3.141592653589793lf;
 #endif
 #if defined(GL_SPIRV) || defined(VULKAN)
 layout(constant_id = 122) const uint dupScale = 2;
@@ -55,8 +63,8 @@ layout(constant_id = 24) gl_MaxImageUnits;
 
 layout(location = 0) in vec4 ucol[arraySize];
 layout(location = 5) in vec4 dupUcol[dupArraySize];
-out vec4 color;
-flat out int size;
+CROSSGL_LOCATION(0) out vec4 color;
+CROSSGL_LOCATION(1) flat out int size;
 // Vertex Shader
 void foo(vec4 p[arraySize]);
 

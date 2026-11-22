@@ -234,15 +234,16 @@ class TestFloatClassification:
         assert_no_fallback(spv)
         validate(spv, tmp_path)
 
-    @pytest.mark.parametrize("function, std450", [("fmin", "FMin"), ("fmax", "FMax")])
+    @pytest.mark.parametrize("function, std450", [("fmin", "NMin"), ("fmax", "NMax")])
     def test_fmin_fmax_return_the_non_nan_operand(self, function, std450, tmp_path):
         spv = spirv_for(
             f"float x = 1.0; float y = 2.0; float r = {function}(x, y);"
             f" vec2 v = {function}(vec2(x), vec2(y));"
         )
+        # NMin/NMax state C99's NaN rule; the integer NaN tests and selects keep it on drivers that assume no NaN.
         assert spv.count(f" {std450} ") == 2
         assert opcodes(spv).count("OpSelect") == 4
-        assert "NMin" not in spv and "NMax" not in spv
+        assert " FMin " not in spv and " FMax " not in spv
         assert_no_fallback(spv)
         validate(spv, tmp_path)
 

@@ -79,8 +79,10 @@ jobs:
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
           set -euo pipefail
-          if git fetch --quiet --depth=1 origin coverage && git show FETCH_HEAD:coverage.json > published.json; then
-            python -m tools.coverage compare published.json "$REPORT" \
+          published="$RUNNER_TEMP/published"
+          if git fetch --quiet --depth=1 origin coverage && mkdir -p "$published" \
+            && git archive FETCH_HEAD | tar -x -C "$published"; then
+            python -m tools.coverage compare "$published/coverage.json" "$REPORT" \
               --repository "$GITHUB_REPOSITORY" --head "$HEAD_SHA" > compare.md
           else
             echo "No published coverage to compare with yet." > compare.md

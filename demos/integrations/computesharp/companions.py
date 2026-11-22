@@ -7,7 +7,8 @@ same job and writes under ``<output>/<project>``:
 
 ``baseline`` (Windows) builds the original project as the upstream
 ``dotnet.yml`` step does (``-c Release -p:Platform=x64``, with the audit
-exceptions of ``baseline-audit.props``), exports its cases and generated HLSL
+exceptions of ``baseline-audit.props``, in the upstream checkout so that its
+``global.json`` selects the SDK), exports its cases and generated HLSL
 with the discovery tool, requires the frozen lock, runs it (``dotnet test``, or
 ``program_runner.py`` for a program, which the upstream step starts with
 ``dotnet run``), requires the assembly unchanged and accounts every case with
@@ -69,9 +70,14 @@ def _tail(text: str) -> str:
 
 
 def run_command(
-    command: list[str], log: Path, *, deadline: float, check: bool = True
+    command: list[str],
+    log: Path,
+    *,
+    deadline: float,
+    check: bool = True,
+    cwd: Path | None = None,
 ) -> subprocess.CompletedProcess:
-    """Run ``command``, keep its output in ``log`` and raise when it fails."""
+    """Run ``command`` in ``cwd``, keep its output in ``log`` and raise when it fails."""
 
     log.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -81,6 +87,7 @@ def run_command(
             text=True,
             timeout=deadline,
             check=False,
+            cwd=cwd,
         )
     except subprocess.TimeoutExpired as exc:
         log.write_text("$ " + " ".join(command) + "\n(deadline exceeded)\n")
@@ -92,6 +99,22 @@ def run_command(
             f"{' '.join(command[:3])} exited with {completed.returncode}:\n{_tail(output)}"
         )
     return completed
+
+
+def in_source(runner: Callable, source: Path) -> Callable:
+    """``runner`` with every command started in the upstream checkout ``source``.
+
+    The dotnet host takes the SDK from the ``global.json`` of its working
+    directory, not from the project's. Started anywhere else, an original build
+    gets the newest SDK on the machine instead of the one the upstream sources
+    pin, with that SDK's newer analyzers; the upstream build treats their
+    warnings as errors (IDE0410 with a .NET 11 SDK on the Windows runner).
+    """
+
+    def run(command: list[str], log: Path, **options: Any):
+        return runner(command, log, cwd=source, **options)
+
+    return run
 
 
 def _sha256(path: Path) -> str:
@@ -139,6 +162,7 @@ def baseline_suite(
 ) -> dict[str, Any]:
     """Run one companion suite against the original Direct3D 12 runtime."""
 
+    runner = in_source(runner, source)
     directory.mkdir(parents=True, exist_ok=True)
     logs = directory / "logs"
     project = source / item.project

@@ -382,7 +382,8 @@ def _crossgl_domain(domain: str, expression: str, extra: bool) -> Template:
         + "    struct DomainOutput {\n        vec4 position @ SV_Position;\n    }\n"
         "    tessellation_evaluation {\n"
         f"        DomainOutput main(PatchConstants constants, vec{size} coord @ SV_DomainLocation,\n"
-        f"                          OutputPatch<ControlPoint, {count}> patch) @domain({name}) {{\n"
+        f"                          OutputPatch<ControlPoint, {count}> patch) @domain({name})\n"
+        f"            @partitioning(integer) @outputtopology({'line' if name == 'isoline' else 'triangle_ccw'}) {{\n"
         f"            DomainOutput output;\n            output.position = {position};\n"
         "            return output;\n        }\n    }\n}\n"
     )

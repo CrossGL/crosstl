@@ -25,6 +25,7 @@ import re
 from ..ast import ArrayLiteralNode, ArrayType, NamedType
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .wgsl_array_constructors import wgsl_array_element
+from .wgsl_clip_distances import scalar_clip_distance_value
 
 __all__ = [
     "WGSLStructInitializerError",
@@ -104,12 +105,21 @@ def wgsl_struct_initializer(codegen, expr, target_type):
             f"it has {len(members)} members and the initializer gives {len(values)} values",
         )
     rendered = [
-        wgsl_converted_value(codegen, value, member_type)
-        for value, (_name, member_type) in zip(values, members)
+        scalar_clip_distance_value(
+            codegen,
+            struct_name,
+            name,
+            wgsl_converted_value(codegen, value, member_type),
+        )
+        for value, (name, member_type) in zip(values, members)
     ]
     rendered += [
-        f"{codegen.type_name_string(member_type)}()"
-        for _name, member_type in members[len(values) :]
+        (
+            "array<f32, 1>()"
+            if (struct_name, name) in codegen._scalar_clip_distance_members
+            else f"{codegen.type_name_string(member_type)}()"
+        )
+        for name, member_type in members[len(values) :]
     ]
     return f"{codegen.type_name_string(target_type)}({', '.join(rendered)})"
 

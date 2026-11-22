@@ -282,6 +282,29 @@ def test_float_atomic_struct_members_use_sanitized_names(tmp_path):
     _compile(generated, "opengl", tmp_path)
 
 
+def test_rerendered_program_defines_its_word_storage_types(tmp_path):
+    # The local ``length`` hides the built-in the program calls, so the generator renders the
+    # program again with the name reserved; that rendering must define the word type it declares.
+    source = _canonical(
+        """
+        float length = 2.0;
+        results[0] = atomicAdd(values[0].value, length);
+        results[1] = length(vec2(3.0, 4.0));
+    """,
+        "struct Counter { float value; };",
+        "Counter",
+    )
+    generated = GLSLCodeGen().generate_stage(parse(source), "compute")
+    assert "float length =" not in generated
+    assert "crossgl_words_Counter values[]" in generated
+    assert generated.count("struct crossgl_words_Counter {") == 1
+    assert generated.count("crossgl_words_Counter crossgl_encode_Counter(Counter ") == 1
+    assert generated.count("Counter crossgl_decode_Counter(crossgl_words_Counter ") == 1
+    assert generated.count("float crossgl_float_storage(") == 1
+    if shutil.which("glslangValidator"):
+        _compile(generated, "opengl", tmp_path)
+
+
 @pytest.mark.parametrize("kind", ("half", "half2", "half[2]"))
 def test_float_storage_does_not_change_neighbor_half_rounding(kind):
     source = _canonical(

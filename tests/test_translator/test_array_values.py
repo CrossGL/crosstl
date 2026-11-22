@@ -13,7 +13,9 @@ import pytest
 import crosstl
 from crosstl.translator import ast as A
 from crosstl.translator import parse
+from crosstl.translator.codegen.cuda_refusals import CudaLoweringRefused
 from crosstl.translator.codegen.GLSL_codegen import OpenGLAggregateInitializerError
+from crosstl.translator.codegen.hip_refusals import HipLoweringRefused
 from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
 from crosstl.translator.semantics.array_values import (
     ArrayConstructorUnsupportedError,
@@ -131,6 +133,33 @@ def _validate_glsl(tmp_path, code, stage):
     source = tmp_path / f"out.{stage}"
     source.write_text(code)
     _run(["glslangValidator", "-S", stage, str(source)])
+
+
+def _validate_cuda(tmp_path, code):
+    compiler = shutil.which("nvcc")
+    if compiler is None:
+        return
+    source = tmp_path / "out.cu"
+    source.write_text(code)
+    _run([compiler, "-c", str(source), "-o", str(tmp_path / "out.o")])
+
+
+def _validate_hip(tmp_path, code):
+    compiler = shutil.which("hipcc")
+    if compiler is None:
+        return
+    source = tmp_path / "out.hip.cpp"
+    source.write_text(code)
+    _run(
+        [
+            compiler,
+            "--offload-arch=gfx90a",
+            "-c",
+            str(source),
+            "-o",
+            str(tmp_path / "out.o"),
+        ]
+    )
 
 
 def _entry_statements(program):
@@ -589,3 +618,153 @@ def test_by_value_array_parameters_keep_their_names_on_value_targets(tmp_path, t
     code = _translate(tmp_path, PARAMETERS_GLSL, ".frag", target)
 
     assert "cgl_array_argument" not in code
+
+
+TYPED_ARRAY_CONSTRUCTOR_CGL = """
+shader Probe {
+    buffer float* outp;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            int a[3] = i32[3](4, 5, 6);
+            %s
+            outp[0] = float(a[1]) + float(i32[3](4, 5, 6)[1]);
+        }
+    }
+}
+"""
+
+
+WHOLE_ARRAY_COPY_CGL = """
+shader Probe {
+    buffer float* outp;
+    struct Holder { int v[3]; }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            int a[3] = int[3](7, 8, 9);
+            int b[3];
+            b = a;
+            Holder h;
+            h.v = a;
+            int c[3] = a;
+            outp[0] = float(b[2] + h.v[1] + c[0]);
+        }
+    }
+}
+"""
+
+
+def test_glsl_spells_the_element_type_of_array_constructors(tmp_path):
+    source = TYPED_ARRAY_CONSTRUCTOR_CGL % "int b[3]; b = i32[3](7, 8, 9);"
+
+    code = _translate(tmp_path, source, ".cgl", "opengl")
+
+    assert "b = int[3](7, 8, 9);" in code
+    assert "int[3](4, 5, 6)[1]" in code
+    assert "i32[" not in code
+
+
+@pytest.mark.parametrize("target", ["cuda", "hip"])
+def test_cuda_and_hip_build_indexed_array_constructors_in_a_local(tmp_path, target):
+    code = _translate(tmp_path, TYPED_ARRAY_CONSTRUCTOR_CGL % "", ".cgl", target)
+
+    assert "int cgl_array_value_0[3] = {4, 5, 6};" in code
+    assert "cgl_array_value_0[1]" in code
+    assert "i32" not in code
+
+
+@pytest.mark.parametrize("target", ["cuda", "hip"])
+def test_cuda_and_hip_refuse_array_constructors_assigned_to_arrays(target):
+    source = TYPED_ARRAY_CONSTRUCTOR_CGL % "int b[3]; b = i32[3](7, 8, 9);"
+
+    with pytest.raises(ArrayConstructorUnsupportedError) as raised:
+        hoist_array_constructors(parse(source), target)
+
+    assert raised.value.reason_code == "array-constructor-assigned"
+
+
+@pytest.mark.parametrize("target", ["cuda", "hip"])
+def test_cuda_and_hip_copy_whole_arrays_element_by_element(tmp_path, target):
+    code = _translate(tmp_path, WHOLE_ARRAY_COPY_CGL, ".cgl", target)
+
+    assert re.search(
+        r"for \(int (__crossgl_array_index_\d+) = 0; \1 < 3; \+\+\1\) \{\s*"
+        r"b\[\1\] = a\[\1\];\s*\}",
+        code,
+    )
+    assert re.search(
+        r"for \(int (__crossgl_array_index_\d+) = 0; \1 < 3; \+\+\1\) \{\s*"
+        r"h\.v\[\1\] = a\[\1\];\s*\}",
+        code,
+    )
+    assert "int c[3] = {a[0], a[1], a[2]};" in code
+    assert "b = a;" not in code
+    assert "h.v = a;" not in code
+    if target == "cuda":
+        _validate_cuda(tmp_path, code)
+    else:
+        _validate_hip(tmp_path, code)
+
+
+@pytest.mark.parametrize("target", ["cuda", "hip"])
+def test_cuda_and_hip_refuse_whole_array_copies_with_effectful_operands(
+    tmp_path, target
+):
+    source = """
+shader Probe {
+    buffer float* outp;
+    int advance(inout int i) { i = i + 1; return i; }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            int rows[2][3] = int[2][3](int[3](1, 2, 3), int[3](4, 5, 6));
+            int b[3];
+            int i = 0;
+            b = rows[advance(i)];
+            outp[0] = float(b[0]);
+        }
+    }
+}
+"""
+    expected = {"cuda": CudaLoweringRefused, "hip": HipLoweringRefused}[target]
+    with pytest.raises(expected, match="array assignment"):
+        _translate(tmp_path, source, ".cgl", target)
+
+
+WHOLE_ARRAY_2D_CGL = """
+shader Probe {
+    buffer float* outp;
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            int a[2][3] = int[2][3](int[3](1, 2, 3), int[3](4, 5, 6));
+            int b[2][3];
+            b = a;
+            int c[2][3] = a;
+            outp[0] = float(b[1][2] + c[0][1]);
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("target", ["cuda", "hip"])
+def test_cuda_and_hip_copy_whole_2d_arrays_element_by_element(tmp_path, target):
+    code = _translate(tmp_path, WHOLE_ARRAY_2D_CGL, ".cgl", target)
+
+    assert re.search(
+        r"for \(int (__crossgl_array_index_\d+) = 0; \1 < 2; \+\+\1\) \{\s*"
+        r"for \(int (__crossgl_array_index_\d+) = 0; \2 < 3; \+\+\2\) \{\s*"
+        r"b\[\1\]\[\2\] = a\[\1\]\[\2\];\s*\}\s*\}",
+        code,
+    )
+    assert (
+        "int c[2][3] = {{a[0][0], a[0][1], a[0][2]}, {a[1][0], a[1][1], a[1][2]}};"
+        in code
+    )
+    assert "b = a;" not in code
+    if target == "cuda":
+        _validate_cuda(tmp_path, code)
+    else:
+        _validate_hip(tmp_path, code)

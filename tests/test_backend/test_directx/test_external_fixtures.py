@@ -375,7 +375,9 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "void node_1_0(NodeOutputArray<RECORD1> OutputArray_1_0) @ stage_entry",
+            "node {",
+            "void node_1_0(@allow_sparse_nodes @node_array_size(129) @max_records(31) "
+            "NodeOutputArray<RECORD1> OutputArray_1_0) @ stage_entry",
             "ThreadNodeOutputRecords<RECORD1> outRec = OutputArray_1_0[1].GetThreadNodeOutputRecords(2);",
             "outRec.OutputComplete();",
         ),
@@ -1074,9 +1076,11 @@ EXTERNAL_FIXTURES = [
                 return a + m + m3[0].xyxy + m3[1].xyxy;
             }
         """).strip(),
+        # DXC makes both globals $Globals members and ignores their initializers
+        # ("Initializer of external global will be ignored").
         contains=(
-            "vec4 m = vec4(4, 5, 6, 7);",
-            "const vec2[2] m3 = {12, 13, 14, 15};",
+            "@ hlsl_program_constant\n    vec4 m;",
+            "@ hlsl_program_constant\n    vec2 m3[2];",
             "return ((a + m) + m3[0].xyxy) + m3[1].xyxy;",
         ),
     ),
@@ -1680,9 +1684,9 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "float16 D_GGX(float16 roughness, float NoH, const vec3 h)",
+            "float D_GGX(float roughness, float NoH, const vec3 h)",
             "float oneMinusNoHSquared = 1.0 - (NoH * NoH);",
-            "float16 d = roughness;",
+            "float d = roughness;",
         ),
     ),
     ExternalFixture(
@@ -1784,10 +1788,13 @@ EXTERNAL_FIXTURES = [
                 return float4(g_pre_uni_con_init, 0.0f, 0.0f, 1.0f);
             }
         """).strip(),
+        # A uniform global is a $Globals member, whose initializer DXC ignores, so the
+        # shader reads the value the host binds.
         contains=(
-            "precise const float g_pre_uni_con_init = 1.0;",
+            "@ hlsl_program_constant\n    precise float g_pre_uni_con_init;",
             "return vec4(g_pre_uni_con_init, 0.0, 0.0, 1.0);",
         ),
+        absent=("g_pre_uni_con_init = 1.0",),
     ),
     ExternalFixture(
         name="unity_builtin_shaderlab_shadowcaster_unexpanded_statement_macros",
@@ -1849,10 +1856,10 @@ EXTERNAL_FIXTURES = [
             }
         """).strip(),
         contains=(
-            "f16vec4 uvw @ TexCoord0;",
+            "vec4 uvw @ TexCoord0;",
             "for (int ix = 0; ix < 2; ix++)",
             "rgb += i.uvw.rgb;",
-            "return f16vec4(rgb, 1.0);",
+            "return vec4(rgb, 1.0);",
         ),
     ),
 ]
@@ -1955,10 +1962,12 @@ LONG_VECTOR_TYPEDEF_FIXTURE = ExternalFixture(
 
 
 def test_codegen_dxc_block_scope_long_vector_typedef_is_refused():
+    # DXC compiles its linalg tests with -enable-16bit-types, so ``half`` keeps its binary16 width.
+    tokens = HLSLLexer(LONG_VECTOR_TYPEDEF_FIXTURE.code, enable_16bit_types=True)
     with pytest.raises(
         DirectXImportRefused, match=r"vector<half, 16> has 16 components"
     ):
-        generate_crossgl(LONG_VECTOR_TYPEDEF_FIXTURE.code)
+        HLSLToCrossGLConverter().generate(HLSLParser(tokens.tokenize()).parse())
 
 
 def test_codegen_dxc_template_value_path_is_refused():

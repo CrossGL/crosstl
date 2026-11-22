@@ -260,8 +260,11 @@ def test_spirv_block_named_like_a_resource_type_is_renamed_in_crossgl(tmp_path):
         str(_rw_block_source(tmp_path, "RWStructuredBuffer")), backend="cgl"
     )
     assert "RWStructuredBuffer<RWStructuredBuffer>" not in code
-    assert "RWStructuredBuffer<RWStructuredBuffer_outp>" in code
-    assert "struct RWStructuredBuffer_outp" in code
+    # The importer renames the block at parse time (type_declaration_names.py): a struct
+    # named like a built-in type takes a trailing underscore, so the wrapper no longer
+    # reads as a buffer of buffers.
+    assert "RWStructuredBuffer<RWStructuredBuffer_>" in code
+    assert "struct RWStructuredBuffer_" in code
 
 
 @pytest.mark.parametrize("target", ["cgl", "hlsl"])
@@ -278,7 +281,7 @@ def test_spirv_readonly_block_named_like_a_resource_type_translates(tmp_path, ta
     code = crosstl.translate(str(source), backend=target)
     assert "StructuredBuffer<StructuredBuffer>" not in code
     if target == "cgl":
-        assert "StructuredBuffer<StructuredBuffer_outp>" in code
+        assert "StructuredBuffer<StructuredBuffer_>" in code
     if target == "hlsl":
         assert re.search(r"\bStructuredBuffer<float> outp\b", code)
 
@@ -468,11 +471,14 @@ def _chain_result_type(assembly, result_id, types, variables):
 
 def test_spirv_pointer_arithmetic_advances_the_last_index(tmp_path):
     code = crosstl.translate(str(_pointer_arithmetic_source(tmp_path)), backend="cgl")
-    # ``*p`` is element ``0 + i`` of the runtime array, not a subscript on element 0.
+    i = "gl_GlobalInvocationID[0]"
+    # ``*p`` is element ``i`` of the runtime array, not a subscript on element 0: the
+    # Element folds into the base index, and a zero base index is dropped.
     assert "__member0[0][" not in code
-    assert re.search(r"__member0\[\(0 \+ gl_GlobalInvocationID\[0\]\)\]", code)
-    # ``q = p - i`` then ``q[i]`` is element ``((0 + i) + -i) + i``: still one subscript each.
-    assert code.count("__member0[(") == 3
+    assert f"outp[0].__member0[{i}] = fin[0].__member0[{i}];" in code
+    # ``q = p - i`` then ``q[i]`` is element ``((i + -i) + i)``: still one subscript each.
+    assert f"__member0[(({i} + -{i}) + {i})]" in code
+    assert code.count("__member0[(") == 2
 
 
 def test_spirv_pointer_arithmetic_round_trip_has_valid_access_chains(tmp_path):

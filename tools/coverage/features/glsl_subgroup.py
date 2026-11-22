@@ -137,15 +137,16 @@ def instructions(*texts: str) -> dict[str, tuple[str, str]]:
     return found
 
 
-def parse(*texts: str) -> list[Feature]:
+def parse(*texts: str, language: str = "glsl") -> list[Feature]:
+    """The subgroup functions of GLSL, or of GLSL ES (``gles``), which the extensions apply to from 3.10."""
     features = []
     for name, (extensions, signatures) in sorted(functions(*texts).items()):
         features.append(
             Feature(
-                "glsl",
+                language,
                 "function",
                 name,
-                pick(signatures, UNIFORMS["glsl"]),
+                pick(signatures, UNIFORMS[language]),
                 group=extensions.split()[-1],
                 crossgl=name,
                 extension=extensions,
