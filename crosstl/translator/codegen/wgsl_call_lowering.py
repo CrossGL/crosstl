@@ -220,26 +220,13 @@ class WGSLCallLoweringMixin:
             and not self.is_user_function_name("f32tof16")
             and len(argument.arguments) == 1
         ):
-            inner_expr, width = self.half_conversion_float_operand(
+            # A round trip through binary16 is WGSL's quantizeToF16 built-in, which naga lowers to OpQuantizeToF16.
+            # unpack2x16float(pack2x16float(v)) means the same, but on lavapipe the SPIR-V naga writes for that pair
+            # returned v unrounded.
+            inner_expr, _width = self.half_conversion_float_operand(
                 argument.arguments[0]
             )
-            if width is None:
-                return f"unpack2x16float(pack2x16float(vec2<f32>({inner_expr}, 0.0))).x"
-            if width == 2:
-                return f"unpack2x16float(pack2x16float({inner_expr}))"
-            components = ["x", "y", "z", "w"][:width]
-            helper_name = f"crosstl_unpack_pack2x16float_vec{width}"
-            if helper_name not in self._half_conversion_helpers:
-                elements = [
-                    f"unpack2x16float(pack2x16float(vec2<f32>(v.{c}, 0.0))).x"
-                    for c in components
-                ]
-                self._half_conversion_helpers[helper_name] = (
-                    f"fn {helper_name}(v: vec{width}<f32>) -> vec{width}<f32> {{\n"
-                    f"    return vec{width}<f32>({', '.join(elements)});\n"
-                    f"}}"
-                )
-            return f"{helper_name}({inner_expr})"
+            return f"quantizeToF16({inner_expr})"
 
         arg_type = self.expression_type(argument)
         vector = self.vector_shape(arg_type)

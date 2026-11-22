@@ -1,12 +1,23 @@
 """CrossGL-to-Rust code generator."""
 
-from ..ast import ArrayNode, EnumNode, FunctionNode, StructNode
+import re
+
+from ..ast import (
+    ArrayNode,
+    EnumNode,
+    ExpressionStatementNode,
+    FunctionNode,
+    ReturnNode,
+    StructNode,
+)
 from ..explicit_specializations import explicit_specialization_refusals
 from ..refusals import RustRefusal
+from ..unhandled import UNHANDLED
 from .c_reference_parameters import is_output_parameter
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .lowering_refusals import LoweringRefusalMixin
 from .precise_evaluation import refuse_precise_evaluation
+from .rust_builtin_result_types import RustBuiltinResultTypeMixin
 from .rust_callables import RustCallableMixin
 from .rust_exact_lookups import (
     rust_generic_template_reason,
@@ -16,6 +27,19 @@ from .rust_exact_lookups import (
 from .rust_expressions import RustExpressionMixin
 from .rust_function_signatures import RustFunctionSignatureMixin
 from .rust_global_declarations import RustGlobalDeclarationMixin
+from .rust_gpu_constants import rust_integer_constants
+from .rust_gpu_entry_buffers import normalize_rust_gpu_buffers
+from .rust_gpu_interface import RUST_GPU_PRELUDE, UNIFORM_VALUE_KIND
+from .rust_gpu_slice_length import RustGpuSliceLengthMixin
+from .rust_gpu_spec_constants import (
+    SPEC_CONSTANT_KIND,
+    spec_constant_infos,
+    spec_constant_local,
+)
+from .rust_gpu_spelling import glam_spelling
+from .rust_gpu_stage_io import GRAPHICS_STAGES, RustGpuStageIoMixin
+from .rust_gpu_storage import PADDED_ELEMENTS, RustGpuPaddedSliceMixin
+from .rust_gpu_subset import refuse_host_only_rust, refuse_outside_rust_gpu_subset
 from .rust_match_lowering import RustMatchMixin
 from .rust_memory_atomics import rust_memory_atomic_result_type
 from .rust_narrow_integers import RUST_EXACT_WIDTH_INTEGER_TYPES
@@ -30,10 +54,26 @@ from .rust_result_types import RustResultTypeMixin
 from .rust_return_values import RustReturnValueMixin
 from .rust_stage_contracts import RustStageContractMixin
 from .rust_statements import RustStatementMixin
+from .rust_switch_lowering import RustSwitchLoweringMixin
+from .rust_tables import (
+    RUST_FUNCTION_MAP,
+    RUST_SEMANTIC_MAP,
+    RUST_SYNC_MAP,
+    RUST_WAVE_OP_MAP,
+)
 from .rust_type_definitions import RustTypeDefinitionMixin
 from .rust_values import RustValueMixin
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import is_fragment_output_parameter, normalize_stage_name
+
+
+def tail_expression_as_return(statements):
+    """``statements`` with a trailing tail expression (``value`` without ``;``) written as ``return value;``."""
+    statements = list(statements or [])
+    if statements and isinstance(statements[-1], ExpressionStatementNode):
+        if getattr(statements[-1], "is_tail_expression", False):
+            statements[-1] = ReturnNode(statements[-1].expression)
+    return statements
 
 
 class RustCodeGen(
@@ -43,6 +83,7 @@ class RustCodeGen(
     RustGlobalDeclarationMixin,
     RustFunctionSignatureMixin,
     RustStatementMixin,
+    RustSwitchLoweringMixin,
     RustMatchMixin,
     RustReturnValueMixin,
     RustOperatorMixin,
@@ -53,9 +94,13 @@ class RustCodeGen(
     RustResultTypeMixin,
     RustResourceAttributeMixin,
     RustOutputParameterMixin,
+    RustGpuPaddedSliceMixin,
+    RustGpuSliceLengthMixin,
+    RustGpuStageIoMixin,
     LoweringRefusalMixin,
+    RustBuiltinResultTypeMixin,
 ):
-    """Emit Rust-like GPU shader source from the shared CrossGL AST."""
+    """Emit rust-gpu shader crates from the shared CrossGL AST."""
 
     LOWERING_REFUSAL_TYPE = RustLoweringRefused
 
@@ -265,321 +310,11 @@ class RustCodeGen(
             ),
         }
 
-        self.semantic_map = {
-            # Vertex attributes
-            "gl_VertexID": "vertex_id",
-            "gl_InstanceID": "instance_id",
-            "gl_BaseVertex": "start_vertex_location",
-            "gl_BaseInstance": "start_instance_location",
-            "gl_DrawID": "draw_id",
-            "gl_Position": "position",
-            "gl_PointSize": "point_size",
-            "gl_ClipDistance": "clip_distance",
-            "SV_Position": "position",
-            "SV_VertexID": "vertex_id",
-            "SV_InstanceID": "instance_id",
-            "SV_StartVertexLocation": "start_vertex_location",
-            "SV_StartInstanceLocation": "start_instance_location",
-            "SV_DrawID": "draw_id",
-            # Fragment attributes
-            "gl_FragColor": "target(0)",
-            "gl_FragColor0": "target(0)",
-            "gl_FragColor1": "target(1)",
-            "gl_FragColor2": "target(2)",
-            "gl_FragColor3": "target(3)",
-            "gl_FragDepth": "depth(any)",
-            "gl_FragCoord": "frag_coord",
-            "gl_FrontFacing": "front_facing",
-            "gl_PointCoord": "point_coord",
-            "gl_PrimitiveID": "primitive_id",
-            "gl_SampleID": "sample_index",
-            "SV_Target": "target(0)",
-            "SV_Target0": "target(0)",
-            "SV_Target1": "target(1)",
-            "SV_Target2": "target(2)",
-            "SV_Target3": "target(3)",
-            "SV_Target4": "target(4)",
-            "SV_Target5": "target(5)",
-            "SV_Target6": "target(6)",
-            "SV_Target7": "target(7)",
-            "SV_Depth": "depth(any)",
-            "SV_IsFrontFace": "front_facing",
-            "SV_PrimitiveID": "primitive_id",
-            "SV_SampleIndex": "sample_index",
-            # Compute attributes
-            "gl_WorkGroupID": "workgroup_id",
-            "gl_LocalInvocationID": "local_invocation_id",
-            "gl_GlobalInvocationID": "global_invocation_id",
-            "gl_LocalInvocationIndex": "local_invocation_index",
-            "SV_GroupID": "workgroup_id",
-            "SV_GroupThreadID": "local_invocation_id",
-            "SV_DispatchThreadID": "global_invocation_id",
-            "SV_GroupIndex": "local_invocation_index",
-            # Tessellation attributes
-            "gl_InvocationID": "output_control_point_id",
-            "gl_PrimitiveIDIn": "primitive_id",
-            "gl_TessCoord": "domain_location",
-            "SV_OutputControlPointID": "output_control_point_id",
-            "SV_DomainLocation": "domain_location",
-            # Ray tracing attributes
-            "payload": "ray_payload",
-            "rayPayloadEXT": "ray_payload",
-            "rayPayloadInEXT": "ray_payload",
-            "hit_attribute": "hit_attribute",
-            "hitAttributeEXT": "hit_attribute",
-            "callable_data": "callable_data",
-            "callableDataEXT": "callable_data",
-            "callableDataInEXT": "callable_data",
-            "gl_LaunchIDEXT": "launch_id",
-            "gl_LaunchSizeEXT": "launch_size",
-            "gl_HitTEXT": "hit_t",
-            "gl_HitKindEXT": "hit_kind",
-            "SV_DispatchRaysIndex": "launch_id",
-            "SV_DispatchRaysDimensions": "launch_size",
-            # Standard vertex semantics
-            "POSITION": "position",
-            "NORMAL": "normal",
-            "TANGENT": "tangent",
-            "BINORMAL": "binormal",
-            "TEXCOORD": "texcoord",
-            "TEXCOORD0": "texcoord(0)",
-            "TEXCOORD1": "texcoord(1)",
-            "TEXCOORD2": "texcoord(2)",
-            "TEXCOORD3": "texcoord(3)",
-            "COLOR": "color",
-            "COLOR0": "color(0)",
-            "COLOR1": "color(1)",
-        }
+        self.semantic_map = dict(RUST_SEMANTIC_MAP)
 
-        # Function mapping for common shader functions
-        self.function_map = {
-            "texture": "sample",
-            "textureLod": "sample_lod",
-            "textureLodOffset": "sample_lod_offset",
-            "textureGrad": "sample_grad",
-            "textureGradOffset": "sample_grad_offset",
-            "textureOffset": "sample_offset",
-            "textureProj": "sample_projected",
-            "textureProjLod": "sample_projected_lod",
-            "textureProjGrad": "sample_projected_grad",
-            "textureProjOffset": "sample_projected_offset",
-            "textureProjLodOffset": "sample_projected_lod_offset",
-            "textureProjGradOffset": "sample_projected_grad_offset",
-            "texelFetch": "texel_fetch",
-            "texelFetchOffset": "texel_fetch_offset",
-            "textureQueryLevels": "texture_query_levels",
-            "textureQueryLod": "texture_query_lod",
-            "textureSamples": "texture_samples",
-            "imageLoad": "image_load",
-            "imageStore": "image_store",
-            "imageSize": "image_size",
-            "imageSamples": "image_samples",
-            "imageAtomicAdd": "image_atomic_add",
-            "imageAtomicMin": "image_atomic_min",
-            "imageAtomicMax": "image_atomic_max",
-            "imageAtomicAnd": "image_atomic_and",
-            "imageAtomicOr": "image_atomic_or",
-            "imageAtomicXor": "image_atomic_xor",
-            "imageAtomicExchange": "image_atomic_exchange",
-            "imageAtomicCompSwap": "image_atomic_comp_swap",
-            "TraceRay": "trace_ray",
-            "CallShader": "call_shader",
-            "ReportHit": "report_hit",
-            "IgnoreHit": "ignore_hit",
-            "AcceptHitAndEndSearch": "accept_hit_and_end_search",
-            "textureCompare": "texture_compare",
-            "textureCompareOffset": "texture_compare_offset",
-            "textureCompareLod": "texture_compare_lod",
-            "textureCompareLodOffset": "texture_compare_lod_offset",
-            "textureCompareGrad": "texture_compare_grad",
-            "textureCompareGradOffset": "texture_compare_grad_offset",
-            "textureCompareProj": "texture_compare_projected",
-            "textureCompareProjOffset": "texture_compare_projected_offset",
-            "textureCompareProjLod": "texture_compare_projected_lod",
-            "textureCompareProjLodOffset": "texture_compare_projected_lod_offset",
-            "textureCompareProjGrad": "texture_compare_projected_grad",
-            "textureCompareProjGradOffset": "texture_compare_projected_grad_offset",
-            "textureGatherCompare": "texture_gather_compare",
-            "textureGatherCompareOffset": "texture_gather_compare_offset",
-            "normalize": "normalize",
-            "dot": "dot",
-            "cross": "cross",
-            "length": "length",
-            "distance": "distance",
-            "reflect": "reflect",
-            "refract": "refract",
-            "faceforward": "faceforward",
-            "outerProduct": "outer_product",
-            "transpose": "transpose",
-            "determinant": "determinant",
-            "inverse": "inverse",
-            "matrixCompMult": "matrix_comp_mult",
-            "sin": "sin",
-            "cos": "cos",
-            "tan": "tan",
-            "asin": "asin",
-            "acos": "acos",
-            "atan": "atan",
-            "atan2": "atan2",
-            "sinh": "sinh",
-            "cosh": "cosh",
-            "tanh": "tanh",
-            "degrees": "degrees",
-            "radians": "radians",
-            "sqrt": "sqrt",
-            "rcp": "rcp",
-            "inversesqrt": "rsqrt",
-            "inverseSqrt": "rsqrt",
-            "pow": "pow",
-            "trunc": "trunc",
-            "roundEven": "round_even",
-            "fma": "fma",
-            "mad": "fma",
-            "ldexp": "ldexp",
-            "exp": "exp",
-            "exp2": "exp2",
-            "log": "log",
-            "log2": "log2",
-            "abs": "abs",
-            "sign": "sign",
-            "isnan": "isnan",
-            "isinf": "isinf",
-            "isfinite": "isfinite",
-            "any": "any",
-            "all": "all",
-            "lessThan": "less_than",
-            "lessThanEqual": "less_than_equal",
-            "greaterThan": "greater_than",
-            "greaterThanEqual": "greater_than_equal",
-            "equal": "equal",
-            "notEqual": "not_equal",
-            "bitCount": "bit_count",
-            "bitfieldReverse": "bitfield_reverse",
-            "findLSB": "find_lsb",
-            "findMSB": "find_msb",
-            "bitfieldExtract": "bitfield_extract",
-            "bitfieldInsert": "bitfield_insert",
-            "floatBitsToInt": "float_bits_to_int",
-            "floatBitsToUint": "float_bits_to_uint",
-            "intBitsToFloat": "int_bits_to_float",
-            "uintBitsToFloat": "uint_bits_to_float",
-            "doubleBitsToLong": "double_bits_to_long",
-            "longBitsToDouble": "long_bits_to_double",
-            "packUnorm2x16": "pack_unorm_2x16",
-            "packSnorm2x16": "pack_snorm_2x16",
-            "packUnorm4x8": "pack_unorm_4x8",
-            "packSnorm4x8": "pack_snorm_4x8",
-            "packHalf2x16": "pack_half_2x16",
-            "packDouble2x32": "pack_double_2x32",
-            "unpackUnorm2x16": "unpack_unorm_2x16",
-            "unpackSnorm2x16": "unpack_snorm_2x16",
-            "unpackUnorm4x8": "unpack_unorm_4x8",
-            "unpackSnorm4x8": "unpack_snorm_4x8",
-            "unpackHalf2x16": "unpack_half_2x16",
-            "unpackDouble2x32": "unpack_double_2x32",
-            "min": "min",
-            "max": "max",
-            "clamp": "clamp",
-            "mix": "lerp",
-            "smoothstep": "smoothstep",
-            "step": "step",
-            "dFdx": "dfdx",
-            "dFdy": "dfdy",
-            "ddx": "dfdx",
-            "ddy": "dfdy",
-            "dFdxFine": "dfdx_fine",
-            "dFdyFine": "dfdy_fine",
-            "ddx_fine": "dfdx_fine",
-            "ddy_fine": "dfdy_fine",
-            "dFdxCoarse": "dfdx_coarse",
-            "dFdyCoarse": "dfdy_coarse",
-            "ddx_coarse": "dfdx_coarse",
-            "ddy_coarse": "dfdy_coarse",
-            "fwidth": "fwidth",
-            "fwidthFine": "fwidth_fine",
-            "fwidthCoarse": "fwidth_coarse",
-            "floor": "floor",
-            "ceil": "ceil",
-            "round": "round",
-            "frac": "fract",
-            "fract": "fract",
-            "mod": "modulo",
-            "fmod": "modulo",
-            "barrier": "workgroup_barrier",
-            "workgroupBarrier": "workgroup_barrier",
-            "workgroupExecutionBarrier": "workgroup_barrier",
-            "memoryBarrier": "memory_barrier",
-            "memoryBarrierShared": "memory_barrier_shared",
-            "memoryBarrierBuffer": "memory_barrier_buffer",
-            "memoryBarrierImage": "memory_barrier_image",
-            "groupMemoryBarrier": "group_memory_barrier",
-            "allMemoryBarrier": "all_memory_barrier",
-            "deviceMemoryBarrier": "device_memory_barrier",
-            "GroupMemoryBarrier": "group_memory_barrier",
-            "GroupMemoryBarrierWithGroupSync": "group_memory_barrier_with_group_sync",
-            "DeviceMemoryBarrier": "device_memory_barrier",
-            "DeviceMemoryBarrierWithGroupSync": "device_memory_barrier_with_group_sync",
-            "AllMemoryBarrier": "all_memory_barrier",
-            "AllMemoryBarrierWithGroupSync": "all_memory_barrier_with_group_sync",
-            "WaveShuffle": "subgroup_shuffle",
-            "WaveShuffleXor": "subgroup_shuffle_xor",
-            "__shfl_down_sync": "subgroup_shuffle_down",
-        }
-        self.wave_op_map = {
-            "WaveActiveSum": "subgroup_add",
-            "WaveActiveProduct": "subgroup_mul",
-            "WaveActiveMin": "subgroup_min",
-            "WaveActiveMax": "subgroup_max",
-            "WaveActiveAnyTrue": "subgroup_any",
-            "WaveActiveAllTrue": "subgroup_all",
-            "WaveActiveAllEqual": "subgroup_all_equal",
-            "WaveActiveBallot": "subgroup_ballot",
-            "WaveActiveCountBits": "subgroup_ballot_bit_count",
-            "WaveActiveBitAnd": "subgroup_and",
-            "WaveActiveBitOr": "subgroup_or",
-            "WaveActiveBitXor": "subgroup_xor",
-            "WaveGetLaneCount": "subgroup_size",
-            "WaveGetLaneIndex": "subgroup_invocation_id",
-            "WaveIsFirstLane": "subgroup_elect",
-            "WaveReadLaneFirst": "subgroup_broadcast_first",
-            "WaveReadLaneAt": "subgroup_broadcast",
-            "WavePrefixSum": "subgroup_exclusive_add",
-            "WavePrefixProduct": "subgroup_exclusive_mul",
-            "WavePrefixCountBits": "subgroup_exclusive_ballot_bit_count",
-            "WaveMatch": "subgroup_match",
-            "WaveMultiPrefixSum": "subgroup_partitioned_add",
-            "WaveMultiPrefixProduct": "subgroup_partitioned_mul",
-            "WaveMultiPrefixCountBits": "subgroup_partitioned_ballot_bit_count",
-            "WaveMultiPrefixBitAnd": "subgroup_partitioned_and",
-            "WaveMultiPrefixBitOr": "subgroup_partitioned_or",
-            "WaveMultiPrefixBitXor": "subgroup_partitioned_xor",
-            "QuadReadLaneAt": "subgroup_quad_broadcast",
-            "QuadReadAcrossX": "subgroup_quad_swap_horizontal",
-            "QuadReadAcrossY": "subgroup_quad_swap_vertical",
-            "QuadReadAcrossDiagonal": "subgroup_quad_swap_diagonal",
-            "QuadAny": "subgroup_quad_any",
-            "QuadAll": "subgroup_quad_all",
-            "WaveShuffle": "subgroup_shuffle",
-            "WaveShuffleXor": "subgroup_shuffle_xor",
-        }
-        self.sync_map = {
-            "barrier": "workgroup_barrier",
-            "workgroupBarrier": "workgroup_barrier",
-            "workgroupExecutionBarrier": "workgroup_barrier",
-            "memoryBarrier": "memory_barrier",
-            "memoryBarrierShared": "memory_barrier_shared",
-            "memoryBarrierBuffer": "memory_barrier_buffer",
-            "memoryBarrierImage": "memory_barrier_image",
-            "groupMemoryBarrier": "group_memory_barrier",
-            "allMemoryBarrier": "all_memory_barrier",
-            "deviceMemoryBarrier": "device_memory_barrier",
-            "GroupMemoryBarrier": "group_memory_barrier",
-            "GroupMemoryBarrierWithGroupSync": "group_memory_barrier_with_group_sync",
-            "DeviceMemoryBarrier": "device_memory_barrier",
-            "DeviceMemoryBarrierWithGroupSync": "device_memory_barrier_with_group_sync",
-            "AllMemoryBarrier": "all_memory_barrier",
-            "AllMemoryBarrierWithGroupSync": "all_memory_barrier_with_group_sync",
-        }
+        self.function_map = dict(RUST_FUNCTION_MAP)
+        self.wave_op_map = dict(RUST_WAVE_OP_MAP)
+        self.sync_map = dict(RUST_SYNC_MAP)
         self.variable_types = {}
         self.local_variable_names = set()
         self.lazy_static_names = set()
@@ -592,6 +327,7 @@ class RustCodeGen(
         self.rust_promoted_resource_node_ids = set()
         self.rust_referenced_names = frozenset()
         self.rust_resource_capture_params = {}
+        self.rust_spec_constant_infos = {}
         self.rust_entry_resource_infos = {}
         self.struct_member_types = {}
         self.struct_member_semantics = {}
@@ -603,6 +339,9 @@ class RustCodeGen(
         self.current_shader_type = None
         self.do_while_contexts = []
         self.for_contexts = []
+        self.switch_contexts = []
+        self.loop_labels = []
+        self.loop_label_counter = 0
         self.loop_depth = 0
         self.do_while_counter = 0
         self.user_function_names = set()
@@ -647,12 +386,17 @@ class RustCodeGen(
         refuse_cooperative_matrices(ast, label="Rust", target="rust")
         refuse_precise_evaluation(ast, label="Rust", target="rust")
         ast = canonicalize_separate_textures(ast)
-        return self.refusals.run(self.generate_program, ast)
+        return glam_spelling(self.refusals.run(self.generate_program, ast))
 
     def generate_program(self, ast):
         """Render the Rust program; refusals recorded on the way are raised by :meth:`generate`."""
         self.validate_supported_stage_types(ast)
+        normalize_rust_gpu_buffers(self, ast)
         explicit_specialization_refusals(self, ast, "Rust")
+        self.rust_referenced_names = referenced_identifier_names(ast)
+        self.struct_member_types = {}
+        self.collect_rust_gpu_struct_nodes(ast)
+        refuse_outside_rust_gpu_subset(self, ast)
         self.variable_types = {}
         self.local_variable_names = set()
         self.lazy_static_names = set()
@@ -666,6 +410,7 @@ class RustCodeGen(
         self.struct_member_types = {}
         self.struct_member_semantics = {}
         self.struct_generic_params = {}
+        self.rust_spec_constant_infos = spec_constant_infos(self, ast)
         self.static_variable_names = self.collect_static_variable_names(ast)
         self.static_symbol_names = self.build_static_symbol_names(
             self.static_variable_names
@@ -674,6 +419,9 @@ class RustCodeGen(
         self.current_return_type = None
         self.do_while_contexts = []
         self.for_contexts = []
+        self.switch_contexts = []
+        self.loop_labels = []
+        self.loop_label_counter = 0
         self.loop_depth = 0
         self.do_while_counter = 0
         self.user_function_names = self.collect_user_function_names(ast)
@@ -695,6 +443,7 @@ class RustCodeGen(
         self.enum_nodes_by_name = self.collect_enum_nodes_by_name(ast)
         self.non_copy_type_names = self.collect_non_copy_type_names(ast)
         self.register_constant_types(ast)
+        self.rust_integer_constant_values = rust_integer_constants(ast)
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
         self.required_mesh_helpers = set()
@@ -728,9 +477,7 @@ class RustCodeGen(
             name: list(params)
             for name, params in self.rust_resource_capture_params.items()
         }
-        code = "// Generated Rust GPU Shader Code\n"
-        code += "use gpu::*;\n"
-        code += "use math::*;\n\n"
+        code = RUST_GPU_PRELUDE
         if self.has_geometry_stage(ast):
             code += self.generate_rust_geometry_stream_helpers()
         if self.has_tessellation_stage(ast):
@@ -751,7 +498,12 @@ class RustCodeGen(
         emitted_static_names = set()
         global_vars = getattr(ast, "global_variables", [])
         for node in global_vars:
-            if self.is_promoted_rust_entry_resource(node):
+            if self.is_rust_gpu_interface_declaration(node):
+                self.register_variable_type(
+                    node.name, self.rust_variable_source_type(node), scope="static"
+                )
+                emitted_static_names.add(node.name)
+            elif self.is_promoted_rust_entry_resource(node):
                 var_type = self.rust_variable_source_type(node)
                 self.register_glsl_buffer_block_metadata(node)
                 self.register_variable_type(node.name, var_type, scope="static")
@@ -843,7 +595,9 @@ class RustCodeGen(
                     )
                     if variable.name in emitted_static_names:
                         continue
-                    if self.is_promoted_rust_entry_resource(variable):
+                    if self.is_rust_gpu_interface_declaration(variable):
+                        pass
+                    elif self.is_promoted_rust_entry_resource(variable):
                         var_type = self.rust_variable_source_type(variable)
                         self.register_glsl_buffer_block_metadata(variable)
                         code += self.rust_resource_metadata_comment(variable, var_type)
@@ -890,6 +644,10 @@ class RustCodeGen(
 
         code += self.generate_required_rust_mesh_helpers()
         code += self.generate_required_generic_math_traits()
+        refuse_host_only_rust(self, code)
+        if re.search(r"\bf16\b", code):
+            # f16 is a nightly primitive type, which rust-gpu's toolchain enables per crate.
+            code = code.replace("#![no_std]\n", "#![no_std]\n#![feature(f16)]\n", 1)
         return code
 
     def generate_rust_mesh_stage_comments(
@@ -1021,7 +779,9 @@ class RustCodeGen(
         saved_function_generic_constraints = self.current_function_generic_constraints
         saved_mutated_names = self.current_mutated_names
         saved_output_parameters = self.current_rust_output_parameters
+        saved_stage_outputs = self.current_rust_stage_outputs
         self.current_rust_output_parameters = []
+        self.current_rust_stage_outputs = []
         self.current_generic_param_names = set(self.generic_param_names(func))
         self.current_shader_type = shader_type
         param_list = list(getattr(func, "parameters", getattr(func, "params", [])))
@@ -1082,6 +842,16 @@ class RustCodeGen(
         self.validate_rust_struct_return_semantics(shader_type, return_type)
         self.validate_rust_stage_parameter_semantics(shader_type, param_list)
 
+        stage_interface = None
+        if shader_type in GRAPHICS_STAGES:
+            stage_interface = self.plan_rust_gpu_stage_interface(
+                func, shader_type, param_list, return_type, return_semantic, stage_node
+            )
+            self.current_rust_stage_outputs = stage_interface.outputs
+        elif shader_type == "compute":
+            stage_interface = self.plan_rust_gpu_compute_interface(
+                func, param_list, return_type
+            )
         param_types = [self.function_parameter_type(p) for p in param_list]
         reference_lifetime = self.function_reference_return_lifetime(
             func,
@@ -1093,7 +863,12 @@ class RustCodeGen(
         local_alias_declarations = []
         emitted_param_names = set()
         parameter_names = [p.name for p in param_list if getattr(p, "name", None)]
-        for p, param_type in zip(param_list, param_types):
+        if stage_interface is not None:
+            params.extend(stage_interface.params)
+            local_alias_declarations.extend(stage_interface.prologue)
+        for p, param_type in zip(
+            param_list if stage_interface is None else [], param_types
+        ):
             self.register_glsl_buffer_block_metadata(p)
             source_param_name = p.name
             semantic = self.node_semantic(p)
@@ -1143,19 +918,28 @@ class RustCodeGen(
                 f"{self.map_function_parameter_type_with_lifetime(param_type, reference_lifetime)}"
             )
             emitted_param_names.add(param_name)
-        params.extend(
-            self.generate_rust_resource_parameter(info)
-            for info in promoted_resource_params
-        )
+        for info in promoted_resource_params:
+            params.append(self.generate_rust_resource_parameter(info))
+            if info.get("kind") == UNIFORM_VALUE_KIND:
+                # A uniform is read-only, so the entry point reads it once into a local of the same name.
+                uniform_name = self.rust_identifier(info["node"].name)
+                local_alias_declarations.append(
+                    f"let {uniform_name}: {self.map_type(info['type_name'])} = *{uniform_name};"
+                )
+            elif info.get("kind") == SPEC_CONSTANT_KIND:
+                spec_name = self.rust_identifier(info["node"].name)
+                local = spec_constant_local(
+                    spec_name, info, self.map_type(info["type_name"])
+                )
+                if local is not None:
+                    local_alias_declarations.append(local)
 
         params_str = ", ".join(params) if params else ""
 
-        if shader_type == "vertex":
-            code += self.generate_rust_stage_attribute("vertex_shader")
-        elif shader_type == "fragment":
-            code += self.generate_rust_stage_attribute("fragment_shader")
+        if shader_type in GRAPHICS_STAGES:
+            code += self.rust_gpu_stage_attribute(shader_type, stage_interface)
         elif shader_type == "compute":
-            code += self.generate_rust_compute_stage_attribute(func)
+            code += self.generate_rust_compute_stage_attribute(func, stage_node)
         elif shader_type == "geometry":
             code += self.generate_rust_geometry_stage_comments(func, param_list)
         elif shader_type in {"tessellation_control", "tessellation_evaluation"}:
@@ -1174,11 +958,11 @@ class RustCodeGen(
                 "// CrossGL ray stage: "
                 f"{self.rust_ray_stage_metadata_name(shader_type)}\n"
             )
-        if return_semantic:
+        if return_semantic and stage_interface is None:
             code += (
                 f"// CrossGL return semantic: {self.map_semantic(return_semantic)}\n"
             )
-        if shader_type:
+        if shader_type and stage_interface is None:
             for param in param_list:
                 param_semantic = self.node_semantic(param)
                 if param_semantic:
@@ -1193,14 +977,21 @@ class RustCodeGen(
             lifetime=reference_lifetime,
         )
         emitted_name = self.rust_identifier(function_name or func.name)
+        emitted_return_type = (
+            "()"
+            if stage_interface is not None
+            else self.map_type_with_lifetime(return_type, reference_lifetime)
+        )
         code += (
             f"pub fn {emitted_name}{generic_params}({params_str}) "
-            f"-> {self.map_type_with_lifetime(return_type, reference_lifetime)} {{\n"
+            f"-> {emitted_return_type} {{\n"
         )
 
         if stage_node is not None:
             for variable in getattr(stage_node, "local_variables", []) or []:
-                if self.is_rust_shared_variable(variable):
+                if self.is_rust_shared_variable(
+                    variable
+                ) and not self.is_promoted_rust_entry_resource(variable):
                     code += self.generate_statement(variable, indent + 1)
         for declaration in local_alias_declarations:
             code += "    " * (indent + 1) + declaration + "\n"
@@ -1222,12 +1013,13 @@ class RustCodeGen(
             )
         if hasattr(body, "statements"):
             body_statements = body.statements
-            for stmt in body.statements:
-                code += self.generate_statement(stmt, indent + 1)
         elif isinstance(body, list):
             body_statements = body
-            for stmt in body:
-                code += self.generate_statement(stmt, indent + 1)
+        if self.current_rust_stage_outputs:
+            # The entry's result goes to output parameters, so a trailing value expression is its return.
+            body_statements = tail_expression_as_return(body_statements)
+        for stmt in body_statements:
+            code += self.generate_statement(stmt, indent + 1)
         if self.current_rust_output_parameters and not self.statement_body_terminates(
             body_statements
         ):
@@ -1236,10 +1028,13 @@ class RustCodeGen(
             body_statements
         ):
             output_param = fragment_output_info[0]
-            code += (
-                "  " * (indent + 1)
-                + f"return {self.rust_identifier(getattr(output_param, 'name', None))};\n"
-            )
+            output_name = self.rust_identifier(getattr(output_param, "name", None))
+            if stage_interface is not None:
+                code += self.generate_rust_stage_output_return(
+                    "  " * (indent + 1), output_name
+                )
+            else:
+                code += "  " * (indent + 1) + f"return {output_name};\n"
 
         code += "  " * indent + "}\n\n"
         self.variable_types = saved_variable_types
@@ -1252,6 +1047,7 @@ class RustCodeGen(
         self.current_function_generic_constraints = saved_function_generic_constraints
         self.current_mutated_names = saved_mutated_names
         self.current_rust_output_parameters = saved_output_parameters
+        self.current_rust_stage_outputs = saved_stage_outputs
         return code
 
     def is_function_prototype(self, func):
@@ -1288,282 +1084,19 @@ class RustCodeGen(
         if wave_type is not None:
             return wave_type
 
-        if mapped_name in {
-            "sample",
-            "sample_bias",
-            "sample_sampler",
-            "sample_bias_sampler",
-            "sample_lod",
-            "sample_lod_sampler",
-            "sample_lod_offset",
-            "sample_lod_offset_sampler",
-            "sample_grad",
-            "sample_grad_sampler",
-            "sample_grad_offset",
-            "sample_grad_offset_sampler",
-            "sample_offset",
-            "sample_offset_bias",
-            "sample_offset_sampler",
-            "sample_offset_bias_sampler",
-            "sample_projected",
-            "sample_projected_bias",
-            "sample_projected_sampler",
-            "sample_projected_bias_sampler",
-            "sample_projected_lod",
-            "sample_projected_lod_sampler",
-            "sample_projected_grad",
-            "sample_projected_grad_sampler",
-            "sample_projected_offset",
-            "sample_projected_offset_bias",
-            "sample_projected_offset_sampler",
-            "sample_projected_offset_bias_sampler",
-            "sample_projected_lod_offset",
-            "sample_projected_lod_offset_sampler",
-            "sample_projected_grad_offset",
-            "sample_projected_grad_offset_sampler",
-            "texel_fetch",
-            "texel_fetch_offset",
-        }:
-            if arg_types:
-                return self.texture_sample_result_type(arg_types[0])
-            return "vec4"
+        handled = self.rust_resource_builtin_result_type(
+            func_name, arg_types, mapped_name
+        )
+        if handled is not UNHANDLED:
+            return handled
 
-        if mapped_name in {
-            "texture_gather",
-            "texture_gather_sampler",
-            "texture_gather_component",
-            "texture_gather_component_sampler",
-            "texture_gather_offset",
-            "texture_gather_offset_sampler",
-            "texture_gather_offset_component",
-            "texture_gather_offset_component_sampler",
-            "texture_gather_offsets",
-            "texture_gather_offsets_sampler",
-            "texture_gather_offsets_component",
-            "texture_gather_offsets_component_sampler",
-        }:
-            if arg_types:
-                return self.texture_gather_result_type(arg_types[0])
-            return "vec4"
+        handled = self.rust_math_builtin_result_type(arg_types, mapped_name)
+        if handled is not UNHANDLED:
+            return handled
 
-        if mapped_name.startswith("sample_shadow"):
-            return "float"
-
-        if mapped_name in {"texture_size", "texture_size_lod"} and arg_types:
-            if func_name == "textureDimensions":
-                return self.texture_dimensions_result_type(arg_types[0])
-            return self.texture_size_result_type(arg_types[0])
-
-        if mapped_name in {"texture_query_levels", "texture_samples"}:
-            return "int"
-
-        if mapped_name in {"texture_query_lod", "texture_query_lod_sampler"}:
-            return "vec2"
-
-        if mapped_name.startswith("texture_compare"):
-            return "float"
-
-        if mapped_name.startswith("texture_gather_compare"):
-            return "vec4"
-
-        if mapped_name in {"image_load", "image_load_sample"} and arg_types:
-            return self.storage_image_value_result_type(arg_types[0])
-
-        if mapped_name == "image_size" and arg_types:
-            return self.storage_image_size_result_type(arg_types[0])
-
-        if mapped_name == "image_samples":
-            return "int"
-
-        if mapped_name.startswith("image_atomic_") and arg_types:
-            return self.storage_image_atomic_result_type(arg_types[0])
-
-        if mapped_name == "buffer_load" and arg_types:
-            return self.buffer_element_result_type(arg_types[0])
-
-        if mapped_name == "buffer_consume" and arg_types:
-            return self.buffer_element_result_type(arg_types[0])
-
-        if mapped_name in {
-            "image_store",
-            "image_store_sample",
-            "buffer_store",
-            "buffer_dimensions",
-            "buffer_append",
-        }:
-            return "void"
-
-        if (
-            mapped_name in {"normalize", "reflect", "refract", "faceforward"}
-            and arg_types
-        ):
-            return arg_types[0]
-
-        if mapped_name == "cross" and len(arg_types) >= 2:
-            return self.promoted_value_type(arg_types[0], arg_types[1]) or arg_types[0]
-
-        if mapped_name in {"dot", "length", "distance"} and arg_types:
-            return self.vector_or_scalar_component_type(arg_types[0])
-
-        if mapped_name == "outer_product" and len(arg_types) >= 2:
-            return self.outer_product_result_type(arg_types[0], arg_types[1])
-
-        if mapped_name == "matrix_comp_mult" and len(arg_types) >= 2:
-            return self.promoted_matrix_type(arg_types[0], arg_types[1])
-
-        if mapped_name == "transpose" and arg_types:
-            matrix_info = self.matrix_type_info(arg_types[0])
-            if matrix_info is not None:
-                return self.matrix_type_for_dimensions(
-                    matrix_info["component_type"],
-                    matrix_info["rows"],
-                    matrix_info["columns"],
-                )
-
-        if mapped_name == "determinant" and arg_types:
-            matrix_info = self.matrix_type_info(arg_types[0])
-            if matrix_info is not None:
-                return matrix_info["component_type"]
-
-        if mapped_name == "inverse" and arg_types:
-            matrix_info = self.matrix_type_info(arg_types[0])
-            if matrix_info is not None:
-                return arg_types[0]
-
-        if (
-            mapped_name in {
-                "sqrt",
-                "rcp",
-                "rsqrt",
-                "abs",
-                "floor",
-                "ceil",
-                "round",
-                "trunc",
-                "round_even",
-                "sin",
-                "cos",
-                "tan",
-                "asin",
-                "acos",
-                "atan",
-                "sinh",
-                "cosh",
-                "tanh",
-                "exp",
-                "exp2",
-                "log",
-                "log2",
-                "degrees",
-                "radians",
-                "fract",
-                "sign",
-            }
-            and arg_types
-        ):
-            return arg_types[0]
-
-        if mapped_name in {"isnan", "isinf", "isfinite"} and arg_types:
-            return self.boolean_value_type(arg_types[0])
-
-        if mapped_name in {"any", "all"} and arg_types:
-            return "bool"
-
-        relational_operator = {
-            "less_than": "<",
-            "less_than_equal": "<=",
-            "greater_than": ">",
-            "greater_than_equal": ">=",
-            "equal": "==",
-            "not_equal": "!=",
-        }.get(mapped_name)
-        if relational_operator is not None and len(arg_types) >= 2:
-            return self.relational_function_result_type(
-                arg_types[0], arg_types[1], relational_operator
-            )
-
-        if mapped_name in {"bit_count", "find_lsb", "find_msb"} and arg_types:
-            return self.integer_index_value_type(arg_types[0])
-
-        if mapped_name in {"bitfield_reverse", "bitfield_extract"} and arg_types:
-            return arg_types[0]
-
-        if mapped_name == "bitfield_insert" and len(arg_types) >= 2:
-            return self.promoted_value_type(arg_types[0], arg_types[1]) or arg_types[0]
-
-        bitcast_component_type = {
-            "double_bits_to_long": "ulong",
-            "float_bits_to_int": "int",
-            "float_bits_to_uint": "uint",
-            "int_bits_to_float": "float",
-            "long_bits_to_double": "double",
-            "uint_bits_to_float": "float",
-        }.get(mapped_name)
-        if bitcast_component_type is not None and arg_types:
-            return self.bitcast_value_type(arg_types[0], bitcast_component_type)
-
-        if mapped_name in {
-            "pack_unorm_2x16",
-            "pack_snorm_2x16",
-            "pack_unorm_4x8",
-            "pack_snorm_4x8",
-            "pack_half_2x16",
-        }:
-            return "uint"
-
-        if mapped_name == "pack_double_2x32":
-            return "double"
-
-        unpack_vector_type = {
-            "unpack_unorm_2x16": "vec2",
-            "unpack_snorm_2x16": "vec2",
-            "unpack_half_2x16": "vec2",
-            "unpack_double_2x32": "uvec2",
-            "unpack_unorm_4x8": "vec4",
-            "unpack_snorm_4x8": "vec4",
-        }.get(mapped_name)
-        if unpack_vector_type is not None:
-            return unpack_vector_type
-
-        if (
-            mapped_name in {"min", "max", "pow", "modulo", "atan2"}
-            and len(arg_types) >= 2
-        ):
-            return self.promoted_value_type(arg_types[0], arg_types[1])
-
-        if mapped_name == "fma" and len(arg_types) >= 3:
-            return self.promoted_argument_type(arg_types[:3])
-
-        if mapped_name == "ldexp" and arg_types:
-            return arg_types[0]
-
-        if mapped_name == "clamp" and arg_types:
-            return self.promoted_argument_type(arg_types[:3])
-
-        if mapped_name == "lerp" and len(arg_types) >= 2:
-            return self.promoted_value_type(arg_types[0], arg_types[1])
-
-        if mapped_name == "smoothstep" and len(arg_types) >= 3:
-            return self.promoted_argument_type(arg_types[:3])
-
-        if mapped_name == "step" and len(arg_types) >= 2:
-            return self.promoted_argument_type(arg_types[:2])
-
-        if (
-            mapped_name in {
-                "dfdx",
-                "dfdy",
-                "dfdx_fine",
-                "dfdy_fine",
-                "dfdx_coarse",
-                "dfdy_coarse",
-                "fwidth",
-                "fwidth_fine",
-                "fwidth_coarse",
-            }
-            and arg_types
-        ):
-            return arg_types[0]
+        handled = self.rust_bitwise_numeric_builtin_result_type(arg_types, mapped_name)
+        if handled is not UNHANDLED:
+            return handled
 
         return None
 
@@ -1638,7 +1171,19 @@ class RustCodeGen(
         if generic_type is not None:
             return generic_type
 
-        return vtype_str
+        return self.rust_type_identifier(vtype_str)
+
+    def rust_type_identifier(self, name):
+        """A user type name; a Rust keyword (``type``, ``match``) is written as a raw identifier ``r#type``."""
+        name = str(name)
+        if name in self.rust_reserved_identifiers() and name not in {
+            "self",
+            "Self",
+            "super",
+            "crate",
+        }:
+            return f"r#{name}"
+        return name
 
     def map_type_with_lifetime(self, vtype, lifetime):
         if lifetime is None:
@@ -1682,6 +1227,20 @@ class RustCodeGen(
         type_name = str(type_name).strip()
         if type_name in {"str", "string"}:
             return "str"
+        if type_name.endswith("[]") and type_name.count("[") == 1:
+            # A reference to an unsized array is a slice: a storage buffer's runtime array, whose 3-vectors take
+            # 4-vector slots (rust_gpu_storage).
+            element = type_name[:-2].strip()
+            padded = PADDED_ELEMENTS.get(element)
+            if padded is not None:
+                return f"[{padded[0]}]"
+            if self.normalize_scalar_type(element) == "bool" or element.startswith(
+                "bvec"
+            ):
+                raise RustRefusal(
+                    "resource: a storage buffer of bool has no SPIR-V layout; rust-gpu cannot bind one"
+                )
+            return f"[{self.map_type(element)}]"
         return self.map_type(type_name)
 
     def map_function_pointer_type(self, type_name):

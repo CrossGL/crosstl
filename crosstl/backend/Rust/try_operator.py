@@ -143,7 +143,9 @@ class RustTryOperatorMixin:
                 indent,
                 loop_contexts,
             )
-            return left_code + right_code, f"({left} {expression.op} {right})"
+            return left_code + right_code, self.format_crossgl_binary(
+                expression, left, right
+            )
 
         if isinstance(expression, UnaryOpNode):
             code, operand = self.generate_try_expression(
@@ -151,7 +153,7 @@ class RustTryOperatorMixin:
                 indent,
                 loop_contexts,
             )
-            return code, f"({expression.op}{operand})"
+            return code, self.format_crossgl_unary(expression, operand)
 
         if isinstance(expression, FunctionCallNode):
             return self.generate_try_function_call_expression(
@@ -409,6 +411,7 @@ class RustTryOperatorMixin:
                 args,
                 expression.args,
                 self.infer_value_type(expression.name.object),
+                receiver_node=expression.name.object,
             )
             if method_call is not None:
                 return object_code + args_code, method_call
@@ -437,6 +440,9 @@ class RustTryOperatorMixin:
             )
             if associated_call is not None:
                 return args_code, associated_call
+            default_value = self.format_default_value_call(expression.name, args)
+            if default_value is not None:
+                return args_code, default_value
             primitive_bitcast_call = (
                 self.format_primitive_float_bitcast_associated_call(
                     expression.name,

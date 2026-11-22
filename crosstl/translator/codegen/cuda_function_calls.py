@@ -4,12 +4,18 @@ from ..ast import FunctionCallNode
 from ..refusals import CudaRefusal
 from .c_pointer_math import generate_pointer_math_call
 from .c_vector_reductions import generate_vector_reduction_call
+from .cuda_pointer_operands import cuda_pointer_operand_call
 from .cuda_refusals import CudaLoweringRefused
 from .cuda_tables import (
     CUDA_64BIT_BITCAST_FUNCTIONS,
     CUDA_BITCAST_FUNCTION_TARGETS,
     CUDA_INTEGER_BIT_FUNCTION_ALIASES,
     CUDA_WAVE_OP_ARITIES,
+)
+from .cuda_type_reinterpretation import (
+    as_type_result_type,
+    is_as_type_call,
+    lower_as_type,
 )
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -120,6 +126,12 @@ class CudaFunctionCallMixin:
             )
             if warp_sync_call is not None:
                 return warp_sync_call
+
+            pointer_operand_call = cuda_pointer_operand_call(
+                self, func_name, raw_args, args, CudaRefusal
+            )
+            if pointer_operand_call is not None:
+                return pointer_operand_call
 
             shader_clock_call = self.generate_cuda_shader_clock_call(
                 func_name, raw_args
@@ -255,6 +267,9 @@ class CudaFunctionCallMixin:
                 return constructor_call
             args = self.generate_vector_constructor_args(vector_info, raw_args, args)
 
+        union_constructor = self.native_unions.constructor(func_name, raw_args, None)
+        if union_constructor is not None:
+            return union_constructor
         if func_name in self.struct_member_types:
             args = self.struct_constructor_arguments(func_name, raw_args, args)
             if func_name in self.structs_by_name:
@@ -296,6 +311,8 @@ class CudaFunctionCallMixin:
         return func_name
 
     def cuda_bitcast_result_type(self, func_name, raw_args):
+        if is_as_type_call(func_name):
+            return as_type_result_type(self, func_name)
         wide_bitcast = CUDA_64BIT_BITCAST_FUNCTIONS.get(func_name)
         if (
             wide_bitcast is not None
@@ -327,6 +344,15 @@ class CudaFunctionCallMixin:
         return None
 
     def generate_cuda_bitcast_call(self, func_name, raw_args, args):
+        if is_as_type_call(func_name) and not self.is_user_defined_function(func_name):
+            return lower_as_type(
+                self,
+                func_name,
+                raw_args,
+                args,
+                CudaLoweringRefused,
+                self.require_cuda_vector_bitcast_helper,
+            )
         result_type = self.cuda_bitcast_result_type(func_name, raw_args)
         if result_type is None:
             return None

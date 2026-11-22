@@ -7,6 +7,7 @@ from ..renames import renamed
 from ..semantics.builtin_names import is_crossgl_gl_builtin
 from .array_utils import split_array_type_suffix
 from .hlsl_image_formats import slang_image_format_prefix
+from .slang_conservative_depth import SLANG_DEPTH_SEMANTICS
 from .slang_exact_lookups import slang_semantic_spelling_is_valid
 from .slang_resource_memory import slang_resource_memory_prefix
 
@@ -448,7 +449,7 @@ class SlangSemanticsMixin:
         mapped_upper = mapped_semantic.upper()
         if lower_name == "gl_position" or mapped_upper == "SV_POSITION":
             return "position"
-        if lower_name == "gl_fragdepth" or mapped_upper == "SV_DEPTH":
+        if lower_name == "gl_fragdepth" or mapped_upper in SLANG_DEPTH_SEMANTICS:
             return "depth"
         if lower_name == "gl_fragstencilrefext" or mapped_upper == "SV_STENCILREF":
             return "stencil_ref"
@@ -684,8 +685,16 @@ class SlangSemanticsMixin:
             f"expected {expected_type} type"
         )
 
+    def slang_domain_location_type(self, function):
+        """SV_DomainLocation's type for a domain entry: float3 on a tri domain, float2 on quad and isoline."""
+        if function is None:
+            return "float3"
+        domain = self.normalized_slang_stage_attribute_argument(function, "domain")
+        domain = self.canonical_slang_tessellation_domain(domain) if domain else None
+        return "float2" if domain in {"quad", "isoline"} else "float3"
+
     def validate_slang_stage_parameter_semantics(
-        self, shader_type, parameters, stage_role=None
+        self, shader_type, parameters, stage_role=None, function=None
     ):
         if shader_type is None:
             return
@@ -721,6 +730,8 @@ class SlangSemanticsMixin:
             mapped_semantic = self.map_semantic(semantic, shader_type)
             mapped_upper = str(mapped_semantic).upper()
             expected_type = rules.get(mapped_upper)
+            if expected_type is not None and mapped_upper == "SV_DOMAINLOCATION":
+                expected_type = self.slang_domain_location_type(function)
             if expected_type is not None:
                 previous_name = seen_system_semantics.get(mapped_upper)
                 if previous_name is not None:

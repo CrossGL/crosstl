@@ -12,27 +12,25 @@ from .access_chains import walk_indices  # noqa: F401
 from .assembly_validation import check_defined_ids  # noqa: F401
 from .assembly_validation import check_type_declaration_order  # noqa: F401
 from .assembly_validation import check_unique_result_ids  # noqa: F401
-from .barrier_import import spirv_barrier_statements
 from .block_arrays import SpirvBlockArrayUnsupportedError  # noqa: F401
 from .block_arrays import block_array_element  # noqa: F401
 from .block_layout_import import spirv_block_layout  # noqa: F401
 from .buffer_memory_qualifiers import storage_block_memory_qualifiers  # noqa: F401
 from .function_structure import SpirvFunctionStructure
 from .image_formats import crossgl_image_format  # noqa: F401
-from .image_texel_atomics import fold_image_texel_atomic
 from .import_exact_lookups import builtin_variable_name  # noqa: F401
 from .import_exact_lookups import constant_or_literal  # noqa: F401
 from .import_exact_lookups import keyword_safe_identifier  # noqa: F401
-from .integer_signedness_import import (
-    spirv_integer_binary_expression,
-    spirv_integer_conversion_expression,
-)
 from .local_names import function_local_names
 from .parsing.access_chain_expressions import VulkanAccessChainMixin
+from .parsing.assembly_declarations import VulkanAssemblyDeclarationMixin
 from .parsing.assembly_module import VulkanAssemblyModuleMixin
 from .parsing.atomics import VulkanAtomicMixin
 from .parsing.declarations import VulkanDeclarationMixin
 from .parsing.expressions import VulkanExpressionMixin
+from .parsing.function_body_images import VulkanFunctionBodyImageMixin
+from .parsing.function_body_operations import VulkanFunctionBodyOperationMixin
+from .parsing.function_body_values import VulkanFunctionBodyValueMixin
 from .parsing.globals import VulkanGlobalMixin
 from .parsing.images import VulkanImageMixin
 from .parsing.instructions import VulkanInstructionMixin
@@ -42,20 +40,14 @@ from .parsing.statements import VulkanStatementMixin
 from .parsing.values import VulkanValueMixin
 from .ray_tracing_import import (
     BUILTIN_VARIABLE_NAMES,
-    SpirvInstructionUnsupportedError,
     ray_statement,
     ray_variable_locations,
     refuse_untranslated_statement,
 )
 from .sampled_images import sampled_image_arguments  # noqa: F401
-from .sampled_images import sampled_image_call, sampled_image_image
-from .select_import import spirv_select_expression
 from .struct_result_import import (
-    spirv_extended_arithmetic_call,
-    spirv_struct_result_call,
     spirv_struct_result_member,
 )
-from .subpass_import import is_subpass_image, subpass_load_expression
 from .VulkanAst import *
 from .VulkanLexer import *
 from .workgroup_size_import import workgroup_size_component  # noqa: F401
@@ -63,7 +55,11 @@ from .workgroup_size_import import SpirvWorkgroupSizes
 
 
 class VulkanParser(
+    VulkanFunctionBodyValueMixin,
+    VulkanFunctionBodyImageMixin,
+    VulkanFunctionBodyOperationMixin,
     VulkanAssemblyModuleMixin,
+    VulkanAssemblyDeclarationMixin,
     VulkanAccessChainMixin,
     VulkanImageMixin,
     VulkanValueMixin,
@@ -1018,247 +1014,36 @@ class VulkanParser(
         for result_id, opcode, operands, _line_number in instructions:
             if result_id in workgroup_sizes.names:
                 names[result_id] = workgroup_sizes.names[result_id]
-            if opcode == "OpCapability" and operands:
-                capabilities.append(operands[0])
-            elif opcode == "OpName" and len(operands) >= 2:
-                names[operands[0]] = (
-                    self.spirv_identifier_name(operands[1], operands[0])
-                    if operands[1]
-                    else ""
-                )
-            elif opcode == "OpMemberName" and len(operands) >= 3:
-                target, member = operands[0], operands[1]
-                name = self.spirv_identifier_name(
-                    operands[2],
-                    f"{target}_{member}",
-                    prefix="member",
-                )
-                member_names.setdefault(target, {})[member] = name
-            elif opcode == "OpDecorate" and len(operands) >= 2:
-                target, decoration = operands[0], operands[1]
-                decorations.setdefault(target, []).append((decoration, operands[2:]))
-            elif opcode == "OpMemberDecorate" and len(operands) >= 3:
-                target, member, decoration = operands[0], operands[1], operands[2]
-                member_decorations.setdefault(target, []).append(
-                    (member, decoration, operands[3:])
-                )
-            elif opcode == "OpGroupDecorate" and len(operands) >= 2:
-                group_decorates.append((operands[0], operands[1:]))
-            elif opcode == "OpGroupMemberDecorate" and len(operands) >= 3:
-                group_member_decorates.append((operands[0], operands[1:]))
-            elif opcode == "OpEntryPoint" and len(operands) >= 3:
-                entry_points.append(
-                    {
-                        "execution_model": operands[0],
-                        "id": operands[1],
-                        "name": self.spirv_identifier_name(
-                            operands[2], operands[1], prefix="entry_point"
-                        ),
-                        "interface_ids": operands[3:],
-                    }
-                )
-            elif (
-                opcode in {"OpExecutionMode", "OpExecutionModeId"}
-                and len(operands) >= 2
+            if self.spirv_assembly_record_annotation(
+                opcode,
+                operands,
+                names,
+                decorations,
+                member_decorations,
+                member_names,
+                capabilities,
+                entry_points,
+                execution_modes,
+                group_decorates,
+                group_member_decorates,
             ):
-                execution_modes.setdefault(operands[0], []).append(
-                    {
-                        "opcode": opcode,
-                        "mode": operands[1],
-                        "operands": operands[2:],
-                    }
-                )
-            elif result_id and opcode == "OpTypeVoid":
-                types[result_id] = {"kind": "scalar", "name": "void"}
-            elif result_id and opcode == "OpTypeBool":
-                types[result_id] = {"kind": "scalar", "name": "bool"}
-            elif result_id and opcode == "OpTypeFloat" and operands:
-                types[result_id] = {
-                    "kind": "scalar",
-                    "name": self.spirv_float_type_name(operands[0]),
-                }
-            elif result_id and opcode == "OpTypeInt" and len(operands) >= 2:
-                types[result_id] = {
-                    "kind": "scalar",
-                    "name": self.spirv_int_type_name(operands[0], operands[1]),
-                }
-            elif result_id and opcode == "OpTypeVector" and len(operands) >= 2:
-                component_type = self.spirv_type_name(operands[0], types)
-                types[result_id] = {
-                    "kind": "vector",
-                    "name": self.spirv_vector_type_name(component_type, operands[1]),
-                    "component_type": operands[0],
-                    "component_count": operands[1],
-                }
-            elif result_id and opcode == "OpTypeMatrix" and len(operands) >= 2:
-                column_type = types.get(operands[0], {})
-                component_type = self.spirv_type_name(
-                    column_type.get("component_type"), types
-                )
-                types[result_id] = {
-                    "kind": "matrix",
-                    "name": self.spirv_matrix_type_name(
-                        component_type,
-                        column_type.get("component_count"),
-                        operands[1],
-                    ),
-                    "column_type": operands[0],
-                    "column_count": operands[1],
-                }
-            elif (
-                result_id
-                and opcode in {
-                    "OpTypeCooperativeMatrixKHR",
-                    "OpTypeCooperativeMatrixNV",
-                }
-                and len(operands) >= 4
+                continue
+            if self.spirv_assembly_record_type(
+                result_id, opcode, operands, types, constants
             ):
-                types[result_id] = {
-                    "kind": "cooperative_matrix",
-                    "name": self.spirv_cooperative_matrix_type_name(
-                        opcode, operands, types, constants
-                    ),
-                    "component_type": operands[0],
-                    "scope": operands[1],
-                    "rows": operands[2],
-                    "columns": operands[3],
-                    "use": operands[4] if len(operands) >= 5 else None,
-                }
-            elif result_id and opcode == "OpTypeArray" and len(operands) >= 2:
-                types[result_id] = {
-                    "kind": "array",
-                    "element_type": operands[0],
-                    "length_id": operands[1],
-                }
-            elif result_id and opcode == "OpTypeRuntimeArray" and len(operands) >= 1:
-                types[result_id] = {
-                    "kind": "runtime_array",
-                    "element_type": operands[0],
-                }
-            elif result_id and opcode == "OpTypeStruct":
-                types[result_id] = {"kind": "struct", "member_types": operands}
-            elif result_id and opcode == "OpTypeImage" and len(operands) >= 7:
-                sampled_type = self.spirv_type_name(operands[0], types)
-                types[result_id] = {
-                    "kind": "image",
-                    "name": self.spirv_image_type_name(
-                        sampled_type,
-                        operands[1],
-                        operands[2],
-                        operands[3],
-                        operands[4],
-                        operands[5],
-                    ),
-                    "sampled_type": operands[0],
-                    "dim": operands[1],
-                    "depth": operands[2],
-                    "arrayed": operands[3],
-                    "multisampled": operands[4],
-                    "sampled": operands[5],
-                    "format": operands[6],
-                    "access_qualifier": operands[7] if len(operands) >= 8 else None,
-                }
-            elif result_id and opcode == "OpTypeSampledImage" and operands:
-                image_type = types.get(operands[0], {})
-                types[result_id] = {
-                    "kind": "sampled_image",
-                    "name": self.spirv_sampled_image_type_name(image_type, types),
-                    "image_type": operands[0],
-                }
-            elif result_id and opcode == "OpTypeSampler":
-                types[result_id] = {"kind": "sampler", "name": "sampler"}
-            elif result_id and opcode == "OpTypeNamedBarrier":
-                types[result_id] = {
-                    "kind": "named_barrier",
-                    "name": "spirvNamedBarrier",
-                }
-            elif result_id and opcode in {
-                "OpTypeAccelerationStructureKHR",
-                "OpTypeAccelerationStructureNV",
-            }:
-                types[result_id] = {
-                    "kind": "acceleration_structure",
-                    "name": "accelerationStructureEXT",
-                }
-            elif result_id and opcode in {"OpTypeRayQueryKHR", "OpTypeRayQueryNV"}:
-                types[result_id] = {
-                    "kind": "ray_query",
-                    "name": "rayQueryEXT",
-                }
-            elif result_id and opcode == "OpTypePointer" and len(operands) >= 2:
-                types[result_id] = {
-                    "kind": "pointer",
-                    "storage_class": operands[0],
-                    "type_id": operands[1],
-                }
-            elif result_id and opcode == "OpTypeFunction" and operands:
-                types[result_id] = {
-                    "kind": "function",
-                    "return_type": operands[0],
-                    "parameter_types": operands[1:],
-                }
-            elif result_id and opcode in {"OpConstant", "OpSpecConstant"}:
-                if len(operands) >= 2:
-                    constant_types[result_id] = operands[0]
-                    constants[result_id] = self.spirv_constant_literal_expression(
-                        operands[0], operands[1], types
-                    )
-                    if opcode == "OpSpecConstant":
-                        spec_constant_ids.append(result_id)
-            elif result_id and opcode == "OpString" and operands:
-                constants[result_id] = self.spirv_string_literal(operands[0])
-            elif result_id and opcode in {
-                "OpConstantFalse",
-                "OpConstantTrue",
-                "OpSpecConstantFalse",
-                "OpSpecConstantTrue",
-            }:
-                if operands:
-                    constant_types[result_id] = operands[0]
-                    constants[result_id] = (
-                        "true" if opcode.endswith("True") else "false"
-                    )
-                    if opcode.startswith("OpSpecConstant"):
-                        spec_constant_ids.append(result_id)
-            elif result_id and opcode == "OpUndef" and operands:
-                constant_types[result_id] = operands[0]
-                constants[result_id] = self.spirv_assembly_undef_expression(
-                    operands[0], types
-                )
-            elif result_id and opcode == "OpConstantNull" and operands:
-                constant_types[result_id] = operands[0]
-                constants[result_id] = self.spirv_assembly_null_expression(
-                    operands[0], types
-                )
-            elif result_id and opcode in {
-                "OpConstantComposite",
-                "OpSpecConstantComposite",
-            }:
-                if operands:
-                    constant_types[result_id] = operands[0]
-                    constants[result_id] = self.spirv_constant_composite_expression(
-                        operands[0], operands[1:], names, types, constants
-                    )
-                    if opcode == "OpSpecConstantComposite":
-                        spec_constant_ids.append(result_id)
-            elif result_id and opcode == "OpSpecConstantOp":
-                if len(operands) >= 2:
-                    constant_types[result_id] = operands[0]
-                    constants[result_id] = self.spirv_spec_constant_op_expression(
-                        operands[1], operands[2:], names, constants, types
-                    )
-                    spec_constant_ids.append(result_id)
-            elif result_id and opcode == "OpExtInstImport" and operands:
-                extended_instruction_imports[result_id] = operands[0]
-            elif result_id and opcode == "OpVariable" and len(operands) >= 2:
-                variables.append(
-                    {
-                        "id": result_id,
-                        "pointer_type_id": operands[0],
-                        "storage_class": operands[1],
-                        "initializer": operands[2] if len(operands) >= 3 else None,
-                    }
-                )
+                continue
+            self.spirv_assembly_record_value(
+                result_id,
+                opcode,
+                operands,
+                names,
+                types,
+                constants,
+                constant_types,
+                spec_constant_ids,
+                extended_instruction_imports,
+                variables,
+            )
 
         self.spirv_apply_decoration_groups(
             decorations, member_decorations, group_decorates, group_member_decorates
@@ -1395,8 +1180,15 @@ class VulkanParser(
         entry_points_by_id = {}
         for entry in entry_points:
             entry_points_by_id.setdefault(entry["id"], []).append(entry)
+        names = self.spirv_name_main_helpers(instructions, names, entry_points_by_id)
         self.spirv_module_execution_models = sorted(
             {entry["execution_model"] for entry in entry_points}
+        )
+        function_names = frozenset(
+            names.get(result_id)
+            or self.spirv_function_name_fallback(result_id, entry_points_by_id)
+            for result_id, opcode, _operands, _line in instructions
+            if opcode == "OpFunction"
         )
         entry_instruction = None
         raw_instructions = []
@@ -1415,7 +1207,7 @@ class VulkanParser(
 
             function_id, _opcode, function_operands, _start_line = entry_instruction
             module_names = names
-            names = function_local_names(raw_instructions, module_names)
+            names = function_local_names(raw_instructions, module_names, function_names)
             return_type_id = function_operands[0] if function_operands else None
             function_control = (
                 function_operands[1] if len(function_operands) >= 2 else None
@@ -1568,1391 +1360,58 @@ class VulkanParser(
             )
             expression_type_ids[result_id] = result_type_id
 
+        instruction_state = {
+            "names": names,
+            "decorations": decorations,
+            "member_decorations": member_decorations,
+            "member_names": member_names,
+            "types": types,
+            "constants": constants,
+            "constant_types": constant_types,
+            "extended_instruction_imports": extended_instruction_imports,
+            "statements": statements,
+            "expressions": expressions,
+            "expression_type_ids": expression_type_ids,
+            "variables_by_id": variables_by_id,
+            "used_result_ids": used_result_ids,
+            "structure": structure,
+            "record_expression": record_expression,
+        }
+
         for result_id, opcode, operands, _line_number in raw_instructions:
             structure.settle(
                 previous_result_id, expressions, expression_type_ids, statements
             )
             previous_result_id = result_id
-            if result_id and opcode == "OpLabel":
-                structure.block_started(result_id, statements)
-                continue
-
-            if result_id and opcode == "OpFunctionParameter":
-                expressions[result_id] = VariableNode(
-                    "",
-                    self.spirv_assembly_value_name(result_id, names, decorations),
-                    spirv_id=result_id,
+            if any(
+                translate(result_id, opcode, operands, **instruction_state)
+                for translate in (
+                    self.spirv_assembly_declaration_instruction,
+                    self.spirv_assembly_image_sample_instruction,
+                    self.spirv_assembly_image_fetch_and_gather_instruction,
+                    self.spirv_assembly_image_size_query_instruction,
+                    self.spirv_assembly_image_property_query_instruction,
+                    self.spirv_assembly_image_read_instruction,
+                    self.spirv_assembly_conversion_instruction,
+                    self.spirv_assembly_access_chain_instruction,
+                    self.spirv_assembly_composite_instruction,
+                    self.spirv_assembly_extended_set_instruction,
+                    self.spirv_assembly_atomic_and_intersection_instruction,
+                    self.spirv_assembly_subgroup_instruction,
+                    self.spirv_assembly_ray_query_and_select_instruction,
                 )
-                if operands:
-                    expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpVariable" and len(operands) >= 2:
-                pointer_type = types.get(operands[0], {})
-                storage_class = operands[1]
-                variable_name = self.spirv_assembly_value_name(
-                    result_id, names, decorations
-                )
-                expressions[result_id] = VariableNode(
-                    "", variable_name, spirv_id=result_id
-                )
-                expression_type_ids[result_id] = operands[0]
-                if storage_class == "Function":
-                    variable_type, array_suffix = self.spirv_type_name_and_suffix(
-                        pointer_type.get("type_id"),
-                        types,
-                        constants,
-                        names=names,
-                    )
-                    variable_type = variable_type or pointer_type.get("type_id") or ""
-                    declaration = VariableNode(
-                        variable_type,
-                        f"{variable_name}{array_suffix}",
-                        spirv_id=result_id,
-                        spirv_type_id=pointer_type.get("type_id"),
-                    )
-                    if len(operands) >= 3:
-                        statements.append(
-                            AssignmentNode(
-                                declaration,
-                                self.spirv_assembly_operand_expression(
-                                    operands[2],
-                                    expressions,
-                                    names,
-                                    decorations,
-                                    constants,
-                                ),
-                            )
-                        )
-                    else:
-                        statements.append(declaration)
-                continue
-
-            if result_id and opcode == "OpLoad" and len(operands) >= 2:
-                expressions[result_id] = self.spirv_assembly_operand_expression(
-                    operands[1],
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
-                    variables_by_id=variables_by_id,
-                    types=types,
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpImage" and len(operands) >= 2:
-                record_expression(
-                    result_id,
-                    operands[0],
-                    sampled_image_image(
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    ),
-                )
-                continue
-
-            if result_id and opcode == "OpSampledImage" and len(operands) >= 3:
-                record_expression(
-                    result_id,
-                    operands[0],
-                    sampled_image_call(
-                        FunctionCallNode,
-                        self.spirv_type_name(operands[0], types) or operands[0],
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.spirv_assembly_operand_expression(
-                            operands[2],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                    ),
-                )
-                continue
-
-            if result_id and opcode.startswith("OpImageSample") and len(operands) >= 3:
-                record_expression(
-                    result_id,
-                    operands[0],
-                    self.spirv_assembly_image_sample_expression(
-                        opcode,
-                        operands[1],
-                        operands[2],
-                        operands[3:],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                        coordinate_components=self.spirv_sample_coordinate_components(
-                            opcode,
-                            operands[1],
-                            operands[2],
-                            expression_type_ids,
-                            constant_types,
-                            types,
-                        ),
-                    ),
-                )
-                continue
-
-            if (
-                result_id
-                and opcode.startswith("OpImageSparseSample")
-                and len(operands) >= 3
             ):
-                expressions[result_id] = (
-                    self.spirv_assembly_image_sparse_sample_expression(
-                        opcode,
-                        operands[1],
-                        operands[2],
-                        operands[3:],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                        coordinate_components=self.spirv_sample_coordinate_components(
-                            opcode,
-                            operands[1],
-                            operands[2],
-                            expression_type_ids,
-                            constant_types,
-                            types,
-                        ),
-                    )
-                )
-                expression_type_ids[result_id] = operands[0]
                 continue
-
-            if result_id and opcode == "OpImageSparseTexelsResident":
-                if len(operands) >= 2:
-                    expressions[result_id] = FunctionCallNode(
-                        "spirvSparseTexelsResident",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operands[1],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                        ],
-                    )
-                    expression_type_ids[result_id] = operands[0]
-                    continue
-
-            if result_id and opcode == "OpImageSparseRead" and len(operands) >= 3:
-                expressions[result_id] = (
-                    self.spirv_assembly_image_sparse_read_expression(
-                        operands[1],
-                        operands[2],
-                        operands[3:],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpImageSparseFetch" and len(operands) >= 3:
-                expressions[result_id] = (
-                    self.spirv_assembly_image_sparse_fetch_expression(
-                        operands[1],
-                        operands[2],
-                        operands[3:],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode in {
-                "OpImageSparseGather",
-                "OpImageSparseDrefGather",
-            }:
-                if len(operands) >= 4:
-                    expressions[result_id] = (
-                        self.spirv_assembly_image_sparse_gather_expression(
-                            opcode,
-                            operands[1],
-                            operands[2],
-                            operands[3],
-                            operands[4:],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    )
-                    expression_type_ids[result_id] = operands[0]
-                    continue
-
-            if result_id and opcode in {"OpImageGather", "OpImageDrefGather"}:
-                if len(operands) >= 4:
-                    expressions[result_id] = (
-                        self.spirv_assembly_image_gather_expression(
-                            opcode,
-                            operands[1],
-                            operands[2],
-                            operands[3],
-                            operands[4:],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    )
-                    expression_type_ids[result_id] = operands[0]
-                    continue
-
-            if result_id and opcode == "OpImageFetch" and len(operands) >= 3:
-                expressions[result_id] = self.spirv_assembly_image_fetch_expression(
-                    operands[1],
-                    operands[2],
-                    operands[3:],
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpImageQuerySizeLod" and len(operands) >= 3:
-                expressions[result_id] = FunctionCallNode(
-                    "textureSize",
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.spirv_assembly_operand_expression(
-                            operands[2],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                    ],
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpImageQuerySize" and len(operands) >= 2:
-                expressions[result_id] = FunctionCallNode(
-                    self.spirv_image_query_name(
-                        "textureSize",
-                        "imageSize",
-                        operands[1],
-                        expression_type_ids,
-                        types,
-                    ),
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    ],
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpImageQueryLod" and len(operands) >= 3:
-                expressions[result_id] = FunctionCallNode(
-                    "textureQueryLod",
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.spirv_assembly_operand_expression(
-                            operands[2],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                    ],
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpImageQueryLevels" and len(operands) >= 2:
-                expressions[result_id] = FunctionCallNode(
-                    "textureQueryLevels",
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    ],
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpImageQuerySamples" and len(operands) >= 2:
-                expressions[result_id] = FunctionCallNode(
-                    self.spirv_image_query_name(
-                        "textureSamples",
-                        "imageSamples",
-                        operands[1],
-                        expression_type_ids,
-                        types,
-                    ),
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    ],
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if (
-                result_id
-                and opcode in {
-                    "OpImageQueryFormat",
-                    "OpImageQueryOrder",
-                }
-                and len(operands) >= 2
-            ):
-                expressions[result_id] = FunctionCallNode(
-                    {
-                        "OpImageQueryFormat": "spirvImageQueryFormat",
-                        "OpImageQueryOrder": "spirvImageQueryOrder",
-                    }[opcode],
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    ],
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if (
-                result_id
-                and opcode == "OpImageRead"
-                and len(operands) >= 3
-                and is_subpass_image(operands[1], expression_type_ids, types)
-            ):
-                parsed_operands = self.spirv_assembly_image_operands(
-                    operands[3:], expressions, names, decorations, constants
-                )
-                expressions[result_id] = subpass_load_expression(
-                    self.spirv_assembly_operand_expression(
-                        operands[1], expressions, names, decorations, constants
-                    ),
-                    operands[2],
-                    constants,
-                    self.spirv_assembly_image_sample_operand(parsed_operands),
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpImageRead" and len(operands) >= 3:
-                expressions[result_id] = self.spirv_assembly_image_read_expression(
-                    operands[1],
-                    operands[2],
-                    operands[3:],
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpImageTexelPointer" and len(operands) >= 4:
-                expressions[result_id] = (
-                    self.spirv_assembly_image_texel_pointer_expression(
-                        operands[1],
-                        operands[2],
-                        operands[3],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpAtomicLoad" and len(operands) >= 4:
-                expressions[result_id] = self.spirv_assembly_atomic_load_expression(
-                    operands[1],
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if (
-                result_id
-                and opcode == "OpNamedBarrierInitialize"
-                and len(operands) >= 2
-            ):
-                expressions[result_id] = FunctionCallNode(
-                    "spirvNamedBarrierInitialize",
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    ],
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if (
-                result_id
-                and (
-                    opcode.startswith("OpConvert")
-                    or opcode in {"OpFConvert", "OpSConvert", "OpUConvert"}
-                )
-                and len(operands) >= 2
-            ):
-                operand = self.spirv_assembly_operand_expression(
-                    operands[1],
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
-                )
-                expressions[result_id] = spirv_integer_conversion_expression(
-                    opcode[2:],
-                    operands[0],
-                    operand,
-                    expression_type_ids.get(operands[1])
-                    or constant_types.get(operands[1]),
-                    types,
-                    self.spirv_vector_type_name,
-                ) or FunctionCallNode(
-                    self.spirv_type_name(operands[0], types) or operands[0],
-                    [operand],
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpBitcast" and len(operands) >= 2:
-                expressions[result_id] = self.spirv_assembly_bitcast_expression(
-                    operands[0],
-                    operands[1],
-                    expressions,
-                    expression_type_ids,
-                    names,
-                    decorations,
-                    constants,
-                    constant_types,
-                    types,
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if (
-                result_id
-                and opcode in {"OpCopyLogical", "OpCopyObject"}
-                and len(operands) >= 2
-            ):
-                expressions[result_id] = self.spirv_assembly_operand_expression(
-                    operands[1],
-                    expressions,
-                    names,
-                    decorations,
-                    constants,
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpUndef" and operands:
-                expressions[result_id] = self.spirv_assembly_undef_expression(
-                    operands[0], types
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpConstantNull" and operands:
-                expressions[result_id] = self.spirv_assembly_null_expression(
-                    operands[0], types
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpTranspose" and len(operands) >= 2:
-                expressions[result_id] = FunctionCallNode(
-                    "transpose",
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    ],
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode in {"OpAccessChain", "OpInBoundsAccessChain"}:
-                if len(operands) >= 2:
-                    access = self.spirv_assembly_access_chain_expression(
-                        operands[1],
-                        operands[2:],
-                        expressions,
-                        names,
-                        decorations,
-                        member_decorations,
-                        member_names,
-                        types,
-                        variables_by_id,
-                        constants,
-                        expression_type_ids=expression_type_ids,
-                    )
-                    expressions[result_id] = access
-                    expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode in {
-                "OpPtrAccessChain",
-                "OpInBoundsPtrAccessChain",
-            }:
-                if len(operands) >= 3:
-                    access = self.spirv_assembly_access_chain_expression(
-                        operands[1],
-                        operands[2:],
-                        expressions,
-                        names,
-                        decorations,
-                        member_decorations,
-                        member_names,
-                        types,
-                        variables_by_id,
-                        constants,
-                    )
-                    expressions[result_id] = access
-                    expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpArrayLength" and len(operands) >= 3:
-                expressions[result_id] = FunctionCallNode(
-                    "spirvArrayLength",
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        operands[2],
-                    ],
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpCompositeConstruct" and operands:
-                record_expression(
-                    result_id,
-                    operands[0],
-                    self.spirv_assembly_composite_construct_expression(
-                        operands[0],
-                        operands[1:],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                        types,
-                    ),
-                )
-                continue
-
-            if result_id and opcode == "OpCompositeExtract" and len(operands) >= 2:
-                record_expression(
-                    result_id,
-                    operands[0],
-                    self.spirv_assembly_composite_extract_expression(
-                        operands[1],
-                        operands[2:],
-                        expressions,
-                        expression_type_ids,
-                        names,
-                        decorations,
-                        member_names,
-                        types,
-                        constants,
-                        constant_types,
-                    ),
-                )
-                continue
-
-            if result_id and opcode == "OpVectorExtractDynamic" and len(operands) >= 3:
-                expressions[result_id] = ArrayAccessNode(
-                    self.spirv_assembly_operand_expression(
-                        operands[1],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
-                    self.spirv_assembly_operand_expression(
-                        operands[2],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if result_id and opcode == "OpVectorInsertDynamic" and len(operands) >= 4:
-                record_expression(
-                    result_id,
-                    operands[0],
-                    self.spirv_assembly_vector_insert_dynamic_expression(
-                        operands[0],
-                        operands[1],
-                        operands[2],
-                        operands[3],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                        types,
-                    ),
-                )
-                continue
-
-            if result_id and opcode == "OpCompositeInsert" and len(operands) >= 3:
-                record_expression(
-                    result_id,
-                    operands[0],
-                    self.spirv_assembly_composite_insert_expression(
-                        operands[0],
-                        operands[1],
-                        operands[2],
-                        operands[3:],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                        types,
-                    ),
-                )
-                continue
-
-            if result_id and opcode == "OpVectorShuffle" and len(operands) >= 4:
-                record_expression(
-                    result_id,
-                    operands[0],
-                    self.spirv_assembly_vector_shuffle_expression(
-                        operands[0],
-                        operands[1],
-                        operands[2],
-                        operands[3:],
-                        expressions,
-                        expression_type_ids,
-                        names,
-                        decorations,
-                        constants,
-                        types,
-                    ),
-                )
-                continue
-
-            if result_id and opcode == "OpExtInst" and len(operands) == 4:
-                struct_value = spirv_struct_result_call(
-                    self,
-                    result_id,
-                    operands[0],
-                    extended_instruction_imports.get(operands[1]),
-                    operands[2],
-                    self.spirv_assembly_operand_expression(
-                        operands[3], expressions, names, decorations, constants
-                    ),
-                    statements,
-                    names,
-                    decorations,
-                    types,
-                    constants,
-                )
-                if struct_value is not None:
-                    expressions[result_id] = struct_value
-                    expression_type_ids[result_id] = operands[0]
-                    continue
-
-            if result_id and opcode == "OpExtInst" and len(operands) >= 3:
-                call = FunctionCallNode(
-                    self.spirv_ext_inst_function_name(
-                        extended_instruction_imports.get(operands[1]),
-                        operands[2],
-                    ),
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operand,
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                        for operand in operands[3:]
-                    ],
-                )
-                if (
-                    extended_instruction_imports.get(operands[1]) == "GLSL.std.450"
-                    and self.SPIRV_GLSL_STD_450_EXT_INST_IDS.get(
-                        str(operands[2]), operands[2]
-                    )
-                    == "NClamp"
-                    and len(call.args) == 3
-                ):
-                    # NClamp(x, lo, hi) is NMin(NMax(x, lo), hi).
-                    call = FunctionCallNode(
-                        "fmin",
-                        [FunctionCallNode("fmax", call.args[:2]), call.args[2]],
-                    )
-                if self.spirv_type_name(operands[0], types) == "void":
-                    statements.append(call)
-                else:
-                    record_expression(result_id, operands[0], call)
-                continue
-
-            if result_id and opcode in {
-                "OpAtomicIIncrement",
-                "OpAtomicIDecrement",
-            }:
-                if len(operands) >= 4:
-                    expressions[result_id] = fold_image_texel_atomic(
-                        self.spirv_assembly_atomic_increment_expression(
-                            opcode,
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        opcode,
-                        self.spirv_type_name(operands[0], types),
-                    )
-                    expression_type_ids[result_id] = operands[0]
-                    if result_id not in used_result_ids:
-                        statements.append(expressions[result_id])
-                    continue
-
-            if result_id and opcode in self.SPIRV_ATOMIC_RMW_FUNCTIONS:
-                if len(operands) >= 5:
-                    expressions[result_id] = fold_image_texel_atomic(
-                        self.spirv_assembly_atomic_expression(
-                            opcode,
-                            operands[1],
-                            operands[4],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        opcode,
-                        self.spirv_type_name(operands[0], types),
-                    )
-                    expression_type_ids[result_id] = operands[0]
-                    if result_id not in used_result_ids:
-                        statements.append(expressions[result_id])
-                    continue
-
-            if result_id and opcode == "OpReportIntersectionKHR":
-                if len(operands) < 3:
-                    raise SpirvInstructionUnsupportedError(
-                        opcode, f"needs 3 operands, got {len(operands)}"
-                    )
-                expressions[result_id] = FunctionCallNode(
-                    "ReportHit",
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operand, expressions, names, decorations, constants
-                        )
-                        for operand in operands[1:3]
-                    ],
-                )
-                expression_type_ids[result_id] = operands[0]
-                if result_id not in used_result_ids:
-                    # A discarded result still reports the hit.
-                    statements.append(expressions[result_id])
-                continue
-
-            if result_id and opcode in {
-                "OpAtomicCompareExchange",
-                "OpAtomicCompareExchangeWeak",
-            }:
-                if len(operands) >= 7:
-                    expressions[result_id] = fold_image_texel_atomic(
-                        self.spirv_assembly_atomic_compare_exchange_expression(
-                            operands[1],
-                            operands[5],
-                            operands[6],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        opcode,
-                        self.spirv_type_name(operands[0], types),
-                    )
-                    expression_type_ids[result_id] = operands[0]
-                    if result_id not in used_result_ids:
-                        statements.append(expressions[result_id])
-                    continue
-
-            if result_id and opcode == "OpGroupNonUniformBroadcastFirst":
-                if len(operands) >= 3:
-                    expressions[result_id] = FunctionCallNode(
-                        "subgroupBroadcastFirst",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operands[2],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                        ],
-                    )
-                    expression_type_ids[result_id] = operands[0]
-                    continue
-
-            if result_id and opcode == "OpGroupNonUniformBroadcast":
-                if len(operands) >= 4:
-                    expressions[result_id] = FunctionCallNode(
-                        "subgroupBroadcast",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operands[2],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            ),
-                            self.spirv_assembly_operand_expression(
-                                operands[3],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            ),
-                        ],
-                    )
-                    expression_type_ids[result_id] = operands[0]
-                    continue
-
-            if result_id and opcode in self.SPIRV_GROUP_NON_UNIFORM_REDUCTION_FUNCTIONS:
-                if len(operands) >= 4:
-                    expressions[result_id] = (
-                        self.spirv_assembly_group_non_uniform_reduction_expression(
-                            opcode,
-                            operands[2],
-                            operands[3],
-                            operands[4:],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    )
-                    expression_type_ids[result_id] = operands[0]
-                    continue
-
-            if result_id and opcode == "OpDot" and len(operands) >= 3:
-                expressions[result_id] = FunctionCallNode(
-                    "dot",
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                        self.spirv_assembly_operand_expression(
-                            operands[2],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                    ],
-                )
-                expression_type_ids[result_id] = operands[0]
-                continue
-
-            if (
-                result_id
-                and opcode in self.SPIRV_RAY_QUERY_EXPRESSION_FUNCTIONS
-                and len(operands) >= 2
-            ):
-                record_expression(
-                    result_id,
-                    operands[0],
-                    self.spirv_assembly_ray_query_expression(
-                        opcode,
-                        operands,
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
-                )
-                continue
-
-            if result_id and opcode == "OpSelect" and len(operands) >= 4:
-                condition, true_value, false_value = (
-                    self.spirv_assembly_operand_expression(
-                        operand,
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                    for operand in operands[1:4]
-                )
-                record_expression(
-                    result_id,
-                    operands[0],
-                    spirv_select_expression(
-                        condition,
-                        true_value,
-                        false_value,
-                        expression_type_ids.get(operands[1])
-                        or constant_types.get(operands[1]),
-                        types,
-                    ),
-                )
-                continue
-
-            if result_id and opcode == "OpPhi" and len(operands) >= 3:
-                structure.import_phi(
-                    result_id,
-                    operands,
-                    expressions,
-                    expression_type_ids,
-                    record_expression,
-                )
-                continue
-
             operation = opcode[2:] if opcode.startswith("Op") else opcode
-            if result_id and len(operands) >= 3:
-                struct_value = spirv_extended_arithmetic_call(
-                    self,
-                    result_id,
-                    operands[0],
-                    operation,
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operand,
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                        for operand in operands[1:]
-                    ],
-                    statements,
-                    names,
-                    decorations,
-                    types,
+            if any(
+                translate(result_id, opcode, operands, operation, **instruction_state)
+                for translate in (
+                    self.spirv_assembly_arithmetic_instruction,
+                    self.spirv_assembly_remainder_and_specialization_instruction,
+                    self.spirv_assembly_call_and_barrier_instruction,
+                    self.spirv_assembly_store_and_return_instruction,
                 )
-                if struct_value is not None:
-                    expressions[result_id] = struct_value
-                    expression_type_ids[result_id] = operands[0]
-                    continue
-
-            if (
-                result_id
-                and operation in self.SPIRV_CORE_FUNCTIONS
-                and len(operands) >= 2
             ):
-                record_expression(
-                    result_id,
-                    operands[0],
-                    FunctionCallNode(
-                        self.SPIRV_CORE_FUNCTIONS[operation],
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[1:]
-                        ],
-                    ),
-                )
-                continue
-
-            if (
-                result_id
-                and operation in self.SPIRV_DERIVATIVE_FUNCTIONS
-                and len(operands) >= 2
-            ):
-                record_expression(
-                    result_id,
-                    operands[0],
-                    FunctionCallNode(
-                        self.SPIRV_DERIVATIVE_FUNCTIONS[operation],
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operands[1],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                        ],
-                    ),
-                )
-                continue
-
-            if (
-                result_id
-                and operation in self.SPIRV_UNARY_FUNCTIONS
-                and len(operands) >= 2
-            ):
-                record_expression(
-                    result_id,
-                    operands[0],
-                    FunctionCallNode(
-                        self.SPIRV_UNARY_FUNCTIONS[operation],
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operands[1],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                        ],
-                    ),
-                )
-                continue
-
-            if result_id and operation == "FMod" and len(operands) >= 3:
-                # OpFMod takes the sign of the divisor (x - y * floor(x / y)), which is
-                # CrossGL mod; the % operator is the truncated remainder of OpFRem.
-                record_expression(
-                    result_id,
-                    operands[0],
-                    FunctionCallNode(
-                        "mod",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand, expressions, names, decorations, constants
-                            )
-                            for operand in operands[1:3]
-                        ],
-                    ),
-                )
-                continue
-
-            if (
-                result_id
-                and operation in self.SPIRV_SPEC_CONSTANT_BINARY_OPS
-                and len(operands) >= 3
-            ):
-                lhs, rhs = (
-                    self.spirv_assembly_operand_expression(
-                        operand,
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                    for operand in operands[1:3]
-                )
-                expression = spirv_integer_binary_expression(
-                    operation,
-                    operands[0],
-                    lhs,
-                    expression_type_ids.get(operands[1])
-                    or constant_types.get(operands[1]),
-                    rhs,
-                    expression_type_ids.get(operands[2])
-                    or constant_types.get(operands[2]),
-                    types,
-                    self.spirv_vector_type_name,
-                )
-                if expression is None:
-                    expression = BinaryOpNode(
-                        lhs, self.SPIRV_SPEC_CONSTANT_BINARY_OPS[operation], rhs
-                    )
-                record_expression(result_id, operands[0], expression)
-                continue
-
-            if (
-                result_id
-                and operation in self.SPIRV_SPEC_CONSTANT_UNARY_OPS
-                and len(operands) >= 2
-            ):
-                record_expression(
-                    result_id,
-                    operands[0],
-                    UnaryOpNode(
-                        self.SPIRV_SPEC_CONSTANT_UNARY_OPS[operation],
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        ),
-                    ),
-                )
-                continue
-
-            if result_id and opcode == "OpFunctionCall" and len(operands) >= 2:
-                call = FunctionCallNode(
-                    self.spirv_assembly_value_name(
-                        operands[1], names, decorations, prefix="function"
-                    ),
-                    [
-                        self.spirv_assembly_operand_expression(
-                            operand,
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                        for operand in operands[2:]
-                    ],
-                )
-                if self.spirv_type_name(operands[0], types) == "void":
-                    statements.append(call)
-                elif result_id not in used_result_ids:
-                    # The call's effects happen even when its result is discarded.
-                    statements.append(call)
-                else:
-                    expressions[result_id] = call
-                    expression_type_ids[result_id] = operands[0]
-                continue
-
-            if opcode == "OpAtomicStore" and len(operands) >= 4:
-                statements.append(
-                    self.spirv_assembly_atomic_store_statement(
-                        operands[0],
-                        operands[3],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                )
-                continue
-
-            if opcode == "OpImageWrite" and len(operands) >= 3:
-                statements.append(
-                    self.spirv_assembly_image_write_statement(
-                        operands[0],
-                        operands[1],
-                        operands[2],
-                        operands[3:],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                )
-                continue
-
-            if opcode in self.SPIRV_GEOMETRY_EMIT_FUNCTIONS:
-                statements.append(
-                    self.spirv_assembly_geometry_emit_statement(
-                        opcode,
-                        operands,
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                )
-                continue
-
-            if opcode in self.SPIRV_RAY_QUERY_STATEMENT_FUNCTIONS:
-                statements.append(
-                    self.spirv_assembly_ray_query_statement(
-                        opcode,
-                        operands,
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                )
-                continue
-
-            if opcode == "OpControlBarrier" and len(operands) >= 3:
-                statements.extend(
-                    spirv_barrier_statements(
-                        opcode,
-                        [constants.get(operand) for operand in operands[:3]],
-                        self.spirv_module_execution_models,
-                    )
-                )
-                continue
-
-            if opcode == "OpMemoryBarrier" and len(operands) >= 2:
-                statements.extend(
-                    spirv_barrier_statements(
-                        opcode,
-                        [constants.get(operand) for operand in operands[:2]],
-                        self.spirv_module_execution_models,
-                    )
-                )
-                continue
-
-            if opcode == "OpMemoryNamedBarrier" and len(operands) >= 3:
-                statements.append(
-                    FunctionCallNode(
-                        "spirvMemoryNamedBarrier",
-                        [
-                            self.spirv_assembly_operand_expression(
-                                operand,
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            )
-                            for operand in operands[:3]
-                        ],
-                    )
-                )
-                continue
-
-            if opcode == "OpStore" and len(operands) >= 2:
-                statements.append(
-                    AssignmentNode(
-                        self.spirv_assembly_operand_expression(
-                            operands[0],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                            variables_by_id=variables_by_id,
-                            types=types,
-                        ),
-                        self.spirv_assembly_operand_expression(
-                            operands[1],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                            variables_by_id=variables_by_id,
-                            types=types,
-                        ),
-                    )
-                )
-                continue
-
-            if opcode == "OpCopyMemory" and len(operands) >= 2:
-                if operands[0] != operands[1]:
-                    statements.append(
-                        AssignmentNode(
-                            self.spirv_assembly_operand_expression(
-                                operands[0],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            ),
-                            self.spirv_assembly_operand_expression(
-                                operands[1],
-                                expressions,
-                                names,
-                                decorations,
-                                constants,
-                            ),
-                        )
-                    )
-                continue
-
-            if opcode == "OpCopyMemorySized" and len(operands) >= 3:
-                statements.append(
-                    self.spirv_assembly_copy_memory_sized_statement(
-                        operands[0],
-                        operands[1],
-                        operands[2],
-                        operands[3:],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    )
-                )
-                continue
-
-            if opcode in {
-                "OpKill",
-                "OpTerminateInvocation",
-                "OpDemoteToHelperInvocation",
-            }:
-                statements.append(DiscardNode())
-                continue
-
-            if opcode == "OpReturnValue" and operands:
-                statements.append(
-                    ReturnNode(
-                        self.spirv_assembly_operand_expression(
-                            operands[0],
-                            expressions,
-                            names,
-                            decorations,
-                            constants,
-                        )
-                    )
-                )
-                continue
-
-            if opcode == "OpReturn":
-                statements.append(ReturnNode())
                 continue
 
             ray_call = ray_statement(
@@ -3030,6 +1489,44 @@ class VulkanParser(
             )
 
         return expression
+
+    def spirv_name_main_helpers(self, instructions, names, entry_points_by_id):
+        """Give ordinary functions a name that cannot take GLSL's entry point."""
+        if not entry_points_by_id:
+            return names
+        helpers = [
+            result_id
+            for result_id, opcode, _operands, _line in instructions
+            if opcode == "OpFunction"
+            and result_id not in entry_points_by_id
+            and names.get(
+                result_id, self.spirv_fallback_identifier(result_id, "function")
+            )
+            == "main"
+        ]
+        if not helpers:
+            return names
+        used = set(names.values())
+        used.update(
+            self.spirv_fallback_identifier(result_id, "value")
+            for result_id, _opcode, _operands, _line in instructions
+            if result_id
+        )
+        used.update(
+            entry["name"]
+            for entries in entry_points_by_id.values()
+            for entry in entries
+        )
+        names = names.copy()
+        for helper in helpers:
+            name = "main_fn"
+            index = 1
+            while name in used:
+                name = f"main_fn_{index}"
+                index += 1
+            names[helper] = name
+            used.add(name)
+        return names
 
     def spirv_function_name_fallback(self, function_id, entry_points_by_id):
         if function_id in entry_points_by_id:

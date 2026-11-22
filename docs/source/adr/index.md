@@ -8,4 +8,6 @@
 0003-measured-coverage
 0004-matrix-orientation
 0005-default-buffer-layout
+0006-host-tooling-package
+0007-template-engine
 ```

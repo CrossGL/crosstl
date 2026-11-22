@@ -3,22 +3,32 @@ name: Coverage
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
 # feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The Linux
 # job measures GLSL, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc
-# (and nvcc for the Slang functions only CUDA has), and OpenCL C input with the runner image's clang-18 and DXC, and
+# (and nvcc for the Slang functions only CUDA has, and DXC's Shader Model 6.10 preview for the HLSL intrinsics that
+# need shader model 6.10), and OpenCL C input with the runner image's clang-18 and DXC, and
 # runs the GLSL and SPIR-V compute probes on Mesa's llvmpipe and lavapipe, and the HLSL, Slang and WGSL ones on lavapipe
 # as the SPIR-V DXC, slangc and naga write for them. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc
 # and the Mojo compiler, one measures Rust with rust-gpu and runs the Rust compute probes on lavapipe as the SPIR-V
-# rust-gpu writes, and the macOS job measures Metal with xcrun metal and runs the Metal compute probes on the GPU. Every
-# run goes through Core's conformance harness (tools/coverage/execution.py). The report job merges the reports and adds
-# the CrossGL IR row. On pushes to main and nightly, the publish job replaces the orphan `coverage` branch with
-# coverage.json, coverage.svg (the README chart), COVERAGE.md, a bounded history.csv and trend.svg, the trend chart
-# drawn from it; main itself never receives generated files. The issues job then reconciles the tracking and bug issues
+# rust-gpu writes, and the macOS job measures Metal with xcrun metal and runs the Metal compute probes on the GPU. The
+# Windows job runs the HLSL compute probes as HLSL on Direct3D 12 WARP; its report carries only those execution
+# verdicts, which the merge adds to the HLSL rows the Linux job measures. Every run goes through Core's conformance
+# harness (tools/coverage/execution.py). The report job merges the reports and adds the CrossGL IR row. On pushes to main and nightly, the publish job replaces the orphan `coverage` branch with
+# coverage.json (each row's score, with its features in features/<language>-<direction>.json so that no file reaches
+# 1 MB), coverage.svg (the README chart), COVERAGE.md, a bounded history.csv and trend.svg, the trend chart drawn from
+# it; main itself never receives generated files. The issues job then reconciles the tracking and bug issues
 # (tools/coverage/issues.py); pull requests only print its plan, and coverage-comment.yml posts their change against
 # main on the pull request.
+#
+# The nightly run and a manual run also measure the translation matrix (tools/coverage/pairs.py): each leg translates
+# the native probes of every source language straight to its own languages, as the published rows define the cells.
+# The publish job writes the matrix to coverage.json (its features in features/pairs/<source>-to-<target>.json), to
+# COVERAGE.md and to one pairs/<source>-to-<target>.md page of gaps per cell; a push to main keeps the last matrix.
+# It also writes one languages/<language>.md page per language, linked from the README (tools/coverage/docs.py).
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
 # only when the engine itself breaks or a reference tool is missing. Pull requests and the merge queue run the Metal,
 # CUDA/HIP/Mojo and Rust jobs only when they change the coverage engine or that backend's translator; the job summary
-# names the rows a run left out. Pushes to main and the nightly run measure everything.
+# names the rows a run left out. Pull requests run the Windows job on the same terms, and the merge queue never runs
+# it (tools/coverage/legs.py). Pushes to main and the nightly run measure everything.
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -60,6 +70,7 @@ jobs:
       metal: ${{ steps.plan.outputs.metal }}
       compute: ${{ steps.plan.outputs.compute }}
       rust: ${{ steps.plan.outputs.rust }}
+      d3d12: ${{ steps.plan.outputs.d3d12 }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -72,32 +83,22 @@ jobs:
           EVENT: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          legs=(metal compute rust)
+          legs=(metal compute rust d3d12)
           if [ "$EVENT" != pull_request ] && [ "$EVENT" != merge_group ]; then
             for leg in "${legs[@]}"; do echo "$leg=true" >> "$GITHUB_OUTPUT"; done
             exit 0
           fi
+          queue=()
+          if [ "$EVENT" = merge_group ]; then queue=(--merge-group); fi
           # A pull request checks out its merge commit and a merge group its queued commit; the first parent is the
-          # base, so this lists exactly the files the change touches.
-          changed="$(git diff --name-only HEAD^1 HEAD)"
-          engine='tools/coverage/|tests/coverage/|\.github/workflows/coverage\.yml$'
-          declare -A paths=(
-            [metal]='crosstl/translator/codegen/metal|crosstl/backend/Metal/|tools/ensure_metal_toolchain\.py$|tests/conformance/(runner|runtimes|native|interface|worker)\.py$'
-            [compute]='crosstl/translator/codegen/(cuda|hip|mojo)_|crosstl/backend/(CUDA|HIP|Mojo)/'
-            [rust]='crosstl/translator/codegen/rust_|crosstl/backend/Rust/|tests/conformance/(runner\.py|runtimes\.py|interface\.py|vkrun\.c)$'
-          )
-          for leg in "${legs[@]}"; do
-            if grep -Eq "^($engine|${paths[$leg]})" <<<"$changed"; then
-              echo "$leg=true" >> "$GITHUB_OUTPUT"
-            else
-              echo "$leg=false" >> "$GITHUB_OUTPUT"
-            fi
-          done
+          # base, so this lists exactly the files the change touches. tools/coverage/legs.py says which legs they reach.
+          git diff --name-only HEAD^1 HEAD | python3 -m tools.coverage.legs "${queue[@]}" | tee -a "$GITHUB_OUTPUT"
 
   linux:
     name: Coverage (GLSL, WebGL, HLSL, SPIR-V, WGSL, Slang, OpenCL C)
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    # The nightly run also measures the translation matrix; the rows alone have a step timeout below.
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
         with:
@@ -118,6 +119,10 @@ jobs:
         uses: ./.github/actions/install-linux-dxc
         with:
           pinned: "true"
+
+      # HLSL features that need shader model 6.10 are checked by DXC's Shader Model 6.10 preview.
+      - name: Install the DXC Shader Model 6.10 preview
+        uses: ./.github/actions/install-dxc-preview
 
       - name: Install pinned glslang and SPIRV-Tools
         uses: ./.github/actions/install-shader-validators
@@ -177,11 +182,14 @@ jobs:
         id: verdicts
         uses: actions/cache/restore@v6
         with:
-          path: ${{ runner.temp }}/coverage-verdicts
-          key: coverage-verdicts-linux-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/coverage-verdicts
+            ${{ runner.temp }}/pairs-verdicts
+          key: coverage-verdicts-linux-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-${{ github.sha }}-${{ github.run_id }}
           restore-keys: coverage-verdicts-linux-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-
 
       - name: Measure coverage
+        timeout-minutes: 35
         env:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
           CROSSTL_COVERAGE_VERDICTS: ${{ runner.temp }}/coverage-verdicts
@@ -193,17 +201,43 @@ jobs:
             --backend glsl --backend webgl --backend hlsl --backend spirv --backend wgsl --backend slang \
             --backend opencl --output coverage-linux.json
 
+      # The nightly run also measures the translation matrix into this leg's languages (tools/coverage/pairs.py). The
+      # rows of the published report define its cells, and the report job reconciles them with this run's rows.
+      - name: Measure the translation matrix
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
+          # Apart from the rows' verdicts, which a run keeps only when it used them.
+          CROSSTL_COVERAGE_VERDICTS: ${{ runner.temp }}/pairs-verdicts
+          CROSSTL_COVERAGE_CLANG: clang-18
+          CROSSTL_CONFORMANCE_MESA: host
+        run: |
+          set -euo pipefail
+          published="$RUNNER_TEMP/published"
+          if ! { git fetch --quiet --depth=1 origin coverage && mkdir -p "$published" \
+            && git archive FETCH_HEAD | tar -x -C "$published"; }; then
+            echo "No published coverage defines the cells yet."
+            exit 0
+          fi
+          python -m tools.coverage run --pairs "$published/coverage.json" --strict --execute --jobs 4 \
+            --backend glsl --backend webgl --backend hlsl --backend spirv --backend wgsl --backend slang \
+            --output coverage-pairs-linux.json
+
       - name: Keep verdicts
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
         with:
-          path: ${{ runner.temp }}/coverage-verdicts
+          path: |
+            ${{ runner.temp }}/coverage-verdicts
+            ${{ runner.temp }}/pairs-verdicts
           key: ${{ steps.verdicts.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v7
         with:
           name: coverage-linux
-          path: coverage-linux.json
+          path: |
+            coverage-linux.json
+            coverage-pairs-linux.json
           retention-days: 14
 
   # One leg per language: each compiles four probes per feature, and together they would outlast a job's timeout.
@@ -212,7 +246,8 @@ jobs:
     needs: plan
     if: needs.plan.outputs.compute == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    # The nightly run also measures the translation matrix; the rows alone have a step timeout below.
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
@@ -279,28 +314,67 @@ jobs:
         id: verdicts
         uses: actions/cache/restore@v6
         with:
-          path: ${{ runner.temp }}/coverage-verdicts
-          key: coverage-verdicts-${{ matrix.backend }}-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/coverage-verdicts
+            ${{ runner.temp }}/pairs-verdicts
+          key: coverage-verdicts-${{ matrix.backend }}-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-${{ github.sha }}-${{ github.run_id }}
           restore-keys: coverage-verdicts-${{ matrix.backend }}-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-
 
       - name: Measure coverage
+        timeout-minutes: 30
         env:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
           CROSSTL_COVERAGE_VERDICTS: ${{ runner.temp }}/coverage-verdicts
           BACKEND: ${{ matrix.backend }}
         run: python -m tools.coverage run --strict --jobs 4 --backend "$BACKEND" --output "coverage-$BACKEND.json"
 
+      # A spirv-to-X cell's SPIR-V probe is compiled from a GLSL probe, or an HLSL one for a construct GLSL cannot
+      # spell, and disassembled (tools/coverage/spirv_input.py). The nightly run installs those compilers after the
+      # rows, which do not use them.
+      - name: Install pinned glslang and SPIRV-Tools for the matrix
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/install-shader-validators
+
+      - name: Install pinned Linux DXC for the matrix
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/install-linux-dxc
+        with:
+          pinned: "true"
+
+      # The nightly run also measures the translation matrix into this leg's languages (tools/coverage/pairs.py). The
+      # rows of the published report define its cells, and the report job reconciles them with this run's rows.
+      - name: Measure the translation matrix
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
+          CROSSTL_COVERAGE_VERDICTS: ${{ runner.temp }}/pairs-verdicts
+          BACKEND: ${{ matrix.backend }}
+        run: |
+          set -euo pipefail
+          published="$RUNNER_TEMP/published"
+          if ! { git fetch --quiet --depth=1 origin coverage && mkdir -p "$published" \
+            && git archive FETCH_HEAD | tar -x -C "$published"; }; then
+            echo "No published coverage defines the cells yet."
+            exit 0
+          fi
+          python -m tools.coverage run --pairs "$published/coverage.json" --strict --jobs 4 --backend "$BACKEND" \
+            --output "coverage-pairs-$BACKEND.json"
+
       - name: Keep verdicts
         if: github.ref == 'refs/heads/main'
         uses: actions/cache/save@v6
         with:
-          path: ${{ runner.temp }}/coverage-verdicts
+          path: |
+            ${{ runner.temp }}/coverage-verdicts
+            ${{ runner.temp }}/pairs-verdicts
           key: ${{ steps.verdicts.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v7
         with:
           name: coverage-${{ matrix.backend }}
-          path: coverage-${{ matrix.backend }}.json
+          path: |
+            coverage-${{ matrix.backend }}.json
+            coverage-pairs-${{ matrix.backend }}.json
           retention-days: 14
 
   rust:
@@ -308,7 +382,8 @@ jobs:
     needs: plan
     if: needs.plan.outputs.rust == 'true'
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    # The nightly run also measures the translation matrix; the rows alone have a step timeout below.
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
         with:
@@ -388,16 +463,38 @@ jobs:
           grep -q "1 passed" rust-execution.log
 
       - name: Measure coverage
+        timeout-minutes: 30
         env:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
           CROSSTL_COVERAGE_RUST_GPU: ${{ runner.temp }}/rust-gpu
           CROSSTL_CONFORMANCE_MESA: host
         run: python -m tools.coverage run --strict --execute --jobs 4 --backend rust --output coverage-rust.json
 
+      # The nightly run also measures the translation matrix into this leg's languages (tools/coverage/pairs.py). The
+      # rows of the published report define its cells, and the report job reconciles them with this run's rows.
+      - name: Measure the translation matrix
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        env:
+          CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
+          CROSSTL_COVERAGE_RUST_GPU: ${{ runner.temp }}/rust-gpu
+          CROSSTL_CONFORMANCE_MESA: host
+        run: |
+          set -euo pipefail
+          published="$RUNNER_TEMP/published"
+          if ! { git fetch --quiet --depth=1 origin coverage && mkdir -p "$published" \
+            && git archive FETCH_HEAD | tar -x -C "$published"; }; then
+            echo "No published coverage defines the cells yet."
+            exit 0
+          fi
+          python -m tools.coverage run --pairs "$published/coverage.json" --strict --execute --jobs 4 --backend rust \
+            --output coverage-pairs-rust.json
+
       - uses: actions/upload-artifact@v7
         with:
           name: coverage-rust
-          path: coverage-rust.json
+          path: |
+            coverage-rust.json
+            coverage-pairs-rust.json
           retention-days: 14
 
   metal:
@@ -405,7 +502,8 @@ jobs:
     needs: plan
     if: needs.plan.outputs.metal == 'true'
     runs-on: xcode-27
-    timeout-minutes: 40
+    # The nightly run also measures the translation matrix; the rows alone have a step timeout below.
+    timeout-minutes: 90
     env:
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
     steps:
@@ -429,17 +527,92 @@ jobs:
           pip install -e . numpy==2.5.4 pyobjc-framework-Metal==12.2.2
 
       - name: Measure coverage
+        timeout-minutes: 30
         run: python -m tools.coverage run --strict --execute --jobs 3 --backend metal --output coverage-metal.json
+
+      # A spirv-to-metal probe is compiled from a GLSL probe and disassembled (tools/coverage/spirv_input.py). macOS has
+      # no DXC, so the few constructs only HLSL spells stay untested in that cell.
+      - name: Install pinned glslang and SPIRV-Tools for the matrix
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        uses: ./.github/actions/install-shader-validators
+
+      # The nightly run also measures the translation matrix into this leg's languages (tools/coverage/pairs.py). The
+      # rows of the published report define its cells, and the report job reconciles them with this run's rows.
+      - name: Measure the translation matrix
+        if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+        run: |
+          set -euo pipefail
+          published="$RUNNER_TEMP/published"
+          if ! { git fetch --quiet --depth=1 origin coverage && mkdir -p "$published" \
+            && git archive FETCH_HEAD | tar -x -C "$published"; }; then
+            echo "No published coverage defines the cells yet."
+            exit 0
+          fi
+          python -m tools.coverage run --pairs "$published/coverage.json" --strict --jobs 3 --backend metal \
+            --output coverage-pairs-metal.json
 
       - uses: actions/upload-artifact@v7
         with:
           name: coverage-metal
-          path: coverage-metal.json
+          path: |
+            coverage-metal.json
+            coverage-pairs-metal.json
+          retention-days: 14
+
+  d3d12:
+    name: Coverage (HLSL on Direct3D 12 WARP)
+    needs: plan
+    if: needs.plan.outputs.d3d12 == 'true'
+    runs-on: windows-2025
+    timeout-minutes: 45
+    env:
+      # Probes and their translations are written as UTF-8 whatever the code page.
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # compushady 0.17.5 publishes Windows wheels up to CPython 3.12, as in conformance.yml's WARP leg.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      # compushady finds the WARP adapter; the harness builds its D3D12 buffer-view worker with the image's MSVC.
+      - name: Install CrossTL
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e . numpy==2.5.4 compushady==0.17.5
+
+      - name: Install pinned DXC and WARP
+        uses: ./.github/actions/install-windows-d3d12
+
+      - name: Restore upstream feature sources
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/coverage-cache
+          key: coverage-upstream-d3d12-${{ hashFiles('tools/coverage/upstream.py') }}
+          restore-keys: coverage-upstream-d3d12-
+
+      # The report holds only execution verdicts (--execution-only): the Linux job's HLSL rows keep their static
+      # verdicts, and the merge adds which probes ran on WARP and which of them diverged there.
+      - name: Run the HLSL probes on WARP
+        env:
+          CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
+        run: >-
+          python -m tools.coverage run --strict --execute --execution-only --runtimes d3d12-warp --jobs 4
+          --backend hlsl --output coverage-d3d12.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: coverage-d3d12
+          path: coverage-d3d12.json
           retention-days: 14
 
   report:
     name: Coverage report
-    needs: [plan, linux, compute, rust, metal]
+    needs: [plan, linux, compute, rust, metal, d3d12]
     # Every leg ran or was planned out; a leg is skipped only on pull requests and in the merge queue.
     if: >-
       always() && needs.plan.result == 'success' && needs.linux.result == 'success'
@@ -495,8 +668,10 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
           set -euo pipefail
-          if git fetch --quiet --depth=1 origin coverage && git show FETCH_HEAD:coverage.json > published.json; then
-            python -m tools.coverage compare published.json coverage.json \
+          published="$RUNNER_TEMP/published"
+          if git fetch --quiet --depth=1 origin coverage && mkdir -p "$published" \
+            && git archive FETCH_HEAD | tar -x -C "$published"; then
+            python -m tools.coverage compare "$published/coverage.json" coverage.json \
               --repository "$GITHUB_REPOSITORY" --head "$HEAD_SHA" | tee compare.md
             { echo "### Change against main"; echo; cat compare.md; } >> "$GITHUB_STEP_SUMMARY"
           else
@@ -562,25 +737,66 @@ jobs:
             exit 0
           fi
           git show FETCH_HEAD:history.csv > previous-history.csv || true
+          # The published report and its feature files, whose translation matrix a run that measured none keeps.
+          mkdir -p "$RUNNER_TEMP/previous"
+          git archive FETCH_HEAD | tar -x -C "$RUNNER_TEMP/previous" || true
           published="$(git show FETCH_HEAD:coverage.json | python -c 'import json, sys; print(json.load(sys.stdin)["commit"])' || true)"
           status=ahead
           if [ -n "$published" ] && [ "$published" != "$GITHUB_SHA" ]; then
             status="$(gh api "repos/$GITHUB_REPOSITORY/compare/$published...$GITHUB_SHA" --jq .status || echo ahead)"
           fi
           # A run that finishes after a run for a newer commit must not replace the newer data.
-          if [ "$status" = behind ]; then
-            echo "The coverage branch already holds $published, which is newer than $GITHUB_SHA."
-            echo "publish=false" >> "$GITHUB_OUTPUT"
-          else
+          if [ "$status" != behind ]; then
             echo "publish=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "The coverage branch already holds $published, which is newer than $GITHUB_SHA."
+          # The nightly matrix takes longer than a push's rows, so on a busy main a push publishes newer rows first.
+          # Those rows stay, and the matrix this run measured replaces the one they carry if that one is older.
+          measured="$(python -c 'import json; print("pairs" in json.load(open("coverage.json")))')"
+          carried="$(git show FETCH_HEAD:coverage.json | python -c 'import json, sys; print(json.load(sys.stdin).get("matrix", {}).get("commit", ""))' || true)"
+          newer=ahead
+          if [ "$measured" != True ] || [ "$carried" = "$GITHUB_SHA" ]; then
+            newer=no
+          elif [ -n "$carried" ]; then
+            newer="$(gh api "repos/$GITHUB_REPOSITORY/compare/$carried...$GITHUB_SHA" --jq .status || echo ahead)"
+          fi
+          if [ "$newer" = ahead ]; then
+            echo "This run's translation matrix replaces the one measured at ${carried:-no commit}."
+            echo "publish=matrix" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build the published files
-        if: steps.published.outputs.publish == 'true'
-        run: python -m tools.coverage publish coverage.json --history previous-history.csv --output-dir "$RUNNER_TEMP/site" --repository "$GITHUB_REPOSITORY"
+        if: steps.published.outputs.publish != 'false'
+        env:
+          PUBLISH: ${{ steps.published.outputs.publish }}
+        run: |
+          set -euo pipefail
+          if [ "$PUBLISH" = matrix ]; then
+            # The published rows, with this run's matrix.
+            python -m tools.coverage publish "$RUNNER_TEMP/previous/coverage.json" --matrix coverage.json \
+              --history previous-history.csv --output-dir "$RUNNER_TEMP/site" --repository "$GITHUB_REPOSITORY"
+          else
+            python -m tools.coverage publish coverage.json --history previous-history.csv \
+              --previous "$RUNNER_TEMP/previous/coverage.json" --output-dir "$RUNNER_TEMP/site" \
+              --repository "$GITHUB_REPOSITORY"
+          fi
+
+      # The issues job reconciles what was published, the rows and the matrix it carries.
+      - name: Keep the published report
+        if: steps.published.outputs.publish != 'false'
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-published
+          path: |
+            ${{ runner.temp }}/site/coverage.json
+            ${{ runner.temp }}/site/features
+          retention-days: 7
 
       - name: Replace the coverage branch
-        if: steps.published.outputs.publish == 'true'
+        if: steps.published.outputs.publish != 'false'
         env:
           GH_TOKEN: ${{ github.token }}
         working-directory: ${{ runner.temp }}/site
@@ -589,7 +805,8 @@ jobs:
           git init --quiet --initial-branch=coverage
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add coverage.json coverage.svg COVERAGE.md history.csv trend.svg
+          git add coverage.json features coverage.svg COVERAGE.md history.csv trend.svg languages
+          if [ -d pairs ]; then git add pairs; fi
           git commit --quiet -m "Coverage for ${GITHUB_SHA::12}"
           # The branch is one commit by design, so each publication replaces it.
           git push --quiet --force "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:coverage
@@ -599,7 +816,7 @@ jobs:
     name: Reconcile coverage issues
     needs: publish
     # Runs only after this run's results were published, so issues never fall back to older data.
-    if: "!cancelled() && needs.publish.outputs.published == 'true'"
+    if: "!cancelled() && needs.publish.result == 'success' && needs.publish.outputs.published != 'false'"
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -618,16 +835,19 @@ jobs:
         with:
           python-version: "3.13"
 
+      # The published report: this run's rows, or a newer push's rows when this run published only its matrix, with
+      # the matrix the coverage branch now carries, whose cells have the pair tracking issues.
       - uses: actions/download-artifact@v8
         with:
-          name: coverage
+          name: coverage-published
+          path: published
 
       - name: Update the tracking and bug issues
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          python -m tools.coverage issues coverage.json --repository "$GITHUB_REPOSITORY" | tee changes.txt
+          python -m tools.coverage issues published/coverage.json --repository "$GITHUB_REPOSITORY" | tee changes.txt
           {
             echo "### Issue changes"
             echo
@@ -638,7 +858,7 @@ jobs:
 
   result:
     name: Coverage result
-    needs: [plan, linux, compute, rust, metal, report, publish, issues]
+    needs: [plan, linux, compute, rust, metal, d3d12, report, publish, issues]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

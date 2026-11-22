@@ -132,3 +132,24 @@ def test_block_literal_is_refused():
     ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
     with pytest.raises(OpenCLBlockUnsupportedError, match="block literals have no"):
         OpenCLToCrossGLConverter().generate(ast)
+
+
+def test_opencl_inline_asm_raises_opencl_import_refused():
+    from crosstl.backend.import_refusals import OpenCLImportRefused
+
+    source = """
+    __kernel void probe(__global int* outp) {
+        int v = 1;
+        __asm__ volatile("" : "+r"(v));
+        outp[0] = v;
+    }
+    """
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
+    with pytest.raises(OpenCLImportRefused) as exc_info:
+        OpenCLToCrossGLConverter().generate(ast)
+    err = exc_info.value
+    assert err.source_name == "opencl"
+    assert err.missing_capabilities == ("opencl.import",)
+    assert err.code == "project.translate.opencl-import-unsupported"
+    assert "OpenCL C inline asm" in str(err)
+    assert "HIP" not in str(err)

@@ -1,0 +1,1 @@
+CUDA and HIP output declare a generic function's specialization before an earlier function that calls it, by an explicit `twice<float>(x)` or an inferred `twice(x)`, so nvcc and hipcc no longer reject the call as undeclared (#4816).

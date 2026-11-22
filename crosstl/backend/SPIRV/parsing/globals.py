@@ -8,10 +8,12 @@ from ..import_exact_lookups import (
     constant_or_literal,
     keyword_safe_identifier,
 )
+from ..matrix_order_import import ROW_MAJOR_ATTRIBUTE, member_is_row_major
 from ..ray_tracing_import import (
     SpirvInstructionUnsupportedError,
     ray_variable_locations,
 )
+from ..type_declaration_names import declarable_struct_name
 from ..VulkanAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -385,8 +387,9 @@ class VulkanGlobalMixin:
         for type_id, type_info in types.items():
             if type_info.get("kind") != "struct":
                 continue
-            name = names.get(type_id) or self.spirv_fallback_identifier(
-                type_id, "struct"
+            name = declarable_struct_name(
+                names.get(type_id) or self.spirv_fallback_identifier(type_id, "struct"),
+                used_names,
             )
             signature = (
                 tuple(type_info.get("member_types", [])),
@@ -453,6 +456,10 @@ class VulkanGlobalMixin:
                     member_node.declaration_qualifiers = (
                         self.spirv_declaration_qualifiers(member_layout_decorations)
                     )
+                if member_is_row_major(member_decorations, type_id, member_key):
+                    member_node.declaration_qualifiers = list(
+                        getattr(member_node, "declaration_qualifiers", None) or []
+                    ) + [ROW_MAJOR_ATTRIBUTE]
                 members.append(member_node)
 
             if members:

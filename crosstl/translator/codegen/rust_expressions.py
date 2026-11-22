@@ -16,11 +16,13 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
 )
+from .assignment_values import is_reevaluable_place
 from .comma_expressions import (
     is_comma_expression,
     refuse_comma_expression,
 )
 from .rust_exact_lookups import rust_foreign_call_reason
+from .rust_gpu_builtins import generate_rust_gpu_builtin_call
 from .rust_memory_atomics import generate_rust_memory_atomic_call
 from .shader_clock_refusals import (
     SHADER_CLOCK_BUILTINS,
@@ -83,36 +85,7 @@ class RustExpressionMixin:
         elif isinstance(expr, MatchNode):
             return self.generate_match_expression(expr)
         elif hasattr(expr, "__class__") and "UnaryOp" in str(expr.__class__):
-            operand_expr = getattr(expr, "operand", "")
-            raw_op = getattr(expr, "operator", getattr(expr, "op", "+"))
-            op = self.map_operator(raw_op)
-            if op in ["++", "--"]:
-                operand = self.generate_expression(operand_expr)
-                assignment_op = "+=" if op == "++" else "-="
-                increment = self.rust_increment_literal(
-                    self.expression_result_type(operand_expr)
-                )
-                return f"{operand} {assignment_op} {increment}"
-            if op == "~":
-                operand = self.generate_expression(operand_expr)
-                return f"(!{operand})"
-            if op == "+":
-                # Rust has no unary plus; +x is x.
-                return f"({self.generate_expression(operand_expr)})"
-            bool_vector_not = self.generate_bool_vector_not_expression(operand_expr, op)
-            if bool_vector_not is not None:
-                return bool_vector_not
-            operand = self.generate_expression(operand_expr)
-            if op == "!":
-                operand_type = self.normalize_scalar_type(
-                    self.expression_result_type(operand_expr)
-                )
-                if operand_type is not None and operand_type != "bool":
-                    zero_literal = (
-                        "0.0" if operand_type in {"f16", "f32", "f64"} else "0"
-                    )
-                    return f"({operand} == {zero_literal})"
-            return f"({op}{operand})"
+            return self.generate_unary_expression(expr)
         elif hasattr(expr, "__class__") and "ArrayAccess" in str(expr.__class__):
             array_expr = getattr(expr, "array_expr", getattr(expr, "array", ""))
             index_expr = getattr(expr, "index_expr", getattr(expr, "index", ""))
@@ -123,6 +96,25 @@ class RustExpressionMixin:
                 self.array_object_depth -= 1
             array = self.lazy_static_object_expression(array_expr, array)
             index = self.generate_array_index_expression(index_expr)
+            if self.matrix_type_info(self.expression_result_type(array_expr)):
+                # glam matrices index their columns through col and col_mut.
+                if self.assignment_lhs_depth > 0:
+                    return f"(*{array}.col_mut({index}))"
+                return f"{array}.col({index})"
+            array_vector = self.vector_type_info(
+                self.expression_result_type(array_expr)
+            )
+            if array_vector is not None and array_vector["component_type"] == "bool":
+                # glam's BVecN has no Index impl; test(i) reads one lane, and no place expression names one.
+                if self.assignment_lhs_depth > 0:
+                    return self.refuse_lowering(
+                        "bool vector element assignment: glam BVecN has no indexable element place in rust-gpu",
+                        f"{array}.test({index})",
+                    )
+                return f"{array}.test({index})"
+            padded = self.rust_gpu_padded_slice_read(array_expr, array, index)
+            if padded is not None:
+                return padded
             if (
                 self.pointer_type_parts(
                     self.map_type(self.expression_result_type(array_expr))
@@ -159,6 +151,9 @@ class RustExpressionMixin:
                 )
                 if texture_call is not None:
                     return texture_call
+                slice_length = self.generate_rust_gpu_slice_length(func_expr, args)
+                if slice_length is not None:
+                    return slice_length
 
             qualified_method_call = self.generate_qualified_generic_trait_method_call(
                 func_expr,
@@ -170,11 +165,23 @@ class RustExpressionMixin:
             if func_name == "lambda":
                 return self.generate_lambda_expression(args)
 
-            if self.is_user_defined_function(func_name):
+            user_function = self.rust_user_function_of_call(func_name)
+            if user_function is not None:
                 args_str = ", ".join(
-                    self.generate_user_function_call_args(func_name, args)
+                    self.generate_user_function_call_args(user_function, args)
                 )
                 return f"{self.rust_callable_name(callee)}({args_str})"
+
+            rust_gpu_call = generate_rust_gpu_builtin_call(self, func_name, args)
+            if rust_gpu_call is not None:
+                return rust_gpu_call
+            if not self.is_rust_gpu_constructor_call(
+                func_name, args
+            ) and not self.is_rust_program_callable(func_name or callee):
+                return self.refuse_lowering(
+                    f"function: '{func_name or callee}' has no rust-gpu lowering for these operands",
+                    "()",
+                )
 
             ray_tracing_call = self.generate_ray_tracing_call_expression(
                 func_name,
@@ -304,6 +311,115 @@ class RustExpressionMixin:
             return self.generate_wave_op_expression(expr)
         else:
             return str(expr)
+
+    def generate_unary_expression(self, expr):
+        """Write a CrossGL unary operation as a Rust expression."""
+        operand_expr = getattr(expr, "operand", "")
+        raw_op = getattr(expr, "operator", getattr(expr, "op", "+"))
+        op = self.map_operator(raw_op)
+        if op in ["++", "--"]:
+            return self.generate_increment_value(expr, operand_expr, op)
+        if op == "~":
+            operand = self.generate_expression(operand_expr)
+            return f"(!{operand})"
+        if op == "+":
+            # Rust has no unary plus; +x is x.
+            return f"({self.generate_expression(operand_expr)})"
+        bool_vector_not = self.generate_bool_vector_not_expression(operand_expr, op)
+        if bool_vector_not is not None:
+            return bool_vector_not
+        operand = self.generate_expression(operand_expr)
+        if op == "-":
+            operand_type = self.expression_result_type(operand_expr)
+            vector = self.vector_type_info(operand_type)
+            component = (
+                vector["component_type"]
+                if vector is not None
+                else self.normalize_scalar_type(operand_type)
+            )
+            if component in {"u8", "u16", "u32", "u64", "uint"}:
+                # Rust has no unary minus on unsigned types; C negation is modulo 2^n.
+                if vector is not None:
+                    return (
+                        f"{self.map_type(operand_type)}::ZERO.wrapping_sub({operand})"
+                    )
+                return f"({operand}).wrapping_neg()"
+        if op == "!":
+            operand_type = self.normalize_scalar_type(
+                self.expression_result_type(operand_expr)
+            )
+            if operand_type is not None and operand_type != "bool":
+                zero_literal = "0.0" if operand_type in {"f16", "f32", "f64"} else "0"
+                return f"({operand} == {zero_literal})"
+        return f"({op}{operand})"
+
+    def rust_user_function_of_call(self, func_name):
+        """The program function a call names, also when it carries explicit type arguments (``pick<mat4>``)."""
+        if self.is_user_defined_function(func_name):
+            return func_name
+        if isinstance(func_name, str) and func_name.endswith(">"):
+            head = func_name.partition("<")[0]
+            if head and self.is_user_defined_function(head):
+                return head
+        return None
+
+    def is_rust_program_callable(self, callee):
+        """Whether ``callee`` names something the program defines: a local closure or a callable parameter, or an
+        associated function of a generic parameter or of a trait, struct or enum the program declares.
+        """
+        if not isinstance(callee, str) or not callee:
+            return False
+        if callee in self.variable_types or callee in self.local_variable_names:
+            return True
+        owner = callee.split("::", 1)[0] if "::" in callee else None
+        if owner is None:
+            return False
+        if owner in self.current_generic_param_names:
+            return True
+        return owner in getattr(self, "rust_program_type_names", ())
+
+    def is_rust_gpu_constructor_call(self, func_name, args):
+        """Whether ``func_name(args)`` builds a value: a scalar conversion, a glam vector or matrix, a struct or an
+        enum variant. Any other call that is neither a program function nor a rust-gpu built-in is refused.
+        """
+        if not isinstance(func_name, str):
+            return False
+        if self.enum_variant_call_info(func_name) is not None:
+            return True
+        if self.struct_constructor_call_type_name(func_name) is not None:
+            return True
+        if self.scalar_constructor_type(func_name) is not None:
+            return True
+        if self.vector_type_info(func_name) is not None:
+            return True
+        return self.matrix_type_info(func_name) is not None
+
+    def generate_increment_update(self, operand_expr, op):
+        """``x += 1`` or ``x -= 1``: a ``++``/``--`` whose value is not used."""
+        operand = self.generate_expression(operand_expr)
+        assignment_op = "+=" if op == "++" else "-="
+        increment = self.rust_increment_literal(
+            self.expression_result_type(operand_expr)
+        )
+        return f"{operand} {assignment_op} {increment}"
+
+    def generate_increment_value(self, expr, operand_expr, op):
+        """A ``++``/``--`` used as a value: a block that updates the place and yields the new or prior value.
+
+        A Rust compound assignment has type ``()``, so ``++x`` is ``{ x += 1; x }`` and ``x++`` reads the place
+        into a local first.
+        """
+        update = self.generate_increment_update(operand_expr, op)
+        if not is_reevaluable_place(operand_expr):
+            return self.refuse_lowering(
+                "increment used as a value: its operand has side effects, so the "
+                "value cannot be read back",
+                update,
+            )
+        place = self.generate_expression(operand_expr)
+        if getattr(expr, "is_postfix", getattr(expr, "postfix", False)):
+            return f"{{ let crosstl_prior = {place}; {update}; crosstl_prior }}"
+        return f"{{ {update}; {place} }}"
 
     def rust_increment_literal(self, operand_type):
         scalar_type = self.normalize_scalar_type(operand_type)

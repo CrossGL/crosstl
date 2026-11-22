@@ -11,7 +11,7 @@ import pytest
 
 import crosstl.translator
 from crosstl.project import ProjectConfig, translate_project
-from crosstl.translator.codegen import GLSL_codegen, glsl_affine_relations
+from crosstl.translator.codegen import glsl_affine_relations, opengl_wave_operations
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen, OpenGLIndexTypeError
 from tests.test_translator.test_metal_builtin_ownership import _compile
 
@@ -78,7 +78,9 @@ def test_guard_on_a_related_local_bounds_the_reversed_row(tmp_path, step):
 
 def test_reversed_row_is_unproven_without_the_relation(monkeypatch):
     monkeypatch.setattr(
-        GLSL_codegen, "related_local_interval", lambda *args, **kwargs: None
+        opengl_wave_operations,
+        "related_local_interval",
+        lambda *args, **kwargs: None,
     )
     with pytest.raises(OpenGLIndexTypeError, match="index range out of target range"):
         _generate()

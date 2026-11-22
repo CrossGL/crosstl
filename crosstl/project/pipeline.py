@@ -35,9 +35,13 @@ from crosstl.backend.Metal.auto_placeholders import (
     deduced_auto_type,
     is_auto_placeholder,
 )
+from crosstl.backend.Metal.bool_dispatch_callbacks import expand_bool_dispatch_callbacks
 from crosstl.backend.Metal.deduction_operand_types import (
     is_unary_sign_position,
     operand_expression_type,
+)
+from crosstl.backend.Metal.defaulted_template_arguments import (
+    primary_template_structs_by_name,
 )
 from crosstl.backend.Metal.function_specialization import (
     _explicit_template_function_specialization_for_selected_overload,
@@ -109,6 +113,10 @@ from crosstl.project.host_reflection import (
 from crosstl.project.integral_literals import (
     CFamilyIntegralLiteralError,
     parse_c_family_integral_literal,
+)
+from crosstl.project.metal_source_scans import (
+    next_identifier_scan_stop,
+    next_statement_scan_stop,
 )
 from crosstl.project.namespace_alias_scopes import (
     alias_visible_at,
@@ -12401,6 +12409,8 @@ def _project_workgroup_rule_execution_metadata(
         provenance = fallback_provenance
     else:
         return None
+    target_split_entries: tuple[str, ...] = ()
+    host_names: list[str] = []
     contract_details: dict[str, Any] = {"path": provenance["path"]}
     if fallback_source_pattern is not None and fallback_components is not None:
         contract_details.update(
@@ -12432,8 +12442,13 @@ def _project_workgroup_rule_execution_metadata(
         ]
         # Split artifacts retain one materialization, but rule coverage belongs
         # to the source's complete project selection, including sibling jobs.
+        # When the target holds one entry per artifact (glsl_entry_split), the
+        # siblings are every discovered entry of the unit.
+        selected_entry_points = _resolved_entry_points_for_unit(config, unit)
+        if entry_scoped and not selected_entry_points:
+            target_split_entries = per_entry_split(unit, target)
         rule_entry_points = (
-            _resolved_entry_points_for_unit(config, unit) or host_names
+            selected_entry_points or target_split_entries or host_names
             if entry_scoped
             else host_names
         )
@@ -12457,6 +12472,18 @@ def _project_workgroup_rule_execution_metadata(
                 },
                 materialization_details={"hostNames": sorted(rule_entry_points)},
             )
+    if (
+        target_split_entries
+        and fallback_components is None
+        and host_names
+        and not any(
+            _configured_entry_workgroup_size_rule(config, unit.relative_path, name)
+            for name in host_names
+        )
+    ):
+        # A one-entry artifact of a target split whose entry no rule names keeps
+        # the size the source or the host gives it, as an unconfigured unit does.
+        return None
     joined = _workgroup_materialization_join(
         stages=stages,
         materialization=materialization,
@@ -15104,6 +15131,8 @@ def _metal_find_implicit_template_function_calls(
     )
     included = list(included_spans) if included_spans is not None else None
     known_return_types = dict(return_types or {})
+    # Deduction compares an argument's trailing defaulted template arguments with the declared defaults.
+    template_structs_by_name: dict[str, Any] | None = None
     for function in functions:
         if (
             included is not None
@@ -15151,7 +15180,7 @@ def _metal_find_implicit_template_function_calls(
                 i = end + 2
                 continue
             if not (body[i].isalpha() or body[i] == "_"):
-                i += 1
+                i = next_identifier_scan_stop(body, i + 1, len(body))
                 continue
             ident, consumed = preprocessor._read_identifier(body, i)
             if preprocessor._is_member_identifier_context(body, i):
@@ -15181,12 +15210,17 @@ def _metal_find_implicit_template_function_calls(
                 work_budget=work_budget,
                 include_struct_members=False,
             )
+            if template_structs_by_name is None:
+                template_structs_by_name = primary_template_structs_by_name(
+                    preprocessor, source
+                )
             inferred_arguments = _infer_plain_template_helper_arguments(
                 preprocessor,
                 template,
                 arguments,
                 call_type_environment,
                 known_return_types,
+                template_structs_by_name=template_structs_by_name,
                 static_values=preprocessor._local_integral_constants_at(
                     integral_constants,
                     call_position,
@@ -15229,6 +15263,20 @@ class _MetalMaterializationTypeEnvironmentCache:
     ) = None
     struct_fields_by_name: dict[str, dict[str, str]] | None = None
     lexical_scopes: list[tuple[int, int]] | None = None
+    # The whole scoped statement scan of each function body, by body span, of ``statement_scan_source``.
+    statement_scans: dict[tuple[int, int], list[tuple[int, int]]] = field(
+        default_factory=dict
+    )
+    statement_scan_source: str | None = None
+
+    def statement_scans_of(
+        self, source: str
+    ) -> dict[tuple[int, int], list[tuple[int, int]]]:
+        """The statement scans of ``source``, dropping any kept for other text."""
+        if self.statement_scan_source is not source:
+            self.statement_scans = {}
+            self.statement_scan_source = source
+        return self.statement_scans
 
 
 @dataclass
@@ -16136,7 +16184,19 @@ def _collect_metal_template_type_bindings(
     ):
         return not actual_args
     if len(expected_args) > len(actual_args):
-        return False
+        # `Tile<float, 1, 1>` names `Tile<float, 1, 1, Frag<float, 8, 8>>`, so a parameter that spells the
+        # defaulted argument deduces it from the completed list ([temp.arg.general]/9).
+        declaration = (template_structs_by_name or {}).get(expected_base.lstrip(":"))
+        completed = (
+            preprocessor._template_arguments_with_resolved_defaults(
+                declaration, list(actual_args)
+            )
+            if declaration is not None
+            else None
+        )
+        if completed is None or len(expected_args) > len(completed):
+            return False
+        actual_args = completed
 
     staged_bindings = dict(bindings)
     for expected_arg, actual_arg in zip(
@@ -16693,6 +16753,9 @@ def _metal_statement_spans(source: str, start: int, end: int) -> list[tuple[int,
     paren_depth = bracket_depth = angle_depth = brace_depth = 0
     i = start
     while i < end:
+        i = next_statement_scan_stop(source, i, end)
+        if i >= end:
+            break
         if source[i] in "\"'":
             _literal, consumed = _read_metal_string_for_project(source, i)
             i += consumed
@@ -16748,15 +16811,53 @@ def _metal_scoped_statement_spans(
     end: int,
     position: int,
     lexical_scopes: Sequence[tuple[int, int]] | None = None,
+    scans: dict[tuple[int, int], list[tuple[int, int]]] | None = None,
 ) -> list[tuple[int, int]]:
+    """The statements of ``source[start:end]`` that end by ``position`` in a scope open at ``position``.
+
+    The scan runs left to right and its state at a character depends only on the characters before it, so the
+    statements a scan up to ``position`` finds are those of the whole range that end by ``position``. ``scans``
+    keeps each range's whole scan, so that the calls for several positions in one function scan it once.
+    """
     if lexical_scopes is None:
         lexical_scopes = preprocessor._find_lexical_brace_scopes(source)
+    if scans is None:
+        spans = _metal_scoped_statement_scan(source, start, min(end, position))
+    else:
+        whole = scans.get((start, end))
+        if whole is None:
+            whole = scans[(start, end)] = _metal_scoped_statement_scan(
+                source, start, end
+            )
+        spans = [span for span in whole if span[1] <= position]
+    active_scopes = {
+        scope for scope in lexical_scopes if scope[0] <= position < scope[1]
+    }
+    return [
+        span
+        for span in spans
+        if preprocessor._innermost_lexical_scope(
+            lexical_scopes,
+            span[0],
+            len(source),
+        )
+        in active_scopes
+    ]
+
+
+def _metal_scoped_statement_scan(
+    source: str, start: int, stop: int
+) -> list[tuple[int, int]]:
+    """The statement spans of ``source[start:stop]``; a block statement starts a new statement scan boundary."""
     spans: list[tuple[int, int]] = []
     statement_start = start
     paren_depth = bracket_depth = 0
     statement_scope_stack: list[bool] = []
     i = start
-    while i < min(end, position):
+    while i < stop:
+        i = next_statement_scan_stop(source, i, stop)
+        if i >= stop:
+            break
         if source[i] in "\"'":
             _literal, consumed = _read_metal_string_for_project(source, i)
             i += consumed
@@ -16826,20 +16927,7 @@ def _metal_scoped_statement_spans(
             if closes_statement_scope:
                 statement_start = i + 1
         i += 1
-
-    active_scopes = {
-        scope for scope in lexical_scopes if scope[0] <= position < scope[1]
-    }
-    return [
-        span
-        for span in spans
-        if preprocessor._innermost_lexical_scope(
-            lexical_scopes,
-            span[0],
-            len(source),
-        )
-        in active_scopes
-    ]
+    return spans
 
 
 def _read_metal_string_for_project(source: str, start: int) -> tuple[str, int]:
@@ -17680,6 +17768,7 @@ def _metal_function_type_environment(
                 if cache is not None and cache.lexical_scopes is not None
                 else None
             ),
+            cache.statement_scans_of(source) if cache is not None else None,
         )
     )
     for start, end in statement_spans:
@@ -18243,6 +18332,11 @@ class _SpanLookup:
         self._spans = merged
         self._starts = [start for start, _end in merged]
 
+    def next_start(self, position: int, default: int) -> int:
+        """The start of the first span that starts at or after ``position``, else ``default``."""
+        index = bisect.bisect_left(self._starts, position)
+        return self._starts[index] if index < len(self._starts) else default
+
     def containing(self, position: int) -> tuple[int, int] | None:
         index = bisect.bisect_right(self._starts, position) - 1
         if index < 0:
@@ -18290,7 +18384,11 @@ def _metal_template_reference_names(
                 i = min(excluded_span[1], scan_end)
                 continue
             if not (source[i].isalpha() or source[i] == "_"):
-                i += 1
+                # Nothing up to the next stop or excluded span acts; ``i`` is in no excluded span.
+                i = min(
+                    next_identifier_scan_stop(source, i + 1, scan_end),
+                    excluded.next_start(i + 1, scan_end),
+                )
                 continue
 
             ident, consumed = preprocessor._read_identifier(source, i)
@@ -18449,7 +18547,11 @@ def _plain_template_helper_call_sites(
                 )
                 i = paren_end + 1
                 continue
-            i += 1
+            # Nothing up to the next stop or excluded span acts; ``i`` is in no excluded span.
+            i = min(
+                next_identifier_scan_stop(source, i + 1, scan_end),
+                excluded.next_start(i + 1, scan_end),
+            )
     return calls
 
 
@@ -22711,6 +22813,7 @@ def _project_template_materialization_for_artifact(
         if cached is not None:
             return cached
         preprocessor._configure_integral_constant_contracts(preprocessed)
+        preprocessed = expand_bool_dispatch_callbacks(preprocessor, preprocessed)
         preprocessed = _canonicalize_metal_struct_template_aliases(
             preprocessor,
             preprocessed,
@@ -27627,6 +27730,7 @@ def _crossgl_ast_for_project_target(
     source_options: Mapping[str, Any],
     source_is_materialized: bool = False,
     frozen_constants: Sequence[Mapping[str, Any]] = (),
+    entry_point: str | None = None,
 ) -> Any:
     register_default_sources()
     source_spec = SOURCE_REGISTRY.get(source_backend)
@@ -27679,7 +27783,7 @@ def _crossgl_ast_for_project_target(
         intermediate.encode("utf-8")
     ).hexdigest()
     ast = fold_frozen_specialization_branches(ast, frozen_constants)
-    apply_rule_carrying(ast, original_source_backend, target)
+    apply_rule_carrying(ast, original_source_backend, target, entry_point)
     return ast
 
 
@@ -30096,6 +30200,7 @@ def _translate_project_impl(
                                 template_materialization is not None
                             ),
                             frozen_constants=specialization_constants,
+                            entry_point=selected_entry_point,
                         )
                         workgroup_execution = _project_workgroup_execution_metadata(
                             ast=crossgl_ast,
@@ -30433,6 +30538,7 @@ def _translate_project_impl(
                                 template_materialization is not None
                             ),
                             frozen_constants=specialization_constants,
+                            entry_point=selected_entry_point,
                         )
                         if dispatch_region is not None:
                             _validate_project_dispatch_region_execution(

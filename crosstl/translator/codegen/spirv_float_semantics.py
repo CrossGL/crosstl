@@ -14,8 +14,10 @@ section 6.5, HLSL ``isnan``/``fmod``), so this mixin lowers them through integer
 operations on the value's bits, which no floating-point optimisation may change:
 
 - ``isnan``, ``isinf`` and ``isfinite`` test the exponent and mantissa fields;
-- ``fmin``/``fmax`` (C99 7.12.12: a NaN operand yields the other operand) select
-  around ``FMin``/``FMax`` with those tests;
+- ``fmin``/``fmax`` (C99 7.12.12: a NaN operand yields the other operand) are
+  GLSL.std.450 ``NMin``/``NMax``, which define the same NaN rule (instructions 79
+  and 80), and select around them with those tests, because a driver may still
+  assume their operands are not NaNs;
 - the truncated remainder (C ``fmod`` and the C/HLSL ``%`` on floats) copies the
   dividend's sign bit onto the ``OpFRem`` result, which C99 F.9.7.1 requires for
   zero results as well.
@@ -34,7 +36,7 @@ FLOAT32_EXPONENT_MASK = 0x7F800000
 FLOAT64_HIGH_EXPONENT_MASK = 0x7FF00000
 
 FLOAT_CLASSIFICATION_FUNCTIONS = ("isnan", "isinf", "isfinite")
-NAN_AVOIDING_MIN_MAX_FUNCTIONS = {"fmin": "FMin", "fmax": "FMax"}
+NAN_AVOIDING_MIN_MAX_FUNCTIONS = {"fmin": "NMin", "fmax": "NMax"}
 
 
 class SpirvFloatSemanticsMixin:

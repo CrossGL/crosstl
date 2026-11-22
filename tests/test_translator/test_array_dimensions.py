@@ -112,7 +112,7 @@ def test_first_suffix_is_the_outermost_dimension():
         ("hip", "float a[2][3];"),
         ("wgsl", "var a: array<array<f32, 3>, 2>;"),
         ("rust", "let mut a: [[f32; 3]; 2]"),
-        ("mojo", "var a = InlineArray[InlineArray[Float32, 3], 2]"),
+        ("mojo", "var a = StaticTuple[StaticTuple[Float32, 3], 2]()"),
     ],
 )
 def test_every_emitter_declares_two_arrays_of_three(tmp_path, backend, declaration):

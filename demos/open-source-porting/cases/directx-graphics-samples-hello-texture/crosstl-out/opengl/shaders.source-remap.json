@@ -5,10 +5,10 @@
       "generated": {
         "column": 1,
         "endColumn": 1,
-        "endLine": 33,
-        "endOffset": 628,
+        "endLine": 45,
+        "endOffset": 943,
         "file": "crosstl-out/opengl/shaders.glsl",
-        "length": 628,
+        "length": 943,
         "line": 1,
         "offset": 0
       },

@@ -78,6 +78,12 @@ class HipTextureMixin:
             return "uint4"
         return "float4"
 
+    def is_sampled_resource_type(self, type_name):
+        """Whether ``type_name`` is a sampled texture, with float, int or uint texels."""
+        return isinstance(type_name, str) and type_name.startswith(
+            ("sampler", "isampler", "usampler")
+        )
+
     def is_sampled_texture_family_type(self, texture_type):
         texture_type = self.resource_base_type(texture_type)
         return (

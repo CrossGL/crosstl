@@ -5,12 +5,14 @@ from typing import List
 
 import pytest
 
+import crosstl
 from crosstl.backend.SPIRV import VulkanCrossGLCodeGen
 from crosstl.backend.SPIRV.VulkanLexer import VulkanLexer
 from crosstl.backend.SPIRV.VulkanParser import VulkanParser
 from crosstl.translator import parse as parse_crossgl
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.source_registry import BINARY_SPIRV_UNSUPPORTED_MESSAGE
 
@@ -5375,6 +5377,8 @@ SPIRV_TOOLS_PTR_ACCESS_CHAIN_ASSEMBLY = """
 ; Source path: test/opt/combine_access_chains_test.cpp
 ; Reduced from CombineAccessChainsTest OpPtrAccessChain fixtures and adapted
 ; to store through the derived pointers so CrossGL output exposes the lowering.
+; The Element operand moves the base pointer within the array the base points into,
+; and the Indexes then index the base's pointee (SPIR-V 1.6 OpPtrAccessChain).
 OpCapability Shader
 OpCapability VariablePointers
 OpCapability Addresses
@@ -5407,11 +5411,11 @@ OpDecorate %out_b Location 1
 %out_b = OpVariable %ptr_output_uint Output
 %main = OpFunction %void None %fn
 %label = OpLabel
-%access = OpAccessChain %ptr_workgroup_arr_uint %workgroup_values %uint_1
+%access = OpAccessChain %ptr_workgroup_uint %workgroup_values %uint_1 %uint_0
 %ptr_access = OpPtrAccessChain %ptr_workgroup_uint %access %uint_2
 %value = OpLoad %uint %ptr_access
 OpStore %out_a %value
-%in_bounds_ptr = OpInBoundsPtrAccessChain %ptr_workgroup_uint %workgroup_values %uint_0 %uint_1
+%in_bounds_ptr = OpInBoundsPtrAccessChain %ptr_workgroup_uint %workgroup_values %uint_0 %uint_0 %uint_1
 %value_in_bounds = OpLoad %uint %in_bounds_ptr
 OpStore %out_b %value_in_bounds
 OpReturn
@@ -5827,11 +5831,12 @@ def test_translate_api_accepts_spirv_source(tmp_path):
         str(shader_path), backend="rust", format_output=False
     )
 
-    assert '#[cfg_attr(feature = "crossgl_gpu", fragment_shader)]' in generated_code
-    assert "pub fn main()" in generated_code
+    assert "#[spirv(fragment)]" in generated_code
     assert (
-        "let color: Vec4<f32> = Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);" in generated_code
+        "pub fn main(#[spirv(location = 0)] out_cgl_FragColor: &mut Vec4) -> ()"
+        in generated_code
     )
+    assert "let color: Vec4 = Vec4::new(1.0, 0.0, 0.0, 1.0);" in generated_code
 
 
 def test_translate_api_rejects_binary_spv_source_with_clear_error(tmp_path):
@@ -5915,6 +5920,70 @@ def test_spirv_assembly_non_main_entrypoint_reparse_preserves_stage_body():
     assert re.search(r'OpEntryPoint Vertex %\d+ "vs_main"', downstream_code)
     assert downstream_code.count("OpFunction ") == 1
     assert "OpStore" in downstream_code
+
+
+@pytest.mark.parametrize(
+    ("entry_name", "helper_id", "debug_name", "expected_helper_name"),
+    [
+        ("vs", "helper", 'OpName %helper "main"', "main_fn_1"),
+        ("vs", "main", "", "main_fn_1"),
+        ("main", "position", "", "position"),
+    ],
+)
+def test_spirv_assembly_only_declared_entry_point_sets_stage(
+    tmp_path, entry_name, helper_id, debug_name, expected_helper_name
+):
+    assembly = f"""
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Vertex %vs "{entry_name}" %pos
+OpName %vs "{entry_name}"
+{debug_name}
+OpDecorate %pos BuiltIn Position
+%void = OpTypeVoid
+%float = OpTypeFloat 32
+%vec4 = OpTypeVector %float 4
+%entry_type = OpTypeFunction %void
+%helper_type = OpTypeFunction %vec4
+%output_type = OpTypePointer Output %vec4
+%zero = OpConstant %float 0
+%one = OpConstant %float 1
+%value = OpConstantComposite %vec4 %zero %zero %zero %one
+%pos = OpVariable %output_type Output
+%main_fn = OpFunction %vec4 None %helper_type
+%position_label = OpLabel
+OpReturnValue %value
+OpFunctionEnd
+%{helper_id} = OpFunction %vec4 None %helper_type
+%helper_label = OpLabel
+%helper_result = OpFunctionCall %vec4 %main_fn
+OpReturnValue %helper_result
+OpFunctionEnd
+%vs = OpFunction %void None %entry_type
+%entry_label = OpLabel
+%result = OpFunctionCall %vec4 %{helper_id}
+OpStore %pos %result
+OpReturn
+OpFunctionEnd
+"""
+
+    source = tmp_path / "position.spvasm"
+    source.write_text(assembly, encoding="utf-8")
+    generated_code = crosstl.translate(str(source), backend="cgl", format_output=False)
+    reparsed = parse_crossgl(generated_code)
+
+    assert set(reparsed.stages) == {ShaderStage.VERTEX}
+    assert reparsed.stages[ShaderStage.VERTEX].entry_point.name == entry_name
+    assert {function.name for function in reparsed.functions} == {
+        "main_fn",
+        expected_helper_name,
+    }
+    assert f"gl_Position = {expected_helper_name}();" in generated_code
+
+    glsl = crosstl.translate(str(source), backend="opengl", format_output=False)
+    assert glsl.count("void main()") == 1
+    assert f"vec4 {expected_helper_name}() {{" in glsl
+    assert f"gl_Position = {expected_helper_name}();" in glsl
 
 
 def test_spirv_assembly_multi_entrypoint_interfaces_scope_locations():
@@ -6126,7 +6195,7 @@ def test_spirv_assembly_matrix_interface_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "float4x4 model @input @location(0);" in generated_code
+    assert "mat4 model @input @location(0);" in generated_code
     assert "%model" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
@@ -6149,17 +6218,21 @@ def test_spirv_assembly_storage_buffer_block_name_collision_codegen_reparse():
     generated_code = generate_code(ast)
 
     parse_crossgl(generated_code)
-    assert generated_code.count("struct StructuredBuffer {") == 1
-    assert "RWStructuredBuffer<StructuredBuffer> index_buffer @set(0) @binding(5);" in (
-        generated_code
+    # A block named for the built-in StructuredBuffer type takes a trailing underscore instead of shadowing it.
+    assert "struct StructuredBuffer {" not in generated_code
+    assert generated_code.count("struct StructuredBuffer_ {") == 1
+    assert (
+        "RWStructuredBuffer<StructuredBuffer_> index_buffer @set(0) @binding(5);" in (
+            generated_code
+        )
     )
     assert (
-        "RWStructuredBuffer<StructuredBuffer> dynamic_index_buffer @set(0) @binding(9);"
+        "RWStructuredBuffer<StructuredBuffer_> dynamic_index_buffer @set(0) @binding(9);"
         in generated_code
     )
-    assert "struct StructuredBuffer_vertex_buffer {" in generated_code
+    assert "struct StructuredBuffer__vertex_buffer {" in generated_code
     assert (
-        "RWStructuredBuffer<StructuredBuffer_vertex_buffer> vertex_buffer "
+        "RWStructuredBuffer<StructuredBuffer__vertex_buffer> vertex_buffer "
         "@set(0) @binding(4);" in generated_code
     )
     assert "Unhandled statement type" not in generated_code
@@ -6415,7 +6488,7 @@ def test_glslang_simple_mat_matrix_times_vector_codegen_reparse():
 
     parse_crossgl(generated_code)
     assert "float4 glPos @output @location(5);" in generated_code
-    assert "float4x4 mvp @output @location(0);" in generated_code
+    assert "mat4 mvp @output @location(0);" in generated_code
     assert "float4 v @input @location(0);" in generated_code
     assert "glPos = (mvp * v);" in generated_code
     assert "glPos = transformed;" not in generated_code
@@ -6878,7 +6951,7 @@ def test_spirv_assembly_push_constant_block_codegen():
         "cbuffer PushConstants @push_constant @buffer_layout(std430) {"
         in generated_code
     )
-    assert "float4x4 model;" in generated_code
+    assert "mat4 model;" in generated_code
     assert "float4 tint;" in generated_code
     assert "%pc" not in generated_code
 
@@ -6891,7 +6964,7 @@ def test_spirv_assembly_uniform_block_codegen():
     assert (
         "cbuffer Camera @set(0) @binding(2) @buffer_layout(std140) {" in generated_code
     )
-    assert "float4x4 viewProj;" in generated_code
+    assert "mat4 viewProj;" in generated_code
     assert "float4 tint;" in generated_code
     assert "%camera" not in generated_code
 
@@ -8172,9 +8245,9 @@ def test_glslang_std450_matrix_extinst_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "float2x2 inputMatrix @input @location(0);" in generated_code
+    assert "mat2 inputMatrix @input @location(0);" in generated_code
     assert "float determinantOut @output @location(0);" in generated_code
-    assert "float2x2 inverseOut @output @location(1);" in generated_code
+    assert "mat2 inverseOut @output @location(1);" in generated_code
     assert "determinantOut = determinant(inputMatrix);" in generated_code
     assert "inverseOut = inverse(inputMatrix);" in generated_code
     assert "spirv_GLSL_std_450_Determinant" not in generated_code
@@ -8762,7 +8835,7 @@ def test_vulkan_layout_blocks_emit_crossgl_resources():
     assert ast.global_variables[1].layout_type == "BUFFER"
     assert ast.global_variables[2].data_type == "vec3"
     assert "cbuffer Camera" in generated_code
-    assert "float4x4 viewProj;" in generated_code
+    assert "mat4 viewProj;" in generated_code
     assert "struct Particles" in generated_code
     assert (
         "RWStructuredBuffer<Particles> particles @set(0) @binding(1);" in generated_code
@@ -8916,7 +8989,7 @@ def test_vulkan_uniform_block_instance_member_access_flattens_to_cbuffer_member(
     generated_code = generate_code(ast)
 
     assert "cbuffer Camera" in generated_code
-    assert "float4x4 viewProj;" in generated_code
+    assert "mat4 viewProj;" in generated_code
     assert "gl_Position = (viewProj * float4(position, 1.0));" in generated_code
     assert "camera.viewProj" not in generated_code
 
@@ -8951,10 +9024,10 @@ def test_vulkan_samples_grid_uniform_members_alias_interface_outputs():
 
     parse_crossgl(generated_code)
     assert "cbuffer Ubo @binding(0) {" in generated_code
-    assert "float4x4 ubo_projection;" in generated_code
-    assert "float4x4 ubo_view;" in generated_code
-    assert "float4x4 view @output @location(2);" in generated_code
-    assert "float4x4 projection @output @location(6);" in generated_code
+    assert "mat4 ubo_projection;" in generated_code
+    assert "mat4 ubo_view;" in generated_code
+    assert "mat4 view @output @location(2);" in generated_code
+    assert "mat4 projection @output @location(6);" in generated_code
     assert "view = ubo_view;" in generated_code
     assert "projection = ubo_projection;" in generated_code
     assert "view = view;" not in generated_code
@@ -8979,7 +9052,7 @@ def test_vulkan_push_constant_block_emits_marked_cbuffer():
     assert ast.global_variables[0].push_constant is True
     assert "cbuffer PushConstants @push_constant {" in generated_code
     assert "cbuffer PushConstants {\n" not in generated_code
-    assert "float4x4 model;" in generated_code
+    assert "mat4 model;" in generated_code
     assert "float4 tint;" in generated_code
     assert "gl_Position = (model * float4(1.0, 0.0, 0.0, 1.0));" in generated_code
     assert "pc.model" not in generated_code
@@ -8998,7 +9071,7 @@ def test_vulkan_layout_blocks_preserve_array_members():
         ("vec4", "positions[128]"),
         ("float", "masses[128]"),
     ]
-    assert "float4x4 transforms[64];" in generated_code
+    assert "mat4 transforms[64];" in generated_code
     assert "float4 weights[4];" in generated_code
     assert "float4 positions[128];" in generated_code
     assert "float masses[128];" in generated_code
@@ -9028,7 +9101,7 @@ def test_vulkan_layout_blocks_preserve_custom_struct_members():
     assert "float3 position;" in generated_code
     assert "cbuffer Scene" in generated_code
     assert "Light lights[4];" in generated_code
-    assert "float4x4 view;" in generated_code
+    assert "mat4 view;" in generated_code
 
 
 def test_vulkan_custom_struct_uniform_type_codegen():
@@ -9739,28 +9812,13 @@ def test_translate_api_accepts_spirv_layout_source(tmp_path):
     shader_path = tmp_path / "layout_vertex.spvasm"
     shader_path.write_text(LAYOUT_SHADER, encoding="utf-8")
 
-    generated_code = crosstl.translate(
-        str(shader_path), backend="rust", format_output=False
-    )
-
-    assert "pub struct Particles" in generated_code
-    assert (
-        "static VIEW_PROJ: std::sync::LazyLock<Mat4<f32>> = "
-        "std::sync::LazyLock::new(|| Default::default());" in generated_code
-    )
-    assert (
-        "static PARTICLES: std::sync::LazyLock<RWStructuredBuffer<Particles>> = "
-        "std::sync::LazyLock::new(|| Default::default());" in generated_code
-    )
-    assert (
-        "static POSITION: std::sync::LazyLock<Vec3<f32>> = "
-        "std::sync::LazyLock::new(|| Default::default());" in generated_code
-    )
-    assert (
-        "gl_Position = Vec4::<f32>::new((*POSITION).x, (*POSITION).y, "
-        "(*POSITION).z, 1.0);" in generated_code
-    )
-    assert '#[cfg_attr(feature = "crossgl_gpu", vertex_shader)]' in generated_code
+    # The uniform block imports as a CrossGL constant buffer, which the rust-gpu output does not bind yet; it is
+    # refused rather than written as a default-valued static.
+    with pytest.raises(
+        RustLoweringRefused,
+        match="constant buffers are not lowered to rust-gpu uniform blocks",
+    ):
+        crosstl.translate(str(shader_path), backend="rust", format_output=False)
 
 
 def test_translate_api_accepts_spirv_push_constant_layout_source(tmp_path):
@@ -9783,18 +9841,14 @@ def test_translate_api_accepts_spirv_push_constant_layout_source(tmp_path):
     generated_cgl = crosstl.translate(
         str(shader_path), backend="cgl", format_output=False
     )
-    generated_rust = crosstl.translate(
-        str(shader_path), backend="rust", format_output=False
-    )
-
     assert "cbuffer PushConstants @push_constant {" in generated_cgl
     assert "pc.model" not in generated_cgl
-    assert "pub struct PushConstants" in generated_rust
-    assert (
-        "static MODEL: std::sync::LazyLock<Mat4<f32>> = "
-        "std::sync::LazyLock::new(|| Default::default());" in generated_rust
-    )
-    assert '#[cfg_attr(feature = "crossgl_gpu", vertex_shader)]' in generated_rust
+    # The push-constant block is a CrossGL constant buffer, which the rust-gpu output refuses for now.
+    with pytest.raises(
+        RustLoweringRefused,
+        match="constant buffers are not lowered to rust-gpu uniform blocks",
+    ):
+        crosstl.translate(str(shader_path), backend="rust", format_output=False)
 
 
 def test_vulkan_bitwise_shift_precedence_codegen():
@@ -10467,7 +10521,7 @@ def test_const_vector_declaration_codegen_maps_base_type():
     assert "const vec3 tint" not in generated_code
 
 
-def test_const_matrix_global_declaration_codegen_maps_base_type():
+def test_const_matrix_global_declaration_codegen_keeps_crossgl_matrix_type():
     code = """
     const mat4 VIEW = mat4(1.0);
     void main() {}
@@ -10477,8 +10531,9 @@ def test_const_matrix_global_declaration_codegen_maps_base_type():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "const float4x4 VIEW = float4x4(1.0);" in generated_code
-    assert "const mat4 VIEW" not in generated_code
+    # CrossGL spells a square matrix matN, which its matrix passes recognize; floatNxN is a plain type name.
+    assert "const mat4 VIEW = mat4(1.0);" in generated_code
+    assert "float4x4" not in generated_code
 
 
 def test_const_global_declaration_codegen():

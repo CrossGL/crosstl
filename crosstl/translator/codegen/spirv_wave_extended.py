@@ -3,8 +3,10 @@
 Covers the extended operations of ``crosstl.translator.wave_operations`` (scans with min, max and bitwise
 operators, clustered reductions and ballot arithmetic) and the Shader Model 6 operations the arithmetic and vote
 paths of the generator did not reach: ``WaveActiveAllEqual``, ``WaveActiveCountBits``, ``WavePrefixCountBits``,
-``QuadActiveSum`` and the bitwise reductions of ``bool`` values, which are the logical group operations. Each lowers
-to the instruction glslang emits for the matching GL_KHR_shader_subgroup function.
+``QuadActiveSum``, the quad votes ``QuadAll`` and ``QuadAny`` and the bitwise reductions of ``bool`` values, which
+are the logical group operations. Each lowers to the instruction glslang emits for the matching GL_KHR_shader_subgroup
+or GL_EXT_shader_quad_control function; the quad votes are SPV_KHR_quad_control's ``OpGroupNonUniformQuadAllKHR``
+and ``OpGroupNonUniformQuadAnyKHR``, which take no execution scope.
 """
 
 from __future__ import annotations
@@ -228,6 +230,28 @@ def _lower_all_equal(codegen, operation, args):
     return _result(codegen, id_value, bool_type)
 
 
+_QUAD_VOTES = {
+    "QuadAll": "OpGroupNonUniformQuadAllKHR",
+    "QuadAny": "OpGroupNonUniformQuadAnyKHR",
+}
+
+
+def _lower_quad_vote(codegen, operation, args):
+    bool_type = codegen.register_primitive_type("bool")
+    if len(args) != 1 or codegen.ensure_registered_type(args[0].type) != bool_type:
+        return _refuse(codegen, operation, args, "requires one scalar bool argument")
+    # glslang declares GroupNonUniformVote with QuadControlKHR, as GL_EXT_shader_quad_control requires
+    # GL_KHR_shader_subgroup_vote.
+    codegen.require_group_non_uniform("GroupNonUniformVote")
+    codegen.require_capability("QuadControlKHR")
+    codegen.require_extension("SPV_KHR_quad_control")
+    id_value = codegen.get_id()
+    codegen.emit(
+        f"%{id_value} = {_QUAD_VOTES[operation]} %{bool_type.id} %{args[0].id}"
+    )
+    return _result(codegen, id_value, bool_type)
+
+
 def lower_spirv_wave_extension(codegen, operation, argument_exprs, args):
     """Lower ``operation`` and return its value, or ``None`` when another path of the generator owns it."""
     if wave_operation_operator(operation) is not None:
@@ -238,6 +262,8 @@ def lower_spirv_wave_extension(codegen, operation, argument_exprs, args):
         return _lower_predicate_count(codegen, operation, args)
     if operation == "WaveActiveAllEqual":
         return _lower_all_equal(codegen, operation, args)
+    if operation in _QUAD_VOTES:
+        return _lower_quad_vote(codegen, operation, args)
     if operation == "QuadActiveSum":
         if len(args) != 1:
             return _refuse(codegen, operation, args, "requires exactly one argument")

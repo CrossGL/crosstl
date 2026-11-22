@@ -16,6 +16,7 @@ from .alias_template_types import (
     fold_expression_decltypes,
 )
 from .array_element_receivers import array_element_receiver_end, array_rank_at
+from .bool_dispatch_callbacks import expand_bool_dispatch_callbacks
 from .call_result_types import CallResultScope, infer_call_result_type
 from .class_argument_precedence import class_identity_template_outranks
 from .concrete_qualified_aliases import resolve_concrete_qualified_type_aliases
@@ -120,6 +121,7 @@ from .preprocessing.template_struct_arguments import MetalTemplateStructArgument
 from .preprocessing.temporary_functors import MetalTemporaryFunctorMixin
 from .preprocessing.type_inference import MetalTypeInferenceMixin
 from .preprocessing.type_traits import MetalTypeTraitMixin
+from .reference_binding import member_call_result
 from .return_type_enablers import fold_concrete_enablers
 from .simd_group_template_overloads import (
     canonicalize_struct_template_ids,
@@ -128,7 +130,10 @@ from .simd_group_template_overloads import (
 )
 from .source_analysis_cache import SourceAnalysisCache
 from .specialized_member_types import specialized_member_type_template_names
-from .static_member_constants import materialized_struct_for_template_id
+from .static_member_constants import (
+    materialized_struct_for_template_id,
+    static_member_constant_substituter,
+)
 from .swizzle_types import infer_swizzle_type
 from .template_carried_reachability import template_carried_reachable_spans
 from .template_constants import unresolved_constant_references
@@ -370,6 +375,9 @@ class MetalPreprocessor(
                 )
         self._configure_inferred_bitcast_ownership(processed)
         self._configure_integral_constant_contracts(processed)
+        # Generic-lambda callbacks of a Boolean dispatch helper become their two
+        # instantiations, so `p.value` is a constant for the passes below.
+        processed = expand_bool_dispatch_callbacks(self, processed)
         # Assertions over constexpr aggregates and operators, such as MLX's
         # `(complex_t<half>{1, 2} * complex_t<half>{3, 4}).real == -5`, are decided while the struct templates and
         # their operators are still spelled as in the source, as template materialization decides them; an
@@ -2435,6 +2443,13 @@ class MetalPreprocessor(
         if known_member_call is not None:
             return known_member_call
 
+        # `receiver.method(args)` on a tracked struct (reference_binding.py).
+        receiver_call = member_call_result(
+            self, expr, local_variable_types, structs_by_name
+        )
+        if receiver_call is not None:
+            return receiver_call[0]
+
         # A call to a source function whose declarations agree on one return type.
         call_result = infer_call_result_type(
             self, expr, self._call_result_scope, local_variable_types, structs_by_name
@@ -2755,6 +2770,10 @@ class MetalPreprocessor(
             local_type_aliases,
             constexpr_functions,
             include_file_scope=True,
+            # `constexpr short TM = Tile::kRows;` is a constant expression too.
+            static_member_constants=static_member_constant_substituter(
+                self, concrete_structs
+            ),
         )
         resolved_calls: List[Tuple[str, List[str], Tuple[int, int]]] = []
         for function_name, template_arguments, span in calls:

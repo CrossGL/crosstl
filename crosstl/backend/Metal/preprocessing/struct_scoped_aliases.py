@@ -1,5 +1,6 @@
 """Struct-scope type aliases and alias templates: collection, materialization and canonicalization."""
 
+import copy
 import re
 from typing import (
     Dict,
@@ -11,6 +12,7 @@ from typing import (
 )
 
 from ..pattern_cache import pattern as _cached_pattern
+from ..source_analysis_cache import memoized
 from ..struct_head_specifiers import (
     alignment_is_natural,
     skip_struct_head_specifiers,
@@ -28,6 +30,22 @@ class MetalStructScopedAliasMixin:
     """Members of ``MetalPreprocessor``: struct-scope type aliases and alias templates: collection, materialization and canonicalization."""
 
     def _find_concrete_struct_definitions(
+        self, code: str
+    ) -> List[_MetalStructDefinition]:
+        """The concrete struct definitions of ``code``, computed once per source text.
+
+        The scan depends on the text only, and one source is queried many times while it is materialized. Callers
+        get their own shallow copies, so one may rebind a field such as ``span``; the member lists and tables in
+        them are shared and must not be mutated.
+        """
+        definitions = memoized(
+            self._source_analysis(code).values,
+            "concrete_struct_definitions",
+            lambda: tuple(self._scan_concrete_struct_definitions(code)),
+        )
+        return [copy.copy(definition) for definition in definitions]
+
+    def _scan_concrete_struct_definitions(
         self, code: str
     ) -> List[_MetalStructDefinition]:
         # Locate every concrete (non-template) `struct/class/union Name { ... };`

@@ -3,8 +3,11 @@
 from ...assignment_operands import grouped_operand
 from ...bfloat16_conversions import format_bfloat16_conversion
 from ...thread_hierarchy import global_invocation_axis
+from ..bit_intrinsics import format_bit_intrinsic
 from ..CudaAst import UnaryOpNode
-from ..directed_rounding import refuse_directed_rounding
+from ..directed_rounding import directed_rounding_call, refuse_directed_rounding
+from ..function_templates import generic_call_name
+from ..pointer_math_import import format_pointer_output_call
 from ..sizeof_operands import sizeof_type_operand
 
 
@@ -76,7 +79,19 @@ class CudaImportIntrinsicMixin:
         if raw_name == "cuda_comma_expression":
             return self.format_cuda_comma_expression(node.args)
 
+        if not self.is_user_defined_function(raw_name):
+            pointer_output_call = format_pointer_output_call(
+                self, raw_name, node.args, UnaryOpNode
+            )
+            if pointer_output_call is not None:
+                return pointer_output_call
+
         args = [self.visit(arg) for arg in node.args]
+        # Names with a double underscore are reserved to the implementation (C++ [lex.name]), so these are the
+        # intrinsics even where a program function shares the name.
+        bit_intrinsic = format_bit_intrinsic(self, raw_name, node.args, args, "CUDA")
+        if bit_intrinsic is not None:
+            return bit_intrinsic
         if raw_name == "sizeof" and len(args) == 1 and isinstance(node.args[0], str):
             # The type operand of ``sizeof(let)`` names the struct as its declaration does.
             args = [
@@ -84,6 +99,9 @@ class CudaImportIntrinsicMixin:
                 or self.rename_keyword_record_names(args[0])
             ]
         args_str = ", ".join(args)
+        device_heap_call = self.format_device_heap_call(raw_name, args)
+        if device_heap_call is not None:
+            return device_heap_call
         make_unique = self.format_make_unique_call(raw_name, args)
         if make_unique is not None:
             return make_unique
@@ -97,6 +115,11 @@ class CudaImportIntrinsicMixin:
             if integer_intrinsic is not None:
                 return integer_intrinsic
 
+        generic_call = generic_call_name(
+            raw_name, self.function_templates, self.convert_cuda_type_to_crossgl
+        )
+        if generic_call is not None:
+            return f"{generic_call}({args_str})"
         if self.is_user_defined_function(raw_name):
             # A call names the function as its declaration does, ``let_`` for ``let``.
             func_name = (
@@ -131,6 +154,11 @@ class CudaImportIntrinsicMixin:
         if warp_intrinsic is not None:
             return warp_intrinsic
 
+        directed_rounding = directed_rounding_call(
+            self.directed_rounding, raw_name, args
+        )
+        if directed_rounding is not None:
+            return directed_rounding
         refuse_directed_rounding(raw_name)
         bfloat16_conversion = format_bfloat16_conversion(raw_name, args)
         if bfloat16_conversion is not None:
@@ -168,6 +196,34 @@ class CudaImportIntrinsicMixin:
         ):
             func_name = self.convert_cuda_function_name_to_crossgl(raw_name)
         return f"{func_name}({args_str})"
+
+    def format_device_heap_call(self, function_name, args):
+        """Refuse ``malloc``/``free`` in device code, like ``delete`` (#4684).
+
+        CrossGL has no device heap, so a device-side heap call has no faithful
+        form. Host code keeps the ordinary call; a user-defined ``malloc`` or
+        ``free`` is not a heap call either.
+        """
+        if not self.in_device_code or not isinstance(function_name, str):
+            return None
+        normalized_name = (
+            function_name[2:] if function_name.startswith("::") else function_name
+        )
+        if normalized_name not in {
+            "malloc",
+            "free",
+            "std::malloc",
+            "std::free",
+        }:
+            return None
+        if self.is_user_defined_function(
+            function_name
+        ) or self.is_user_defined_function(normalized_name):
+            return None
+        return self.refuse_import(
+            f"CUDA {normalized_name}({', '.join(args)}): CrossGL has no device heap",
+            "0",
+        )
 
     def format_cuda_time_function_call(self, function_name, args):
         if not isinstance(function_name, str):
@@ -306,14 +362,12 @@ class CudaImportIntrinsicMixin:
         }:
             return None
 
-        return self.format_unsupported_cuda_block_sync_vote(function_name, args)
-
-    def format_unsupported_cuda_block_sync_vote(self, function_name, args):
-        return self.refuse_import(
-            f"CUDA thread block sync vote {function_name}({', '.join(args)}): CrossGL has no barrier that "
-            "reduces a predicate",
-            "0",
-        )
+        if len(args) != 1:
+            return self.refuse_import(
+                f"CUDA thread block sync vote {function_name}({', '.join(args)}) takes one predicate",
+                "0",
+            )
+        return self.block_votes.call(function_name, self.format_wave_predicate(args[0]))
 
     def format_cuda_fp16_intrinsic_call(self, function_name, args):
         if isinstance(function_name, str) and function_name.startswith("::"):
@@ -450,12 +504,8 @@ class CudaImportIntrinsicMixin:
             return f"(({args[0]} & 0x00ffffffu) * ({args[1]} & 0x00ffffffu))"
         if function_name == "__dp4a" and len(args) == 3:
             return f"(dot4I8Packed({args[0]}, {args[1]}) + {args[2]})"
-        if function_name == "__byte_perm" and len(args) == 3:
-            return self.format_cuda_byte_perm_intrinsic(args[0], args[1], args[2])
         if function_name in {"__ffs", "__ffsll"} and len(args) == 1:
             return f"(findLSB({args[0]}) + 1)"
-        if function_name in {"__clz", "__clzll"} and len(args) == 1:
-            return f"countLeadingZeros({args[0]})"
         if function_name in {"__brev", "__brevll"} and len(args) == 1:
             return f"bitfieldReverse({args[0]})"
         if function_name in {"__hadd", "__uhadd"} and len(args) == 2:
@@ -472,13 +522,6 @@ class CudaImportIntrinsicMixin:
         if function_name == "__usad4" and len(args) in {2, 3}:
             bias = args[2] if len(args) == 3 else "0u"
             return self.format_cuda_usad4_intrinsic(args[0], args[1], bias)
-        if function_name in {
-            "__funnelshift_l",
-            "__funnelshift_lc",
-            "__funnelshift_r",
-            "__funnelshift_rc",
-        }:
-            return self.format_cuda_integer_intrinsic_diagnostic(function_name, args)
         return None
 
     def format_cuda_usad4_intrinsic(self, left, right, bias):
@@ -507,30 +550,6 @@ class CudaImportIntrinsicMixin:
         if shift == 0:
             return f"({operand} & 0xffu)"
         return f"(({operand} >> {shift}) & 0xffu)"
-
-    def format_cuda_integer_intrinsic_diagnostic(self, function_name, args):
-        return self.refuse_import(
-            f"CUDA integer intrinsic {function_name}({', '.join(args)}) has no CrossGL form",
-            "0",
-        )
-
-    def format_cuda_byte_perm_intrinsic(self, left, right, selector):
-        normalized_selector = self.normalize_cuda_integer_literal(selector)
-        if normalized_selector in {"0x0123", "0x123"}:
-            return self.format_cuda_byte_swap_32(left)
-
-        return self.format_cuda_integer_intrinsic_diagnostic(
-            "__byte_perm", [left, right, selector]
-        )
-
-    def format_cuda_byte_swap_32(self, value):
-        operand = self.format_bitwise_operand(value)
-        return (
-            f"(((({operand} & 0x000000ffu) << 24) | "
-            f"(({operand} & 0x0000ff00u) << 8)) | "
-            f"((({operand} & 0x00ff0000u) >> 8) | "
-            f"(({operand} & 0xff000000u) >> 24)))"
-        )
 
     def normalize_cuda_integer_literal(self, value):
         text = str(value).strip().replace("'", "").lower()
@@ -580,8 +599,11 @@ class CudaImportIntrinsicMixin:
 
         if function_name == "__saturatef" and len(args) == 1:
             return f"clamp({args[0]}, 0.0f, 1.0f)"
+        # fdivide and fdividef return a / b unless fast math is on (__clang_cuda_math.h); __fdividef is the fast form.
         if (
             function_name in {
+                "fdivide",
+                "fdividef",
                 "__fdividef",
                 "__fdiv_rd",
                 "__fdiv_rn",

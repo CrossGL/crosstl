@@ -2430,7 +2430,6 @@ def test_scan_project_skips_known_unsupported_source_artifacts(
 
     expected_skipped = [
         {"path": "future.wesl", "reason": "unsupported-extension"},
-        {"path": "future.wgsl", "reason": "unsupported-extension"},
         {"path": "generated.webgl.glsl", "reason": "unsupported-extension"},
         {"path": "generated.webgl.glsl.json", "reason": "unsupported-extension"},
     ]
@@ -2443,12 +2442,12 @@ def test_scan_project_skips_known_unsupported_source_artifacts(
         ".webgl.glsl": 1,
         ".webgl.glsl.json": 1,
         ".wesl": 1,
-        ".wgsl": 1,
     }
     if explicit_include:
         expected_skipped_by_extension[".spv"] = 1
 
-    assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
+    # The WGSL front end reads .wgsl modules; WESL modules stay refused.
+    assert [unit.relative_path for unit in scan.units] == ["future.wgsl", "simple.cgl"]
     assert scan.skipped == expected_skipped
     assert payload["summary"]["skippedByReason"] == {
         "unsupported-extension": len(expected_skipped),
@@ -2465,10 +2464,11 @@ def test_scan_project_skips_known_unsupported_source_artifacts(
         assert (
             "Binary SPIR-V input files" in diagnostics_by_file["compiled.spv"].message
         )
-    assert diagnostics_by_file["future.wgsl"].code == "project.scan.unsupported-source"
-    assert "WGSL/WebGPU source files" in diagnostics_by_file["future.wgsl"].message
+    assert "future.wgsl" not in diagnostics_by_file
     assert diagnostics_by_file["future.wesl"].code == "project.scan.unsupported-source"
-    assert "WGSL/WebGPU source files" in diagnostics_by_file["future.wesl"].message
+    assert (
+        "provide the WGSL module (.wgsl)" in diagnostics_by_file["future.wesl"].message
+    )
     assert (
         diagnostics_by_file["generated.webgl.glsl"].code
         == "project.scan.unsupported-source"
@@ -2522,14 +2522,9 @@ def test_scan_project_reports_wgsl_unsupported_macro_forms_with_variant_context(
     }
 
     assert validation["success"] is True
-    assert payload["skipped"] == [
-        {"path": "shaders/native.wgsl", "reason": "unsupported-extension"}
-    ]
-    assert set(diagnostics_by_code) == {
-        "project.scan.empty",
-        "project.scan.unsupported-source",
-        "project.scan.unsupported-macro-form",
-    }
+    # The WGSL front end reads the module; its preprocessor lines are not WGSL and are reported.
+    assert payload["skipped"] == []
+    assert set(diagnostics_by_code) == {"project.scan.unsupported-macro-form"}
     macro_diagnostic = diagnostics_by_code["project.scan.unsupported-macro-form"]
     assert macro_diagnostic["sourceBackend"] == "wgsl"
     assert macro_diagnostic["variant"] == "debug"
@@ -2540,17 +2535,11 @@ def test_scan_project_reports_wgsl_unsupported_macro_forms_with_variant_context(
         macro_diagnostic["message"]
     )
     assert payload["summary"]["diagnosticsByCode"] == {
-        "project.scan.empty": 1,
         "project.scan.unsupported-macro-form": 1,
-        "project.scan.unsupported-source": 1,
     }
     assert payload["summary"]["diagnosticsBySourceBackend"] == {"wgsl": 1}
     assert payload["summary"]["diagnosticsByVariant"] == {"debug": 1}
-    assert payload["summary"]["missingCapabilityCounts"] == {
-        "macro.native": 1,
-        "repo.scan": 1,
-        "source.discovery": 1,
-    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"macro.native": 1}
 
 
 def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units(tmp_path):
@@ -7747,7 +7736,10 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     assert "layout(location = 5) out vec2 out_uv;" in opengl
     assert "layout(location = 5) in vec2 out_uv;" in opengl
     assert "layout(location = 0) out vec4 fragColor;" in opengl
-    assert "fragColor = texture(g_texture, out_uv);" in opengl
+    assert (
+        "fragColor = texture(CROSSGL_SAMPLED(sampler2D(g_texture, g_sampler), g_texture),"
+        " out_uv);"
+    ) in opengl
     assert "vec4 PSMain(PSInput input)" not in opengl
     assert "void main() {\n}" not in opengl
     assert "PSInput" not in opengl
@@ -11255,30 +11247,20 @@ def test_translate_project_rust_sampled_texture_uses_entry_resource_parameters(
     payload = report.to_json()
     output = repo / "translated" / "rust" / "shaders" / "sampled.rs"
 
-    assert output.exists()
-    rust_code = output.read_text(encoding="utf-8")
-    assert payload["summary"]["translatedCount"] == 1
-    assert (
-        "// CrossGL resource metadata: name=colorMap kind=texture set=1 "
-        "binding=2 binding_source=explicit" in rust_code
-    )
-    assert (
-        "// CrossGL resource metadata: name=linearSampler kind=sampler set=1 "
-        "binding=3 binding_source=explicit" in rust_code
-    )
-    assert (
-        '#[cfg_attr(feature = "crossgl_gpu", '
-        "spirv(descriptor_set = 1, binding = 2))] colorMap: Texture2D<f32>" in rust_code
-    )
-    assert (
-        '#[cfg_attr(feature = "crossgl_gpu", '
-        "spirv(descriptor_set = 1, binding = 3))] linearSampler: Sampler" in rust_code
-    )
-    assert "return sample_sampler(colorMap, linearSampler, uv);" in rust_code
-    assert "CrossGL Rust limitation: resource colorMap" not in rust_code
-    assert "CrossGL Rust limitation: resource linearSampler" not in rust_code
-    assert "static COLOR_MAP" not in rust_code
-    assert "static LINEAR_SAMPLER" not in rust_code
+    # rust-gpu output does not bind textures and samplers yet: the file is refused by resource name, with no
+    # output and no placeholder, instead of writing default-valued statics.
+    assert not output.exists()
+    assert payload["summary"]["translatedCount"] == 0
+    messages = [
+        diagnostic["message"]
+        for diagnostic in payload["diagnostics"]
+        if diagnostic.get("target") == "rust"
+    ]
+    assert any(
+        "resource: 'colorMap' (sampler2D) is not lowered to a rust-gpu resource binding"
+        in message
+        for message in messages
+    ), messages
     assert not [
         diagnostic
         for diagnostic in payload["diagnostics"]
@@ -11299,7 +11281,8 @@ def test_translate_project_rust_storage_buffer_is_bound_as_entry_parameter(
                 RWStructuredBuffer<int> values @binding(0);
 
                 compute {
-                    void main(uint index) {
+                    void main() {
+                        uint index = gl_GlobalInvocationID.x;
                         int value = buffer_load(values, index);
                         buffer_store(values, index, value + 1);
                     }
@@ -11336,9 +11319,10 @@ def test_translate_project_rust_storage_buffer_is_bound_as_entry_parameter(
     assert "CrossGL Rust limitation" not in rust_code
     assert "static VALUES" not in rust_code
     assert (
-        '#[cfg_attr(feature = "crossgl_gpu", spirv(storage_buffer, descriptor_set = 0, '
-        "binding = 0))] values: RWStructuredBuffer<i32>"
-    ) in rust_code
+        "#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] values: &mut [i32]"
+        in rust_code
+    )
+    assert "values[index as usize] = (value + 1);" in rust_code
     assert placeholder_diagnostics == []
     assert validate_project_report(report_path)["success"] is True
 
@@ -23616,6 +23600,102 @@ def test_translate_project_runs_pinned_slang_external_corpus_fixture(tmp_path):
             }
         },
     }
+    assert external_corpus["entries"] == [
+        {
+            **manifest_entry,
+            "present": True,
+            "discovered": True,
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        }
+    ]
+
+
+def test_translate_project_runs_pinned_wgsl_external_corpus_fixture(tmp_path):
+    support_manifest = json.loads(
+        (ROOT / "tests" / "fixtures" / "external-corpus.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    manifest_entry = next(
+        entry
+        for entry in support_manifest["entries"]
+        if entry["id"] == "wgpu-standalone-hello-compute"
+    )
+    repo = tmp_path / "repo"
+    source_path = repo / manifest_entry["path"]
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        textwrap.dedent("""
+            @group(0) @binding(0)
+            var<storage, read> input: array<f32>;
+            @group(0) @binding(1)
+            var<storage, read_write> output: array<f32>;
+
+            @compute @workgroup_size(64)
+            fn doubleMe(@builtin(global_invocation_id) global_id: vec3<u32>) {
+                let index = global_id.x;
+                let array_length = arrayLength(&input);
+                if (global_id.x >= array_length) {
+                    return;
+                }
+                output[global_id.x] = input[global_id.x] * 2.0;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "name": "Pinned WGSL project fixture",
+                "entries": [manifest_entry],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["examples"]
+            targets = ["cgl"]
+            output_dir = "out"
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    artifact = payload["artifacts"][0]
+    translated = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    assert validation["success"] is True
+    assert payload["summary"]["unitsBySourceBackend"] == {"wgsl": 1}
+    assert payload["summary"]["artifactsBySourceBackend"] == {
+        "wgsl": {"artifactCount": 1, "translatedCount": 1, "failedCount": 0}
+    }
+    assert artifact["source"] == manifest_entry["path"]
+    assert artifact["sourceBackend"] == "wgsl"
+    assert artifact["target"] == "cgl"
+    assert artifact["status"] == "translated"
+    assert artifact["path"] == (
+        "out/cgl/examples/standalone/01_hello_compute/src/shader.cgl"
+    )
+    assert "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;" in (
+        translated
+    )
+    assert "buffer_dimensions(input_)" in translated
+    assert "output_[global_id.x] = (input_[global_id.x] * 2.0);" in translated
+    external_corpus = payload["externalCorpus"]
+    assert external_corpus["status"] == "ok"
+    assert external_corpus["summary"]["entriesBySourceBackend"] == {"wgsl": 1}
+    assert external_corpus["summary"]["presentCount"] == 1
+    assert external_corpus["summary"]["discoveredUnitCount"] == 1
     assert external_corpus["entries"] == [
         {
             **manifest_entry,
@@ -49214,7 +49294,10 @@ def test_translate_project_metal_matmul_uint2_grid_id_normalizes_for_compute_tar
     assert "uint2 id" not in hip
 
     mojo = outputs["mojo"]
-    assert "id_globalInvocationID: SIMD[DType.uint32, 4]" in mojo
+    assert (
+        "var id_globalInvocationID = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+        "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+    ) in mojo
     assert (
         "var id: SIMD[DType.uint32, 2] = "
         "SIMD[DType.uint32, 2](id_globalInvocationID[0], "
@@ -49224,11 +49307,12 @@ def test_translate_project_metal_matmul_uint2_grid_id_normalizes_for_compute_tar
     assert "var col: UInt32 = id[0]" in mojo
 
     rust = outputs["rust"]
-    assert "id_globalInvocationID: Vec3<u32>" in rust
+    assert "#[spirv(global_invocation_id)] id_global_invocation_id: UVec3" in rust
+    assert "let id: UVec2 = id_global_invocation_id.truncate();" in rust
     assert (
-        "let id: Vec2<u32> = "
-        "Vec2::<u32>::new(id_globalInvocationID.x, id_globalInvocationID.y);"
-    ) in rust
+        "#[spirv(uniform, descriptor_set = 0, binding = 0)] params: &MatMulParams"
+        in rust
+    )
     assert "let row: u32 = id.y;" in rust
     assert "let col: u32 = id.x;" in rust
 
@@ -56446,8 +56530,12 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
 
     assert "# CrossGL GPU builtin placeholders" not in output
     assert "struct _CrossGLGpuBuiltinU32Vec3" not in output
-    assert "fn saxpy(global_idx_uint: SIMD[DType.uint32, 4]) -> None:" in output
-    assert "var gid: Int32 = global_idx_uint[0]" in output
+    assert "def saxpy(" in output
+    assert (
+        "var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+        "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+    ) in output
+    assert "var gid: Int32 = Int32(global_idx_uint[0])" in output
     assert "gl_GlobalInvocationID" not in output
 
     assert "crossgl-gpu-builtin-placeholders" not in payload["summary"].get(
@@ -56473,8 +56561,11 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
             }
             """,
             # The grid index imports as the global invocation id.
-            ["global_idx_uint: SIMD[DType.uint32, 4]"],
-            "var i: Int32 = global_idx_uint[0]",
+            [
+                "var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+                "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+            ],
+            "var i: Int32 = Int32(global_idx_uint[0])",
         ),
         (
             "add_kernel.hip",
@@ -56491,8 +56582,11 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
                 }
             }
             """,
-            ["global_idx_uint: SIMD[DType.uint32, 4]"],
-            "var i: Int32 = global_idx_uint[0]",
+            [
+                "var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+                "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+            ],
+            "var i: Int32 = Int32(global_idx_uint[0])",
         ),
     ],
 )
@@ -56954,18 +57048,19 @@ def test_translate_project_rust_gpu_mutable_fragment_output_lowers_for_native_ta
     }
 
     mojo = outputs["mojo"]
-    assert "fn main_fs() -> SIMD[DType.float32, 4]:" in mojo
+    assert "def main_fs() -> SIMD[DType.float32, 4]:" in mojo
     assert "var output: SIMD[DType.float32, 4]" in mojo
     assert "output = SIMD[DType.float32, 4](1.0, 0.0, 0.0, 1.0)" in mojo
     assert "return output" in mojo
-    assert "fn main_fs(output" not in mojo
+    assert "def main_fs(output" not in mojo
     assert "CrossGL parameter semantic" not in mojo
 
     rust = outputs["rust"]
-    assert "pub fn main_fs() -> Vec4<f32>" in rust
-    assert "let mut output: Vec4<f32>;" in rust
-    assert "output = Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);" in rust
-    assert "return output;" in rust
+    assert "#[spirv(fragment)]" in rust
+    assert "pub fn main_fs(#[spirv(location = 0)] out_value: &mut Vec4) -> ()" in rust
+    assert "let mut output: Vec4;" in rust
+    assert "output = Vec4::new(1.0, 0.0, 0.0, 1.0);" in rust
+    assert "*out_value = return_value;" in rust
     assert "pub fn main_fs(output" not in rust
     assert "CrossGL parameter semantic: output" not in rust
 

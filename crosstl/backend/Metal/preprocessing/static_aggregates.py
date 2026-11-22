@@ -12,6 +12,10 @@ from typing import (
 )
 
 from ..concrete_free_operators import materialize_concrete_free_operators
+from ..integral_constant_locals import (
+    fold_concrete_function_integral_constant_arithmetic,
+    is_folded_integral_constant_operator,
+)
 from ..static_assertion_sources import concrete_static_assertion_conditions
 from ..value_traits import (
     complete_template_arguments,
@@ -30,6 +34,13 @@ from .support import (
     _MetalTypeAliasBinding,
     _strip_global_metal_qualifiers,
 )
+
+_TEMPLATE_HEAD_RE = re.compile(r"\btemplate\s*<")
+_FREE_OPERATOR_NAME_RE = re.compile(
+    r"\boperator\s*(?P<operator>==|!=|<=|>=|[+\-*/%]=|[+\-*/%<>])\s*\("
+)
+# A free operator's name follows its template head before any of these characters.
+_DECLARATION_BREAK_RE = re.compile(r"[;{}]")
 
 
 class MetalStaticAggregateMixin:
@@ -878,15 +889,15 @@ class MetalStaticAggregateMixin:
         anonymous_namespace_spans = self._source_analysis(
             code
         ).anonymous_namespace_spans
-        operator_re = re.compile(
-            r"\boperator\s*(?P<operator>==|!=|<=|>=|[+\-*/%]=|[+\-*/%<>])\s*\("
-        )
         cursor = 0
         while True:
-            template_match = re.search(r"\btemplate\s*<", code[cursor:])
+            # The cursor always follows one of > ( ) { }, or sits between a matched
+            # "template" and its "<", so a match at or after it is the match that
+            # code[cursor:] would give, without copying the rest of the source.
+            template_match = _TEMPLATE_HEAD_RE.search(code, cursor)
             if template_match is None:
                 break
-            template_start = cursor + template_match.start()
+            template_start = template_match.start()
             cursor = template_start + len("template")
             if self._containing_span(template_start, ignored) is not None:
                 continue
@@ -894,14 +905,19 @@ class MetalStaticAggregateMixin:
             angle_end = self._find_matching_template_param_angle(code, angle_start)
             if angle_end is None:
                 continue
-            operator_match = operator_re.search(code, angle_end + 1)
+            # The operator name must come before the next ';', '{' or '}', and the
+            # name itself contains none of them, so the search can stop there
+            # instead of running to the end of the source.
+            declaration_break = _DECLARATION_BREAK_RE.search(code, angle_end + 1)
+            operator_match = _FREE_OPERATOR_NAME_RE.search(
+                code,
+                angle_end + 1,
+                len(code) if declaration_break is None else declaration_break.start(),
+            )
             if operator_match is None:
                 cursor = angle_end + 1
                 continue
             declaration_prefix = code[angle_end + 1 : operator_match.start()]
-            if any(token in declaration_prefix for token in (";", "{", "}")):
-                cursor = angle_end + 1
-                continue
             parameter_open = code.find(
                 "(", operator_match.start(), operator_match.end()
             )
@@ -1129,6 +1145,8 @@ class MetalStaticAggregateMixin:
         return self._apply_text_replacements(body, replacements)
 
     def _materialize_free_operator_overloads(self, code: str) -> str:
+        # An operator between two integral constants has a known constant result; fold it rather than instantiate it.
+        code = fold_concrete_function_integral_constant_arithmetic(self, code)
         code = materialize_concrete_free_operators(self, code)
         if not self._materialized_struct_specializations or "operator" not in code:
             return code
@@ -1185,6 +1203,8 @@ class MetalStaticAggregateMixin:
             and is_reachable_materialized_type(name)
         }
         for definition in operators:
+            if is_folded_integral_constant_operator(self, definition):
+                continue
             generated = []
             for materialized_name, (source_name, source_arguments) in sorted(
                 retained_structs.items()

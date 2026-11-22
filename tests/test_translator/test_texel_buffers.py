@@ -315,7 +315,8 @@ layout(local_size_x = 1) in;
 layout(binding = 0, r32f) uniform highp writeonly imageBuffer outData;
 void main() { imageStore(outData, 0, vec4(1.0)); }
 """
-    glsl = _translate(tmp_path, source, ".comp", "opengl")
+    # The gles target writes GLSL ES; opengl writes desktop GLSL from a GLSL ES source.
+    glsl = _translate(tmp_path, source, ".comp", "gles")
     assert glsl.startswith("#version 320 es") or (
         "#extension GL_EXT_texture_buffer" in glsl
     )

@@ -15,6 +15,7 @@ from pathlib import Path
 from . import (
     decorations,
     execution,
+    metal_reflection,
     placeholders,
     probes,
     rustgpu,
@@ -22,7 +23,7 @@ from . import (
     validators,
 )
 from .features.spirv import is_core
-from .model import ROUND_TRIPS, Feature, Result, kept_folder
+from .model import PAIR, ROUND_TRIPS, Feature, Result, kept_folder
 from .semantic import identify, instructions, lower
 
 OUTPUT_BACKENDS = {
@@ -52,6 +53,7 @@ INPUT_BACKENDS = {
     "rust": "rust",
     "slang": "slang",
     "spirv": "vulkan",
+    "webgl": "webgl",
 }
 # The target a language's probes fall back to when the reference compiler rejects a native probe for its usual target.
 # slangc writes invalid SPIR-V for some operations its HLSL target compiles, such as an OpAtomicCompareExchange on
@@ -75,6 +77,12 @@ def _first_line(error: BaseException, scratch: str) -> str:
     return f"{type(error).__name__}: {text[0][:300] if text else ''}".rstrip(": ")
 
 
+# How the reference compilers read each native probe, told to the importer that reads it. DXC compiles every HLSL
+# probe with -enable-16bit-types (validators.py and lowering.py), under which ``half`` is binary16; without it the
+# importer reads ``half`` as DXC does by default, as binary32 (crosstl/backend/DirectX/half_width.py).
+SOURCE_OPTIONS = {"directx": {"enable_16bit_types": True}}
+
+
 def translate(source: str, suffix: str, backend: str, source_backend: str) -> str:
     """Translate ``source`` with CrossTL, raising :class:`Refused` or :class:`Broken` on failure.
 
@@ -92,6 +100,7 @@ def translate(source: str, suffix: str, backend: str, source_backend: str) -> st
                 backend=backend,
                 source_backend=source_backend,
                 format_output=False,
+                source_options=SOURCE_OPTIONS.get(source_backend),
             )
         except Exception as error:  # noqa: BLE001 - every failure is classified
             code = getattr(error, "project_diagnostic_code", None)
@@ -305,6 +314,14 @@ def run_output(feature: Feature, language: str) -> Result:
     )
     if ignored:
         return result("wrong", ignored)
+    # A graphics probe never runs; its Metal must keep the native probe's interface (tools/coverage/metal_reflection.py).
+    moved = (
+        metal_reflection.output_difference(feature, translated)
+        if language == "metal"
+        else ""
+    )
+    if moved:
+        return result("wrong", moved)
     # The CrossGL probe reads its inputs like the native probe unless it calls a counterpart overload.
     if _runs(feature, language) and not feature.counterpart:
         try:
@@ -424,19 +441,39 @@ def run_input(feature: Feature, language: str) -> Result:
     lost = decorations.lost(feature, emitted, translated, imported=language)
     if lost:
         return result("wrong", f"after the round trip: {lost}")
+    # A graphics probe never runs, so a Metal round trip that moves a binding, a vertex attribute or a stage value
+    # still validates; its entry points must keep the interface of the probe's (tools/coverage/metal_reflection.py).
+    moved = (
+        metal_reflection.round_trip_difference(probe.source, translated)
+        if language == emitted == "metal"
+        else ""
+    )
+    if moved:
+        return result("wrong", f"after the round trip: {moved}")
     if emitted == language and _runs(feature, language):
         return replace(result("supported"), sources=(probe.source, translated))
     return result("supported")
 
 
-def _job(job: tuple[Feature, str, str]) -> Result:
-    feature, direction, language = job
+def _job(job: tuple) -> Result:
+    feature, direction, language, *partner = job
+    # A cell's files sit under its source language, in the folder of its target (:func:`.pairs.run_pair`).
+    owner, folder = (
+        (feature.language, f"to-{language}")
+        if direction == PAIR
+        else (language, direction)
+    )
     if _kept:
         # Files an earlier run kept for this probe would sit beside this run's as if they belonged to it.
         shutil.rmtree(
-            Path(_kept, kept_folder(language, direction, feature.name)),
+            Path(_kept, kept_folder(owner, folder, feature.name)),
             ignore_errors=True,
         )
+    if direction == PAIR:
+        # Imported here because :mod:`.pairs` builds on this module.
+        from . import pairs
+
+        return pairs.run_pair(feature, feature.language, language, *partner)
     if direction == "input":
         return run_input(feature, language)
     result = run_output(feature, language)
@@ -447,12 +484,14 @@ def _job(job: tuple[Feature, str, str]) -> Result:
 
 
 def run(
-    jobs: list[tuple[Feature, str, str]],
+    jobs: list[tuple],
     workers: int | None = None,
     keep: Path | None = None,
 ) -> list[Result]:
     """Run every ``(feature, direction, language)`` job; results come back in job order.
 
+    A translation matrix job is ``(feature, PAIR, target, partner)``: it translates ``feature``'s native probe into
+    ``target`` and checks it as ``partner``, ``target``'s feature of the same semantic key (:func:`.pairs.run_pair`).
     With ``keep``, each job writes its probe and CrossTL's translations of it to the job's :func:`.model.kept_folder`
     under ``keep``.
     """
@@ -472,7 +511,7 @@ def run(
 
 
 def _run_jobs(
-    jobs: list[tuple[Feature, str, str]], workers: int, verdicts: str, kept: str | None
+    jobs: list[tuple], workers: int, verdicts: str, kept: str | None
 ) -> list[Result]:
     if workers == 1 or len(jobs) < 2:
         _remember(verdicts, kept)

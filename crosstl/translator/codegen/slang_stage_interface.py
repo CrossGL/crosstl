@@ -66,15 +66,20 @@ class SlangStageInterfaceMixin:
                 result += self.generate_function(func) + "\n\n"
 
         if entry_point is not None:
-            result += self.generate_function(
-                entry_point,
-                shader_type=stage_name,
-                execution_config=getattr(stage, "execution_config", None),
-                entry_name=self.stage_entry_name_overrides.get(id(entry_point)),
-                extra_parameters=self.slang_stage_interface_parameters(
-                    stage_name, local_variables
-                ),
-            )
+            # The stage's layout qualifiers, such as layout(early_fragment_tests) in;, decorate its entry point.
+            self.current_slang_stage_node = stage
+            try:
+                result += self.generate_function(
+                    entry_point,
+                    shader_type=stage_name,
+                    execution_config=getattr(stage, "execution_config", None),
+                    entry_name=self.stage_entry_name_overrides.get(id(entry_point)),
+                    extra_parameters=self.slang_stage_interface_parameters(
+                        stage_name, local_variables
+                    ),
+                )
+            finally:
+                self.current_slang_stage_node = None
             result += "\n\n"
 
         return result

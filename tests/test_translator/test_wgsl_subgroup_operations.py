@@ -1,0 +1,211 @@
+"""WGSL output writes CrossGL wave operations as WGSL subgroup and quad built-in functions.
+
+WGSL output used to refuse every wave operation (``WGSL target does not support expression WaveOpNode``). The
+reductions, scans, votes, ballots, lane reads and quad reads now map to WGSL's ``subgroup*`` and ``quad*`` functions;
+``bool`` operands of the functions that take numbers travel as ``u32`` 0 or 1; ``WaveGetLaneIndex()`` and the
+operations written with it read the ``subgroup_invocation_id`` built-in input of the entry point. Operations WGSL has
+no built-in for are refused by name.
+"""
+
+import re
+import shutil
+import subprocess
+
+import pytest
+
+import crosstl
+from crosstl.translator.refusals import WGSLRefusal
+
+SHADER = """
+shader Waves {{
+    compute {{
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+        buffer float* fin;
+        buffer int* iin;
+        buffer uint* uin;
+        buffer {stored_type}* outp;
+        void main() {{
+            uint i = gl_GlobalInvocationID.x;
+            vec3 f = vec3(fin[i], fin[i + 1u], fin[i + 2u]);
+            ivec2 n = ivec2(iin[i], iin[i + 1u]);
+            uint u = uin[i];
+            int k = iin[i + 2u];
+            bool b = fin[i] > 0.0;
+            bvec2 bb = bvec2(fin[i] > 1.0, fin[i] < 2.0);
+            {result_type} r = {expression};
+            outp[i] = {stored};
+        }}
+    }}
+}}
+"""
+
+
+def _translate(tmp_path, source, name="shader.cgl"):
+    path = tmp_path / name
+    path.write_text(source)
+    return crosstl.translate(str(path), backend="wgsl")
+
+
+def _naga(code, tmp_path):
+    naga = shutil.which("naga")
+    if naga is None:
+        return
+    (tmp_path / "out.wgsl").write_text(code)
+    result = subprocess.run(
+        [naga, "out.wgsl"], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert result.returncode == 0, result.stderr + code
+
+
+# A storage buffer cannot hold bool (WGSL, "Host-shareable Types"), so bool results are stored as integers.
+_STORED = {"bool": ("int", "r ? 1 : 0"), "bvec2": ("ivec2", "ivec2(r)")}
+
+
+def _wave(tmp_path, result_type, expression):
+    stored_type, stored = _STORED.get(result_type, (result_type, "r"))
+    return _translate(
+        tmp_path,
+        SHADER.format(
+            result_type=result_type,
+            expression=expression,
+            stored_type=stored_type,
+            stored=stored,
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    "result_type, expression, wgsl",
+    [
+        ("vec3", "WaveActiveSum(f)", "subgroupAdd(f)"),
+        ("vec3", "subgroupMul(f)", "subgroupMul(f)"),
+        ("ivec2", "WaveActiveMin(n)", "subgroupMin(n)"),
+        ("uint", "WaveActiveMax(u)", "subgroupMax(u)"),
+        ("ivec2", "subgroupAnd(n)", "subgroupAnd(n)"),
+        ("uint", "WaveActiveBitOr(u)", "subgroupOr(u)"),
+        ("int", "subgroupXor(k)", "subgroupXor(k)"),
+        ("vec3", "WavePrefixSum(f)", "subgroupExclusiveAdd(f)"),
+        ("ivec2", "WavePrefixProduct(n)", "subgroupExclusiveMul(n)"),
+        ("uint", "subgroupInclusiveAdd(u)", "subgroupInclusiveAdd(u)"),
+        ("vec3", "WavePrefixInclusiveProduct(f)", "subgroupInclusiveMul(f)"),
+        ("bool", "WaveActiveAllTrue(b)", "subgroupAll(b)"),
+        ("bool", "allInvocations(b)", "subgroupAll(b)"),
+        ("bool", "subgroupAny(b)", "subgroupAny(b)"),
+        ("uvec4", "WaveActiveBallot(b)", "subgroupBallot(b)"),
+        ("vec3", "WaveReadLaneFirst(f)", "subgroupBroadcastFirst(f)"),
+        ("vec3", "subgroupBroadcast(f, 3u)", "subgroupBroadcast(f, 3u)"),
+        ("vec3", "WaveReadLaneAt(f, 3)", "subgroupBroadcast(f, 3u)"),
+        ("vec3", "WaveReadLaneAt(f, u)", "subgroupShuffle(f, u)"),
+        ("ivec2", "subgroupShuffle(n, uint(k))", "subgroupShuffle(n, u32(k))"),
+        ("vec3", "WaveShuffleXor(f, 1u)", "subgroupShuffleXor(f, 1u)"),
+        ("vec3", "subgroupShuffleUp(f, u)", "subgroupShuffleUp(f, u)"),
+        ("ivec2", "WaveShuffleDown(n, 2u)", "subgroupShuffleDown(n, 2u)"),
+        ("vec3", "QuadReadAcrossX(f)", "quadSwapX(f)"),
+        ("int", "QuadReadAcrossY(k)", "quadSwapY(k)"),
+        ("uint", "subgroupQuadSwapDiagonal(u)", "quadSwapDiagonal(u)"),
+        ("vec3", "QuadReadLaneAt(f, 2u)", "quadBroadcast(f, 2u)"),
+    ],
+)
+def test_wave_operation_is_the_wgsl_subgroup_function(
+    tmp_path, result_type, expression, wgsl
+):
+    code = _wave(tmp_path, result_type, expression)
+    assert wgsl in code
+    assert "enable subgroups" not in code
+    _naga(code, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "result_type, expression, wgsl",
+    [
+        (
+            "uint",
+            "WaveActiveCountBits(b)",
+            "dot(countOneBits(subgroupBallot(b)), vec4<u32>(1u))",
+        ),
+        ("uint", "WavePrefixCountBits(b)", "subgroupExclusiveAdd(select(0u, 1u, b))"),
+        (
+            "bool",
+            "WaveReadLaneAt(b, u)",
+            "(subgroupShuffle(select(0u, 1u, b), u) != 0u)",
+        ),
+        (
+            "bvec2",
+            "QuadReadAcrossX(bb)",
+            "(quadSwapX(select(vec2<u32>(0u), vec2<u32>(1u), bb)) != vec2<u32>(0u))",
+        ),
+        ("bool", "WaveActiveBitAnd(b)", "(subgroupAnd(select(0u, 1u, b)) != 0u)"),
+        (
+            "bvec2",
+            "WaveActiveBitXor(bb)",
+            "(subgroupXor(select(vec2<u32>(0u), vec2<u32>(1u), bb)) != vec2<u32>(0u))",
+        ),
+    ],
+)
+def test_counts_and_bool_operands_are_computed_through_u32(
+    tmp_path, result_type, expression, wgsl
+):
+    code = _wave(tmp_path, result_type, expression)
+    assert wgsl in code
+    _naga(code, tmp_path)
+
+
+def test_lane_index_and_first_lane_read_the_entry_point_built_in(tmp_path):
+    code = _wave(
+        tmp_path,
+        "uint",
+        "WaveGetLaneIndex() + WaveGetLaneCount() + (WaveIsFirstLane() ? 1u : 0u)",
+    )
+    signature = re.search(r"fn \w+\((.*)\)\s*\{", code).group(1)
+    assert "@builtin(subgroup_invocation_id) subgroup_invocation_id: u32" in signature
+    assert "@builtin(subgroup_size) subgroup_size: u32" in signature
+    assert (
+        "(subgroupBroadcastFirst(subgroup_invocation_id) == subgroup_invocation_id)"
+        in (code)
+    )
+    _naga(code, tmp_path)
+
+
+def test_quad_lane_chosen_at_run_time_shuffles_within_the_quad(tmp_path):
+    code = _wave(tmp_path, "vec3", "QuadReadLaneAt(f, u)")
+    assert (
+        "subgroupShuffle(f, ((subgroup_invocation_id & 4294967292u) | (u & 3u)))"
+        in code
+    )
+    assert "@builtin(subgroup_invocation_id) subgroup_invocation_id: u32" in code
+    _naga(code, tmp_path)
+
+
+def test_lane_index_in_a_helper_function_is_refused(tmp_path):
+    source = """
+shader Helper {
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+        buffer uint* outp;
+        uint lane() { return WaveGetLaneIndex(); }
+        void main() {
+            outp[gl_GlobalInvocationID.x] = lane();
+        }
+    }
+}
+"""
+    with pytest.raises(WGSLRefusal, match=r"WaveGetLaneIndex\(\)"):
+        _translate(tmp_path, source)
+
+
+@pytest.mark.parametrize(
+    "result_type, expression, reason",
+    [
+        ("vec3", "WavePrefixInclusiveMin(f)", "no subgroup built-in function"),
+        ("vec3", "WaveClusteredSum(f, 4u)", "no subgroup built-in function"),
+        ("uint", "WaveBallotBitCount(WaveActiveBallot(b))", "no subgroup built-in"),
+        ("vec3", "WaveActiveSum(bb)", "numbers only"),
+        ("vec3", "WaveActiveBitAnd(f)", "integers only"),
+        ("bool", "WaveActiveAllTrue(bb)", "one bool operand"),
+    ],
+)
+def test_operations_wgsl_cannot_express_are_refused(
+    tmp_path, result_type, expression, reason
+):
+    with pytest.raises(WGSLRefusal, match=reason):
+        _wave(tmp_path, result_type, expression)

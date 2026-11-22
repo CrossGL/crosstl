@@ -431,8 +431,11 @@ class SlangValueTypesMixin:
         return f"(({left}) - (floor(({left}) / ({right})) * ({right})))"
 
     def binary_expression_result_type(self, expr):
-        left_type = self.expression_result_type(expr.left)
-        right_type = self.expression_result_type(expr.right)
+        left_type, right_type = self.slang_promoted_operand_types(
+            expr,
+            self.expression_result_type(expr.left),
+            self.expression_result_type(expr.right),
+        )
         if expr.op in {"==", "!=", "<", ">", "<=", ">="}:
             return self.comparison_expression_result_type(left_type, right_type)
         if expr.op in {"&&", "||"}:

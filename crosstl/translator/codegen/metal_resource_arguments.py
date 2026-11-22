@@ -2,6 +2,7 @@
 
 import ast as py_ast
 import re
+from contextlib import contextmanager
 
 from ..ast import (
     ArrayAccessNode,
@@ -58,6 +59,7 @@ from .image_access_contracts import (
     texture_query_lod_coordinate_dimension_error,
     texture_query_lod_coordinate_type_error,
 )
+from .metal_argument_tables import metal_argument_tables, metal_argument_tables_meet
 from .stage_utils import (
     normalize_stage_name,
     stage_matches,
@@ -155,14 +157,22 @@ class MetalResourceArgumentMixin:
                 )
 
     def next_available_resource_binding(
-        self, used_bindings, namespace, binding_index, count
+        self, used_bindings, namespace, binding_index, count, every_table=False
     ):
+        """The first index from ``binding_index`` at which ``count`` slots are free in the current argument tables.
+
+        A slot another entry's declaration holds is free for a declaration of different entries; with
+        ``every_table`` it is not, so a resource the source gives no binding takes an index no entry uses.
+        """
         count = max(count or 1, 1)
         ranges = used_bindings.get(namespace, [])
+        tables = None if every_table else self.metal_binding_tables
         while True:
             end = binding_index + count - 1
             conflict_end = None
-            for used_start, used_end, _ in ranges:
+            for used_start, used_end, _, used_tables in ranges:
+                if not metal_argument_tables_meet(tables, used_tables):
+                    continue
                 if binding_index <= used_end and used_start <= end:
                     conflict_end = (
                         used_end
@@ -172,6 +182,27 @@ class MetalResourceArgumentMixin:
             if conflict_end is None:
                 return binding_index
             binding_index = conflict_end + 1
+
+    def lowest_free_resource_binding(self, used_bindings, namespace, count):
+        """The lowest index at which ``count`` consecutive slots of ``namespace`` are free.
+
+        A resource the source gives no binding takes the lowest free slots, in declaration order, so an explicit
+        binding elsewhere in the program does not move the unbound ones past it: a kernel whose constants block is
+        bound at buffer 3 still takes its unbound storage buffers at buffers 0 and 1.
+        """
+        return self.next_available_resource_binding(
+            used_bindings, namespace, 0, count, every_table=True
+        )
+
+    @contextmanager
+    def metal_binding_tables_of(self, node):
+        """Reserve bindings for ``node`` in the argument tables of the entries that take it."""
+        previous = self.metal_binding_tables
+        self.metal_binding_tables = metal_argument_tables(node)
+        try:
+            yield
+        finally:
+            self.metal_binding_tables = previous
 
     def collect_stage_local_resource_stage_scopes(
         self, ast, target_stage, stage_local_resource_variables
@@ -191,7 +222,13 @@ class MetalResourceArgumentMixin:
         return stage_scopes
 
     def metal_source_binding_stage_scope(self, node):
-        return self.metal_source_binding_stage_by_id.get(id(node))
+        scope = self.metal_source_binding_stage_by_id.get(id(node))
+        tables = metal_argument_tables(node)
+        if tables is None:
+            return scope
+        # Each entry's own declarations are checked in that entry's argument table.
+        label = ", ".join(str(table) for table in sorted(tables))
+        return f"{scope or 'entry'} argument table {label}"
 
     def pre_reserve_cbuffer_bindings(self, used_bindings, source_bindings):
         for cbuffer in self.cbuffer_variables:
@@ -221,18 +258,12 @@ class MetalResourceArgumentMixin:
             )
 
     def reserve_cbuffer_bindings(self, used_bindings, source_bindings):
-        buffer_index = 0
         for cbuffer in self.cbuffer_variables:
             binding = self.explicit_resource_binding_index(
                 cbuffer, {"binding", "buffer"}, ("b",)
             )
             if binding is None:
-                binding = self.next_available_resource_binding(
-                    used_bindings,
-                    "buffer",
-                    buffer_index,
-                    1,
-                )
+                binding = self.lowest_free_resource_binding(used_bindings, "buffer", 1)
             binding = self.reserve_or_remap_resource_binding(
                 used_bindings,
                 source_bindings,
@@ -241,13 +272,18 @@ class MetalResourceArgumentMixin:
                 1,
                 getattr(cbuffer, "name", "<anonymous>"),
                 cbuffer,
-                buffer_index,
             )
             self.cbuffer_binding_indices[id(cbuffer)] = binding
-            buffer_index = max(buffer_index, binding + 1)
-        return buffer_index
 
     def pre_reserve_explicit_resource_binding(
+        self, used_bindings, source_bindings, namespace, binding, count, name, node
+    ):
+        with self.metal_binding_tables_of(node):
+            return self.pre_reserve_explicit_resource_binding_in_tables(
+                used_bindings, source_bindings, namespace, binding, count, name, node
+            )
+
+    def pre_reserve_explicit_resource_binding_in_tables(
         self, used_bindings, source_bindings, namespace, binding, count, name, node
     ):
         if binding is None:
@@ -301,7 +337,21 @@ class MetalResourceArgumentMixin:
         count,
         name,
         node,
-        cursor,
+    ):
+        with self.metal_binding_tables_of(node):
+            return self.reserve_or_remap_resource_binding_in_tables(
+                used_bindings, source_bindings, namespace, binding, count, name, node
+            )
+
+    def reserve_or_remap_resource_binding_in_tables(
+        self,
+        used_bindings,
+        source_bindings,
+        namespace,
+        binding,
+        count,
+        name,
+        node,
     ):
         cached = self.metal_resource_binding_indices_by_id.get(id(node))
         if cached is not None:
@@ -318,12 +368,7 @@ class MetalResourceArgumentMixin:
         requested_binding = binding
         descriptor_set = self.explicit_resource_set_index(node)
         if binding is None:
-            binding = self.next_available_resource_binding(
-                used_bindings,
-                namespace,
-                cursor,
-                count,
-            )
+            binding = self.lowest_free_resource_binding(used_bindings, namespace, count)
 
         if descriptor_set is not None:
             if requested_binding is not None:
@@ -397,7 +442,10 @@ class MetalResourceArgumentMixin:
         count = max(count or 1, 1)
         end = start + count - 1
         ranges = used_bindings.setdefault(namespace, [])
-        for used_start, used_end, used_name in ranges:
+        tables = self.metal_binding_tables
+        for used_start, used_end, used_name, used_tables in ranges:
+            if not metal_argument_tables_meet(tables, used_tables):
+                continue
             if start <= used_end and used_start <= end:
                 if used_start == start and used_end == end and used_name == name:
                     return
@@ -407,7 +455,7 @@ class MetalResourceArgumentMixin:
                     f"overlaps '{used_name}' "
                     f"{self.resource_binding_range_label(namespace, used_start, used_end)}"
                 )
-        ranges.append((start, end, name))
+        ranges.append((start, end, name, tables))
 
     def resource_binding_range_label(self, namespace, start, end):
         if start == end:

@@ -7,11 +7,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT))
+# coverage_pages writes languages/, one page per language, from the published coverage report.
+sys.path.insert(0, str(Path(__file__).resolve().parent / "_ext"))
 
 project = "CrossGL Translator"
 author = "CrossGL"
 copyright = "2026, CrossGL"
-release = "3.7.0"
+release = "3.8.0"
 
 extensions = [
     "myst_parser",
@@ -21,6 +23,7 @@ extensions = [
     "sphinx.ext.viewcode",
     "sphinx_autodoc_typehints",
     "sphinx_copybutton",
+    "coverage_pages",
 ]
 
 templates_path = ["_templates"]
