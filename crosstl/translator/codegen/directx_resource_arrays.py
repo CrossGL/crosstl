@@ -43,6 +43,7 @@ from .directx_values import (
     DirectXPrivatePointerParameterError,
 )
 from .generic_function_utils import generic_function_call_name
+from .hlsl_private_member_view_types import hlsl_typed_member_view_root
 from .hlsl_texel_buffers import texel_buffer_base_type
 from .image_access_contracts import (
     is_image_format_attribute,
@@ -59,7 +60,6 @@ from .private_array_rows import (
     array_row_shape,
     array_row_view,
 )
-from .private_member_views import hlsl_member_view_root
 
 
 class DirectXResourceArrayMixin:
@@ -365,8 +365,11 @@ class DirectXResourceArrayMixin:
                         "side_effecting": False,
                     }
             if isinstance(operand, MemberAccessNode):
-                root = hlsl_member_view_root(
-                    self, operand, set(parameter_names) | set(local_extents)
+                root = hlsl_typed_member_view_root(
+                    self,
+                    operand,
+                    set(parameter_names) | set(local_extents),
+                    local_types,
                 )
                 if root is None:
                     return None
