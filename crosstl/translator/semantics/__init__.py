@@ -123,6 +123,7 @@ from .initializer_shapes import (
     InitializerShapeMismatchError,
     refuse_initializer_shape_mismatches,
 )
+from .integer_math import IntegerMathError, lower_integer_math
 from .interface_block_instances import (
     InterfaceBlockInstanceUnsupportedError,
     declare_interface_block_instances,
@@ -325,6 +326,7 @@ __all__ = [
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
     "InitializerShapeMismatchError",
+    "IntegerMathError",
     "InterfaceBlockInstanceUnsupportedError",
     "IntersectionResultUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
@@ -428,7 +430,9 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     :class:`BindingIndexUnresolvedError`; WGSL output keeps a name the program does not declare, for the host to
     declare (:mod:`.binding_constants`).
     User functions named like texture or image built-ins are then renamed, with the calls that resolve to them
-    (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in. ``sizeof``
+    (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in. Calls of
+    CrossGL's integer combinatorics functions (``gcd``, ``lcm``, ``factorial``, ``comb``, ``perm``) become calls of
+    CrossGL helpers for every target, or are refused with :class:`IntegerMathError` (:mod:`.integer_math`). ``sizeof``
     then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
     layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). Every use of a
     type alias then names the aliased type, the MSL, HLSL and GLSL generators keeping program-scope aliases
@@ -581,6 +585,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     fold_stage_layout_counts(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
+    lower_integer_math(program, report.target)
     hoist_stage_private_variables(program, report.target)
     hoist_static_locals(program, report.target)
     lower_device_private_globals(program, report.target)
