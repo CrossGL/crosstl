@@ -322,17 +322,18 @@ def run_output(feature: Feature, language: str) -> Result:
     )
     if moved:
         return result("wrong", moved)
-    # The CrossGL probe reads its inputs like the native probe unless it calls a counterpart overload.
-    if _runs(feature, language) and not feature.counterpart:
+    if _runs(feature, language):
         try:
             native = (
                 spirv_input.build(feature)
                 if language == "spirv"
                 else probes.build(feature, language)
-            ).source
+            )
         except probes.ProbeError:
             return result("supported")
-        return replace(result("supported"), sources=(native, translated))
+        # A CrossGL probe that calls a counterpart overload runs only if it reads its inputs like the native probe.
+        if not feature.counterpart or native.reads == probe.reads:
+            return replace(result("supported"), sources=(native.source, translated))
     return result("supported")
 
 
