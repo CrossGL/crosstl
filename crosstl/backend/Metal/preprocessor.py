@@ -45,6 +45,7 @@ from .integral_constant_tags import (
 from .member_address_types import addressed_member_pointer_type
 from .member_lowering_layers import lower_members_with_late_specializations
 from .namespaced_specializations import place_in_namespace, specialization_reference
+from .struct_homonyms import distinct_struct_homonyms
 from .narrow_float_constants import metal_predefined_constant_type
 from .operator_argument_types import infer_conditional_type, infer_unary_sign_type
 from .overload_precedence import exact_template_outranks
@@ -360,6 +361,7 @@ class MetalPreprocessor(
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
         processed = self._canonicalize_metal_library_matrix_typedefs(processed)
+        processed = distinct_struct_homonyms(processed)
         if re.search(r"\b(?:fp|FP_CONTRACT)\b", processed):
             # Inspect active expanded tokens before materialization changes the
             # lexical scope of a directive or prunes its containing template.
