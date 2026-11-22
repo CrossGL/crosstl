@@ -23,7 +23,6 @@ from __future__ import annotations
 import re
 from bisect import bisect_right
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Set, Tuple
 
 from crosstl.translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
@@ -64,17 +63,17 @@ _NOT_A_RETURN_TYPE = frozenset(
 class _Frame:
     start: int
     end: int
-    namespace: Optional[
+    namespace: None | (
         str
-    ]  # the full namespace name of a namespace body, None for any other brace block
+    )  # the full namespace name of a namespace body, None for any other brace block
     parent: int  # the index of the enclosing frame, -1 at file scope
 
 
-def _frames(masked: str) -> List[_Frame]:
+def _frames(masked: str) -> list[_Frame]:
     """Every brace block of ``masked`` in source order, each with its enclosing block."""
     opens = {match.end() - 1: match for match in _NAMESPACE_OPEN.finditer(masked)}
-    frames: List[_Frame] = []
-    stack: List[int] = []
+    frames: list[_Frame] = []
+    stack: list[int] = []
     for brace in re.finditer(r"[{}]", masked):
         position = brace.start()
         if brace.group() == "}":
@@ -93,7 +92,7 @@ def _frames(masked: str) -> List[_Frame]:
     return frames
 
 
-def _namespace_of(frames: List[_Frame], index: int) -> str:
+def _namespace_of(frames: list[_Frame], index: int) -> str:
     while index >= 0:
         if frames[index].namespace is not None:
             return frames[index].namespace
@@ -113,14 +112,14 @@ class _Scopes:
             index = self.frames[index].parent
         return index
 
-    def innermost(self, position: int) -> Optional[_Frame]:
+    def innermost(self, position: int) -> _Frame | None:
         index = self._innermost_index(position)
         return self.frames[index] if index >= 0 else None
 
     def namespace_at(self, position: int) -> str:
         return _namespace_of(self.frames, self._innermost_index(position))
 
-    def resolve(self, spelled: str, origin: str) -> Optional[str]:
+    def resolve(self, spelled: str, origin: str) -> str | None:
         """The namespace ``spelled`` names when looked up from namespace ``origin``."""
         spelled = re.sub(r"\s+", "", spelled)
         if spelled.startswith("::"):
@@ -134,12 +133,12 @@ class _Scopes:
         return None
 
 
-def _enclosing(namespace: str) -> List[str]:
+def _enclosing(namespace: str) -> list[str]:
     parts = namespace.split("::") if namespace else []
     return ["::".join(parts[:depth]) for depth in range(len(parts), -1, -1)]
 
 
-def _unsafe(name: str, masked: str, scopes: _Scopes, block_scoped: Set[str]) -> bool:
+def _unsafe(name: str, masked: str, scopes: _Scopes, block_scoped: set[str]) -> bool:
     word = re.escape(name)
     if name in block_scoped:
         return True
@@ -159,10 +158,10 @@ def _unsafe(name: str, masked: str, scopes: _Scopes, block_scoped: Set[str]) -> 
     return False
 
 
-def _qualifier(masked: str, start: int) -> Tuple[Optional[str], bool]:
+def _qualifier(masked: str, start: int) -> tuple[str | None, bool]:
     """The ``a::b`` qualifier spelled before ``start`` (``None`` when it is not a namespace path) and whether the
     reference is qualified at all."""
-    parts: List[str] = []
+    parts: list[str] = []
     cursor = start
     anchored = False
     while True:
@@ -189,8 +188,8 @@ def distinct_struct_homonyms(code: str) -> str:
         return code
     masked = mask_comments_and_literals(code)
     scopes = _Scopes(masked)
-    declared: Dict[str, Set[str]] = {}
-    block_scoped: Set[str] = set()
+    declared: dict[str, set[str]] = {}
+    block_scoped: set[str] = set()
     for match in _STRUCT_DECLARATION.finditer(masked):
         frame = scopes.innermost(match.start())
         name = match.group("name")
@@ -209,7 +208,7 @@ def distinct_struct_homonyms(code: str) -> str:
         return code
 
     taken = set(re.findall(_IDENT, masked))
-    renamed: Dict[Tuple[str, str], str] = {}
+    renamed: dict[tuple[str, str], str] = {}
     for name in sorted(homonyms):
         for namespace in sorted(homonyms[name]):
             if not namespace:
@@ -229,7 +228,7 @@ def distinct_struct_homonyms(code: str) -> str:
             directives.append((match.start(), origin, frame, target))
 
     def nominated(position: int):
-        def nominated_by(namespace: str) -> List[str]:
+        def nominated_by(namespace: str) -> list[str]:
             return [
                 target
                 for at, origin, frame, target in directives
@@ -246,7 +245,7 @@ def distinct_struct_homonyms(code: str) -> str:
 
     def lookup(
         name: str, position: int, qualifier: str, qualified: bool
-    ) -> Optional[str]:
+    ) -> str | None:
         origin = scopes.namespace_at(position)
         if qualified:
             namespace = scopes.resolve(qualifier, origin) if qualifier != "::" else ""
@@ -280,8 +279,8 @@ def distinct_struct_homonyms(code: str) -> str:
         return None
 
     pattern = re.compile(r"\b(?:" + "|".join(map(re.escape, sorted(homonyms))) + r")\b")
-    edits: List[Tuple[int, int, str]] = []
-    kept: Set[str] = set()
+    edits: list[tuple[int, int, str]] = []
+    kept: set[str] = set()
     for match in pattern.finditer(masked):
         qualifier, qualified = _qualifier(masked, match.start())
         if qualifier is None or match.group() in kept:

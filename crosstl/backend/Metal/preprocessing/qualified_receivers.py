@@ -14,7 +14,7 @@ call to either struct.
 from __future__ import annotations
 
 import re
-from typing import Iterable, Optional, Sequence, Tuple
+from typing import Iterable, Sequence
 
 __all__ = ["qualified_struct_receiver"]
 
@@ -24,9 +24,9 @@ _QUALIFIED = re.compile(r"(?:::)?(?:[A-Za-z_]\w*::)+[A-Za-z_]\w*")
 def qualified_struct_receiver(
     declared_type: str,
     struct_names: Iterable[str],
-    definitions: Sequence[Tuple[str, str]],
+    definitions: Sequence[tuple[str, str]],
     lexical_namespace: str = "",
-) -> Optional[str]:
+) -> str | None:
     """The unqualified struct name a namespace-qualified ``declared_type`` names, or ``None``.
 
     ``definitions`` holds the ``(name, qualified_name)`` of every concrete struct in the unit, and

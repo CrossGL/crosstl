@@ -45,7 +45,6 @@ from .integral_constant_tags import (
 from .member_address_types import addressed_member_pointer_type
 from .member_lowering_layers import lower_members_with_late_specializations
 from .namespaced_specializations import place_in_namespace, specialization_reference
-from .struct_homonyms import distinct_struct_homonyms
 from .narrow_float_constants import metal_predefined_constant_type
 from .operator_argument_types import infer_conditional_type, infer_unary_sign_type
 from .overload_precedence import exact_template_outranks
@@ -135,6 +134,7 @@ from .static_member_constants import (
     materialized_struct_for_template_id,
     static_member_constant_substituter,
 )
+from .struct_homonyms import distinct_struct_homonyms
 from .swizzle_types import infer_swizzle_type
 from .template_carried_reachability import template_carried_reachable_spans
 from .template_constants import unresolved_constant_references
