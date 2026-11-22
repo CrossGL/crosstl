@@ -3,6 +3,7 @@
 from ..unhandled import (
     UNHANDLED,
 )
+from .cuda_surface_texels import UnsupportedSurfaceTexel
 
 
 class HipResourceCallMixin:
@@ -25,7 +26,8 @@ class HipResourceCallMixin:
                 )
 
         if (
-            func_name in {
+            func_name
+            in {
                 "texture",
                 "textureLod",
                 "textureGrad",
@@ -61,7 +63,8 @@ class HipResourceCallMixin:
                 return texture_gather
 
         if (
-            func_name in {
+            func_name
+            in {
                 "textureGather",
                 "textureGatherOffset",
                 "textureGatherOffsets",
@@ -77,7 +80,8 @@ class HipResourceCallMixin:
                 )
 
         if (
-            func_name in {
+            func_name
+            in {
                 "textureProj",
                 "textureProjLod",
                 "textureProjGrad",
@@ -104,7 +108,8 @@ class HipResourceCallMixin:
     ):
         """Emit offset and projective texture sampling."""
         if (
-            func_name in {
+            func_name
+            in {
                 "textureOffset",
                 "textureLodOffset",
                 "textureGradOffset",
@@ -411,119 +416,119 @@ class HipResourceCallMixin:
         raw_args,
         args,
     ):
-        """Emit storage-image loads and stores."""
-        if func_name == "imageLoad" and len(args) >= 2:
-            image_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
-            if image_type is None:
-                return None
-            if self.is_multisample_resource_type(image_type):
-                return self.unsupported_multisample_resource_call(
-                    func_name, image_type, args
-                )
-            access_diagnostic = self.image_access_diagnostic(
-                func_name, image_type, raw_args[0]
+        """Emit storage-image loads and stores.
+
+        The surface element is the image's texel as memory holds it (:mod:`.cuda_surface_texels`); without a
+        format or texel type it is the four-component default of :meth:`image_value_type`.
+        """
+        if func_name not in {"imageLoad", "imageStore"}:
+            return UNHANDLED
+        if len(args) < (2 if func_name == "imageLoad" else 3):
+            return UNHANDLED
+        image_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
+        if image_type is None:
+            return None
+        if self.is_multisample_resource_type(image_type):
+            return self.unsupported_multisample_resource_call(
+                func_name, image_type, args
             )
-            if access_diagnostic is not None:
-                return access_diagnostic
+        access_diagnostic = self.image_access_diagnostic(
+            func_name, image_type, raw_args[0]
+        )
+        if access_diagnostic is not None:
+            return access_diagnostic
+        coordinate_diagnostic = self.image_coordinate_rank_diagnostic(
+            func_name, image_type, raw_args[1]
+        )
+        if coordinate_diagnostic is not None:
+            return coordinate_diagnostic
 
-            image_name = args[0]
-            coord = args[1]
-            coordinate_diagnostic = self.image_coordinate_rank_diagnostic(
-                func_name, image_type, raw_args[1]
+        image_name = args[0]
+        coord = args[1]
+        texel = self.storage_image_texel(raw_args[0])
+        if isinstance(texel, UnsupportedSurfaceTexel):
+            placeholder = (
+                self.zero_value_for_type(self.image_value_type(image_type))
+                if func_name == "imageLoad"
+                else "((void)0)"
             )
-            if coordinate_diagnostic is not None:
-                return coordinate_diagnostic
-            value_type = self.image_value_type(image_type)
-            x = self.image_surface_x_offset(coord, value_type, image_type)
-            y = self.coord_component(coord, "y")
+            return self.surface_texel_refusal(func_name, image_name, texel, placeholder)
+        value_type = (
+            texel.element if texel is not None else self.image_value_type(image_type)
+        )
+        if func_name == "imageLoad":
+            read = self.hip_surface_read(image_type, image_name, coord, value_type)
+            if read is None:
+                return UNHANDLED
+            width = self.surface_texel_load_width(raw_args)
+            return self.surface_texel_load(read, texel, width)
+        value = self.surface_texel_store_value(raw_args[2], args[2], texel)
+        return self.hip_surface_write(image_type, image_name, coord, value, value_type)
 
-            if "1DArray" in image_type:
-                self.require_surface_read_helper("cgl_surf1DLayeredread")
-                layer = self.coord_component(coord, "y")
-                return (
-                    f"cgl_surf1DLayeredread<{value_type}>"
-                    f"({image_name}, {x}, {layer})"
-                )
-            if "1D" in image_type:
-                self.require_surface_read_helper("cgl_surf1Dread")
-                return f"cgl_surf1Dread<{value_type}>({image_name}, {x})"
-            if "CubeArray" in image_type:
-                self.require_surface_read_helper("cgl_surfCubemapLayeredread")
-                face = self.coord_component(coord, "z")
-                layer = self.coord_component(coord, "w")
-                return (
-                    f"cgl_surfCubemapLayeredread<{value_type}>"
-                    f"({image_name}, {x}, {y}, {face}, {layer})"
-                )
-            if "Cube" in image_type:
-                self.require_surface_read_helper("cgl_surfCubemapread")
-                face = self.coord_component(coord, "z")
-                return (
-                    f"cgl_surfCubemapread<{value_type}>"
-                    f"({image_name}, {x}, {y}, {face})"
-                )
-            if "3D" in image_type:
-                self.require_surface_read_helper("cgl_surf3Dread")
-                z = self.coord_component(coord, "z")
-                return f"cgl_surf3Dread<{value_type}>({image_name}, {x}, {y}, {z})"
-            if "Array" in image_type:
-                self.require_surface_read_helper("cgl_surf2DLayeredread")
-                layer = self.coord_component(coord, "z")
-                return (
-                    f"cgl_surf2DLayeredread<{value_type}>"
-                    f"({image_name}, {x}, {y}, {layer})"
-                )
-            if "2D" in image_type:
-                self.require_surface_read_helper("cgl_surf2Dread")
-                return f"cgl_surf2Dread<{value_type}>({image_name}, {x}, {y})"
-
-        if func_name == "imageStore" and len(args) >= 3:
-            image_type = self.resource_base_type(self.get_expression_type(raw_args[0]))
-            if image_type is None:
-                return None
-            if self.is_multisample_resource_type(image_type):
-                return self.unsupported_multisample_resource_call(
-                    func_name, image_type, args
-                )
-            access_diagnostic = self.image_access_diagnostic(
-                func_name, image_type, raw_args[0]
+    def hip_surface_read(self, image_type, image_name, coord, value_type):
+        """The ``cgl_surf*read<value_type>`` call that reads the texel at ``coord``, or ``None``."""
+        x = self.image_surface_x_offset(coord, value_type, image_type)
+        y = self.coord_component(coord, "y")
+        if "1DArray" in image_type:
+            self.require_surface_read_helper("cgl_surf1DLayeredread")
+            layer = self.coord_component(coord, "y")
+            return f"cgl_surf1DLayeredread<{value_type}>({image_name}, {x}, {layer})"
+        if "1D" in image_type:
+            self.require_surface_read_helper("cgl_surf1Dread")
+            return f"cgl_surf1Dread<{value_type}>({image_name}, {x})"
+        if "CubeArray" in image_type:
+            self.require_surface_read_helper("cgl_surfCubemapLayeredread")
+            face = self.coord_component(coord, "z")
+            layer = self.coord_component(coord, "w")
+            return (
+                f"cgl_surfCubemapLayeredread<{value_type}>"
+                f"({image_name}, {x}, {y}, {face}, {layer})"
             )
-            if access_diagnostic is not None:
-                return access_diagnostic
-
-            image_name = args[0]
-            coord = args[1]
-            value = args[2]
-            coordinate_diagnostic = self.image_coordinate_rank_diagnostic(
-                func_name, image_type, raw_args[1]
+        if "Cube" in image_type:
+            self.require_surface_read_helper("cgl_surfCubemapread")
+            face = self.coord_component(coord, "z")
+            return f"cgl_surfCubemapread<{value_type}>({image_name}, {x}, {y}, {face})"
+        if "3D" in image_type:
+            self.require_surface_read_helper("cgl_surf3Dread")
+            z = self.coord_component(coord, "z")
+            return f"cgl_surf3Dread<{value_type}>({image_name}, {x}, {y}, {z})"
+        if "Array" in image_type:
+            self.require_surface_read_helper("cgl_surf2DLayeredread")
+            layer = self.coord_component(coord, "z")
+            return (
+                f"cgl_surf2DLayeredread<{value_type}>"
+                f"({image_name}, {x}, {y}, {layer})"
             )
-            if coordinate_diagnostic is not None:
-                return coordinate_diagnostic
-            value_type = self.image_value_type(image_type)
-            x = self.image_surface_x_offset(coord, value_type, image_type)
-            y = self.coord_component(coord, "y")
+        if "2D" in image_type:
+            self.require_surface_read_helper("cgl_surf2Dread")
+            return f"cgl_surf2Dread<{value_type}>({image_name}, {x}, {y})"
+        return None
 
-            if "1DArray" in image_type:
-                layer = self.coord_component(coord, "y")
-                return f"surf1DLayeredwrite({value}, {image_name}, {x}, {layer})"
-            if "1D" in image_type:
-                return f"surf1Dwrite({value}, {image_name}, {x})"
-            if "CubeArray" in image_type:
-                face = self.coord_component(coord, "z")
-                layer = self.coord_component(coord, "w")
-                return (
-                    f"surfCubemapLayeredwrite"
-                    f"({value}, {image_name}, {x}, {y}, {face}, {layer})"
-                )
-            if "Cube" in image_type:
-                face = self.coord_component(coord, "z")
-                return f"surfCubemapwrite({value}, {image_name}, {x}, {y}, {face})"
-            if "3D" in image_type:
-                z = self.coord_component(coord, "z")
-                return f"surf3Dwrite({value}, {image_name}, {x}, {y}, {z})"
-            if "Array" in image_type:
-                layer = self.coord_component(coord, "z")
-                return f"surf2DLayeredwrite({value}, {image_name}, {x}, {y}, {layer})"
-            if "2D" in image_type:
-                return f"surf2Dwrite({value}, {image_name}, {x}, {y})"
+    def hip_surface_write(self, image_type, image_name, coord, value, value_type):
+        """The ``surf*write`` call that stores ``value`` at ``coord``, or ``UNHANDLED``."""
+        x = self.image_surface_x_offset(coord, value_type, image_type)
+        y = self.coord_component(coord, "y")
+        if "1DArray" in image_type:
+            layer = self.coord_component(coord, "y")
+            return f"surf1DLayeredwrite({value}, {image_name}, {x}, {layer})"
+        if "1D" in image_type:
+            return f"surf1Dwrite({value}, {image_name}, {x})"
+        if "CubeArray" in image_type:
+            face = self.coord_component(coord, "z")
+            layer = self.coord_component(coord, "w")
+            return (
+                f"surfCubemapLayeredwrite"
+                f"({value}, {image_name}, {x}, {y}, {face}, {layer})"
+            )
+        if "Cube" in image_type:
+            face = self.coord_component(coord, "z")
+            return f"surfCubemapwrite({value}, {image_name}, {x}, {y}, {face})"
+        if "3D" in image_type:
+            z = self.coord_component(coord, "z")
+            return f"surf3Dwrite({value}, {image_name}, {x}, {y}, {z})"
+        if "Array" in image_type:
+            layer = self.coord_component(coord, "z")
+            return f"surf2DLayeredwrite({value}, {image_name}, {x}, {y}, {layer})"
+        if "2D" in image_type:
+            return f"surf2Dwrite({value}, {image_name}, {x}, {y})"
         return UNHANDLED
