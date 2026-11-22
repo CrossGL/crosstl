@@ -123,6 +123,7 @@ from .wgsl_struct_initializers import (
     wgsl_struct_array_initializer,
     wgsl_struct_initializer,
 )
+from .wgsl_subgroup_directives import add_subgroup_directives
 from .wgsl_subgroup_operations import wgsl_wave_operation, wgsl_wave_result_type
 from .wgsl_texture_calls import WGSLTextureCallMixin
 from .wgsl_texture_gather import GATHER_OPERATIONS, WGSLTextureGatherMixin
@@ -309,8 +310,8 @@ class WGSLCodeGen(
         "gl_WorkGroupID": "workgroup_id",
         "SV_GroupID": "workgroup_id",
         "gl_NumWorkGroups": "num_workgroups",
-        # The subgroup built-in inputs (WGSL section 13.3.1.1). naga 30 reads them without the
-        # `enable subgroups;` directive and rejects that directive as not yet implemented.
+        # The subgroup built-in inputs (WGSL section 13.3.1.1), which need `enable subgroups;`
+        # (wgsl_subgroup_directives).
         "gl_SubgroupSize": "subgroup_size",
         "gl_SubgroupInvocationID": "subgroup_invocation_id",
         "gl_NumSubgroups": "num_subgroups",
@@ -991,6 +992,7 @@ class WGSLCodeGen(
             helper_section_index,
             lines,
         )
+        add_subgroup_directives(lines)
         return "\n".join(lines).rstrip() + "\n"
 
     def stage_output_lowerings(self, ast, target_stage, existing_structs):

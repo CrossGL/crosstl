@@ -1,7 +1,8 @@
 """Reference validators, one per target language.
 
 A validator is looked up on ``PATH``; ``CROSSTL_COVERAGE_<TOOL>`` (for example ``CROSSTL_COVERAGE_DXC``) points at a
-specific binary instead. rust-gpu is a rustc backend rather than a binary; :mod:`.rustgpu` says how to provide it.
+specific binary instead. rust-gpu is a rustc backend rather than a binary; :mod:`.rustgpu` says how to provide it. Tint,
+which checks WGSL after naga, runs through Dawn's Node.js bindings; :mod:`.tint` says how to provide them.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import rustgpu
+from . import rustgpu, tint
 from .model import RAYTRACING_STAGES
 
 TIMEOUT = 60
@@ -166,6 +167,8 @@ def command(name: str) -> tuple[str, ...]:
         return metal if probe.returncode == 0 else ()
     if name == "rust-gpu":
         return rustgpu.command()
+    if name == "tint":
+        return tint.command()
     found = _executable(name)
     if (
         found
@@ -203,6 +206,8 @@ def version(name: str) -> str:
     """The first line the tool prints for ``--version``, or an empty string when it is not installed."""
     if name == "rust-gpu":
         return rustgpu.version()
+    if name == "tint":
+        return tint.version()
     base = command(name)
     if not base:
         return ""
@@ -219,6 +224,7 @@ def toolchain(language: str, target: str = "") -> tuple[str, ...]:
         return ("dxc-preview",)
     return {
         "spirv": ("spirv-as", "spirv-val"),
+        "wgsl": ("naga", "tint"),
         # An imported OpenCL C probe is checked as the HLSL it is emitted to (runner.ROUND_TRIPS).
         "opencl": ("clang", "dxc"),
     }.get(language, (TOOLS[language],))
@@ -458,7 +464,6 @@ def _dxc(
 
 # The arguments of the validators (:data:`TOOLS`) that only compile the probe; ``{source}`` is its file name.
 COMPILE_ARGUMENTS = {
-    "wgsl": ("{source}",),
     "cuda": (f"-arch={CUDA_ARCH}", "-std=c++17", "-c", "{source}", "-o", "probe.o"),
     "hip": (
         f"--offload-arch={HIP_ARCH}",
@@ -562,6 +567,28 @@ def spirv_environment(assemblies: list[str]) -> str:
     )
 
 
+# naga 30 parses ``enable subgroups;`` but refuses it as not yet implemented (gfx-rs/wgpu#5555), although it validates
+# the subgroup built-ins without it; Tint, like the WGSL specification (section 4.1.1), requires the directive. naga
+# therefore checks and lowers WGSL with that one directive blanked out, so every other line is the line as written.
+_NAGA_UNIMPLEMENTED = re.compile(r"^[ \t]*enable[ \t]+subgroups[ \t]*;[ \t]*$", re.M)
+
+
+def naga_source(source: str) -> str:
+    """``source`` as naga reads it: with an ``enable subgroups;`` directive blanked out (:data:`_NAGA_UNIMPLEMENTED`)."""
+    return _NAGA_UNIMPLEMENTED.sub("", source)
+
+
+def _wgsl(name: str, source: str, scratch: str) -> Verdict:
+    """Check WGSL with naga, and then with Tint where it is installed (the coverage run requires both)."""
+    folder = Path(scratch, "naga")
+    folder.mkdir()
+    folder.joinpath(name).write_text(naga_source(source))
+    checked = run([*command("naga"), name], str(folder))
+    if not checked.accepted or not command("tint"):
+        return checked
+    return run([*command("tint"), name], scratch)
+
+
 def _spirv(name: str, source: str, stage: str, scratch: str) -> Verdict:
     # A module is checked for the Vulkan version its SPIR-V version needs, as slangc's SPIR-V 1.5 is, and the stages
     # that need SPIR-V 1.4 for Vulkan 1.2 at least.
@@ -594,6 +621,8 @@ def validate(
             return run([*command(TOOLS[language]), *arguments], scratch)
         if language == "webgl":
             return _essl(name, source, scratch)
+        if language == "wgsl":
+            return _wgsl(name, source, scratch)
         if language == "glsl":
             return _glsl(name, source, stage, target, scratch)
         if language == "hlsl":
@@ -622,7 +651,8 @@ def first_error(log: str, language: str = "") -> str:
     """
     lines = log.splitlines()
     for index, line in enumerate(lines):
-        if "error" not in line.lower():
+        # naga logs a warning, such as an unknown diagnostic rule name, as "[WARN  ...] error: ...".
+        if "error" not in line.lower() or line.startswith("[WARN"):
             continue
         header = _HEADER.fullmatch(line.strip()) if language in LABELLED else None
         return _labelled(header, lines[index + 1 :]) if header else line.strip()
