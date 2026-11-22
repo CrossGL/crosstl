@@ -239,6 +239,33 @@ float4 main(float2 uv : TEXCOORD0, uint s : SV_SampleIndex) : SV_Target
     assert "interpolateAtSample(" in glsl
 
 
+PACK_SOURCE = """RWStructuredBuffer<int> i;
+RWStructuredBuffer<uint> u;
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID)
+{
+    int4 s = int4(i[0], i[1], i[2], i[3]);
+    uint4 v = uint4(u[0], u[1], u[2], u[3]);
+    u[4] = packInt4x8(s) + packUint4x8(v) + packInt4x8Clamp(s) + packUint4x8Clamp(s);
+    int4 a = unpackInt4x8ToInt32(u[5]) + int4(unpackInt4x8ToInt16(u[6]));
+    uint4 b = unpackUint4x8ToUint32(u[7]) + uint4(unpackUint4x8ToUint16(u[8]));
+    i[4] = a.x + int(b.y);
+}
+"""
+
+
+def test_slang_input_reads_8_bit_packing_as_the_hlsl_functions(tmp_path):
+    crossgl = _compact(_import(tmp_path, PACK_SOURCE))
+    assert "pack_s8(s) + pack_u8(v) + pack_clamp_s8(s) + pack_clamp_u8(s)" in crossgl
+    assert "unpack_s8s32(u[5])" in crossgl and "unpack_s8s16(u[6])" in crossgl
+    assert "unpack_u8u32(u[7])" in crossgl and "unpack_u8u16(u[8])" in crossgl
+    assert "4x8" not in crossgl
+    path = tmp_path / "probe.slang"
+    for backend in ("slang", "directx", "metal"):
+        assert crosstl.translate(str(path), backend=backend)
+
+
 def _slangc(tmp_path, source, stage):
     slangc = shutil.which("slangc")
     if slangc is None:
@@ -287,4 +314,10 @@ def test_slang_output_compiles_with_slangc(tmp_path):
 def test_slang_round_trip_compiles_with_slangc(tmp_path):
     crossgl = tmp_path / "probe.cgl"
     crossgl.write_text(_import(tmp_path), encoding="utf-8")
+    _slangc(tmp_path, crosstl.translate(str(crossgl), backend="slang"), "compute")
+
+
+def test_slang_8_bit_packing_round_trip_compiles_with_slangc(tmp_path):
+    crossgl = tmp_path / "pack.cgl"
+    crossgl.write_text(_import(tmp_path, PACK_SOURCE), encoding="utf-8")
     _slangc(tmp_path, crosstl.translate(str(crossgl), backend="slang"), "compute")

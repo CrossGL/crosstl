@@ -27,6 +27,16 @@ SLANG_CORE_FUNCTION_IMPORTS = {
     "copysign_double": "copysign",
     "EvaluateAttributeAtCentroid": "interpolateAtCentroid",
     "EvaluateAttributeAtSample": "interpolateAtSample",
+    # hlsl.meta.slang's "Pack/Unpack Math Intrinsics": HLSL's SM 6.6 pack_* and unpack_* functions call these
+    # and return their value, so each one is the CrossGL function of the HLSL name.
+    "packInt4x8": "pack_s8",
+    "packUint4x8": "pack_u8",
+    "packInt4x8Clamp": "pack_clamp_s8",
+    "packUint4x8Clamp": "pack_clamp_u8",
+    "unpackInt4x8ToInt16": "unpack_s8s16",
+    "unpackInt4x8ToInt32": "unpack_s8s32",
+    "unpackUint4x8ToUint16": "unpack_u8u16",
+    "unpackUint4x8ToUint32": "unpack_u8u32",
 }
 
 # Each half-precision unpacking function: the CrossGL unpacking function and the half vector it converts to.
