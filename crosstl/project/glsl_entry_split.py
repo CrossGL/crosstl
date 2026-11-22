@@ -12,7 +12,7 @@ from __future__ import annotations
 from collections import Counter
 from typing import Any
 
-from crosstl.translator.codegen.registry import BACKEND_REGISTRY
+from crosstl.translation_artifacts import holds_one_entry_per_stage
 from crosstl.translator.entry_discovery import ENTRY_DISCOVERY_AVAILABLE
 
 __all__ = ["holds_one_entry_per_stage", "host_sizes_unit", "per_entry_split"]
@@ -23,14 +23,6 @@ _HOST_SIZE_RULES = (
     "workgroup_size_rules",
     "subgroup_width_rules",
 )
-
-
-def holds_one_entry_per_stage(target: str) -> bool:
-    """Whether ``target``'s generator refuses a program with two entries of one stage."""
-    spec = BACKEND_REGISTRY.get(target)
-    return spec is not None and bool(
-        getattr(spec.codegen_class, "one_entry_per_stage", False)
-    )
 
 
 def host_sizes_unit(config: Any, unit: Any) -> bool:
