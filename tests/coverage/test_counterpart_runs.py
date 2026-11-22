@@ -1,18 +1,55 @@
 """Compute probes that run although their CrossGL probe calls a counterpart overload or their construct reads nothing."""
 
-import functools
-
 import pytest
 
 from tools.coverage import execution, features, probes, runner, validators
+from tools.coverage.model import Feature, Param, Signature, Type
+from tools.coverage.upstream import UpstreamError
 
 from .execution_cases import metal_runs
 
+INT = Type("int")
+BOOL = Type("bool")
+ADD = Signature(INT, (Param(INT, "inout"), Param(INT, "in")))
+# The pinned features these tests use, written out so that the tests need no feature sources; the last test checks
+# them against the pinned lists where those are cached.
+FEATURES = {
+    ("metal", "atomic_fetch_add_explicit"): Feature(
+        "metal",
+        "function",
+        "atomic_fetch_add_explicit",
+        Signature(INT, (*ADD.params, Param(Type("", opaque="memory_order"), "const"))),
+        group="atomic",
+        crossgl="atomicAdd",
+        stage="compute",
+        counterpart=ADD,
+    ),
+    ("metal", "simd_ballot"): Feature(
+        "metal",
+        "function",
+        "simd_ballot",
+        Signature(Type("", opaque="simd_vote"), (Param(BOOL, "in"),)),
+        group="simdgroup",
+        crossgl="subgroupBallot",
+        stage="compute",
+        counterpart=Signature(Type("uint", (4,)), (Param(BOOL, "in"),)),
+    ),
+    **{
+        (language, name): Feature(
+            language, "compute", name, None, group=f"BuiltIn.{group}", stage="compute"
+        )
+        for language, name, group in (
+            ("metal", "local-invocation-id", "LocalInvocationId"),
+            ("metal", "subgroup-size", "SubgroupSize"),
+            ("metal", "workgroup-size", "WorkgroupSize"),
+            ("cuda", "local-invocation-id", "LocalInvocationId"),
+        )
+    },
+}
 
-@functools.cache
-def _metal(name: str):
-    [feature] = [f for f in features.load("metal", offline=True) if f.name == name]
-    return feature
+
+def _metal(name: str) -> Feature:
+    return FEATURES["metal", name]
 
 
 def _supported_everywhere(monkeypatch):
@@ -68,11 +105,7 @@ def test_a_compute_construct_that_reads_nothing_declares_an_unread_input(name):
 
 
 def test_a_construct_in_a_language_the_harness_cannot_run_declares_no_input():
-    [feature] = [
-        f
-        for f in features.load("cuda", offline=True)
-        if f.name == "local-invocation-id"
-    ]
+    feature = FEATURES["cuda", "local-invocation-id"]
     assert not execution.runs("cuda")
     assert execution.input_buffers(probes.build(feature, "cuda").source) == ()
 
@@ -91,3 +124,14 @@ def test_metal_runs_counterpart_and_construct_probes_with_a_verdict():
     assert [(r.outcome, r.runtime, r.unrun) for r in ran] == [
         ("supported", "metal-apple", "")
     ] * 2
+
+
+@pytest.mark.parametrize("language", sorted({language for language, _ in FEATURES}))
+def test_the_features_match_the_pinned_lists(language):
+    try:
+        pinned = {f.name: f for f in features.load(language, offline=True)}
+    except UpstreamError:
+        pytest.skip(f"the {language} feature sources are not cached")
+    for (owner, name), feature in FEATURES.items():
+        if owner == language:
+            assert pinned[name] == feature, name
