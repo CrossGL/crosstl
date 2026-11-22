@@ -134,6 +134,11 @@ from .method_struct_carriers import (
     lower_late_member_functions,
     method_struct_template_names,
 )
+from .pending_receiver_structs import (
+    deferred_receiver_structs,
+    final_member_lowering,
+    reset_deferred_receiver_structs,
+)
 from .static_member_constants import (
     materialized_struct_for_template_id,
     static_member_constant_substituter,
@@ -305,6 +310,7 @@ class MetalPreprocessor(
         self._const_for_loop_contract_verified = False
         self._const_for_loop_expansion_work = 0
         self._fail_closed_static_assertions = False
+        reset_deferred_receiver_structs(self)
         self._static_constexpr_helper_values = {}
         self._static_constexpr_helper_resolution_stack = []
         self._source_analysis_cache: SourceAnalysisCache[_MetalSourceAnalysis] = (
@@ -359,6 +365,7 @@ class MetalPreprocessor(
         self._const_for_loop_contract_verified = False
         self._const_for_loop_expansion_work = 0
         self._fail_closed_static_assertions = False
+        reset_deferred_receiver_structs(self)
         self._static_constexpr_helper_values = {}
         self._static_constexpr_helper_resolution_stack = []
         code = self._strip_leading_compiler_diagnostics(code)
@@ -425,9 +432,12 @@ class MetalPreprocessor(
             processed = self._materialize_explicit_template_struct_instantiations(
                 processed
             )
+        if processed != constrained_source or deferred_receiver_structs(self):
             # A carrier body that names a functor struct template (`Less<T> op; op(a, b)`) spells it concretely
-            # only now; member lowering lowers the members of the specializations it has just produced.
-            processed = lower_late_member_functions(self, processed)
+            # only now, and a struct a pending template call needed has kept its members until now
+            # (pending_receiver_structs.py); member lowering lowers both.
+            with final_member_lowering(self):
+                processed = lower_late_member_functions(self, processed)
         processed = self._prune_unreferenced_materialized_function_templates(processed)
         # A constrained overload nothing calls would reach CrossGL without its constraint.
         processed = prune_unreferenced_constrained_templates(self, processed)

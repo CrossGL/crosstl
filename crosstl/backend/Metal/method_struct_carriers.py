@@ -51,8 +51,17 @@ def method_struct_template_names(
 ) -> set[str]:
     """Names of the templates in ``templates`` that name a struct template with member functions dependently."""
 
+    return set(method_struct_template_uses(preprocessor, code, templates))
+
+
+def method_struct_template_uses(
+    preprocessor: Any, code: str, templates: Sequence[Any]
+) -> dict[str, set[str]]:
+    """Map each template in ``templates`` that names a struct template with member functions dependently to those
+    struct templates."""
+
     if not templates or "template" not in code:
-        return set()
+        return {}
     method_structs = sorted(
         {
             template_struct.name
@@ -62,12 +71,12 @@ def method_struct_template_names(
         }
     )
     if not method_structs:
-        return set()
+        return {}
     masked = preprocessor._mask_comments_and_literals(code)
     use_re = re.compile(
-        r"\b(?:" + "|".join(re.escape(name) for name in method_structs) + r")\s*<"
+        r"\b(" + "|".join(re.escape(name) for name in method_structs) + r")\s*<"
     )
-    names: set[str] = set()
+    uses: dict[str, set[str]] = {}
     for template in templates:
         parameters = [name for name in template.template_parameters if name]
         if not parameters:
@@ -83,9 +92,8 @@ def method_struct_template_names(
             if closing is None:
                 continue
             if parameter_re.search(text, opening + 1, closing):
-                names.add(template.name)
-                break
-    return names
+                uses.setdefault(template.name, set()).add(use.group(1))
+    return uses
 
 
 def lower_late_member_functions(preprocessor: Any, code: str) -> str:
