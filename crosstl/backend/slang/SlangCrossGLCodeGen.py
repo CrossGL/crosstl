@@ -2880,7 +2880,9 @@ class SlangToCrossGLConverter(
         """
         if name in self.function_map:
             return self.function_map[name]
-        return SLANG_CORE_FUNCTION_IMPORTS.get(name, name)
+        if name in SLANG_CORE_FUNCTION_IMPORTS:
+            return SLANG_CORE_FUNCTION_IMPORTS[name]
+        return name
 
     def map_generic_vector_type(self, slang_type):
         args = self.generic_type_arguments(slang_type)

@@ -151,7 +151,11 @@ def generate_slang_core_function_call(codegen, callee, arguments):
         for index in _UINT_OPERANDS[callee]:
             if _slang_type(codegen, arguments[index]) != "uint":
                 rendered[index] = f"uint({rendered[index]})"
-        name = SLANG_CORE_FUNCTION_RENAMES.get(callee, callee)
+        name = (
+            SLANG_CORE_FUNCTION_RENAMES[callee]
+            if callee in SLANG_CORE_FUNCTION_RENAMES
+            else callee
+        )
         return f"{name}({', '.join(rendered)})"
     integer_type = _integer_slang_type(codegen, arguments[0])
     if integer_type is None:

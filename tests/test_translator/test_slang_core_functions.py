@@ -222,6 +222,23 @@ float4 main(PSIn input) : SV_Target
     assert "interpolateAtCentroid(input.a0)" in _compact(_import(tmp_path, source))
 
 
+def test_slang_input_reads_evaluate_attribute_at_sample_for_glsl(tmp_path):
+    source = """[shader("fragment")]
+float4 main(float2 uv : TEXCOORD0, uint s : SV_SampleIndex) : SV_Target
+{
+    float2 v = EvaluateAttributeAtSample(uv, s);
+    return float4(v, 0.0, 1.0);
+}
+"""
+    path = tmp_path / "sample.slang"
+    path.write_text(source, encoding="utf-8")
+    crossgl = _compact(crosstl.translate(str(path), backend="cgl"))
+    assert "interpolateAtSample(uv, s)" in crossgl
+    assert "EvaluateAttribute" not in crossgl
+    glsl = crosstl.translate(str(path), backend="opengl")
+    assert "interpolateAtSample(" in glsl
+
+
 def _slangc(tmp_path, source, stage):
     slangc = shutil.which("slangc")
     if slangc is None:

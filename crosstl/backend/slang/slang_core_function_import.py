@@ -4,7 +4,9 @@ Slang's core module (``hlsl.meta.slang``, Slang v2026.20) spells GLSL's unpackin
 the name: ``unpackUnorm4x8ToFloat`` is GLSL's ``unpackUnorm4x8``, and ``unpackUnorm4x8ToHalf`` is defined as
 ``half4(unpackUnorm4x8ToFloat(x))`` on every target but Metal, where it is MSL's ``unpack_unorm4x8_to_half``, the
 same value. ``copysign_half``, ``copysign_float`` and ``copysign_double`` are ``copysign`` for one floating-point
-type, and ``EvaluateAttributeAtCentroid`` is GLSL's ``interpolateAtCentroid`` (``InterpolateAtCentroid`` on SPIR-V).
+type. ``EvaluateAttributeAtCentroid`` and ``EvaluateAttributeAtSample`` are GLSL's ``interpolateAtCentroid`` and
+``interpolateAtSample`` (``InterpolateAtCentroid`` and ``InterpolateAtSample`` on SPIR-V); the generators convert the
+``uint`` sample index to the type each target's function takes.
 """
 
 from __future__ import annotations
@@ -24,6 +26,7 @@ SLANG_CORE_FUNCTION_IMPORTS = {
     "copysign_float": "copysign",
     "copysign_double": "copysign",
     "EvaluateAttributeAtCentroid": "interpolateAtCentroid",
+    "EvaluateAttributeAtSample": "interpolateAtSample",
 }
 
 # Each half-precision unpacking function: the CrossGL unpacking function and the half vector it converts to.
