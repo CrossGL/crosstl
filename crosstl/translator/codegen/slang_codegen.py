@@ -145,6 +145,10 @@ from .slang_varying_locations import (
     struct_member_location_prefix,
     varying_location_semantic,
 )
+from .slang_wave_extensions import (
+    SLANG_EXTENDED_WAVE_OPERATIONS,
+    generate_slang_extended_wave_operation,
+)
 from .slang_wave_mesh_ops import SlangWaveMeshOpsMixin
 from .slang_wave_shuffles import (
     SLANG_WAVE_SHUFFLE_ARITIES,
@@ -1676,6 +1680,8 @@ class SlangCodeGen(
     def generate_slang_wave_op_expression(self, node):
         if node.operation in SLANG_WAVE_SHUFFLE_ARITIES:
             return self.generate_slang_wave_shuffle_expression(node)
+        if node.operation in SLANG_EXTENDED_WAVE_OPERATIONS:
+            return generate_slang_extended_wave_operation(self, node)
         expected_arity = self.SLANG_WAVE_INTRINSIC_ARITIES.get(node.operation)
         if expected_arity is None:
             return self.unsupported_slang_wave_op_expression(
