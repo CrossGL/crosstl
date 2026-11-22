@@ -135,6 +135,7 @@ from .intrinsic_named_functions import (
     IntrinsicOverloadAmbiguousError,
     resolve_intrinsic_named_functions,
 )
+from .libm_binary64 import Binary64MathError, lower_binary64_math
 from .local_structs import LocalStructUnsupportedError, hoist_local_structs
 from .lower import Lowerer, RuleInexpressibleError
 from .matrix_spellings import (
@@ -287,6 +288,7 @@ __all__ = [
     "AggregateEqualityUnsupportedError",
     "AmbiguousMatrixSpellingError",
     "ArrayConstructorUnsupportedError",
+    "Binary64MathError",
     "BindingIndexUnresolvedError",
     "BlockMatrixOrderError",
     "BuiltinValueUnsupportedError",
@@ -531,7 +533,9 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     registers; on Metal, DirectX, CUDA and HIP, which compute them with integer promotion, the narrow results of a
     non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). A SPIR-V
     operation the importer kept as a call is then refused with :class:`SpirvOperationUnsupportedError` for every
-    target but CrossGL (:mod:`.spirv_instructions`). Families a target meets for the whole program, such as
+    target but CrossGL (:mod:`.spirv_instructions`). After the rule intrinsics are lowered, binary64 ``exp``,
+    ``exp2``, ``log``, ``log2`` and ``pow`` calls become calls of CrossGL helpers on the targets whose built-ins
+    take binary32 at most (:mod:`.libm_binary64`). Families a target meets for the whole program, such as
     ``fp_ieee``, are discharged last (:mod:`.program_families`). The AST is
     rewritten in place. Raises :class:`RuleInexpressibleError` when the target
     cannot express a rule, :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute
@@ -677,6 +681,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     refuse_spirv_instructions(program, report.target)
     Annotator(program, report.source, report, declared_families).run()
     Lowerer(program, report.target, report).run()
+    lower_binary64_math(program, report.target)
     discharge_program_families(
         program, source_families(report.source) | declared_families, report
     )
