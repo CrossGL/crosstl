@@ -29,13 +29,9 @@ from .rust_function_signatures import RustFunctionSignatureMixin
 from .rust_global_declarations import RustGlobalDeclarationMixin
 from .rust_gpu_constants import rust_integer_constants
 from .rust_gpu_entry_buffers import normalize_rust_gpu_buffers
-from .rust_gpu_interface import RUST_GPU_PRELUDE, UNIFORM_VALUE_KIND
+from .rust_gpu_interface import RUST_GPU_PRELUDE
 from .rust_gpu_slice_length import RustGpuSliceLengthMixin
-from .rust_gpu_spec_constants import (
-    SPEC_CONSTANT_KIND,
-    spec_constant_infos,
-    spec_constant_local,
-)
+from .rust_gpu_spec_constants import spec_constant_infos
 from .rust_gpu_spelling import glam_spelling
 from .rust_gpu_stage_io import GRAPHICS_STAGES, RustGpuStageIoMixin
 from .rust_gpu_storage import PADDED_ELEMENTS, RustGpuPaddedSliceMixin
@@ -926,19 +922,9 @@ class RustCodeGen(
             emitted_param_names.add(param_name)
         for info in promoted_resource_params:
             params.append(self.generate_rust_resource_parameter(info))
-            if info.get("kind") == UNIFORM_VALUE_KIND:
-                # A uniform is read-only, so the entry point reads it once into a local of the same name.
-                uniform_name = self.rust_identifier(info["node"].name)
-                local_alias_declarations.append(
-                    f"let {uniform_name}: {self.map_type(info['type_name'])} = *{uniform_name};"
-                )
-            elif info.get("kind") == SPEC_CONSTANT_KIND:
-                spec_name = self.rust_identifier(info["node"].name)
-                local = spec_constant_local(
-                    spec_name, info, self.map_type(info["type_name"])
-                )
-                if local is not None:
-                    local_alias_declarations.append(local)
+            local = self.rust_resource_parameter_local(info)
+            if local is not None:
+                local_alias_declarations.append(local)
 
         params_str = ", ".join(params) if params else ""
         self.retype_rust_workgroup_references()

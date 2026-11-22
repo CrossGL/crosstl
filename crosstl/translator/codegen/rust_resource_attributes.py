@@ -22,7 +22,11 @@ from .rust_gpu_interface import (
     is_uniform_value,
     storage_slice_parts,
 )
-from .rust_gpu_spec_constants import SPEC_CONSTANT_KIND, spec_constant_parameter
+from .rust_gpu_spec_constants import (
+    SPEC_CONSTANT_KIND,
+    spec_constant_local,
+    spec_constant_parameter,
+)
 
 
 class RustResourceAttributeMixin:
@@ -597,6 +601,21 @@ class RustResourceAttributeMixin:
         if kind == UNIFORM_VALUE_KIND:
             return f"{attribute}{name}: &{self.map_type(type_name)}"
         return f"{attribute}{name}: {self.map_function_parameter_type(type_name)}"
+
+    def rust_resource_parameter_local(self, resource_info):
+        """The local an entry point declares from its resource parameter, else ``None``.
+
+        A uniform is read-only, so the entry point reads it once into a local of the same name; a specialization
+        constant may need a typed local (:func:`.rust_gpu_spec_constants.spec_constant_local`).
+        """
+        kind = resource_info.get("kind")
+        name = self.rust_identifier(resource_info["node"].name)
+        rust_type = self.map_type(resource_info["type_name"])
+        if kind == UNIFORM_VALUE_KIND:
+            return f"let {name}: {rust_type} = *{name};"
+        if kind == SPEC_CONSTANT_KIND:
+            return spec_constant_local(name, resource_info, rust_type)
+        return None
 
     def reserve_explicit_rust_resource_binding(self, node, type_name, kind=None):
         name = getattr(node, "name", None)
