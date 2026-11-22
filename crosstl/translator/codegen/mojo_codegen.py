@@ -42,6 +42,7 @@ from .generic_function_utils import (
     prepare_generic_function_specializations,
 )
 from .generic_global_types import collect_constant_and_cbuffer_member_types
+from .lowering_refusals import refuse_unsupported
 from .mojo_arithmetic_conversions import MojoArithmeticConversionMixin
 from .mojo_builtin_calls import MojoBuiltinCallMixin
 from .mojo_call_expressions import MojoCallExpressionMixin
@@ -991,8 +992,14 @@ class MojoCodeGen(
             self.required_mesh_helpers.add("set_mesh_output_counts")
             return f"_crossgl_set_mesh_output_counts({', '.join(args)})"
         if operation == "DispatchMesh":
-            self.required_mesh_helpers.add("dispatch_mesh")
-            return f"_crossgl_dispatch_mesh({', '.join(args)})"
+            # Mojo's gpu package launches compute kernels only: it has no task stage and no operation that
+            # launches mesh workgroups, so a task entry has no Mojo lowering.
+            return refuse_unsupported(
+                "Mojo",
+                "DispatchMesh",
+                "Mojo's gpu package has no task stage and no operation that launches mesh workgroups",
+                "",
+            )
 
         raise MojoRefusal(f"Unsupported Mojo mesh intrinsic {operation}")
 
@@ -1202,8 +1209,6 @@ class MojoCodeGen(
             code += "# CrossGL mesh/task placeholders\n"
             if "set_mesh_output_counts" in self.required_mesh_helpers:
                 code += self.generate_set_mesh_output_counts_helper()
-            if "dispatch_mesh" in self.required_mesh_helpers:
-                code += self.generate_dispatch_mesh_helper()
             code += "\n"
 
         if self.required_reinterpret_helpers:
@@ -1280,16 +1285,6 @@ class MojoCodeGen(
         for key in sorted(self.required_matrix_diagonal_helpers):
             code += self.generate_matrix_diagonal_helper(*key)
         return code + "\n"
-
-    def generate_dispatch_mesh_helper(self):
-        return (
-            "def _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType]("
-            "x: X, y: Y, z: Z):\n"
-            "    pass\n\n"
-            "def _crossgl_dispatch_mesh[X: AnyType, Y: AnyType, Z: AnyType, "
-            "Payload: AnyType](x: X, y: Y, z: Z, payload: Payload):\n"
-            "    pass\n\n"
-        )
 
     @property
     def local_variable_types(self):
