@@ -63,6 +63,7 @@ from .rust_tables import (
 )
 from .rust_type_definitions import RustTypeDefinitionMixin
 from .rust_values import RustValueMixin
+from .rust_vector_elements import RustVectorElementMixin
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import is_fragment_output_parameter, normalize_stage_name
 
@@ -99,6 +100,7 @@ class RustCodeGen(
     RustGpuStageIoMixin,
     LoweringRefusalMixin,
     RustBuiltinResultTypeMixin,
+    RustVectorElementMixin,
 ):
     """Emit rust-gpu shader crates from the shared CrossGL AST."""
 

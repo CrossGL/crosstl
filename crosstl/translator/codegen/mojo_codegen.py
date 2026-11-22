@@ -52,6 +52,7 @@ from .mojo_generic_types import MojoGenericTypeMixin
 from .mojo_kernel_arguments import MojoKernelArgumentMixin
 from .mojo_match_lowering import MojoMatchMixin
 from .mojo_math_helpers import MojoMathHelperMixin
+from .mojo_numeric_functions import MOJO_NUMERIC_CALLABLE_NAMES
 from .mojo_pointer_expressions import MojoPointerExpressionMixin
 from .mojo_private_globals import MojoPrivateGlobalMixin
 from .mojo_refusals import (  # noqa: F401  (registers the Mojo refusal)
@@ -552,7 +553,10 @@ class MojoCodeGen(
         self.program_type_names = declared_type_names(ast)
         output = self.render_program(ast)
         refuse_written_foreign_calls(
-            output, MOJO_CALLABLE_FUNCTION_NAMES, "Mojo", non_calls=MOJO_NON_CALLS
+            output,
+            MOJO_CALLABLE_FUNCTION_NAMES | MOJO_NUMERIC_CALLABLE_NAMES,
+            "Mojo",
+            non_calls=MOJO_NON_CALLS,
         )
         return output
 
