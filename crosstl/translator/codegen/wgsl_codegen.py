@@ -119,7 +119,6 @@ from .wgsl_mixed_float_operands import (
     wgsl_mixed_float_operands,
 )
 from .wgsl_multisampled_textures import WGSLMultisampledTextureMixin
-from .wgsl_must_use import wgsl_call_statement
 from .wgsl_narrow_storage import narrow_storage_word_type
 from .wgsl_parameter_lowering import WGSLParameterLoweringMixin
 from .wgsl_program_collection import WGSLProgramCollectionMixin
