@@ -32,6 +32,26 @@ def test_glsl_460_group_votes_run_through_arb_shader_group_vote():
     assert execution.runnable("glsl", written) == written
 
 
+def test_glsl_460_counter_ops_run_through_arb_shader_atomic_counter_ops():
+    source = (
+        "#version 460\nlayout(binding = 0) uniform atomic_uint c;\n"
+        "void main() { uint r = atomicCounterAdd(c, 2u) + atomicCounterCompSwap (c, 1u, 3u);"
+        " r += atomicCounterIncrement(c); }\n"
+    )
+    assert execution.runnable("glsl", source) == (
+        "#version 450 core\n#extension GL_ARB_shader_atomic_counter_ops : require\n"
+        "layout(binding = 0) uniform atomic_uint c;\n"
+        "void main() { uint r = atomicCounterAddARB(c, 2u) + atomicCounterCompSwapARB (c, 1u, 3u);"
+        " r += atomicCounterIncrement(c); }\n"
+    )
+    both = "#version 460\nvoid main() { bool r = anyInvocation(atomicCounterMax(c, 1u) > 0u); }\n"
+    assert execution.runnable("glsl", both) == (
+        "#version 450 core\n#extension GL_ARB_shader_group_vote : require\n"
+        "#extension GL_ARB_shader_atomic_counter_ops : require\n"
+        "void main() { bool r = anyInvocationARB(atomicCounterMaxARB(c, 1u) > 0u); }\n"
+    )
+
+
 def _glsl(declared="#version 460"):
     feature = Feature("glsl", "function", "sin", SIN.signature, crossgl="sin")
     native = probes.build(feature, "glsl").source

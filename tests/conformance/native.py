@@ -182,8 +182,14 @@ def execute_metal(job):
 def execute_opengl(job):
     import moderngl
 
+    from . import glsl_resources
+
+    if job.get("ordered"):
+        # llvmpipe reads its thread count when the worker's first context starts; without threads it runs the
+        # workgroups in index order, so atomic results do not depend on scheduling (:mod:`.glsl_resources`).
+        os.environ["LP_NUM_THREADS"] = "0"
     context = moderngl.create_standalone_context(require=430, backend="egl")
-    buffers, shader = [], None
+    buffers, shader, resources = [], None, {}
     try:
         identity = _expect(
             job, f"{context.info['GL_RENDERER']}; {context.info['GL_VERSION']}"
@@ -204,6 +210,7 @@ def execute_opengl(job):
             constants = context.buffer(data)
             buffers.append((constants, None))
             constants.bind_to_uniform_block(block["slot"])
+        resources = glsl_resources.bind(job)
         shader.run(group_x=_groups(job))
         context.finish()
         for buffer, filename in buffers:
@@ -211,6 +218,7 @@ def execute_opengl(job):
                 (Path(job["directory"]) / filename).write_bytes(buffer.read())
         return {"device": identity, "runtime": job["runtime"]}
     finally:
+        glsl_resources.release(resources)
         for buffer, _ in buffers:
             buffer.release()
         if shader is not None:
