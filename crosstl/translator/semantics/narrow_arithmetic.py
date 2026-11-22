@@ -25,7 +25,13 @@ from __future__ import annotations
 
 from .. import ast as A
 from .hub_types import HubType, call_name
-from .narrow import PROMOTING_SOURCES, NarrowLegalizer, narrow_from_name, narrow_of
+from .narrow import (
+    PROMOTING_SOURCES,
+    NarrowLegalizer,
+    integer_literal_type,
+    narrow_from_name,
+    narrow_of,
+)
 from .rewrite import call, set_child
 
 __all__ = ["PROMOTING_TARGETS", "wrap_narrow_arithmetic"]
@@ -37,6 +43,8 @@ _CARRIED_BYTE_VECTOR_TARGETS = frozenset({"directx"})
 # Operators computed on ``uint`` operands so the 32-bit intermediate wraps.
 _UNSIGNED_INTERMEDIATE = frozenset({"+", "-", "*", "<<"})
 _SHIFTS = frozenset({"<<", ">>"})
+# Operators whose result takes the common type of their operands.
+_TYPED_BINARY = frozenset({"+", "-", "*", "/", "%", "&", "|", "^"})
 _GLSL_PREFIX = {"i": "i", "u": "u"}
 
 
@@ -83,6 +91,8 @@ class NarrowArithmeticWrapper(NarrowLegalizer):
 
     # Rewrites ---------------------------------------------------------------------------------------------------
     def rewrite(self, node):
+        if isinstance(node, A.BinaryOpNode):
+            self._widen_literal_vector_operand(node)
         if isinstance(node, (A.BinaryOpNode, A.UnaryOpNode)):
             unary = isinstance(node, A.UnaryOpNode)
             return self.operation(node, self.arithmetic_narrow(node), unary=unary)
@@ -104,6 +114,26 @@ class NarrowArithmeticWrapper(NarrowLegalizer):
         unwrapped = self._stored(value, narrow)
         if unwrapped is not value:
             set_child(node, field, None, unwrapped)
+
+    def _widen_literal_vector_operand(self, node):
+        """Convert a narrow vector operand of an int literal to the literal's type where the source does so.
+
+        GLSL and Slang compute ``u8vec2 v; v * 2`` as ``ivec2(v) * 2`` (``literal_widens``); MSL and HLSL compute
+        the same expression at the vector's width, so the conversion is written out for them.
+        """
+        if not self.literal_widens or node.op not in _TYPED_BINARY:
+            return
+        for side, other in (("left", node.right), ("right", node.left)):
+            operand = getattr(node, side)
+            narrow = self.narrow_value(operand)
+            literal = integer_literal_type(other)
+            if narrow is None or narrow.lanes == 1 or literal is None:
+                continue
+            prefix = "i" if literal == "int" else "u"
+            widened = call(f"{prefix}vec{narrow.lanes}", [operand])
+            widened.source_location = getattr(operand, "source_location", None)
+            set_child(node, side, None, widened)
+            return
 
     @staticmethod
     def _stored(value, narrow):

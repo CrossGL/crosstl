@@ -2,12 +2,12 @@
 
 CrossGL ``printf(format, values...)`` is the shader debug print of HLSL compiled to SPIR-V, Slang and GLSL's
 GL_EXT_debug_printf ``debugPrintfEXT``, with the Vulkan debug printf format. SPIR-V carries it as
-``NonSemantic.DebugPrintf``, GLSL as ``debugPrintfEXT`` and Metal 3.2 as ``os_log_default.log``.
-:func:`refuse_debug_printf` refuses the targets that have no shader print:
-
-* DXIL has no print operation; DXC accepts ``printf`` only when it compiles HLSL to SPIR-V (``-spirv``) and
-  reports "use of unsupported identifier 'printf'" otherwise, so the Direct3D targets cannot carry it.
-* WebGL 2 (GLSL ES 3.00) and WGSL define no shader print and no extension that adds one.
+``NonSemantic.DebugPrintf``, GLSL as ``debugPrintfEXT``, Metal 3.2 as ``os_log_default.log`` and HLSL as its
+``printf`` intrinsic. HLSL's ``printf`` is a SPIR-V feature: DXC writes it as ``NonSemantic.DebugPrintf`` with
+``-spirv`` and, since DXIL has no print operation, rejects it with "use of unsupported identifier 'printf'" when it
+compiles to DXIL, so HLSL output keeps the print and DXIL compilation fails at it rather than dropping it.
+:func:`refuse_debug_printf` refuses the targets that have no shader print: WebGL 2 (GLSL ES 3.00) and WGSL define
+no shader print and no extension that adds one.
 
 A program that declares its own ``printf`` function calls that function, which every target can.
 """
@@ -26,12 +26,7 @@ __all__ = [
 
 DEBUG_PRINTF_FUNCTIONS = frozenset({"printf", "debugPrintfEXT"})
 
-_HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
 _REASONS = {
-    **dict.fromkeys(
-        _HLSL_TARGETS,
-        "DXIL has no print operation; DXC accepts printf only when it compiles HLSL to SPIR-V",
-    ),
     "webgl": "WebGL 2 (GLSL ES 3.00) has no shader print",
     "wgsl": "WGSL has no shader print",
     "webgpu": "WGSL has no shader print",
