@@ -8,7 +8,9 @@ you can tell before a local run which rows it will report as untested.
 
 ``run --pairs REPORT`` measures the translation matrix (:mod:`.pairs`) instead of rows: the cells that the rows of
 ``REPORT``, a merged report, define, for each ``--backend`` as the target. ``merge`` adds such reports' cells to the
-rows. ``publish --previous`` keeps the previously published matrix when the report has none.
+rows. ``publish --previous`` keeps the previously published matrix when the report has none, and ``publish --matrix``
+puts a report's matrix in place of the one another report holds, so that a nightly run that finishes after a push
+published newer rows still publishes the matrix it measured.
 """
 
 from __future__ import annotations
@@ -114,10 +116,17 @@ def _parser() -> argparse.ArgumentParser:
     publishing.add_argument(
         "--history", type=Path, help="the previously published history.csv, if any"
     )
-    publishing.add_argument(
+    carried = publishing.add_mutually_exclusive_group()
+    carried.add_argument(
         "--previous",
         type=Path,
         help="the previously published coverage.json, if any, whose translation matrix a report without one keeps",
+    )
+    carried.add_argument(
+        "--matrix",
+        type=Path,
+        help="a report whose translation matrix replaces the report's own, such as a nightly run's when a push "
+        "published newer rows before it finished",
     )
     publishing.add_argument("--repository", default="CrossGL/crosstl")
     reconciling = commands.add_parser(
@@ -333,7 +342,14 @@ def _publish(args: argparse.Namespace) -> int:
     if args.history and args.history.is_file():
         previous = args.history.read_text(encoding="utf-8")
     data = report.load(args.report)
-    if args.previous and args.previous.is_file():
+    if args.matrix:
+        measured = report.load(args.matrix)
+        if not measured.get("pairs"):
+            print(f"error: {args.matrix} has no translation matrix", file=sys.stderr)
+            return 2
+        rows = {k: v for k, v in data.items() if k not in ("pairs", "matrix")}
+        data = pairs.reconcile(rows, measured)
+    elif args.previous and args.previous.is_file():
         try:
             data = pairs.reconcile(data, report.load(args.previous))
         except (OSError, ValueError, KeyError) as error:

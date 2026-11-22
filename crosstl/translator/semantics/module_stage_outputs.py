@@ -6,7 +6,9 @@ shader that writes an output array, ``gl_FragDepth`` or ``gl_SampleMask`` is imp
 declare stage outputs that way too. HLSL and MSL have no module-scope outputs: the HLSL generator emitted them as
 globals, which HLSL makes constant, and the Metal generator refused the stores.
 
-CrossGL written the GLSL way declares stage inputs at module scope too (``in vec3 position @location(0);``). HLSL
+CrossGL written the GLSL way declares stage inputs at module scope too (``in vec3 position @location(0);``), and
+the SPIR-V and GLSL importers write the same declaration with the attribute (``float3 position @input
+@location(0);``). HLSL
 and MSL read a module-scope variable as a constant: the HLSL generator declared the input as a global, which HLSL
 makes a uniform, and the Metal generator as a ``constant`` initialized to zero, so the stage read 0 instead of its
 input.
@@ -48,16 +50,33 @@ _DIRECTIONS = {"in": "input", "out": "output"}
 _NOT_INTERFACE = frozenset({"uniform", "buffer", "shared", "const", "static", "inout"})
 
 
+_ATTRIBUTE_DIRECTIONS = {"input": "in", "output": "out"}
+
+
+def _attribute_directions(variable):
+    """The directions the ``@input`` and ``@output`` attributes of ``variable`` name, in source order."""
+    return [
+        _ATTRIBUTE_DIRECTIONS[str(getattr(attribute, "name", "")).lower()]
+        for attribute in getattr(variable, "attributes", None) or []
+        if str(getattr(attribute, "name", "")).lower() in _ATTRIBUTE_DIRECTIONS
+    ]
+
+
 def _direction(variable):
-    """``in`` or ``out`` for a module-scope stage input or output, else None."""
+    """``in`` or ``out`` for a module-scope stage input or output, else None.
+
+    The direction comes from an ``in``/``out`` qualifier or an ``@input``/``@output`` attribute; a declaration that
+    names both directions, or that is a uniform, buffer, shared or constant, is no stage interface.
+    """
     qualifiers = {
         str(qualifier).lower()
         for qualifier in getattr(variable, "qualifiers", None) or []
     }
     if qualifiers & _NOT_INTERFACE:
         return None
-    directions = [direction for direction in _DIRECTIONS if direction in qualifiers]
-    return directions[0] if len(directions) == 1 else None
+    directions = {direction for direction in _DIRECTIONS if direction in qualifiers}
+    directions.update(_attribute_directions(variable))
+    return next(iter(directions)) if len(directions) == 1 else None
 
 
 def adopt_module_stage_outputs(program, target) -> int:
@@ -97,9 +116,10 @@ def adopt_module_stage_outputs(program, target) -> int:
             for qualifier in variable.qualifiers or []
             if str(qualifier).lower() != direction
         ]
-        variable.attributes = list(variable.attributes or []) + [
-            A.AttributeNode(_DIRECTIONS[direction])
-        ]
+        if not _attribute_directions(variable):
+            variable.attributes = list(variable.attributes or []) + [
+                A.AttributeNode(_DIRECTIONS[direction])
+            ]
     stage.local_variables = (
         list(getattr(stage, "local_variables", None) or []) + outputs
     )

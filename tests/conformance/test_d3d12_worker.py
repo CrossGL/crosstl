@@ -98,6 +98,57 @@ def test_structured_buffers_and_constants_keep_their_registers(tmp_path):
     assert files == ["input.bin", "output.bin"]
 
 
+def _inputs(tmp_path, count):
+    """Write the extra input files of a ``count``-input job, each its own size, and return every input's size."""
+    sizes = [512]
+    for slot in range(1, count):
+        (tmp_path / f"input{slot}.bin").write_bytes(bytes([slot]) * 64 * slot)
+        sizes.append(64 * slot)
+    return sizes
+
+
+@pytest.mark.parametrize("count", [2, 3])
+def test_every_input_buffer_gets_its_own_allocation_and_register(tmp_path, count):
+    inputs = [
+        {"register": "u0", "kind": "structured", "stride": 4},
+        {"register": "t1", "kind": "structured", "stride": 4},
+        {"register": "u2", "kind": "raw", "stride": 0},
+    ][:count]
+    job = _job(
+        tmp_path,
+        [*inputs, {"register": f"u{count}", "kind": "structured", "stride": 4}],
+        constants=bytes(20),
+    )
+    job["constants"]["slot"] = 0
+    expected = _inputs(tmp_path, count) + [160]
+    payload, files, sizes = native.d3d12_request(job, SHADER)
+    assert files == list(native.buffer_files(count))
+    assert sizes == [*expected, 256]
+    kinds = [native.D3D12_UAV, native.D3D12_SRV, native.D3D12_UAV | native.D3D12_RAW]
+    strides = [4, 4, 0]
+    assert _decode(payload)[2] == [
+        *(
+            (kinds[slot], slot, slot, strides[slot], 0, expected[slot])
+            for slot in range(count)
+        ),
+        (native.D3D12_UAV, count, count, 4, 0, 160),
+        (native.D3D12_CBV, 0, count + 1, 0, 0, 256),
+    ]
+
+
+def test_a_resource_without_a_buffer_file_is_refused(tmp_path):
+    job = _job(
+        tmp_path,
+        [
+            {"register": "u0", "kind": "raw", "stride": 0},
+            {"register": "u1", "kind": "raw", "stride": 0},
+            {"register": "u2", "kind": "raw", "stride": 0},
+        ],
+    )
+    with pytest.raises(FileNotFoundError, match="input1.bin"):
+        native.d3d12_request(job, SHADER)
+
+
 def test_readbacks_and_runtime_identity_decode():
     payload = (
         struct.pack("<II", native.D3D12_READBACKS, 2)
@@ -123,8 +174,10 @@ def test_readbacks_and_runtime_identity_decode():
     }
 
 
-@pytest.mark.parametrize("kind", ["raw", "structured"])
-def test_the_worker_accepts_the_request(tmp_path, kind):
+@pytest.mark.parametrize(
+    ("kind", "count"), [("raw", 1), ("structured", 1), ("structured", 3)]
+)
+def test_the_worker_accepts_the_request(tmp_path, kind, count):
     """The worker's request parser is portable C++; its ``--validate`` mode runs on any host."""
     compiler = shutil.which("c++") or shutil.which("clang++") or shutil.which("g++")
     if compiler is None:
@@ -142,16 +195,19 @@ def test_the_worker_accepts_the_request(tmp_path, kind):
     )
     assert built.status == "accepted", built.log
     stride = {"raw": 0, "structured": 4}[kind]
+    inputs = [
+        {"register": f"t{slot}", "kind": kind, "stride": stride}
+        for slot in range(count)
+    ]
     job = _job(
         tmp_path,
-        [
-            {"register": "t0", "kind": kind, "stride": stride},
-            {"register": "u1", "kind": kind, "stride": stride},
-        ],
+        [*inputs, {"register": f"u{count}", "kind": kind, "stride": stride}],
         constants=bytes(48),
     )
+    job["constants"]["slot"] = 0
+    _inputs(tmp_path, count)
     request = tmp_path / "request.bin"
     request.write_bytes(native.d3d12_request(job, SHADER)[0])
     checked = run([worker, request, "--validate"])
     assert checked.status == "accepted", checked.log
-    assert checked.log.strip() == "3 allocations, 1 dispatches"
+    assert checked.log.strip() == f"{count + 2} allocations, 1 dispatches"

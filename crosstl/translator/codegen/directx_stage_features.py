@@ -11,6 +11,7 @@ from ..ast import (
     ReferenceType,
 )
 from ..refusals import DirectXRefusal
+from ..semantics.work_graph_nodes import EMPTY_NODE_TYPES
 from .array_utils import (
     ZeroExtentArrayUnsupportedError,
     evaluate_literal_int_expression,
@@ -1051,6 +1052,9 @@ class DirectXStageFeatureMixin:
 
         if vtype_str in self.type_mapping:
             mapped_type = self.type_mapping[vtype_str]
+        elif vtype_str in EMPTY_NODE_TYPES:
+            # The work-graph node types without a record type (hlsl_work_graph_nodes); HLSL spells them so.
+            mapped_type = vtype_str
         else:
             mapped_type = written_type_name(
                 vtype_str,

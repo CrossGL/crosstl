@@ -46,6 +46,7 @@ from .generic_pointer_spaces import (
     refuse_written_generic_pointers,
 )
 from .generic_struct_utils import generic_struct_specialized_fields
+from .metal_argument_tables import assign_metal_argument_tables
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_draw_base_indices import offset_metal_draw_base_indices
@@ -70,6 +71,7 @@ from .metal_stage_input_builtins import (
     lower_metal_helper_invocation_reads,
     split_metal_stage_input_builtins,
 )
+from .metal_typed_buffers import lower_metal_typed_buffers
 from .metal_vertex_input_builtins import refuse_unbound_metal_vertex_inputs
 from .pointer_reinterpret import (
     crossgl_literal_positive_integer,
@@ -406,6 +408,7 @@ class MetalProgramEntryMixin:
             ),
         )
         ast = lower_byte_address_buffers(ast, self.refuse_lowering)
+        ast = lower_metal_typed_buffers(ast, self.refuse_lowering)
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
         ast = lower_runtime_texture_arrays(ast)
         ast = canonicalize_separate_textures(ast, "Metal", depth_for_compares=True)
@@ -419,6 +422,7 @@ class MetalProgramEntryMixin:
         ast = rename_metal_namespace_names(ast)
         ast = rename_metal_keyword_parameters(ast)
         ast = lower_metal_post_tessellation(ast, self)
+        ast = assign_metal_argument_tables(ast, self)
         ast = rename_metal_shadowing_declarations(ast, self)
         refuse_unbound_metal_vertex_inputs(ast, self)
         ast = split_metal_stage_input_builtins(ast, self)
