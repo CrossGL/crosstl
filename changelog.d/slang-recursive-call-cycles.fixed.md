@@ -1,0 +1,1 @@
+Slang output refuses recursive call cycles, such as `fact` calling itself or `even` and `odd` calling each other, with `RecursionUnsupportedError` (code `project.translate.slang-recursion-unsupported`) that names the cycle. It used to write the cycle, which slangc rejects with error E55201 "recursion not allowed" (#4747).

@@ -234,6 +234,18 @@ class SlangControlFlowMixin:
         result += self.indent() + "}"
         return result
 
+    def generate_loop(self, node):
+        """An unconditional loop: ``while (true)`` — the shape self tail-call lowering produces."""
+        result = "while (true)\n{\n"
+
+        self.indent_level += 1
+        for stmt in self.get_statements(node.body):
+            result += self.emit_statement(stmt) + "\n"
+        self.indent_level -= 1
+
+        result += self.indent() + "}"
+        return result
+
     def generate_do_while(self, node):
         condition = self.slang_precise_condition(
             node.condition,
