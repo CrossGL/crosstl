@@ -84,8 +84,9 @@ def test_shared_subgroup_barrier_is_checked_in_reachable_helpers(tmp_path):
     with pytest.raises(BuiltinValueUnsupportedError) as raised:
         _translate(tmp_path, FRAGMENT_HELPER)
 
-    assert "subgroupMemoryBarrierShared in 'sharedBarrier' of the fragment stage" in str(
-        raised.value
+    assert (
+        "subgroupMemoryBarrierShared in 'sharedBarrier' of the fragment stage"
+        in str(raised.value)
     )
 
 
