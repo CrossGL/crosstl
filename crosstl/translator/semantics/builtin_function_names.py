@@ -337,6 +337,7 @@ CUDA_FUNCTION_NAMES = (
 # program uses them.
 _CROSSGL_OPERATION_NAMES = _names("""
 atomicLoad atomicStore atomicCompareExchange atomicCompareExchangeWeak atomicThreadFence workgroupBarrier
+workgroupUniformLoad
 workgroupExecutionBarrier subgroupExecutionBarrier deviceMemoryBarrier allMemoryBarrier textureResidency
 textureResident textureGatherCompareOffsets textureSamplePosition write_sampler_feedback write_sampler_feedback_bias
 write_sampler_feedback_grad write_sampler_feedback_level fwidth_fine fwidth_coarse doubleBitsToLong longBitsToDouble

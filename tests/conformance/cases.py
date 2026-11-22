@@ -1035,6 +1035,15 @@ def o_buffer_helper_parameters(inp):
     return np.array(out, dtype=np.int32)
 
 
+def o_workgroup_uniform_load(inp):
+    """Per 64-invocation workgroup: ``tile[63]``, the sum of the inputs, ``cells[2].w[1]`` and the rewritten ``tile[0]``."""
+    out = []
+    for group in inp.astype(np.int64).reshape(-1, 64):
+        loads = [group[63], group.sum(), group[2] + 2, group[0] * 2 + 1]
+        out.extend(loads * 64)
+    return np.array(out, dtype=np.int32)
+
+
 def _width_check(inp, out, group=64, divergent=False):
     """Parametric oracle for SIMD/wave reductions: the reported width w must be uniform and every lane's sum must
     equal the sum over its SIMD-group (consecutive chunks of w threads within each threadgroup); with
@@ -2227,6 +2236,17 @@ CASES = [
         SMALL,
         np.int32,
         o_buffer_helper_parameters,
+        threads=128,
+    ),
+    Case(
+        "x_workgroup_uniform_load",
+        "H13",
+        "workgroupUniformLoad of a shared array element, an atomically built sum and a structure member",
+        "CrossGL workgroupUniformLoad (WGSL workgroupUniformLoad): a workgroup barrier, the read every invocation of "
+        "the workgroup sees, and a barrier before any invocation writes the memory again",
+        SMALL,
+        np.int32,
+        o_workgroup_uniform_load,
         threads=128,
     ),
     Case(
