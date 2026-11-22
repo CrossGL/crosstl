@@ -236,6 +236,7 @@ from .hlsl_groupshared_word_views import lower_groupshared_word_views
 from .hlsl_half_private_storage import lower_half_private_storage
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_host_workgroup_size import hlsl_entry_local_size
+from .hlsl_matrix_initializers import hlsl_matrix_aggregate_initializer
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_mesh_semantics import collect_hlsl_mesh_output_struct_offsets
 from .hlsl_narrow_integers import HLSLNarrowIntegerMixin
@@ -8564,80 +8565,8 @@ class HLSLCodeGen(
         self.current_hlsl_private_pointer_condition_interval_names = set()
 
     def hlsl_matrix_aggregate_initializer(self, expr, mapped_type):
-        """Lower ``{...}`` for a CrossGL matrix.
-
-        Nested lists are columns (GLSL 4.60 section 4.1.11) and a flat list fills the columns in
-        order; missing trailing elements are zero. HLSL constructors fill rows, so the columns are
-        built as the transposed matrix, which keeps the elements in evaluation order.
-        """
-        dimensions = self.hlsl_matrix_dimensions(mapped_type)
-        if dimensions is None:
-            return None
-        if self.hlsl_is_zero_aggregate_initializer(expr):
-            return self.hlsl_value_initialized_expression(expr, mapped_type)
-
-        component_type, rows, columns = dimensions
-        elements = list(getattr(expr, "elements", []) or [])
-        nested_count = sum(
-            isinstance(element, ArrayLiteralNode) for element in elements
-        )
-        if nested_count not in {0, len(elements)}:
-            self.hlsl_aggregate_error(
-                expr,
-                expected_type=mapped_type,
-                reason="matrix-shape-mismatch",
-                detail="matrix columns cannot mix nested and flat initializer elements",
-            )
-
-        rendered = []
-        if nested_count or not elements:
-            if len(elements) > columns:
-                self.hlsl_aggregate_error(
-                    expr,
-                    expected_type=mapped_type,
-                    reason="element-count-mismatch",
-                    expected_element_count=columns,
-                )
-            for column in elements:
-                column_elements = list(getattr(column, "elements", []) or [])
-                if len(column_elements) > rows:
-                    self.hlsl_aggregate_error(
-                        column,
-                        expected_type=mapped_type,
-                        reason="element-count-mismatch",
-                        expected_element_count=rows,
-                    )
-                rendered.extend(
-                    self.generate_expression_with_expected(element, component_type)
-                    for element in column_elements
-                )
-                rendered.extend(
-                    self.hlsl_value_initialized_expression(column, component_type)
-                    for _index in range(len(column_elements), rows)
-                )
-            rendered.extend(
-                self.hlsl_value_initialized_expression(expr, component_type)
-                for _index in range(len(elements) * rows, rows * columns)
-            )
-        else:
-            expected_count = rows * columns
-            if len(elements) > expected_count:
-                self.hlsl_aggregate_error(
-                    expr,
-                    expected_type=mapped_type,
-                    reason="element-count-mismatch",
-                    expected_element_count=expected_count,
-                )
-            rendered.extend(
-                self.generate_expression_with_expected(element, component_type)
-                for element in elements
-            )
-            rendered.extend(
-                self.hlsl_value_initialized_expression(expr, component_type)
-                for _index in range(len(elements), expected_count)
-            )
-        transposed_type = f"{component_type}{columns}x{rows}"
-        return f"transpose({transposed_type}({', '.join(rendered)}))"
+        """Lower ``{...}`` for a CrossGL matrix (:mod:`.hlsl_matrix_initializers`)."""
+        return hlsl_matrix_aggregate_initializer(self, expr, mapped_type)
 
     def generate_texture_call(self, func_name, args, *, call_node=None):
         if not func_name:
