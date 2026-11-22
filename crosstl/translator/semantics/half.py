@@ -70,8 +70,9 @@ HALF_TARGETS = {
     "vulkan": "the SPIR-V emitter has no 16-bit floating-point type",
     "wgsl": "WGSL f16 needs the optional shader-f16 feature (WGSL section 4.1.1)",
 }
-# Sources whose floating-point literals adopt the type of a half operand (HLSL and Slang literal float).
-FLOAT_LITERAL_ADOPTING = frozenset({"directx", "slang"})
+# Sources whose floating-point literals adopt the type of a half operand (HLSL literal float). A Slang float literal
+# is a ``float``: slangc writes ``half a; a * 2.0`` as ``OpFMul %float`` (an int literal converts to half there).
+FLOAT_LITERAL_ADOPTING = frozenset({"directx"})
 HALF = HubType("f", 16)
 
 _SCALARS = frozenset({"half", "float16", "float16_t", "f16"})

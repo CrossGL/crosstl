@@ -2632,7 +2632,7 @@ def test_spirv_subgroup_quad_swap_dynamic_direction_refused():
     tokens = tokenize_code(SPIRV_SUBGROUP_QUAD_SWAP_DYNAMIC_DIRECTION_ASSEMBLY)
     with pytest.raises(
         SpirvInstructionUnsupportedError,
-        match="OpGroupNonUniformQuadSwap needs a constant direction",
+        match="OpGroupNonUniformQuadSwap swaps in direction",
     ):
         parse_code(tokens)
 

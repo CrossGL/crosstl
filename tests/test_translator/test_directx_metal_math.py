@@ -10,7 +10,7 @@ import sys
 import pytest
 
 from crosstl import translate
-from crosstl.backend.DirectX.DirectxCrossGLCodeGen import HLSLSelectOverloadError
+from crosstl.backend.DirectX.select_overload_error import HLSLSelectOverloadError
 from crosstl.project.native_runtime_drivers import DirectXComputeRuntime
 from crosstl.project.runtime_verification import (
     NativeRuntimeBufferBinding,
@@ -139,7 +139,7 @@ def test_hlsl_select_roundtrip_preserves_source_helper(tmp_path):
     intermediate = translate(str(source), backend="crossgl", format_output=False)
     assert "select(10.0, 20.0, 30.0, 40.0)" in intermediate
     generated = translate(str(source), backend="directx", format_output=False)
-    assert "select_(10.0, 20.0, 30.0, 40.0)" in generated
+    assert "select_fn(10.0, 20.0, 30.0, 40.0)" in generated
     assert_directx_warnings_clean_if_available(generated, tmp_path)
 
 
@@ -191,7 +191,7 @@ def test_directx_metal_math_preserves_source_helpers(tmp_path, name, arity):
         }}
     """
     generated = HLSLCodeGen().generate(parse(source))
-    target_name = "select_" if name == "select" else name
+    target_name = "select_fn" if name == "select" else name
     assert f"float {target_name}({parameters})" in generated
     assert f"results[0] = {target_name}({arguments});" in generated
     assert_directx_warnings_clean_if_available(generated, tmp_path)
@@ -211,24 +211,44 @@ def test_directx_source_select_alias_avoids_existing_names(tmp_path):
         }
     }""")
     generated = HLSLCodeGen().generate(ast)
-    assert "float select___(float x, float y, bool choose)" in generated
-    assert "results[0] = select___(select_(1.0), select__, false);" in generated
+    assert "float select_fn(float x, float y, bool choose)" in generated
+    assert "results[0] = select_fn(select_(1.0), select__, false);" in generated
     assert_directx_warnings_clean_if_available(generated, tmp_path)
 
 
 @pytest.mark.parametrize(
     "name,target,arity", [("fabs", "abs", 1), ("fmin", "min", 2), ("fmax", "max", 2)]
 )
-@pytest.mark.parametrize("binding", ["function", "local", "global"])
-def test_directx_metal_math_rejects_shadowed_target(name, target, arity, binding):
+def test_directx_metal_math_beside_target_named_helper_keeps_the_intrinsic(
+    tmp_path, name, target, arity
+):
+    # The helper named like the HLSL target is renamed, so fabs/fmin/fmax still reach abs/min/max.
     parameters = ", ".join(f"float a{i}" for i in range(arity))
     arguments = ", ".join("1.0" for _ in range(arity))
-    declaration = f"float {target}({parameters}) {{ return 99.0; }}"
-    global_declaration = (
-        declaration
-        if binding == "function"
-        else (f"float {target} = 99.0;" if binding == "global" else "")
+    ast = parse(f"""shader ShadowedTarget {{
+        float {target}({parameters}) {{ return 99.0; }}
+        RWStructuredBuffer<float> results;
+        compute {{
+            layout(local_size_x = 1) in;
+            void main() {{ results[0] = {name}({arguments}) + {target}({arguments}); }}
+        }}
+    }}""")
+    generated = HLSLCodeGen().generate(ast)
+    assert f"float {target}_fn({parameters})" in generated
+    assert f"{target}_fn({arguments})" in generated
+    assert (
+        f"results[0] = ({target}({arguments}) + {target}_fn({arguments}));" in generated
     )
+    assert_directx_warnings_clean_if_available(generated, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "name,target,arity", [("fabs", "abs", 1), ("fmin", "min", 2), ("fmax", "max", 2)]
+)
+@pytest.mark.parametrize("binding", ["local", "global"])
+def test_directx_metal_math_rejects_shadowed_target(name, target, arity, binding):
+    arguments = ", ".join("1.0" for _ in range(arity))
+    global_declaration = f"float {target} = 99.0;" if binding == "global" else ""
     local_declaration = f"float {target} = 99.0;" if binding == "local" else ""
     ast = parse(f"""shader ShadowedTarget {{
         {global_declaration}

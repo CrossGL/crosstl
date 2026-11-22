@@ -5,6 +5,10 @@ import pytest
 
 from crosstl.backend.Metal.MetalLexer import MetalLexer
 from crosstl.backend.Metal.MetalParser import MetalParser
+from crosstl.backend.Metal.preprocessing.support import (
+    _MetalAddressableValueType,
+    _MetalIntegralConstantBinding,
+)
 from crosstl.backend.Metal.preprocessor import (
     CONTAINING_SPAN_CACHE_LIMIT,
     LEXICAL_SCOPE_CACHE_LIMIT,
@@ -16,8 +20,6 @@ from crosstl.backend.Metal.preprocessor import (
     MetalStructMethodError,
     MetalTemplateSpecializationError,
     MetalTypeTraitError,
-    _MetalAddressableValueType,
-    _MetalIntegralConstantBinding,
     _MetalTemplateStruct,
 )
 from crosstl.backend.Metal.source_analysis_cache import (
@@ -12677,7 +12679,7 @@ def test_infer_argument_type_postfix_does_not_guess_overloads(kind):
 
 
 def test_inferred_postfix_retains_const_declaration_provenance():
-    from crosstl.backend.Metal.preprocessor import _MetalAddressableValueType
+    from crosstl.backend.Metal.preprocessing.support import _MetalAddressableValueType
 
     declared = _MetalAddressableValueType("uint", "const thread uint*")
     assert (

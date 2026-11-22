@@ -38,6 +38,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
+import urllib.error
 import urllib.request
 from collections import Counter
 from dataclasses import dataclass
@@ -134,18 +136,39 @@ class Inventory:
         return sum(counts.get("unknown", 0) for counts in self.counts().values())
 
 
+DOWNLOAD_ATTEMPTS = 3
+DOWNLOAD_BACKOFF_SECONDS = 2.0
+
+
+def _transient(error):
+    """True for a failure a later attempt can cure: a 5xx or 429 reply, a lost connection or a timeout."""
+    if isinstance(error, urllib.error.HTTPError):
+        return error.code >= 500 or error.code == 429
+    return isinstance(error, (urllib.error.URLError, TimeoutError, ConnectionError))
+
+
 def download(url):
-    """GET a pinned upstream input; GitHub API calls use GITHUB_TOKEN when set, to avoid anonymous rate limits."""
+    """GET a pinned upstream input; GitHub API calls use GITHUB_TOKEN when set, to avoid anonymous rate limits.
+
+    Transient failures (5xx, 429, lost connections, timeouts) are retried ``DOWNLOAD_ATTEMPTS`` times with
+    exponential backoff; any other HTTP error, and the last transient one, propagate unchanged.
+    """
     request = urllib.request.Request(
         url, headers={"User-Agent": "crosstl-conformance-inventory"}
     )
     token = os.environ.get("GITHUB_TOKEN")
     if token and url.startswith("https://api.github.com/"):
         request.add_header("Authorization", f"Bearer {token}")
-    with urllib.request.urlopen(
-        request, timeout=120
-    ) as response:  # noqa: S310 - fixed https URLs
-        return response.read()
+    for attempt in range(1, DOWNLOAD_ATTEMPTS + 1):
+        try:
+            with urllib.request.urlopen(
+                request, timeout=120
+            ) as response:  # noqa: S310 - fixed https URLs
+                return response.read()
+        except Exception as error:  # noqa: BLE001 - classified by _transient
+            if attempt == DOWNLOAD_ATTEMPTS or not _transient(error):
+                raise
+            time.sleep(DOWNLOAD_BACKOFF_SECONDS * 2 ** (attempt - 1))
 
 
 def curated(language):

@@ -67,6 +67,30 @@ _ATOMICS = frozenset(
 )
 _COMPARE_EXCHANGE = "atomicCompareExchange"
 _ORDERED_ATOMICS = frozenset({"atomicMin", "atomicMax"})
+# A CrossGL program may call the HLSL methods of a byte-address buffer, ``b.Load(a)``; each is the CrossGL call the
+# HLSL importer writes for it (crosstl/backend/DirectX/import_tables.py), with the buffer as the first argument.
+_METHOD_CALLS = {
+    **{f"Load{suffix}": f"buffer_load{suffix}" for suffix in ("", "2", "3", "4")},
+    **{f"Store{suffix}": f"buffer_store{suffix}" for suffix in ("", "2", "3", "4")},
+    "GetDimensions": "buffer_dimensions",
+    "InterlockedAdd": "atomicAdd",
+    "InterlockedAnd": "atomicAnd",
+    "InterlockedOr": "atomicOr",
+    "InterlockedXor": "atomicXor",
+    "InterlockedMin": "atomicMin",
+    "InterlockedMax": "atomicMax",
+    "InterlockedExchange": "atomicExchange",
+    "InterlockedCompareExchange": _COMPARE_EXCHANGE,
+    "InterlockedCompareStore": _COMPARE_EXCHANGE,
+}
+# The operands of each Interlocked method before the original-value output that may follow them; the output is
+# required for InterlockedExchange and InterlockedCompareExchange, and InterlockedCompareStore has none.
+_INTERLOCKED_OPERANDS = {
+    method: 3 if method.startswith("InterlockedCompare") else 2
+    for method in _METHOD_CALLS
+    if method.startswith("Interlocked")
+}
+_WITHOUT_OUTPUT = frozenset({"InterlockedCompareStore"})
 _SCALAR_NAMES = {"i": "int", "f": "float"}
 _COMPONENTS = "xyzw"
 _SCOPES = (A.BlockNode, A.ForNode, A.ForInNode, A.FunctionNode)
@@ -393,13 +417,67 @@ class _Lowerer:
             )
         return A.BlockNode(statements)
 
+    # Methods ----------------------------------------------------------------------------------------------------
+    def method_call(self, node):
+        """For a method call ``b.M(...)`` on a byte-address buffer: the CrossGL call it spells and the variable
+        an Interlocked method writes the original value to (or ``None``). ``False`` after a refusal, and ``None``
+        for any other node."""
+        callee = getattr(node, "function", None)
+        if not isinstance(node, A.FunctionCallNode) or not isinstance(
+            callee, A.MemberAccessNode
+        ):
+            return None
+        buffer = callee.object_expr
+        if self.buffer_kind(buffer) is None:
+            return None
+        method, args = callee.member, list(node.arguments or [])
+        name = _METHOD_CALLS.get(method)
+        if name is None or getattr(node, "generic_args", None):
+            self.refuse(
+                f"byte-address buffer method '{method}' has no lowering on this target"
+            )
+            return False
+        output = None
+        operands = _INTERLOCKED_OPERANDS.get(method)
+        if operands is not None and method not in _WITHOUT_OUTPUT:
+            if len(args) == operands + 1:
+                output = args.pop()
+            elif method in ("InterlockedExchange", "InterlockedCompareExchange"):
+                self.refuse(
+                    f"{method} on a byte-address buffer without its original-value output"
+                )
+                return False
+        call = _call(name, [buffer, *args])
+        call.source_location = getattr(node, "source_location", None)
+        return call, output
+
+    def method_statement(self, node):
+        """``node``, an expression statement of a byte-address buffer method call, as the statement of the CrossGL
+        call it spells: an assignment to the original-value output of an Interlocked method. ``False`` after a
+        refusal, ``None`` for any other node."""
+        if not isinstance(node, A.ExpressionStatementNode):
+            return None
+        spelled = self.method_call(node.expression)
+        if not spelled:
+            return spelled
+        call, output = spelled
+        expression = call if output is None else A.AssignmentNode(output, call)
+        return A.ExpressionStatementNode(expression)
+
     # Traversal --------------------------------------------------------------------------------------------------
     def statement_replacement(self, node, in_block=False):
         """The lowered statement for a byte-address store or dimension query used as a statement, else ``None``.
 
         A signed ``atomicMin``/``atomicMax`` statement, assignment or declaration becomes a compare-exchange loop:
         a block, or for a declaration directly inside a block (``in_block``) a list of statements to splice there.
+        A statement that calls a method of a byte-address buffer is first spelled as the CrossGL call.
         """
+        spelled = self.method_statement(node)
+        if spelled is False:
+            return False
+        if spelled is not None:
+            lowered = self.statement_replacement(spelled, in_block)
+            return spelled if lowered is None else lowered
         signed = signed_ordered_atomic_replacement(self, node, in_block)
         if signed is not None:
             return signed
@@ -426,6 +504,19 @@ class _Lowerer:
         """
         if not isinstance(node, A.FunctionCallNode) or id(node) in self.generated:
             return None
+        spelled = self.method_call(node)
+        if spelled is False:
+            return False
+        if spelled is not None:
+            call, output = spelled
+            if output is not None:
+                self.refuse(
+                    f"{node.function.member} on a byte-address buffer with an original-value output inside an "
+                    "expression"
+                )
+                return False
+            lowered = self.expression_replacement(call, receiver)
+            return call if lowered is None else lowered
         name = _call_name(node)
         args = list(node.arguments or [])
         if not args or self.buffer_kind(args[0]) is None:

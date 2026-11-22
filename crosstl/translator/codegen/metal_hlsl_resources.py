@@ -31,6 +31,7 @@ from ..semantics.constant_buffers import constant_buffer_element
 from .buffer_member_layout import member_explicit_offset, member_is_row_major
 from .glsl_block_layout import (
     GLSL_BLOCK_LAYOUTS,
+    STD140_LAYOUT,
     STD430_LAYOUT,
     declared_buffer_layout,
     member_explicit_alignment,
@@ -203,6 +204,10 @@ class MetalHlslResourceMixin:
         ``std430`` or ``scalar``, and the element types of
         structured buffers marked ``@ buffer_layout(hlsl_structured)`` get Metal
         declarations with the exact member offsets of those layouts.
+
+        A constant buffer that declares no layout is a std140 block, as the GLSL and SPIR-V generators declare it
+        (GLSL 4.60 section 7.6.2.2); MSL's natural layout differs for ``vec3``, ``bool``, arrays and matrices (MSL
+        3.2 section 2.2). A constant buffer marked ``@ buffer_layout(metal)`` keeps the natural layout.
         """
         self.metal_hlsl_cbuffer_plans = {}
         self.metal_hlsl_struct_plans = {}
@@ -218,6 +223,8 @@ class MetalHlslResourceMixin:
         self.metal_hlsl_layout_planner = planner
         for cbuffer in self.cbuffer_variables or []:
             layout = self.metal_constant_block_layout(cbuffer, cbuffer.name)
+            if layout is None:
+                layout = STD140_LAYOUT
             if layout != HLSL_CBUFFER_LAYOUT and layout not in GLSL_BLOCK_LAYOUTS:
                 continue
             try:
@@ -745,12 +752,13 @@ class MetalHlslResourceMixin:
                 name,
                 stage_scope=self.metal_source_binding_stage_scope(node),
             )
-            target_binding = self.next_available_resource_binding(
-                used_bindings, namespace, register_index, count
-            )
-            self.reserve_resource_binding_range(
-                used_bindings, "Metal", namespace, target_binding, count, name
-            )
+            with self.metal_binding_tables_of(node):
+                target_binding = self.next_available_resource_binding(
+                    used_bindings, namespace, register_index, count
+                )
+                self.reserve_resource_binding_range(
+                    used_bindings, "Metal", namespace, target_binding, count, name
+                )
             self.metal_resource_binding_indices_by_id[id(node)] = target_binding
             self.metal_hlsl_register_bindings_by_id[id(node)] = (
                 f"{register_class}{register_index}"

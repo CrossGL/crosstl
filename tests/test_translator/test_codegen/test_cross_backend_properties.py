@@ -599,7 +599,7 @@ def test_comparison_sampler_array_is_an_explicit_sampler_resource():
     )
 
     assert "name=shadowCompareSamplers kind=sampler" in mojo
-    assert "InlineArray[Sampler, 2](Sampler(), Sampler())" in mojo
+    assert "StaticTuple[Sampler, 2](fill=Sampler())" in mojo
     assert "_crossgl_texture_compare_sampler_Texture2DShadow_Sampler" in mojo
     assert "_crossgl_texture_compare_lod_sampler_Texture2DShadow_Sampler" in mojo
 

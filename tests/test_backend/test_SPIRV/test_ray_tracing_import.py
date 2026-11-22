@@ -124,7 +124,7 @@ UNSUPPORTED = HEADER + """               OpEntryPoint RayGenerationKHR %main "ma
           %3 = OpTypeFunction %void
        %main = OpFunction %void None %3
           %5 = OpLabel
-               OpBeginInvocationInterlockEXT
+               OpIgnoreIntersectionNV
                OpReturn
                OpFunctionEnd
 """
@@ -232,7 +232,7 @@ def test_unknown_statement_instructions_are_refused_not_dropped(tmp_path):
     with pytest.raises(SpirvInstructionUnsupportedError) as raised:
         import_spirv(tmp_path, UNSUPPORTED)
 
-    assert "OpBeginInvocationInterlockEXT" in str(raised.value)
+    assert "OpIgnoreIntersectionNV" in str(raised.value)
     assert (
         raised.value.project_diagnostic_code
         == "project.translate.spirv-instruction-unsupported"

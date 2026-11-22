@@ -577,18 +577,10 @@ def generate_enum_constructor_functions(generator, enums):
 def generate_generic_enum_constants(generator, definitions, qualifier="static const"):
     code = ""
     for name, definition in sorted((definitions or {}).items()):
-        next_value = 0
-        for variant in definition["enum"].variants or []:
-            if getattr(variant, "value", None) is None:
-                value = str(next_value)
-                next_value += 1
-            else:
-                value = generator.generate_expression(variant.value)
-                literal_value = literal_int_value(variant.value)
-                next_value = literal_value + 1 if literal_value is not None else 0
-            code += (
-                f"{qualifier} int {enum_constant_name(name, variant.name)} = {value};\n"
-            )
+        for constant, value in enum_constant_values(
+            generator, name, definition["enum"].variants
+        ):
+            code += f"{qualifier} int {constant} = {value};\n"
     if code:
         code += "\n"
     return code
@@ -665,19 +657,36 @@ def collect_generic_enum_specialization_member_types(generator, specializations)
     return member_types
 
 
+def enum_constant_values(generator, enum_name, variants):
+    """``(constant name, value text)`` for each variant of an enum, numbered as C++17 [dcl.enum]/2 numbers them.
+
+    A variant without an initializer is one more than the previous variant, or 0 for the first. While the previous
+    value is a literal the value is written as a number; after a computed initializer such as ``-5``, ``1 << 3`` or
+    ``W::P + 3`` it is written as the previous constant plus one, which every C-style target folds the same way.
+    """
+    values = []
+    next_value = 0
+    previous = None
+    for variant in variants or []:
+        name = enum_constant_name(enum_name, variant.name)
+        if getattr(variant, "value", None) is not None:
+            value = generator.generate_expression(variant.value)
+            literal_value = literal_int_value(variant.value)
+            next_value = literal_value + 1 if literal_value is not None else None
+        elif next_value is not None:
+            value = str(next_value)
+            next_value += 1
+        else:
+            value = f"{previous} + 1"
+        values.append((name, value))
+        previous = name
+    return values
+
+
 def generate_enum_constants(generator, enums, qualifier="static const"):
     code = ""
     for enum in enums or []:
-        next_value = 0
-        for variant in enum.variants or []:
-            if getattr(variant, "value", None) is None:
-                value = str(next_value)
-                next_value += 1
-            else:
-                value = generator.generate_expression(variant.value)
-                literal_value = literal_int_value(variant.value)
-                next_value = literal_value + 1 if literal_value is not None else 0
-            name = enum_constant_name(enum.name, variant.name)
+        for name, value in enum_constant_values(generator, enum.name, enum.variants):
             code += f"{qualifier} int {name} = {value};\n"
     if code:
         code += "\n"

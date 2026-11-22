@@ -25,6 +25,7 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # The tool each language is validated with, and the suffix its compiler expects.
 TOOLS = {
     "cuda": "nvcc",
+    "gles": "glslangValidator",
     "glsl": "glslangValidator",
     "hip": "hipcc",
     "hlsl": "dxc",
@@ -39,6 +40,7 @@ TOOLS = {
 }
 SUFFIX = {
     "cuda": ".cu",
+    "gles": ".comp",
     "glsl": ".comp",
     "hip": ".hip",
     "hlsl": ".hlsl",
@@ -68,25 +70,34 @@ GLSL_STAGES = {
     "miss": "rmiss",
     "callable": "rcall",
 }
-# The newest shader model the pinned DXC accepts. Feature lists leave out intrinsics that need a newer one.
+# The newest shader model the pinned DXC accepts. Feature lists leave out intrinsics that need a newer one, except
+# those the Shader Model 6.10 preview compiler checks.
 HLSL_SHADER_MODEL = (6, 9)
+# HLSL probes of features that need shader model 6.10 are checked for this target, by DXC's Shader Model 6.10 preview
+# (v1.10.2605.37), which CI installs next to the pinned release and :func:`command` finds as ``dxc-preview``.
+HLSL_PREVIEW = "sm6.10"
+HLSL_PREVIEW_SHADER_MODEL = (6, 10)
+# HLSL probes of features DXC compiles only to SPIR-V, such as printf, are checked for this target.
+HLSL_SPIRV = "spirv"
 # Ray-tracing and work-graph node shaders compile as a library, whose ``[shader(...)]`` attributes name the entry
 # points.
+HLSL_PREFIXES = {
+    "compute": "cs",
+    "fragment": "ps",
+    "vertex": "vs",
+    "geometry": "gs",
+    "tessellation-control": "hs",
+    "tessellation-evaluation": "ds",
+    "task": "as",
+    "mesh": "ms",
+    **dict.fromkeys(RAYTRACING_STAGES, "lib"),
+    "node": "lib",
+}
 HLSL_PROFILES = {
     stage: f"{prefix}_{HLSL_SHADER_MODEL[0]}_{HLSL_SHADER_MODEL[1]}"
-    for stage, prefix in {
-        "compute": "cs",
-        "fragment": "ps",
-        "vertex": "vs",
-        "geometry": "gs",
-        "tessellation-control": "hs",
-        "tessellation-evaluation": "ds",
-        "task": "as",
-        "mesh": "ms",
-        **dict.fromkeys(RAYTRACING_STAGES, "lib"),
-        "node": "lib",
-    }.items()
+    for stage, prefix in HLSL_PREFIXES.items()
 }
+
 # The ``[shader(...)]`` kind of each stage a library holds.
 HLSL_LIBRARY_KINDS = {**RAYTRACING_STAGES, "node": "node"}
 # slangc's names for the stages it does not spell as the report does.
@@ -118,6 +129,10 @@ OPENCL_TARGET = "spir64"
 SLANG_TARGET = "spirv"
 # slangc runs that validator only when this variable is set; without it, slangc writes invalid SPIR-V and exits 0.
 SLANG_VALIDATION = {"SLANG_RUN_SPIRV_VALIDATION": "1"}
+# The targets other than SPIR-V a Slang probe compiles for, each with the compiler that checks what slangc writes.
+# slangc writes HLSL and CUDA source without compiling it, so DXC and nvcc check that source as they check the probes
+# of those languages. The CUDA source includes the prelude header that ships with slangc.
+SLANG_SOURCE_TARGETS = {"hlsl": "dxc", "cuda": "nvcc"}
 # HIP probes compile for RDNA3 (gfx1100), which has the image instructions texture and surface access need; the CDNA
 # targets have none. No GPU is needed: hipcc compiles for the named target.
 HIP_ARCH = "gfx1100"
@@ -200,9 +215,12 @@ def version(name: str) -> str:
 
 def toolchain(language: str, target: str = "") -> tuple[str, ...]:
     """The tools that checking ``language`` probes for ``target`` runs."""
+    if language == "slang" and target in SLANG_SOURCE_TARGETS:
+        return ("slangc", SLANG_SOURCE_TARGETS[target])
+    if language == "hlsl" and target == HLSL_PREVIEW:
+        return ("dxc-preview",)
     return {
         "spirv": ("spirv-as", "spirv-val"),
-        "slang": ("slangc", "dxc") if target == "hlsl" else ("slangc",),
         # An imported OpenCL C probe is checked as the HLSL it is emitted to (runner.ROUND_TRIPS).
         "opencl": ("clang", "dxc"),
     }.get(language, (TOOLS[language],))
@@ -253,7 +271,7 @@ def run(
 
 def suffix(language: str, stage: str) -> str:
     """The file suffix of a probe, from which glslang tells its stage. A WebGL kernel probe is a fragment shader."""
-    if language == "glsl":
+    if language in ("glsl", "gles"):
         return f".{GLSL_STAGES[stage]}"
     if language == "webgl":
         return ".vert" if stage == "vertex" else ".frag"
@@ -269,6 +287,19 @@ def _essl(name: str, source: str, scratch: str) -> Verdict:
     if not _ESSL_VERSION.match(source):
         return Verdict(False, "error: the shader does not begin with #version 300 es")
     return run([*command("glslangValidator"), name], scratch)
+
+
+# An OpenGL ES 3.2 shader names one of the GLSL ES versions OpenGL ES 3.x runs.
+_GLES_VERSION = re.compile(r"\A(?:\s|//[^\n]*\n)*#\s*version\s+3[012]0\s+es\b")
+
+
+def _gles(name: str, source: str, stage: str, target: str, scratch: str) -> Verdict:
+    """Check a shader with glslang as GLSL ES 3.00, 3.10 or 3.20, as its ``#version`` line names."""
+    if not _GLES_VERSION.match(source):
+        return Verdict(
+            False, "error: the shader does not begin with #version 300, 310 or 320 es"
+        )
+    return _glsl(name, source, stage, target, scratch)
 
 
 # Entry-point names HLSL writers conventionally give each stage, tried when a shader has no ``main``.
@@ -352,29 +383,86 @@ def _metal(name: str, stage: str, scratch: str) -> Verdict:
     return compiled
 
 
-# What Slang's library emits for an operation that its HLSL target cannot express, as for ``debugBreak``.
+# What Slang's library emits for an operation that its HLSL target cannot express, as for ``debugBreak``. The feature
+# list probes such a function for CUDA instead (features.slang.lacking); this catches a comment it does not find.
 _UNSUPPORTED_IN_HLSL = re.compile(r"/\*[^*]*not currently supported for HLSL\s*\*/")
 
 
-def _dxc(name: str, source: str, stage: str, entry: str, scratch: str) -> Verdict:
-    """Compile an HLSL probe. A library must also declare an entry point of ``stage``: DXC accepts a library of plain
-    functions, which no pipeline can run."""
-    profile = HLSL_PROFILES[stage]
+def hlsl_profile(stage: str, target: str = "") -> str:
+    """The DXC profile an HLSL probe of ``stage`` compiles with for ``target``."""
+    model = HLSL_PREVIEW_SHADER_MODEL if target == HLSL_PREVIEW else HLSL_SHADER_MODEL
+    return f"{HLSL_PREFIXES[stage]}_{model[0]}_{model[1]}"
+
+
+# A kernel whose source leaves its workgroup size to the host is written so that a compiler of GLSL, HLSL or Slang
+# source reads the size from three macros the host defines, and stops at an #error without them
+# (crosstl/translator/codegen/host_workgroup_size_ids.py). Such a translation is compiled as its host compiles it,
+# with a size of one in each dimension, as the conformance harness does (tests/conformance/validators.py).
+HOST_WORKGROUP_SIZE = "1"
+
+
+_GLSL_VERSION_LINE = re.compile(r"^[ \t]*#[ \t]*version\b[^\n]*\n", re.M)
+
+
+def _host_workgroup_macros(source: str) -> tuple[str, ...]:
+    from crosstl.translator.codegen.host_workgroup_size_ids import (
+        HOST_WORKGROUP_SIZE_MACROS,
+    )
+
+    if any(f"defined({macro})" in source for macro in HOST_WORKGROUP_SIZE_MACROS):
+        return HOST_WORKGROUP_SIZE_MACROS
+    return ()
+
+
+def host_workgroup_defines(source: str) -> list[str]:
+    """The ``-D`` arguments that size a translation whose host chooses its workgroup size, or none for any other."""
+    return [
+        argument
+        for macro in _host_workgroup_macros(source)
+        for argument in ("-D", f"{macro}={HOST_WORKGROUP_SIZE}")
+    ]
+
+
+def host_sized_glsl(source: str) -> str:
+    """``source`` as an OpenGL host compiles it: with the size macros defined after ``#version``, and a ``#line``
+    that keeps the log's line numbers those of ``source``. glslang takes ``-D`` only when it links.
+    """
+    macros = _host_workgroup_macros(source)
+    version = _GLSL_VERSION_LINE.search(source)
+    if not macros or version is None:
+        return source
+    following = source.count("\n", 0, version.end()) + 1
+    defines = "".join(f"#define {macro} {HOST_WORKGROUP_SIZE}\n" for macro in macros)
+    end = version.end()
+    return f"{source[:end]}{defines}#line {following}\n{source[end:]}"
+
+
+def _dxc(
+    name: str, source: str, stage: str, entry: str, scratch: str, target: str = ""
+) -> Verdict:
+    """Compile an HLSL probe for ``target``: DXIL by default, DXIL at shader model 6.10 with the preview compiler for
+    :data:`HLSL_PREVIEW`, and Vulkan SPIR-V, which DXC validates as it writes it, for :data:`HLSL_SPIRV`. A library
+    must also declare an entry point of ``stage``: DXC accepts a library of plain functions, which no pipeline can
+    run."""
+    profile = hlsl_profile(stage, target)
     library = profile.startswith("lib_")
     entry_point = [] if library else ["-E", entry or hlsl_entry(source, stage)]
     kind = HLSL_LIBRARY_KINDS.get(stage, "")
     attribute = rf'\[\s*shader\s*\(\s*"{kind}"\s*\)\s*\]'
     if library and not re.search(attribute, source, re.IGNORECASE):
         return Verdict(False, f"error: the library has no {stage} entry point")
+    spirv = ["-spirv", f"-fspv-target-env={SPIRV_ENVIRONMENT}"]
     return run(
         [
-            *command("dxc"),
+            *command(toolchain("hlsl", target)[0]),
+            *(spirv if target == HLSL_SPIRV else []),
             "-T",
             profile,
             *entry_point,
             "-HV",
             "2021",
             "-enable-16bit-types",
+            *host_workgroup_defines(source),
             name,
             "-Fo",
             "probe.bin",
@@ -419,7 +507,7 @@ COMPILE_ARGUMENTS = {
 }
 
 
-def _glsl(name: str, stage: str, target: str, scratch: str) -> Verdict:
+def _glsl(name: str, source: str, stage: str, target: str, scratch: str) -> Verdict:
     # GL_EXT_ray_tracing and GL_EXT_mesh_shader exist only for SPIR-V 1.4 and later, so those shaders are checked
     # for Vulkan, as are probes whose feature only GLSL for Vulkan has.
     if stage in SPIRV_1_4_STAGES:
@@ -428,6 +516,9 @@ def _glsl(name: str, stage: str, target: str, scratch: str) -> Verdict:
         environment = ["--target-env", SPIRV_ENVIRONMENT]
     else:
         environment = []
+    sized = host_sized_glsl(source)
+    if sized != source:
+        Path(scratch, name).write_text(sized)
     return run([*command("glslangValidator"), *environment, name], scratch)
 
 
@@ -441,12 +532,13 @@ def _slang(
         *(["-entry", entry or "main"] if target or not attributed else []),
         *([] if attributed else ["-stage", SLANG_STAGES.get(stage, stage)]),
     ]
-    output = "probe.hlsl" if target == "hlsl" else "probe.spv"
+    output = f"probe{SUFFIX[target]}" if target in SLANG_SOURCE_TARGETS else "probe.spv"
     compiled = run(
         [
             *command("slangc"),
             name,
             *entry_point,
+            *host_workgroup_defines(source),
             "-target",
             target or SLANG_TARGET,
             "-o",
@@ -456,10 +548,12 @@ def _slang(
         SLANG_VALIDATION,
         stdout=False,
     )
-    if target != "hlsl" or not compiled.accepted:
+    if target not in SLANG_SOURCE_TARGETS or not compiled.accepted:
         return compiled
-    # slangc writes HLSL without compiling it, so DXC checks the result as it checks an HLSL probe. Where HLSL lacks
-    # an operation, Slang's library emits a comment in place of the call.
+    if target == "cuda":
+        arguments = (a.format(source=output) for a in COMPILE_ARGUMENTS["cuda"])
+        return run([*command("nvcc"), *arguments], scratch)
+    # Where HLSL lacks an operation, Slang's library emits a comment in place of the call.
     generated = Path(scratch, output).read_text()
     dropped = _UNSUPPORTED_IN_HLSL.search(generated)
     if dropped:
@@ -515,10 +609,12 @@ def validate(
             return run([*command(TOOLS[language]), *arguments], scratch)
         if language == "webgl":
             return _essl(name, source, scratch)
+        if language == "gles":
+            return _gles(name, source, stage, target, scratch)
         if language == "glsl":
-            return _glsl(name, stage, target, scratch)
+            return _glsl(name, source, stage, target, scratch)
         if language == "hlsl":
-            return _dxc(name, source, stage, entry, scratch)
+            return _dxc(name, source, stage, entry, scratch, target)
         if language == "metal":
             return _metal(name, stage, scratch)
         if language == "rust":

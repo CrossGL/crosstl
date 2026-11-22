@@ -5,9 +5,9 @@ import json
 from crosstl.translator import ast as ast_module
 from crosstl.translator import language_spec
 from crosstl.translator import lexer as lexer_module
-from crosstl.translator import parser as parser_module
 from crosstl.translator import stage_utils
 from crosstl.translator import validation as validation_module
+from crosstl.translator.parsing import vocabulary as parser_vocabulary
 
 
 def test_language_spec_output_is_deterministic_json():
@@ -189,9 +189,9 @@ def test_language_spec_uses_frontend_objects_as_authority(monkeypatch):
     monkeypatch.setitem(lexer_module.KEYWORDS, "spec_test", "SPEC_TEST_TOKEN")
     monkeypatch.setitem(stage_utils.STAGE_NAME_ALIASES, "pixel_spec", "fragment")
     monkeypatch.setattr(
-        parser_module,
+        parser_vocabulary,
         "WAVE_INTRINSICS",
-        set(parser_module.WAVE_INTRINSICS) | {"SpecWaveIntrinsic"},
+        set(parser_vocabulary.WAVE_INTRINSICS) | {"SpecWaveIntrinsic"},
     )
     monkeypatch.setattr(
         validation_module,

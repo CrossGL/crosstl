@@ -23,6 +23,7 @@ from crosstl.translator.codegen.written_function_names import (
 )
 from crosstl.translator.semantics.builtin_function_names import (
     HLSL_INTRINSIC_FUNCTION_NAMES,
+    HLSL_PREVIEW_FUNCTION_NAMES,
     METAL_LIBRARY_FUNCTION_NAMES,
 )
 
@@ -51,7 +52,12 @@ def _translate(tmp_path, body, backend, declarations=""):
 @pytest.mark.parametrize(
     ("language", "kind", "group"),
     [
-        ("hlsl", "intrinsic", HLSL_INTRINSIC_FUNCTION_NAMES),
+        # The DXC 1.9 inventory predates the Shader Model 6.10 preview intrinsics.
+        (
+            "hlsl",
+            "intrinsic",
+            HLSL_INTRINSIC_FUNCTION_NAMES - HLSL_PREVIEW_FUNCTION_NAMES,
+        ),
         ("metal", "library-function", METAL_LIBRARY_FUNCTION_NAMES),
     ],
 )
@@ -103,11 +109,16 @@ def test_hlsl_refuses_a_foreign_builtin_call(tmp_path, body, name):
         _translate(tmp_path, body, "directx")
 
 
-@pytest.mark.parametrize("backend", ["metal", "directx"])
-def test_a_function_the_program_declares_is_not_foreign(tmp_path, backend):
+# HLSL output renames a program function that shares the name of a DXC intrinsic (noise), so DXC calls the
+# program's function rather than the intrinsic.
+@pytest.mark.parametrize(
+    ("backend", "name"), [("metal", "noise"), ("directx", "noise_fn")]
+)
+def test_a_function_the_program_declares_is_not_foreign(tmp_path, backend, name):
     declarations = "float noise(float x) { return x * 0.5; }"
     output = _translate(tmp_path, "o[0] = noise(o[1]);", backend, declarations)
-    assert re.search(r"\bnoise\s*\(", output)
+    assert re.search(rf"\bfloat {name}\s*\(", output)
+    assert re.search(rf"= {name}\s*\(", output)
 
 
 @pytest.mark.parametrize(

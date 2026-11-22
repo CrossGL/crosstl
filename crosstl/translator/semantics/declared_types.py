@@ -36,6 +36,7 @@ __all__ = [
     "UndeclaredTypeError",
     "dead_function_ids",
     "declared_type_names",
+    "entry_dropped_function_ids",
     "refuse_undeclared_types",
     "undeclared_type_uses",
 ]
@@ -189,10 +190,14 @@ def _referenced_names(node, skip):
 
 
 def _dead_functions(program):
-    """Ids of the functions no stage entry reaches, which the generators drop; none when there is no entry.
+    """Ids of the functions no stage entry reaches; none when there is no entry.
 
     A function is live when it is a stage's entry point, or when a live function, a stage or a module-level
-    declaration names it. A program without a stage entry is a library, so every function is checked.
+    declaration names it, and an explicit specialization is live when its primary is. The undeclared-name refusal
+    passes read every function regardless, because no generator drops a plain function or an explicit
+    specialization no stage entry reaches; only the
+    passes that specifically model reachability consume this. A program without a stage entry is a library, so
+    every function is live.
     Inside :func:`shared_dead_functions` the answer is computed once per program.
     """
     cache = _DEAD_FUNCTIONS.get()
@@ -222,37 +227,72 @@ def shared_dead_functions():
 def _find_dead_functions(program):
     """:func:`_dead_functions`, computed."""
     helpers = {}
+    # A call to a generic primary is routed by the generators to its explicit
+    # specializations, so those specializations are written even though no call
+    # names them directly. Track primary name -> explicit specializations.
+    specializations = {}
     for functions in _function_lists(program):
         for function in functions:
             if isinstance(function, A.FunctionNode) and isinstance(function.name, str):
                 helpers.setdefault(function.name, []).append(function)
-    entries = {
-        id(stage.entry_point)
+                spec = (getattr(function, "annotations", None) or {}).get(
+                    "explicit_specialization"
+                )
+                if isinstance(spec, tuple) and spec and isinstance(spec[0], str):
+                    specializations.setdefault(spec[0], []).append(function)
+    entry_functions = [
+        stage.entry_point
         for stage in (getattr(program, "stages", None) or {}).values()
         if isinstance(getattr(stage, "entry_point", None), A.FunctionNode)
-    }
-    if not entries:
+    ]
+    if not entry_functions:
         return set()
+    entry_ids = {id(function) for function in entry_functions}
     every = {id(function) for group in helpers.values() for function in group}
-    skip = every - entries
-    live = set(entries)
-    pending = sorted(_referenced_names(program, skip))
+    skip = every - entry_ids
+    live = set()
+    pending = []
     seen = set()
+
+    def activate(function):
+        fid = id(function)
+        if fid in live:
+            return
+        live.add(fid)
+        pending.extend(sorted(_referenced_names(function, skip - {fid})))
+        # A specialization counts as reached when its primary does.
+        for specialization in specializations.get(function.name, []):
+            activate(specialization)
+
+    for function in entry_functions:
+        activate(function)
+    pending.extend(sorted(_referenced_names(program, skip)))
     while pending:
         name = pending.pop()
         if name in seen:
             continue
         seen.add(name)
         for function in helpers.get(name, []):
-            if id(function) in live:
-                continue
-            live.add(id(function))
-            pending.extend(sorted(_referenced_names(function, skip - {id(function)})))
+            activate(function)
     return every - live
 
 
 def dead_function_ids(program) -> set:
     """Ids of the functions no stage entry reaches, which the generators drop; none when there is no entry."""
+    return _dead_functions(program)
+
+
+def entry_dropped_function_ids(program, entry_point=None) -> set:
+    """Ids of the functions a translation of ``program`` never writes, which the undeclared-name checks skip.
+
+    A whole-program translation (``entry_point`` is ``None``) writes every plain function and explicit
+    specialization, so none is skipped. A translation that selects one entry writes only the functions that entry
+    reaches (``entry_scoped_ast`` of the DirectX, Metal and OpenGL generators, the only ones that select entries),
+    so the functions no stage entry reaches are skipped: importers leave a call they cannot resolve in such a body
+    unchanged, because no entry evaluates it.
+    """
+    if entry_point is None:
+        return set()
     return _dead_functions(program)
 
 
@@ -389,17 +429,21 @@ def _call_type_argument_names(call, generic_functions):
     ]
 
 
-def undeclared_type_uses(program, target=None):
+def undeclared_type_uses(program, target=None, entry_point=None):
     """``(name, node)`` for each plain type name in ``program`` that is neither declared nor built in.
 
-    Functions no stage entry reaches are not read: they cannot change what the program computes, and translation
-    for a selected entry point drops them (a project's explicit specialization that was materialized under another
-    name keeps its unresolved parameter types, for example). For a ``target`` in :data:`INSTANTIATING_TARGETS`, the
-    generic structures no live code names are not read either, because those generators never emit them.
+    Every function body is read: no generator drops a plain function or an explicit specialization no stage entry
+    reaches, so an
+    undeclared type in such a function reaches the generated output and is refused here the same way. The
+    generic functions no code calls are read too, for every target — the Rust generator writes even those, and
+    for the others the type pass prefers the single read-everything shape the plain functions impose. For a
+    ``target`` in :data:`INSTANTIATING_TARGETS`, the generic structures nothing names are not read either,
+    because those generators never emit them. A translation that selects ``entry_point`` skips the functions no
+    stage entry reaches (:func:`entry_dropped_function_ids`).
     """
     declared, bounds, values, declared_values = _type_use_context(program)
     uses = []
-    skip = _dead_functions(program) | bounds | values
+    skip = bounds | values | entry_dropped_function_ids(program, entry_point)
     if str(target or "").lower() in INSTANTIATING_TARGETS:
         skip |= _uninstantiated_templates(program, skip)
     generic_functions = _generic_function_names(program)
@@ -438,9 +482,9 @@ def undeclared_type_uses(program, target=None):
     return uses
 
 
-def refuse_undeclared_types(program, target):
+def refuse_undeclared_types(program, target, entry_point=None):
     """Raise :class:`UndeclaredTypeError` for the first undeclared plain type name in ``program``."""
-    for name, node in undeclared_type_uses(program, target):
+    for name, node in undeclared_type_uses(program, target, entry_point):
         raise UndeclaredTypeError(
             target, name, source_location=getattr(node, "source_location", None)
         )
