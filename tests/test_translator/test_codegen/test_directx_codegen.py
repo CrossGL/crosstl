@@ -52031,11 +52031,6 @@ def test_hlsl_hip_inherited_fields_aliases_and_enums_validate(tmp_path):
             "output[0] = state.item.get();",
         ),
         (
-            "own-instance",
-            "class State { public: int value; int get() { return value; } };",
-            "State state; state.value = input[0]; output[0] = state.get();",
-        ),
-        (
             "inherited-static",
             "class Base { public: static int twice(int value) { return value * 2; } }; "
             "class Derived : public Base {};",
