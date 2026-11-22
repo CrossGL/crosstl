@@ -322,6 +322,9 @@ class RustCodeGen(
         self.glsl_buffer_block_layouts = {}
         self.rust_resource_binding_cursors = {}
         self.rust_used_resource_bindings = {}
+        self.rust_emitted_binding_cursors = {}
+        self.rust_used_emitted_bindings = set()
+        self.rust_emitted_binding_by_node = {}
         self.rust_resource_binding_infos = {}
         self.rust_entry_resource_params_by_function_id = {}
         self.rust_promoted_resource_node_ids = set()
@@ -404,6 +407,9 @@ class RustCodeGen(
         self.glsl_buffer_block_layouts = {}
         self.rust_resource_binding_cursors = {}
         self.rust_used_resource_bindings = {}
+        self.rust_emitted_binding_cursors = {}
+        self.rust_used_emitted_bindings = set()
+        self.rust_emitted_binding_by_node = {}
         self.rust_resource_binding_infos = {}
         self.rust_entry_resource_params_by_function_id = {}
         self.rust_promoted_resource_node_ids = set()
