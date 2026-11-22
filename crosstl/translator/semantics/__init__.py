@@ -254,6 +254,7 @@ from .texture_swizzles import canonicalize_texture_swizzles
 from .tuple_fields import TupleFieldUnsupportedError, refuse_tuple_fields
 from .type_aliases import TypeAliasUnsupportedError, resolve_type_aliases
 from .uniform_variables import lower_uniform_variables
+from .union_word_views import UnionWordViewError, split_union_word_views
 from .unsized_arrays import (
     StorageBufferParameterUnsupportedError,
     UnsizedArrayUnsupportedError,
@@ -358,6 +359,7 @@ __all__ = [
     "UndeclaredFunctionError",
     "UndeclaredIdentifierError",
     "UndeclaredTypeError",
+    "UnionWordViewError",
     "UnsizedArrayUnsupportedError",
     "VoidCastError",
     "VoidValueError",
@@ -589,6 +591,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     lower_metal_math_spellings(program, report.target)
     lower_float_relations(program, report.target)
     lower_enum_values(program, report.target)
+    split_union_word_views(program, report.target)
     lower_device_struct_references(program, report.target)
     separate_initializer_scopes(program, report.source, report.target)
     canonicalize_texture_swizzles(program)
