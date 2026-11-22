@@ -199,7 +199,7 @@ class MetalStatelessGlobalMixin:
         code: str,
         *,
         work_budget: Optional[object] = None,
-        allow_partial_object_specializations: bool = False,
+        allow_partial_object_specializations: bool = True,
     ) -> str:
         # Struct counterpart of _materialize_explicit_template_function_calls
         # (issue #1354). Replaces concrete `StructName<args>` type references with

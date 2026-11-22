@@ -4820,8 +4820,8 @@ def test_preprocessor_selects_partial_struct_specialization_by_fixed_argument():
 
     output = MetalPreprocessor().preprocess(code)
 
-    assert "Trait<bool, half, 8> specialized;" in output
-    assert "struct Trait_bool_half_8 {" not in output
+    assert "Trait_bool_half_8 specialized;" in output
+    assert "struct Trait_bool_half_8 {\n        int value;\n    };" in output
     assert "Trait_float_half_8 primary;" in output
     assert "struct Trait_float_half_8" in output
     assert "Tile_4 tile;" in output
@@ -5086,15 +5086,17 @@ def test_preprocessor_matches_partial_specialization_spelled_with_an_alias():
 
     # The pattern names Complex<float> through its alias, so both spellings
     # select the partial specialization rather than the primary's body.
-    assert "Block<Complex<float>, 2> split;" in output
-    assert "Block<ComplexFloat, 4> aliased;" in output
+    assert "Block_Complex_float_2 split;" in output
+    assert "Block_ComplexFloat_4 aliased;" in output
+    assert "struct Block_Complex_float_2 {\n        float real[2];" in output
+    assert "struct Block_ComplexFloat_4 {\n        float real[4];" in output
     assert "ComplexFloat values" not in output
     assert "Complex_float values" not in output
     assert "Block_float_2 plain;" in output
     assert "struct Block_float_2" in output
     # A template parameter shadows the alias inside its own specialization.
-    assert "Shadow<Block<half, 1>> shadowed;" in output
-    assert "struct Shadow_Block_half_1" not in output
+    assert "Shadow_Block_half_1 shadowed;" in output
+    assert "struct Shadow_Block_half_1 {\n        half value;" in output
 
 
 def test_preprocessor_resolves_struct_alias_in_nested_method_parameter_template():
@@ -5296,9 +5298,11 @@ def test_preprocessor_deduces_partial_struct_specialization_pattern():
 
     output = MetalPreprocessor().preprocess(code)
 
-    assert "Trait<float*> specialized;" in output
-    assert "struct Trait_float {" in output
-    assert "Trait_float primary;" in output
+    # Trait<float*> selects Trait<T*> with T = float; the primary's Trait<float> takes the next free name.
+    assert "Trait_float specialized;" in output
+    assert "struct Trait_float {\n        float pointed_value;" in output
+    assert "Trait_float_2 primary;" in output
+    assert "struct Trait_float_2 {\n        float value;" in output
 
 
 def test_preprocessor_matches_cv_qualified_partial_struct_specialization():
@@ -5318,8 +5322,8 @@ def test_preprocessor_matches_cv_qualified_partial_struct_specialization():
 
     output = MetalPreprocessor().preprocess(code)
 
-    assert "Trait<const float> specialized;" in output
-    assert "struct Trait_const_float {" not in output
+    assert "Trait_const_float specialized;" in output
+    assert "struct Trait_const_float {\n        int value;" in output
 
 
 def test_preprocessor_merges_nested_static_constant_contexts():
@@ -5390,7 +5394,7 @@ def test_preprocessor_keeps_struct_templates_with_unresolved_specialization_use(
     preprocessor = MetalPreprocessor()
 
     materialized = preprocessor._materialize_explicit_template_struct_instantiations(
-        code
+        code, allow_partial_object_specializations=False
     )
     output = preprocessor._prune_unreferenced_template_struct_declarations(materialized)
 
@@ -5531,19 +5535,19 @@ def test_preprocessor_scoped_partial_object_materialization_requires_unique_matc
     """
     preprocessor = MetalPreprocessor()
 
+    unscoped_output = preprocessor._materialize_explicit_template_struct_instantiations(
+        unique,
+        allow_partial_object_specializations=False,
+    )
+    assert "Selector<int, 1, true> value;" in unscoped_output
+    assert "struct Selector_int_1_true" not in unscoped_output
+
     default_output = preprocessor._materialize_explicit_template_struct_instantiations(
         unique
     )
-    assert "Selector<int, 1, true> value;" in default_output
-    assert "struct Selector_int_1_true" not in default_output
-
-    scoped_output = preprocessor._materialize_explicit_template_struct_instantiations(
-        unique,
-        allow_partial_object_specializations=True,
-    )
-    assert "struct Selector_int_1_true" in scoped_output
-    assert "int selected{0};" in scoped_output
-    assert "Selector_int_1_true value;" in scoped_output
+    assert "struct Selector_int_1_true" in default_output
+    assert "int selected{0};" in default_output
+    assert "Selector_int_1_true value;" in default_output
 
     ambiguous = """
     template <typename T, int Width, bool Active>
