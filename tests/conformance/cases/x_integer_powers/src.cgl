@@ -1,0 +1,25 @@
+// powi of a binary32 base and an int exponent: a scalar, a vector with an exponent per lane, a splat exponent,
+// a uint exponent and powif. Thread i reads x = inp[i] and n = int(inp[i + 64]) and writes 6 words.
+shader IntegerPowers {
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+        readonly buffer float inp[] @binding(0);
+        buffer float outp[] @binding(1);
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float x = inp[i];
+            int n = int(inp[i + 64u]);
+            uint o = i * 6u;
+            outp[o] = powi(x, n);
+            vec2 pair = powi(vec2(x, -x), ivec2(n, 1 - n));
+            outp[o + 1u] = pair.x;
+            outp[o + 2u] = pair.y;
+            vec3 splat = powi(vec3(x, x * 0.5, x * 2.0), n + 1);
+            outp[o + 3u] = splat.z;
+            outp[o + 4u] = powi(x, uint(n & 7));
+            outp[o + 5u] = powif(x, n);
+        }
+    }
+}
