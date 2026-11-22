@@ -82,25 +82,24 @@ def test_opencl_work_item_queries_accept_other_constant_spellings(dimension, com
 
 
 @pytest.mark.parametrize(
-    "dimension,expected",
+    "query,dimension,base,component",
     [
-        ("3u", "get_global_id(3u)"),
-        ("(float)1", "get_global_id(f32(1))"),
-        ("d", "get_global_id(d)"),
+        # A cast to a narrow integer type applies that type's width first:
+        # (uchar)256 is 0 and (ushort)65537 is 1 in C.
+        ("get_local_size", "(uchar)256", "gl_WorkGroupSize", "x"),
+        ("get_group_id", "(ushort)65537", "gl_WorkGroupID", "y"),
+        # Hex literals spell a constant dimension too.
+        ("get_global_id", "0x1", "gl_GlobalInvocationID", "y"),
+        ("get_global_id", "(uint)0x2", "gl_GlobalInvocationID", "z"),
     ],
 )
-def test_opencl_work_item_queries_keep_other_dimensions(dimension, expected):
-    source = f"""
-        kernel void probe(global uint *outp, uint d) {{
-            uint i = get_global_id(0);
-            outp[i] = get_global_id({dimension});
-        }}
-        """
-    tokens = OpenCLLexer(source).tokenize()
-    ast = OpenCLParser(tokens).parse()
-    crossgl = OpenCLToCrossGLConverter().generate(ast)
+def test_opencl_work_item_queries_apply_cast_width_and_hex_literals(
+    query, dimension, base, component
+):
+    crossgl = generate_crossgl(kernel_with(query, dimension))
 
-    assert expected in crossgl
+    assert f"{base}.{component}" in crossgl
+    assert f"{query}(" not in crossgl
 
 
 def test_opencl_suffixed_dimension_lowers_to_directx(tmp_path):
