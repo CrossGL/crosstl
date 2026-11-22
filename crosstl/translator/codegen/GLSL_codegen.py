@@ -78,6 +78,7 @@ from .comma_expressions import (
     is_comma_expression,
 )
 from .constant_ordering import partition_constants_by_struct_dependency
+from .device_globals import device_global_refusal_reason, is_mutable_device_global
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -4177,12 +4178,15 @@ class GLSLCodeGen(
                     resource_count,
                 )
             else:
-                code += self.generate_global_variable_declaration(
-                    node,
-                    declaration,
-                    vtype,
-                    mapped_type_for_layout=f"{mapped_type}{array_suffix}",
-                )
+                if is_mutable_device_global(node):
+                    self.refuse_lowering(device_global_refusal_reason(node, "GLSL"))
+                else:
+                    code += self.generate_global_variable_declaration(
+                        node,
+                        declaration,
+                        vtype,
+                        mapped_type_for_layout=f"{mapped_type}{array_suffix}",
+                    )
 
         interface_var_stages = {
             id(variable): normalize_stage_name(stage_type)

@@ -20,10 +20,17 @@ from crosstl.backend.OpenCL.target_lowering import (
     validate_opencl_intermediate_for_target,
 )
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
+from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.glsl_refusals import OpenGLLoweringRefused
 from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
+from crosstl.translator.codegen.metal_codegen import MetalCodeGen
+from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
+from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
+from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 from crosstl.translator.diagnostics import TranslationDiagnostic
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from crosstl.translator.refusals import VulkanRefusal, WGSLRefusal
 
 
 def parse_crossgl_from_opencl(source):
@@ -87,6 +94,34 @@ def test_opencl_program_scope_global_keeps_device_memory():
         match="device-global declaration.*acc.*HLSL cannot represent",
     ):
         HLSLCodeGen().generate(cgl_ast)
+
+
+@pytest.mark.parametrize(
+    ("codegen", "error_type", "target"),
+    [
+        (MetalCodeGen, MetalLoweringRefused, "Metal"),
+        (GLSLCodeGen, OpenGLLoweringRefused, "GLSL"),
+        (WGSLCodeGen, WGSLRefusal, "WGSL"),
+        (VulkanSPIRVCodeGen, VulkanRefusal, "SPIR-V"),
+    ],
+)
+def test_opencl_program_scope_device_global_is_refused_by_unsupported_targets(
+    codegen, error_type, target
+):
+    cgl_ast, _crossgl = parse_crossgl_from_opencl("""
+        __global float acc[64] = {1.0f, 2.0f, 4.0f};
+        kernel void probe(global float *outp) {
+            uint i = get_global_id(0);
+            acc[i & 63] = acc[i & 63] * 2.0f;
+            outp[i] = acc[i & 63];
+        }
+        """)
+
+    with pytest.raises(
+        error_type,
+        match=rf"device-global declaration.*acc.*{target} cannot represent",
+    ):
+        codegen().generate(cgl_ast)
 
 
 def test_opencl_explicit_atomics_drop_memory_order_and_scope():

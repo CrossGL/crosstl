@@ -12,6 +12,7 @@ from ..ast import (
     VariableNode,
 )
 from ..refusals import VulkanRefusal
+from .device_globals import device_global_refusal_reason, is_mutable_device_global
 from .enum_utils import generic_type_parts
 from .precise_dataflow import declaration_is_precise
 from .spirv_conservative_depth import record_depth_layout
@@ -137,6 +138,10 @@ class SpirvGlobalDeclarationMixin:
 
         if self.is_structured_buffer_declared_type_name(var_type_name):
             return self.process_structured_buffer_declaration(node, var_type_name)
+        if is_mutable_device_global(
+            node
+        ) and not self.is_uniform_constant_resource_node(node):
+            raise VulkanRefusal(device_global_refusal_reason(node, "SPIR-V"))
 
         var_type = self.map_resource_type_with_format(var_type_source, node)
         storage_class = self.infer_global_storage_class(
