@@ -73,6 +73,7 @@ from .glsl_call_helpers import reset_glsl_call_helpers
 from .glsl_exact_lookups import glsl_undeclared_call_reasons
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_refusals import stageless_entry_refusal_reason
+from .glsl_stage_local_functions import rename_stage_local_functions_called_elsewhere
 from .glsl_string_literals import string_literal_reasons
 from .glsl_target_builtins import unavailable_builtin_reasons
 from .glsl_tessellation_modes import program_control_sources
@@ -1181,6 +1182,7 @@ class OpenGLProgramStructureMixin:
 
     def render_program_with_profile_builtins(self, ast, target_stage=None):
         """Render the program and refuse every built-in the target profile does not have."""
+        ast = rename_stage_local_functions_called_elsewhere(ast)
         ast = lower_byte_address_buffers(ast, self.refuse_lowering)
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
         ast = assign_generic_pointer_spaces(ast, self.refuse_lowering)
