@@ -1564,10 +1564,18 @@ class HipToCrossGLConverter(
         if function_name not in {"clock", "clock64", "wall_clock64"}:
             return None
 
-        return self.refuse_import(
-            f"HIP device timer {function_name}({', '.join(args)}): CrossGL has no clock counter",
-            "0",
-        )
+        if args:
+            return self.refuse_import(
+                f"HIP device timer {function_name}({', '.join(args)}) takes no arguments",
+                "0",
+            )
+        # clock64() and clock() both return __clock64(), the shader cycle counter (s_memtime) as a long long
+        # (hip/amd_detail/amd_device_functions.h); CrossGL's clockARB() is that counter (HIP output writes it as
+        # clock64()). wall_clock64() reads the constant-rate counter, CrossGL's clockRealtimeEXT() (HIP C++ language
+        # extensions, "Timer functions").
+        if function_name == "wall_clock64":
+            return "i64(clockRealtimeEXT())"
+        return "i64(clockARB())"
 
     def format_hip_load_cache_intrinsic_call(
         self, function_name, raw_args, formatted_args
@@ -2156,6 +2164,8 @@ class HipToCrossGLConverter(
             "double": "f64",
             "size_t": "u64",
             "ptrdiff_t": "i64",
+            # clock_t is long on the LP64 hosts CUDA and ROCm compile device code for (C11 7.27.1).
+            "clock_t": "i64",
             "hipArray": "ptr<void>",
             "hipArray_t": "ptr<void>",
             "hipTextureObject_t": "sampler",

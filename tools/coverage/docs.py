@@ -6,8 +6,12 @@ the feature files it names from :data:`PUBLISHED` with :func:`fetch`. The pages 
 reads with MyST, and go to ``docs/source/languages/``, which git ignores, so nobody commits or regenerates them.
 
 Each page has the language's rows of the report: the score and counts of each direction, the reference tool and the
-runtime the probes ran on, the pinned feature lists, the measured features per category and the gaps grouped by cause,
-as ``COVERAGE.md`` groups them.
+runtime the probes ran on, the pinned feature lists, the measured features per category, the translation matrix cells
+the language is the source or target of, and the gaps grouped by cause, as ``COVERAGE.md`` groups them.
+
+The Coverage workflow publishes the same pages, in GitHub's Markdown (``github=True``), to ``languages/`` on the
+``coverage`` branch beside ``COVERAGE.md`` (:func:`tools.coverage.publish.write_site`), so they are current even where
+no documentation build has run since the last measurement.
 """
 
 from __future__ import annotations
@@ -23,14 +27,17 @@ from pathlib import Path
 
 from . import chart, ir, report
 from .publish import (
+    OUTCOMES,
     WORKFLOW,
     _bugs_url,
     _causes,
+    _cell_score,
     _executed_cell,
     _untested,
     cell,
     label,
 )
+from .publish import page as cell_page
 
 # Where the Coverage workflow publishes the report and its feature files.
 PUBLISHED = "https://raw.githubusercontent.com/CrossGL/crosstl/coverage/"
@@ -41,7 +48,16 @@ _LANGUAGE_ID = re.compile(r"[a-z0-9]+")
 # The most bytes one downloaded file may have; the Coverage workflow publishes none over 1 MB.
 _DOWNLOAD_LIMIT = 4_000_000
 HEADER = "% Written from coverage.json by tools/coverage/docs.py when the documentation is built. Do not edit."
+# The first line of a page published to the coverage branch, which GitHub renders without MyST.
+GITHUB_HEADER = (
+    "<!-- Written from coverage.json by tools/coverage/docs.py when the Coverage workflow publishes. "
+    "Do not edit. -->"
+)
 DIRECTIONS = ("output", "input")
+# The documentation sources of the checkout this module is in, where the backend guides are.
+DOCS_SOURCE = Path(__file__).resolve().parents[2] / "docs" / "source"
+# The backend guide of each language whose guide is not named after it.
+GUIDE_NAMES = {"hlsl": "directx"}
 
 
 def _download(url: str, opener: Callable) -> bytes:
@@ -235,27 +251,70 @@ def _gaps(row: dict, repository: str) -> list[str]:
     return lines
 
 
+def _pairs(data: dict, language: str, github: bool, repository: str) -> list[str]:
+    """The measured translation matrix cells ``language`` is the source or the target of, each linked to its page."""
+    cells = [
+        c
+        for c in data.get("pairs", [])
+        if language in (c["source"], c["target"]) and c.get("features")
+    ]
+    if not cells:
+        return []
+    cells.sort(key=lambda c: (c["source"] != language, c["source"], c["target"]))
+    stamp = data.get("matrix") or data
+    base = "../" if github else f"https://github.com/{repository}/blob/coverage/"
+    lines = [
+        "## Translation pairs",
+        "",
+        f"The cells of the translation matrix that translate {chart.name(language)} straight to another language "
+        "or another language straight to it, measured on "
+        f"{_stamp({'commit': stamp.get('commit'), 'date': stamp.get('date')}, repository)}. Each cell measures "
+        "the features of the source's input row that the target has too, and its page lists the gaps.",
+        "",
+        "| Source | Target | Score | Supported | Refused | Wrong | Untested | Executed |",
+        "|---|---|---:|---:|---:|---:|---:|---|",
+    ]
+    for entry in cells:
+        counts = entry["counts"]
+        lines.append(
+            f"| {chart.name(entry['source'])} | {chart.name(entry['target'])} | "
+            f"[{_cell_score(entry)}]({base}{cell_page(entry)}) | "
+            + " | ".join(str(counts.get(o, 0)) for o in OUTCOMES)
+            + f" | {'yes' if entry.get('executes') else 'compile-only'} |"
+        )
+    return [*lines, ""]
+
+
 def page(
     data: dict,
     language: str,
     guide: str | None = None,
     repository: str = "CrossGL/crosstl",
+    github: bool = False,
 ) -> str:
-    """The Markdown page of ``language``; ``guide`` is the document name of its backend guide, if it has one."""
+    """The Markdown page of ``language``; ``guide`` is the document name of its backend guide, if it has one.
+
+    ``github`` writes the page for the ``coverage`` branch: GitHub's Markdown, with links relative to it.
+    """
     rows = _rows(data, language)
     if not rows:
         raise ValueError(f"the report has no row for {language!r}")
     name = chart.name(language)
     offered = [r for r in rows if r["offered"]]
+    if github:
+        built = "The Coverage workflow writes this page from `coverage.json` each time it publishes"
+        coverage_md = "../COVERAGE.md"
+    else:
+        built = "The documentation build writes this page from the published `coverage.json`"
+        coverage_md = COVERAGE_MD
     lines = [
-        HEADER,
+        GITHUB_HEADER if github else HEADER,
         "",
         f"# {name}",
         "",
         f"Measured on {_stamp(data, repository)} by the "
-        f"[Coverage workflow](https://github.com/{repository}/actions/workflows/{WORKFLOW}). The documentation "
-        f"build writes this page from the published `coverage.json`; [COVERAGE.md]({COVERAGE_MD}) defines each "
-        "outcome. Score = supported / (supported + refused + wrong).",
+        f"[Coverage workflow](https://github.com/{repository}/actions/workflows/{WORKFLOW}). {built}; "
+        f"[COVERAGE.md]({coverage_md}) defines each outcome. Score = supported / (supported + refused + wrong).",
         "",
     ]
     if language == ir.LANGUAGE:
@@ -266,13 +325,19 @@ def page(
             "",
         ]
     if guide:
+        link = (
+            f"[backend guide](https://github.com/{repository}/blob/main/docs/source/{guide}.rst)"
+            if github
+            else f"{{doc}}`backend guide </{guide}>`"
+        )
         lines += [
-            f"The {{doc}}`backend guide </{guide}>` describes how CrossTL translates {name}.",
+            f"The {link} describes how CrossTL translates {name}.",
             "",
         ]
     lines += _table(data, rows)
     lines += _sources(data, language, repository)
     lines += _categories(rows)
+    lines += _pairs(data, language, github, repository)
     gaps = [line for row in offered for line in _gaps(row, repository)]
     if gaps:
         lines += [
@@ -293,17 +358,18 @@ def _score(rows: list[dict], direction: str) -> str:
     return ""
 
 
-def index(data: dict, repository: str = "CrossGL/crosstl") -> str:
+def index(data: dict, repository: str = "CrossGL/crosstl", github: bool = False) -> str:
     """The page that lists every language with its scores and links to the language's page."""
     lines = [
-        HEADER,
+        GITHUB_HEADER if github else HEADER,
         "",
         "# Coverage by language",
         "",
         "Each page lists what CrossTL translates to and from one language, measured on "
         f"{_stamp(data, repository)}. CI probes every feature of a pinned upstream feature list, checks each "
         "translation with the language's reference compiler or validator and, where it has a runtime for the "
-        f"language, runs it. [COVERAGE.md]({COVERAGE_MD}) has the same numbers for every language on one page.",
+        f"language, runs it. [COVERAGE.md]({'../COVERAGE.md' if github else COVERAGE_MD}) has the same numbers "
+        "for every language on one page.",
         "",
         "| Language | Output | Input |",
         "|---|---:|---:|",
@@ -315,6 +381,8 @@ def index(data: dict, repository: str = "CrossGL/crosstl") -> str:
         lines.append(
             f"| [{chart.name(language)}]({language}.md) | {output} | {_score(rows, 'input')} |"
         )
+    if github:
+        return "\n".join(lines) + "\n"
     lines += [
         "",
         "```{toctree}",
@@ -342,13 +410,28 @@ def unavailable(source: str, error: str) -> str:
     )
 
 
+def guides(srcdir: Path, names: Iterable[str]) -> dict[str, str]:
+    """The document name of each language's backend guide under ``srcdir/backends/``, for those that have one."""
+    found = {}
+    for language in names:
+        name = f"backends/{GUIDE_NAMES.get(language, language)}"
+        if (srcdir / f"{name}.rst").is_file():
+            found[language] = name
+    return found
+
+
 def pages(
-    data: dict, guides: dict[str, str], repository: str = "CrossGL/crosstl"
+    data: dict,
+    guides: dict[str, str],
+    repository: str = "CrossGL/crosstl",
+    github: bool = False,
 ) -> dict[str, str]:
     """Every page by file name: ``index.md`` and one ``<language>.md`` per language of ``data``."""
-    files = {"index.md": index(data, repository)}
+    files = {"index.md": index(data, repository, github)}
     for language in languages(data):
-        files[f"{language}.md"] = page(data, language, guides.get(language), repository)
+        files[f"{language}.md"] = page(
+            data, language, guides.get(language), repository, github
+        )
     return files
 
 

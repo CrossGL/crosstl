@@ -2946,20 +2946,18 @@ def test_codegen_node_shader_attribute_reparses_from_dxc_callgraph():
 
     crossgl = generate_crossgl(code)
 
-    assert '@shader("node")' in crossgl
-    assert '@ shader("node")' not in crossgl
+    # [shader("node")] makes main the entry of a CrossGL node stage, and its attributes the node's.
+    assert "node {" in crossgl
+    assert "shader(" not in crossgl
 
     shader_ast = parse_crossgl(crossgl)
-    main = next(
-        function for function in shader_ast.functions if function.name == "main"
-    )
+    main = shader_ast.stages[ShaderStage.NODE].entry_point
 
+    assert main.name == "main"
     assert [
         (attr.name, [arg.value for arg in attr.arguments]) for attr in main.attributes
-    ] == [
-        ("shader", ["node"]),
-        ("NodeLaunch", ["thread"]),
-    ]
+    ] == [("node_launch", ["thread"])]
+    assert [function.name for function in shader_ast.functions] == ["intermediate"]
 
 
 def test_codegen_pascal_case_mesh_attributes_infer_stage():

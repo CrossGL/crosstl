@@ -356,6 +356,25 @@ def test_a_glsl_probe_translated_to_spirv_computes_what_the_native_probe_compute
     assert "as SPIR-V from glslangValidator," in diverged.detail
 
 
+@pytest.mark.skipif(
+    not (validators.available("glsl") and lowering.can_lower("glsl")),
+    reason="glslang or spirv-dis is not installed",
+)
+@pytest.mark.skipif(not _spirv_runtime(), reason="no Vulkan runtime")
+def test_a_spirv_probe_translated_to_glsl_computes_what_the_native_probe_computes():
+    # The GLSL translation names the probe's buffers `_` and `__0`, not `fin` and `outp`; the run binds them by slot.
+    glsl, spirv = _loaded("glsl"), _loaded("spirv")
+    result = pairs.run_pair(spirv["Ceil"], "spirv", "glsl", glsl["ceil"])
+    assert result.outcome == "supported", result.detail
+    native, translated = result.sources
+    assert "fin" not in translated and "ceil(" in translated
+    other = replace(result, sources=(native, translated.replace("ceil(", "floor(")))
+    (same, diverged), used = execution.run([result, other], workers=1)
+    assert used and same.outcome == "supported" and same.runtime, same.unrun
+    assert diverged.outcome == "wrong"
+    assert execution.DIVERGED in diverged.detail
+
+
 def test_the_cli_measures_the_cells_a_report_defines(monkeypatch, tmp_path):
     source = tmp_path / "rows.json"
     report.write({**report.build([], [], []), "backends": rows()}, source)
