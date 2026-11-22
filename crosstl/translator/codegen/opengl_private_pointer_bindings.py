@@ -696,7 +696,9 @@ class OpenGLPrivatePointerBindingMixin:
         if not is_single_object_type(self.type_name_string(source_type)):
             return None
         binding = glsl_member_view_root(
-            self, operand, {"root_kind": "scalar_value", "root": root}
+            self,
+            operand,
+            {"root_kind": "scalar_value", "root": root, "source_type": source_type},
         )
         if binding is None:
             return None
