@@ -76,6 +76,27 @@ def hlsl_member_view_root(generator, operand, excluded_names):
     return root
 
 
+def struct_member_chain_type(generator, root_type, members):
+    """Type of a member chain walked from the root's declared struct type.
+
+    Each member is looked up only in the struct its object has, so two structs
+    that share a member name never exchange member types. Returns
+    ``(walked, type)``: ``walked`` is false when the root type is unknown or a
+    link's object is not a struct (a swizzle, for example), and ``type`` is
+    ``None`` when a struct does not declare the member.
+    """
+    tables = getattr(generator, "struct_member_types", None) or {}
+    current = generator.type_name_string(root_type) if root_type is not None else ""
+    for member in members:
+        struct_members = tables.get(current)
+        if struct_members is None:
+            return False, None
+        current = struct_members.get(str(member.member))
+        if current is None:
+            return True, None
+    return True, current
+
+
 def glsl_member_view_root(generator, operand, root_binding):
     """Root binding of a GLSL scalar member view of ``operand``, or ``None``.
 
@@ -96,7 +117,11 @@ def glsl_member_view_root(generator, operand, root_binding):
                 "only a 32-bit unsigned union member is the storage word, so "
                 "only its address can be passed as a private pointer",
             )
-    source_type = generator.glsl_source_expression_type(operand)
+    walked, source_type = struct_member_chain_type(
+        generator, root_binding.get("source_type"), members
+    )
+    if not walked:
+        source_type = generator.glsl_source_expression_type(operand)
     if not is_single_object_type(generator.type_name_string(source_type)):
         return None
     return {

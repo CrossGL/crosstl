@@ -16,9 +16,6 @@
 - name: enhancement
   color: a2eeef
   description: New feature or improvement
-- name: documentation
-  color: 0075ca
-  description: Documentation changes
 - name: question
   color: d876e3
   description: Usage question; prefer Discussions
@@ -172,11 +169,13 @@
     - pyproject.toml
     - tools/*
     - tests/coverage/*
+    - tests/conformance/*
     - tests/ci_helpers.py
     - tests/test_ci_*
 - name: area:docs
   color: 1d76db
   description: Documentation site, guides and community files
+  renamed-from: [documentation]
   paths:
     - docs/*
     - readme.md

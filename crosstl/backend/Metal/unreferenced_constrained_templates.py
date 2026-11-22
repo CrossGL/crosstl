@@ -24,7 +24,13 @@ body needs a choice that only the constraint decides, such as the partial specia
   specializations spell a removed name, since their generic bodies would call an overload whose contract the
   importer cannot express. Explicit specializations of a removed name go with it ([temp.expl.spec]/1).
 
-Unconstrained templates that nothing names stay, as before, because CrossGL can express them as generics. Member
+A template whose body calls through a qualifier that names one of its template parameters, as
+``CTile::Frag_t::mma(...)``, is removed in the same way when nothing live names it: the call's owner is known only once
+the template is instantiated ([temp.dep.type]), a CrossGL generic function has no such call, and the importer refuses
+it (``static_member_calls.MetalDependentMemberCallRefusal``), which it need not do for a template the program never
+instantiates.
+
+Other unconstrained templates that nothing names stay, as before, because CrossGL can express them as generics. Member
 templates of aggregates are not considered; their bodies count as code outside function templates.
 """
 
@@ -76,12 +82,38 @@ def _closure(seeds: set[str], edges: dict[str, set[str]]) -> set[str]:
     return reached
 
 
+def _calls_through_a_parameter(masked: str, template: Any) -> bool:
+    """Whether the body of ``template`` calls a member through a qualifier that starts with a template parameter."""
+    parameters = [
+        name
+        for name in getattr(template, "template_parameters", None) or ()
+        if isinstance(name, str) and name
+    ]
+    body_start = getattr(template, "body_start", None)
+    if not parameters or body_start is None:
+        return False
+    alternatives = "|".join(re.escape(name) for name in parameters)
+    call = re.compile(
+        rf"(?<![\w$:.])(?:{alternatives})(?:\s*<[^;{{}}()]*>)?"
+        rf"(?:\s*::\s*(?:template\s+)?[A-Za-z_]\w*(?:\s*<[^;{{}}()]*>)?)+\s*\("
+    )
+    return call.search(masked, body_start, template.span[1]) is not None
+
+
 def prune_unreferenced_constrained_templates(preprocessor: Any, code: str) -> str:
-    """Return ``code`` without the constrained free function templates that only unused code names."""
+    """Return ``code`` without the constrained free function templates, and those that call through a dependent
+    qualifier, that only unused code names."""
 
     templates = _free_templates(preprocessor, code)
     constrained_names = {
         template.name for template in templates if template.template_constraints
+    }
+    masked = preprocessor._mask_comments_and_literals(code)
+    constrained_names |= {
+        template.name
+        for template in templates
+        if template.name not in constrained_names
+        and _calls_through_a_parameter(masked, template)
     }
     if not constrained_names:
         return code
@@ -97,7 +129,6 @@ def prune_unreferenced_constrained_templates(preprocessor: Any, code: str) -> st
         )
     names = set(spans_by_name)
     all_spans = sorted({span for spans in spans_by_name.values() for span in spans})
-    masked = preprocessor._mask_comments_and_literals(code)
     pattern = re.compile(r"(?<![\w$])[A-Za-z_]\w*")
 
     outside: set[str] = set()

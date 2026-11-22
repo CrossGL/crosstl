@@ -1,0 +1,1 @@
+CUDA and HIP output read a component of a compute built-in with a runtime subscript, such as `gl_GlobalInvocationID[d]`, through a helper that evaluates the index once. Both generators refused the subscript before, although GLSL, HLSL, Metal and SPIR-V output translate it. A constant subscript outside 0..2 and a subscript of the scalar local invocation index are still refused.

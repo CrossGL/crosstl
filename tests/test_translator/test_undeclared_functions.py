@@ -18,6 +18,7 @@ from crosstl.translator.semantics.builtin_function_names import (
     GLSL_EXTENSION_FUNCTION_NAMES,
     GLSL_FUNCTION_NAMES,
     HLSL_FUNCTION_NAMES,
+    HLSL_PREVIEW_FUNCTION_NAMES,
     METAL_FUNCTION_NAMES,
 )
 from crosstl.translator.semantics.declared_functions import (
@@ -183,8 +184,9 @@ shader Dead {
 LIVE_HELPER = DEAD_HELPER.replace("values[0] = used(1.0);", "values[0] = unused(1.0);")
 
 
-def test_calls_in_functions_no_entry_reaches_are_not_checked():
-    assert undeclared_function_calls(_program(DEAD_HELPER)) == []
+def test_calls_in_functions_no_entry_reaches_are_checked():
+    calls = undeclared_function_calls(_program(DEAD_HELPER))
+    assert [name for name, _ in calls] == ["undeclaredHelper"]
 
 
 def test_calls_in_functions_an_entry_reaches_are_checked():
@@ -235,7 +237,8 @@ INVENTORIES = Path(__file__).resolve().parents[1] / "conformance" / "inventory" 
     ("language", "group"),
     [
         ("glsl", GLSL_FUNCTION_NAMES),
-        ("hlsl", HLSL_FUNCTION_NAMES),
+        # The DXC 1.9 inventory predates the Shader Model 6.10 preview intrinsics.
+        ("hlsl", HLSL_FUNCTION_NAMES - HLSL_PREVIEW_FUNCTION_NAMES),
         ("metal", METAL_FUNCTION_NAMES),
     ],
 )

@@ -7,6 +7,6 @@ anywhere else. :mod:`.dialect` writes the programs and :mod:`.templates` holds t
 """
 
 from .dialect import DIALECT, ES_DIALECT
-from .templates import CONSTRUCTS
+from .templates import CONSTRUCTS, FOR_LANGUAGE
 
-__all__ = ["CONSTRUCTS", "DIALECT", "ES_DIALECT"]
+__all__ = ["CONSTRUCTS", "DIALECT", "ES_DIALECT", "FOR_LANGUAGE"]

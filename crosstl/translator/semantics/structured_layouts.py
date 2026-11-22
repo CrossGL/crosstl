@@ -49,7 +49,7 @@ from dataclasses import dataclass, field, replace
 from functools import lru_cache
 
 from .. import ast as A
-from ..codegen.buffer_member_layout import member_is_packed
+from ..codegen.buffer_member_layout import member_is_packed, member_is_row_major
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import call_name, iter_functions, iter_structs, type_from_node
 from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
@@ -392,6 +392,8 @@ class _Shapes:
             for member in struct.members:
                 member_context = f"{context}, member {member.name}"
                 shape = self.of(member.member_type, member_context)
+                if member_is_row_major(member):
+                    shape = _row_major_shape(shape)
                 if member_is_packed(member):
                     shape = _packed_shape(shape, member_context)
                 size, alignment, _leaves = _layout(shape, self.source)
@@ -406,6 +408,27 @@ class _Shapes:
                 alignment=_metal_alignment(struct, context),
             )
         return self.cache[name]
+
+
+def _row_major_shape(shape):
+    """The shape of a ``@row_major`` member: a matrix stored as its rows.
+
+    A row-major matrix of C columns and R rows is R vectors of C lanes under every rule set (GLSL 4.60 section
+    7.6.2.2 rule 7; HLSL ``row_major``), so it is laid out as such and kept whole: the word helpers index columns.
+    """
+    if shape.form == "array":
+        return replace(shape, element=_row_major_shape(shape.element))
+    if shape.form == "matrix":
+        return _Shape(
+            "opaque",
+            name=shape.type_text(),
+            opaque=("f", 32, shape.count, shape.lanes),
+            source=shape.source,
+        )
+    if shape.form == "opaque" and shape.opaque[3]:
+        kind, bits, rows, columns = shape.opaque
+        return replace(shape, opaque=(kind, bits, columns, rows))
+    return shape
 
 
 def element_stride(program, type_node, rules, context, cache=None) -> int:

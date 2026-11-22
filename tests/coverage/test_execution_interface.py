@@ -197,6 +197,12 @@ def test_the_report_names_the_runtime_and_coverage_md_says_what_ran():
         1,
     )
     assert "| 1 | 0 | 0 | 0 | 1 on metal-apple |" in publish.markdown(data)
+    # Each probe that ran names its runtime, and the row counts them per runtime.
+    assert row["executions"] == {"metal-apple": 1}
+    assert row["features"][0]["runtime"] == "metal-apple"
+    assert "execution_only" not in data
+    only = report.build([ran], ["metal"], ["output"], execute=True, execution_only=True)
+    assert only["execution_only"] is True
     # Measured without --execute, a language that has a runtime says so instead of claiming that none could run.
     plain = report.build([Result(SIN, "output", "supported")], ["metal"], ["output"])
     [row] = [b for b in plain["backends"] if b["language"] == "metal"]
@@ -337,6 +343,19 @@ def _mixed_interface(language, input_count, constants):
         if constants:
             source += f"layout(std140, binding = {input_count + 1}) uniform Params {{ float scale; }};\n"
         return source + "void main() {}\n"
+    if language == "hlsl":
+        source = "".join(
+            f"RWStructuredBuffer<{kind}> {name} : register(u{slot});\n"
+            for slot, (kind, name) in enumerate(storage)
+        )
+        if constants:
+            source += (
+                f"cbuffer Params : register(b{input_count + 1}) {{ float scale; }};\n"
+            )
+        return (
+            source
+            + "[numthreads(1, 1, 1)]\nvoid main(uint3 id : SV_DispatchThreadID) {}\n"
+        )
     source = (
         'OpEntryPoint GLCompute %main "main"\nOpExecutionMode %main LocalSize 1 1 1\n'
     )
@@ -365,7 +384,7 @@ def _mixed_interface(language, input_count, constants):
     return source
 
 
-@pytest.mark.parametrize("language", ["metal", "glsl", "spirv"])
+@pytest.mark.parametrize("language", ["metal", "glsl", "spirv", "hlsl"])
 @pytest.mark.parametrize("input_count", [2, 3])
 @pytest.mark.parametrize("constants", [False, True])
 def test_multiple_inputs_keep_binding_and_constants_checks(
@@ -384,9 +403,12 @@ def test_multiple_inputs_keep_binding_and_constants_checks(
         )
         == ""
     )
-    binding = {"metal": "buffer({})", "glsl": "binding = {}", "spirv": "Binding {}"}[
-        language
-    ]
+    binding = {
+        "metal": "buffer({})",
+        "glsl": "binding = {}",
+        "spirv": "Binding {}",
+        "hlsl": "register(u{})",
+    }[language]
     # Duplicate or moved input/output slots must fail, not silently keep the validation result.
     for old, new in ((1, 0), (1, input_count + 2), (input_count, input_count + 2)):
         translated.write_text(source.replace(binding.format(old), binding.format(new)))

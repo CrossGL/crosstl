@@ -691,6 +691,16 @@ each split artifact. Each artifact still evaluates only its own matching rule
 using its materialized template parameters. Rules that match no selected entry
 remain errors, including rules for entries excluded from the selection.
 
+OpenGL translates a unit with several compute entries one entry per artifact,
+because a GLSL program has a single ``main``. Entry rules keep that split: each
+artifact applies the rule of its own entry, and pattern coverage is checked
+against every discovered entry of the unit. An entry that no entry rule names,
+in a source without a source-wide fallback, keeps the size its source or host
+gives it. If it reads ``threads_per_threadgroup`` without such a size, it fails
+with ``project.translate.workgroup-size-required``. Targets that emit every
+entry into one artifact, such as DirectX and Metal, still need a rule for each
+entry.
+
 Metal also consumes source-wide and entry-specific workgroup-size rules, but as
 host-dispatch contracts rather than source specialization. MSL does not encode
 a fixed ``numthreads`` or ``local_size`` attribute: the generated kernel keeps

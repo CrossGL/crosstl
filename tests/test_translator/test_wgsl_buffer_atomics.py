@@ -338,3 +338,27 @@ def test_workgroup_local_with_an_initializer_is_refused(tmp_path):
 def test_programs_without_atomics_are_not_copied(tmp_path):
     output = _translate(tmp_path, "b.head = i;")
     assert "atomic" not in output
+
+
+def test_buffer_pointer_elements_become_atomic(tmp_path):
+    """``buffer int* p`` declared ``array<i32>`` although atomic built-ins addressed its elements."""
+    source = """shader main {
+    compute {
+    layout(local_size_x = 1) in;
+    buffer int* src;
+    buffer uint* counts;
+    void main() {
+        uint i = gl_GlobalInvocationID.x;
+        atomicAdd(counts[i], 1u);
+        atomicMax(counts[0u], uint(src[i]));
+        counts[1u] = 2u;
+    }
+    }
+}
+"""
+    output = _translate(tmp_path, "", source=source)
+    assert re.search(r"var<storage, read_write> counts: array<atomic<u32>>;", output)
+    assert re.search(r"var<storage, read_write> src: array<i32>;", output)
+    assert "atomicAdd(&counts[i], 1u)" in output
+    assert "atomicStore(&counts[1u], 2u)" in output
+    _validate(tmp_path, output)

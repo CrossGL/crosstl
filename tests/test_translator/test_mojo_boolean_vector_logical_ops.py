@@ -51,7 +51,7 @@ def test_scalar_bool_operands_keep_short_circuit_operators(tmp_path):
         "shader P { bool f(bool a, bool b, float x) { return a && b || x < 1.0; } }",
     )
     assert "((a and b) or (x < 1.0))" in output
-    assert "&" not in output.split("fn f", 1)[1]
+    assert "&" not in output.split("def f", 1)[1]
 
 
 def test_masks_of_different_widths_are_refused(tmp_path):

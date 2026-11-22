@@ -1,3 +1,6 @@
+import re
+import shutil
+import subprocess
 from collections import Counter
 
 import pytest
@@ -155,6 +158,15 @@ def test_instructions_keep_the_operands_that_change_the_operation():
     assert found["OpGroupNonUniformAll"] == 1
 
 
+def test_without_aliases_a_khr_vote_keeps_its_own_name():
+    found = semantic.instructions(BARRIERS, aliases=False)
+    assert found["OpSubgroupAllKHR"] == 1 and "OpGroupNonUniformAll" not in found
+    # The other tokens do not depend on the aliases.
+    assert found["OpControlBarrier(2,2,264)"] == 1
+    assert semantic.canonical("OpSubgroupAnyKHR") == "OpGroupNonUniformAny"
+    assert semantic.canonical("OpGroupNonUniformAny") == "OpGroupNonUniformAny"
+
+
 # HLSL's WaveMultiPrefixSum and GLSL's subgroupPartitionedAddNV, as DXC and glslang write them; an older SPIRV-Tools
 # prints the group operation with the NV suffix.
 PARTITIONED = """
@@ -173,6 +185,89 @@ def test_a_partitioned_operation_is_not_the_one_over_the_whole_subgroup():
         "OpGroupNonUniformFAdd.PartitionedReduceEXT",
         "OpGroupNonUniformFAdd.Reduce",
     ]
+
+
+def test_hlsl_reordering_shares_the_id_of_the_spirv_reorder_instruction():
+    reorder = Feature("hlsl", "function", "dx::MaybeReorderThread", None)
+    assert semantic.lower(reorder) == ("OpReorderThreadWithHintEXT", "")
+
+
+# The arguments of each GLSL function's call in the SPIRV-Cross check: ``x`` is a float and ``u`` a uint.
+_TWIN_ARGUMENTS = {
+    "subgroupAnd": "u",
+    "subgroupOr": "u",
+    "subgroupXor": "u",
+    "subgroupElect": "",
+    "subgroupBroadcast": "x, 3u",
+    "subgroupShuffle": "x, u",
+    "subgroupShuffleXor": "x, 1u",
+    "subgroupShuffleUp": "x, 1u",
+    "subgroupShuffleDown": "x, 1u",
+    "subgroupRotate": "x, 1u",
+    "subgroupQuadBroadcast": "x, 1u",
+    "subgroupQuadAll": "u > 1u",
+    "subgroupQuadAny": "u > 1u",
+}
+_TWIN_SHADER = """#version 460
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_KHR_shader_subgroup_ballot : enable
+#extension GL_KHR_shader_subgroup_vote : enable
+#extension GL_KHR_shader_subgroup_shuffle : enable
+#extension GL_KHR_shader_subgroup_shuffle_relative : enable
+#extension GL_KHR_shader_subgroup_quad : enable
+#extension GL_KHR_shader_subgroup_rotate : enable
+#extension GL_EXT_shader_quad_control : enable
+layout(local_size_x = 32) in;
+layout(std430, binding = 0) buffer Data { float f[32]; uint w[32]; float r[32]; };
+void main() {
+    uint i = gl_LocalInvocationIndex;
+    float x = f[i];
+    uint u = w[i];
+    r[i] = float(CALL);
+}
+"""
+
+
+@pytest.mark.skipif(
+    not (shutil.which("glslangValidator") and shutil.which("spirv-cross")),
+    reason="glslangValidator or spirv-cross is missing",
+)
+@pytest.mark.parametrize(
+    ("metal", "glsl"), sorted(semantic.CROSS_COMPILED["metal"].items())
+)
+def test_spirv_cross_writes_each_metal_function_for_its_glsl_twin(
+    tmp_path, metal, glsl
+):
+    call = f"{glsl}({_TWIN_ARGUMENTS.get(glsl, 'x')})"
+    source, binary = tmp_path / "twin.comp", tmp_path / "twin.spv"
+    source.write_text(_TWIN_SHADER.replace("CALL", call))
+    subprocess.run(
+        [
+            "glslangValidator",
+            "-V",
+            "--target-env",
+            "vulkan1.3",
+            str(source),
+            "-o",
+            str(binary),
+        ],
+        check=True,
+        capture_output=True,
+    )
+    msl = subprocess.run(
+        ["spirv-cross", str(binary), "--msl", "--msl-version", "30000"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    # SPIRV-Cross writes some calls through a helper of its own, as spvSubgroupBroadcast, which calls the Metal
+    # function; the output names that function and no other of the table's.
+    named = {
+        name
+        for name in semantic.CROSS_COMPILED["metal"]
+        if re.search(rf"\b{name}\(", msl)
+    }
+    assert named == {metal}, msl
 
 
 def slang(name, result, *params):

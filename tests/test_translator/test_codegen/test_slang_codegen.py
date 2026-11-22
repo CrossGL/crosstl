@@ -641,7 +641,7 @@ def test_vertex_position_and_point_size_outputs_rewrite_to_slang_output_struct()
 
     assert "struct CGLVSMainOutput" in generated_code
     assert "float4 cgl_Position : SV_Position;" in generated_code
-    assert "float cgl_PointSize : PSIZE;" in generated_code
+    assert "float cgl_PointSize : SV_PointSize;" in generated_code
     assert "CGLVSMainOutput main()" in generated_code
     assert "cgl_Output.cgl_Position = float4(0.0, 0.0, 0.0, 1.0);" in generated_code
     assert "cgl_Output.cgl_PointSize = 4.0;" in generated_code
@@ -3573,9 +3573,10 @@ def test_synchronization_intrinsics_lower_to_slang_barriers():
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
     assert generated_code.count("GroupMemoryBarrierWithGroupSync();") == 2
-    assert generated_code.count("GroupMemoryBarrier();") == 2
+    # groupMemoryBarrier orders buffer and image memory too, which Slang's GroupMemoryBarrier does not.
+    assert generated_code.count("GroupMemoryBarrier();") == 1
     assert generated_code.count("DeviceMemoryBarrier();") == 3
-    assert generated_code.count("AllMemoryBarrier();") == 2
+    assert generated_code.count("AllMemoryBarrier();") == 3
     assert "barrier();" not in generated_code
     assert "workgroupBarrier();" not in generated_code
     assert "groupMemoryBarrier();" not in generated_code
@@ -7192,7 +7193,12 @@ def test_slang_ray_tracing_intrinsics_emit_native_calls_and_validate_shapes():
     ) in generated_code
     assert "CallShader(1, callableData);" in generated_code
     assert "bool accepted = ReportHit(1.0, 0, attributes);" in generated_code
-    assert "bool acceptedWithoutAttributes = ReportHit(2.0, 1);" in generated_code
+    # Slang's ReportHit needs attributes (E30439): the call without them reports a placeholder of the declared type.
+    assert "static HitAttributes crossgl_hit_attributes;" in generated_code
+    assert (
+        "bool acceptedWithoutAttributes = ReportHit(2.0, 1, crossgl_hit_attributes);"
+        in generated_code
+    )
     assert "IgnoreHit();" in generated_code
     assert "AcceptHitAndEndSearch();" in generated_code
     assert "void CallableMain(inout CallableData data)" in generated_code
@@ -8592,10 +8598,11 @@ def test_slang_ray_query_inout_helper_receivers_emit_native_calls():
         (
             """
             ray_miss {
-                void main(float payload @ payload) { }
+                void main(sampler2D payload @ payload) { }
             }
             """,
-            "payload parameter 'payload' must use a user-defined struct type",
+            "payload parameter 'payload' must use a structure, scalar, vector or "
+            "matrix type",
         ),
         (
             """
@@ -9610,12 +9617,12 @@ def test_invalid_slang_ray_tracing_helper_interface_arguments_raise(
                 void main() {
                     RaytracingAccelerationStructure scene;
                     RayDesc ray;
-                    uint payload;
+                    RaytracingAccelerationStructure payload;
                     TraceRay(scene, 0, 0xFF, 0, 1, 0, ray, payload);
                 }
             }
             """,
-            "TraceRay payload.*user-defined struct",
+            "TraceRay payload.*structure, scalar, vector or matrix",
         ),
         (
             """
@@ -9817,12 +9824,12 @@ def test_invalid_slang_ray_tracing_helper_interface_arguments_raise(
             """
             ray_intersection {
                 void main() {
-                    uint attributes;
+                    RaytracingAccelerationStructure attributes;
                     ReportHit(1.0, 0, attributes);
                 }
             }
             """,
-            "ReportHit hit attribute.*user-defined struct",
+            "ReportHit hit attribute.*structure, scalar, vector or matrix",
         ),
         (
             """
@@ -9907,20 +9914,6 @@ def test_invalid_slang_ray_tracing_helper_interface_arguments_raise(
             """,
             "ReportHit hit attribute argument type OtherHitAttributes "
             "must match hit attribute parameter type HitAttributes",
-        ),
-        (
-            """
-            uint makeAttributeScalar() {
-                return 1u;
-            }
-
-            ray_intersection {
-                void main() {
-                    ReportHit(1.0, 0, makeAttributeScalar());
-                }
-            }
-            """,
-            "ReportHit hit attribute.*user-defined struct",
         ),
     ],
 )
@@ -11333,8 +11326,11 @@ def test_matrix_multiply_and_inverse_lower_to_slang_helpers():
     assert "float4x4 _crossgl_inverse_float4x4(float4x4 m)" in generated_code
     assert "float4x4 modelView = mul(view, model);" in generated_code
     assert (
-        "float3x3 normalMatrix = float3x3(transpose(_crossgl_inverse_float4x4(model)));"
-        in (generated_code)
+        "float3x3 normalMatrix = cgl_matrix_resize_float4x4_to_float3x3("
+        "transpose(_crossgl_inverse_float4x4(model)));" in (generated_code)
+    )
+    assert "float3x3 cgl_matrix_resize_float4x4_to_float3x3(float4x4 m)" in (
+        generated_code
     )
     assert "float3 normal = mul(normalMatrix, float3(0.0, 1.0, 0.0));" in (
         generated_code
@@ -25304,7 +25300,7 @@ def test_slang_keeps_user_nonuniform_ext_function():
     assert "NonUniformResourceIndex" not in generated_code
 
 
-def test_shader_clock_builtins_are_refused_for_slang():
+def test_shader_clock_builtins_are_written_for_slang():
     source_code = """
     shader Clock {
         compute {
@@ -25318,16 +25314,10 @@ def test_shader_clock_builtins_are_refused_for_slang():
         }
     }
 """
-    with pytest.raises(SlangLoweringRefused) as refused:
-        generate_code(parse_code(tokenize_code(source_code)))
-    for name in (
-        "clockARB",
-        "clock2x32ARB",
-        "clockRealtimeEXT",
-        "clockRealtime2x32EXT",
-    ):
-        assert name in str(refused.value)
-    assert "shader clock builtin" in str(refused.value)
+    generated = generate_code(parse_code(tokenize_code(source_code)))
+
+    assert "out_buf[0] = clockARB() + crosstl_clock_realtime();" in generated
+    assert "pair_buf[0] = clock2x32ARB() + getRealtimeClock();" in generated
 
 
 def test_user_function_named_like_a_shader_clock_is_kept_for_slang():

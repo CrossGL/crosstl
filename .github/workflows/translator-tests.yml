@@ -47,8 +47,10 @@ jobs:
         id: select
         env:
           # Pushes to main and pull requests labelled ci:full test every supported
-          # version; other pull requests test the oldest and the newest.
-          FULL_PYTHON_VERSIONS: '["3.11", "3.12", "3.13", "3.14", "3.15"]'
+          # version; other pull requests test the oldest and the newest. The
+          # Complete Test Suite runs every translator test on Python 3.12 on
+          # Ubuntu, so a 3.12 leg here would repeat it.
+          FULL_PYTHON_VERSIONS: '["3.11", "3.13", "3.14", "3.15"]'
           PULL_REQUEST_PYTHON_VERSIONS: '["3.11", "3.15"]'
           FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
         run: |
@@ -68,32 +70,16 @@ jobs:
       PYTEST_XDIST_AUTO_NUM_WORKERS: ${{ matrix.OS == 'macOS-latest' && '3' || '4' }}
     strategy:
       matrix:
-        component:
-          [
-            "directx",
-            "metal",
-            "GLSL",
-            "slang",
-            "SPIRV",
-            "mojo",
-            "rust",
-            "CUDA",
-            "hip",
-            "webgl",
-            "wgsl",
-            "general-1-of-3",
-            "general-2-of-3",
-            "general-3-of-3",
-          ]
+        # Each Ubuntu leg runs a quarter of every translator test. One leg per
+        # code generator plus three general shards made 14 jobs per Python
+        # version, most of them under a minute, and skipped the tests in
+        # test_codegen outside the per-generator modules.
+        component: ["all-1-of-4", "all-2-of-4", "all-3-of-4", "all-4-of-4"]
         python-version: ${{ fromJSON(needs.python-versions.outputs.versions) }}
-        OS: [ubuntu-latest, windows-latest, macOS-latest]
-        exclude:
-          - OS: windows-latest
-          - OS: macOS-latest
-        # A K-of-N leg runs shard K of N (tools/pytest_shard.py). The general
-        # tests took 13 to 24 minutes on one runner, every translator test 28
-        # minutes on Windows and 15 on macOS, the longest required job in the
-        # merge queue, which builds one group at a time.
+        OS: [ubuntu-latest]
+        # A K-of-N leg runs shard K of N (tools/pytest_shard.py). Every
+        # translator test took 28 minutes on one Windows runner and 15 on
+        # macOS, the longest required job in the merge queue.
         include:
           - component: all-1-of-3
             python-version: "3.13"
@@ -167,6 +153,10 @@ jobs:
           python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal -std=metal4.1 -x metal -fsyntax-only /dev/null
 
+      - name: Use Visual Studio's Clang
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/windows-clang
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -174,16 +164,7 @@ jobs:
 
       - name: Rewrite test modules
         # Otherwise each xdist worker rewrites the asserts of every test module itself.
-        # The other legs run one module, which the workers rewrite in parallel anyway.
-        if: startsWith(matrix.component, 'all') || startsWith(matrix.component, 'general')
-        shell: bash
-        run: |
-          component="${{ matrix.component }}"
-          if [[ "$component" == general* ]]; then
-            python -m tools.pytest_warm tests/test_translator --ignore=tests/test_translator/test_codegen
-          else
-            python -m tools.pytest_warm tests/test_translator
-          fi
+        run: python -m tools.pytest_warm tests/test_translator
 
       - name: Run translator tests
         id: run_translator_tests
@@ -196,20 +177,8 @@ jobs:
             part="${component#*-}"
             shard=(-p tools.pytest_shard --shard "${part%-of-*}/${part#*-of-}")
           fi
-          if [[ "$component" == all* ]]; then
-            python -m pytest tests/test_translator "${shard[@]}" -n auto \
-              --junitxml build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
-          elif [[ "$component" == general* ]]; then
-            python -m pytest tests/test_translator --ignore=tests/test_translator/test_codegen "${shard[@]}" -n auto \
-              --junitxml build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
-          elif [ "${{ matrix.component }}" == "GLSL" ]; then
-            python -m pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py -n auto \
-              tests/test_translator/test_codegen/test_GLSL_workgroup_pointer_codegen.py \
-              --junitxml build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
-          else
-            python -m pytest tests/test_translator/test_codegen/test_${{ matrix.component }}_codegen.py -n auto \
-              --junitxml build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
-          fi
+          python -m pytest tests/test_translator "${shard[@]}" -n auto \
+            --junitxml build/reports/translator-tests-${{ matrix.component }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
 
       - name: Write translator test failure summary
         if: failure() && steps.run_translator_tests.outcome == 'failure'

@@ -41,6 +41,7 @@ from . import (
     pointers,
     portability,
     primitives,
+    promotion,
     qualifiers,
     rasterization,
     rays,
@@ -56,12 +57,13 @@ from . import (
     tasks,
     tessellation,
     textures,
+    unions,
     values,
     vectors,
     vertices,
     workgroups,
 )
-from .base import ABSENT, Template, scalar
+from .base import ABSENT, Template, narrow_scalar, scalar
 from .family import C_FAMILY
 
 _METAL_HEADER = "#include <metal_stdlib>\nusing namespace metal;\n\n"
@@ -126,6 +128,8 @@ METAL = {
     **components.ELSEWHERE,
     **pointers.METAL,
     **memory.ELSEWHERE,
+    **unions.METAL,
+    **promotion.METAL,
     **subgroups.METAL,
     **specializations.METAL,
     **qualifiers.METAL,
@@ -149,10 +153,10 @@ METAL = {
     "runtime-array-length": ABSENT,
     "half": scalar("half", "fin"),
     "double": ABSENT,
-    "int8": scalar("char"),
-    "uint8": scalar("uchar"),
-    "int16": scalar("short"),
-    "uint16": scalar("ushort"),
+    "int8": narrow_scalar("char"),
+    "uint8": narrow_scalar("uchar"),
+    "int16": narrow_scalar("short"),
+    "uint16": narrow_scalar("ushort"),
     "int64": scalar("long"),
     "uint64": scalar("ulong"),
     "shared-memory": Template(
