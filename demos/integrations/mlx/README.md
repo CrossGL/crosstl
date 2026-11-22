@@ -3861,6 +3861,17 @@ git clone https://github.com/ml-explore/mlx.git /tmp/mlx
 git -C /tmp/mlx checkout 4367c73b60541ddd5a266ce4644fd93d20223b6e
 ```
 
+CI jobs check MLX out with `fetch_upstream.py` instead, which also works
+locally. It makes one shallow fetch of the full 40-digit commit, retries a
+failed attempt from an empty directory up to four times (waiting 15, 30 and
+60 s), and then fails unless `core.autocrlf` is off, `HEAD` is that commit and
+the tree is clean. `--sparse` limits the tree to the named directories:
+
+```bash
+python -m demos.integrations.mlx.fetch_upstream /tmp/mlx \
+  4367c73b60541ddd5a266ce4644fd93d20223b6e --sparse mlx/backend/metal/kernels
+```
+
 Run the project-porting harness from the CrossTL repository:
 
 ```bash
