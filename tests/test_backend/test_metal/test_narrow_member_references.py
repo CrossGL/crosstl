@@ -183,9 +183,7 @@ def _expected():
 
 
 @pytest.mark.parametrize("route", ["direct", "crossgl"])
-def test_narrow_field_references_compute_the_source_results_on_the_gpu(
-    tmp_path, route
-):
+def test_narrow_field_references_compute_the_source_results_on_the_gpu(tmp_path, route):
     if route == "direct":
         metal = _translate(tmp_path, SOURCE, "bytes.metal", "metal")
     else:
