@@ -672,6 +672,24 @@ def applied(issues: Iterable[Issue], done: Iterable[tuple[Action, int]]) -> list
     return list(state.values())
 
 
+def _superseded(action: Action, commit: str, github: GitHub) -> str:
+    """Why ``action`` must not run, or ``""`` when it can.
+
+    A reopening waits when a merged fix closed the issue and the report measured ``commit``, which does not contain
+    that fix: a run that started before the merge must not undo it. A run on a commit with the fix decides again.
+    """
+    if action.kind != "reopen" or not commit or action.number is None:
+        return ""
+    try:
+        closer = github.closing_commit(action.number)
+        if not closer or github.contains(commit, closer):
+            return ""
+    except RuntimeError:
+        # GitHub could not say, so the measurement decides as it does for an issue nothing closed.
+        return ""
+    return f"closed by {closer[:12]}, which the measured commit {commit[:12]} does not contain"
+
+
 def reconcile(
     report: dict,
     github: GitHub,
@@ -680,9 +698,28 @@ def reconcile(
     dry_run: bool = False,
     log: Callable[[str], None] = print,
 ) -> list[Action]:
-    """Plan and, unless ``dry_run``, apply, logging each action as it happens; returns the actions."""
+    """Plan and, unless ``dry_run``, apply, logging each action as it happens; returns the actions.
+
+    A reopening of an issue that a fix newer than the report closed is left out and logged (:func:`_superseded`).
+    """
+    commit = report.get("commit") or ""
+    # Why each reopening checked so far waits, or "" when it goes ahead; the follow-up plan asks again.
+    checked: dict[int | None, str] = {}
+
+    def current(planned: list[Action]) -> list[Action]:
+        kept = []
+        for action in planned:
+            why = checked.get(action.number) if action.kind == "reopen" else ""
+            if why is None:
+                why = checked[action.number] = _superseded(action, commit, github)
+                if why:
+                    log(f"{'skip':<6} {f'#{action.number}':<10} {action.title} ({why})")
+            if not why:
+                kept.append(action)
+        return kept
+
     known = github.managed()
-    actions = plan(report, known, github.repository, new_bugs)
+    actions = current(plan(report, known, github.repository, new_bugs))
     done: list[tuple[Action, int]] = []
     for action in actions:
         if not dry_run:
@@ -692,7 +729,7 @@ def reconcile(
         # New bug issues have numbers now; link them from the tracking issues within this run. The follow-up plans
         # against the issues as this run left them rather than listing them again, because GitHub's issue list can
         # leave out an issue created a few seconds earlier.
-        follow_up = plan(report, applied(known, done), github.repository, 0)
+        follow_up = current(plan(report, applied(known, done), github.repository, 0))
         for action in follow_up:
             github.apply(action)
             log(action.describe())
