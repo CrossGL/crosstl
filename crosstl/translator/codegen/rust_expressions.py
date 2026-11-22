@@ -159,6 +159,9 @@ class RustExpressionMixin:
                 )
                 return f"{self.rust_callable_name(callee)}({args_str})"
 
+            memory_atomic = generate_rust_memory_atomic_call(self, func_name, args)
+            if memory_atomic is not None:
+                return memory_atomic
             rust_gpu_call = generate_rust_gpu_builtin_call(self, func_name, args)
             if rust_gpu_call is not None:
                 return rust_gpu_call
@@ -203,10 +206,6 @@ class RustExpressionMixin:
             bitcast_intrinsic = self.generate_bitcast_intrinsic_call(func_name, args)
             if bitcast_intrinsic is not None:
                 return bitcast_intrinsic
-
-            memory_atomic = generate_rust_memory_atomic_call(self, func_name, args)
-            if memory_atomic is not None:
-                return memory_atomic
 
             original_func_name = func_name
             func_name = self.mapped_function_name(func_name, len(args), args)

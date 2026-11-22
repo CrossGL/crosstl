@@ -13898,7 +13898,6 @@ def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
             vec4 main(
                 mat3 normal_matrix,
                 mat4 world_matrix,
-                mat3x4 affine,
                 vec3 normal,
                 vec4 position
             ) {
@@ -13908,7 +13907,6 @@ def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
                 let world_inverse = inverse(world_matrix);
                 let world_basis = transpose(world_inverse);
                 let world_weight = determinant(world_basis);
-                let rectangular = transpose(affine);
                 let transformed_normal = normal_inverse * normal;
                 let transformed_position = world_basis * position;
                 return vec4(
@@ -13920,9 +13918,26 @@ def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused, match="function: 'inverse' has no rust-gpu lowering"
-    ):
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let normal_inverse: Mat3 = (normal_basis).inverse();" in generated_code
+    assert "let world_weight: f32 = (world_basis).determinant();" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_refuses_rectangular_matrix_parameters():
+    code = """
+    shader RectangularMatrix {
+        fragment {
+            vec4 main(mat3x4 affine) {
+                let rectangular = transpose(affine);
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(RustRefusal, match="glam has no 3x4 matrix of f32"):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -14433,32 +14448,55 @@ def test_pack_unpack_intrinsics_infer_result_types_and_smoke_compile(tmp_path):
     code = """
     shader PackUnpackIntrinsicInference {
         fragment {
-            vec4 main(vec2 pair, vec4 color, uint packed2, uint packed4, uvec2 doubleBits, double packedDoubleInput) {
+            vec4 main(vec2 pair, vec4 color, uint packed2, uint packed4) {
                 let packedUnorm2 = packUnorm2x16(pair);
                 let packedSnorm2 = packSnorm2x16(pair);
                 let packedUnorm4 = packUnorm4x8(color);
                 let packedSnorm4 = packSnorm4x8(color);
                 let packedHalf = packHalf2x16(pair);
-                let packedDouble = packDouble2x32(doubleBits);
                 let unpackedUnorm2 = unpackUnorm2x16(packed2);
                 let unpackedSnorm2 = unpackSnorm2x16(packed2);
                 let unpackedUnorm4 = unpackUnorm4x8(packed4);
                 let unpackedSnorm4 = unpackSnorm4x8(packed4);
                 let unpackedHalf = unpackHalf2x16(packed2);
-                let unpackedDouble = unpackDouble2x32(packedDoubleInput);
                 uint packedMix = packedUnorm2 + packedSnorm2 + packedUnorm4
                     + packedSnorm4 + packedHalf;
                 return unpackedUnorm4 + unpackedSnorm4
                     + vec4(unpackedUnorm2, unpackedSnorm2)
-                    + vec4(unpackedHalf, vec2(float(unpackedDouble.x), float(unpackedDouble.y)))
-                    + vec4(vec3(float(packedMix)), float(packedDouble));
+                    + vec4(unpackedHalf, unpackedHalf)
+                    + vec4(float(packedMix));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let packedUnorm2: u32 = spirv_std::float::vec2_to_u16x2_unorm(pair);" in (
+        generated_code
+    )
+    assert (
+        "let unpackedSnorm4: Vec4 = spirv_std::float::u8x4_to_vec4_snorm(packed4);" in (
+            generated_code
+        )
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_double_packing_is_refused():
+    code = """
+    shader DoublePacking {
+        fragment {
+            vec4 main(uvec2 doubleBits) {
+                let packedDouble = packDouble2x32(doubleBits);
+                return vec4(float(packedDouble));
             }
         }
     }
     """
 
     with pytest.raises(
-        RustLoweringRefused, match="function: 'packUnorm2x16' has no rust-gpu lowering"
+        RustLoweringRefused, match="function: 'packDouble2x32' has no rust-gpu lowering"
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -19581,10 +19619,10 @@ def test_rust_matrix_scalar_and_resize_constructors_compile(tmp_path):
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused, match="function: 'inverse' has no rust-gpu lowering"
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "(model).inverse()" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_hlsl_matrix_alias_constructors_compile(tmp_path):

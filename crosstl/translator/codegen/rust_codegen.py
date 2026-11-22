@@ -30,6 +30,7 @@ from .rust_global_declarations import RustGlobalDeclarationMixin
 from .rust_gpu_constants import rust_integer_constants
 from .rust_gpu_entry_buffers import normalize_rust_gpu_buffers
 from .rust_gpu_interface import RUST_GPU_PRELUDE, UNIFORM_VALUE_KIND
+from .rust_gpu_math_calls import rust_gpu_math_result_type
 from .rust_gpu_slice_length import RustGpuSliceLengthMixin
 from .rust_gpu_spec_constants import (
     SPEC_CONSTANT_KIND,
@@ -1070,6 +1071,9 @@ class RustCodeGen(
             atomic_type = rust_memory_atomic_result_type(self, func_name, arguments)
             if atomic_type is not None:
                 return atomic_type
+            math_type = rust_gpu_math_result_type(self, func_name, arguments)
+            if math_type is not None:
+                return math_type
 
         mapped_name = self.mapped_function_name(func_name, len(arguments), arguments)
         arg_types = [self.expression_result_type(arg) for arg in arguments]
