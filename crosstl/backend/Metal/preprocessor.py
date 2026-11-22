@@ -3448,6 +3448,7 @@ class MetalPreprocessor(
                 matching_partials: List[Tuple[_MetalTemplateStruct, Dict[str, str]]] = (
                     []
                 )
+                matching_patterns: List[List[str]] = []
                 has_unmaterializable_partial = False
                 for (
                     partial_template,
@@ -3483,8 +3484,14 @@ class MetalPreprocessor(
                         has_unmaterializable_partial = True
                     else:
                         matching_partials.append((partial_template, bindings))
-                self._require_unique_constrained_struct_partial(
-                    ident, resolved_arguments, matching_partials
+                        matching_patterns.append(canonical_specialization_arguments)
+                matching_partials = self._most_specialized_struct_partials(
+                    ident,
+                    resolved_arguments,
+                    matching_partials,
+                    matching_patterns,
+                    code=code,
+                    position=i,
                 )
                 if matching_partials or has_unmaterializable_partial:
                     resolved_constraint = len(matching_partials) == 1 and any(

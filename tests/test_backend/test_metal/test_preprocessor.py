@@ -5561,14 +5561,13 @@ def test_preprocessor_scoped_partial_object_materialization_requires_unique_matc
 
     Selector<int, 1, true> value;
     """
-    ambiguous_output = (
+    # Neither partial specialization is more specialized ([temp.spec.partial.order]), so C++ rejects the
+    # template-id and so does the materializer instead of keeping the template spelling.
+    with pytest.raises(MetalTemplateSpecializationError, match="is ambiguous"):
         preprocessor._materialize_explicit_template_struct_instantiations(
             ambiguous,
             allow_partial_object_specializations=True,
         )
-    )
-    assert "Selector<int, 1, true> value;" in ambiguous_output
-    assert "struct Selector_int_1_true" not in ambiguous_output
 
 
 def test_preprocessor_mutating_method_uses_mutable_receiver_reference():

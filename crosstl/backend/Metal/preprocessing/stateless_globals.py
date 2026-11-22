@@ -288,6 +288,21 @@ class MetalStatelessGlobalMixin:
                 )
                 if specialization_arguments is None:
                     continue
+                primary = templates_by_name.get(template.name)
+                if (
+                    primary is not None
+                    and not primary.variadic_template_parameters
+                    and len(specialization_arguments) < len(primary.template_parameters)
+                ):
+                    # `Cell<T, device U*>` of `Cell<T, U, Enable = void>` is
+                    # `Cell<T, device U*, void>`: like any template-id, a partial
+                    # specialization's argument list takes the primary's defaults.
+                    specialization_arguments = (
+                        self._template_arguments_with_resolved_defaults(
+                            primary, specialization_arguments
+                        )
+                        or specialization_arguments
+                    )
                 partial_specializations.setdefault(template.name, []).append(
                     (template, specialization_arguments)
                 )
