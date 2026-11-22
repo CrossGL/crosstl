@@ -20327,3 +20327,103 @@ def test_user_function_named_like_a_shader_clock_is_kept_for_rust():
     }
     """
     assert "clockARB()" in generate_code(parse_code(tokenize_code(source_code)))
+
+
+def test_rust_generic_operator_function_emits_copy_bound_and_compiles(tmp_path):
+    """Generic functions that use a value-consuming operator need a Copy bound (#4748)."""
+    code = """
+    shader G8 {
+        generic<T> T twice(T x) {
+            return x + x;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = twice(v);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert (
+        "pub fn twice<T: Copy + core::ops::Add<Output = T>>(x: T) -> T"
+        in generated_code
+    )
+    assert "return (x + x);" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_generic_multi_use_by_value_emits_copy_bound_and_compiles(tmp_path):
+    """Generic values used by value more than once need Copy even without operators (#4748)."""
+    code = """
+    shader MultiUse {
+        generic<T> T f(T x) {
+            T y = x;
+            T z = x;
+            return z;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = f(v);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "pub fn f<T: Copy>(x: T) -> T" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_generic_repeated_call_argument_emits_copy_bound_and_compiles(tmp_path):
+    """Passing the same generic value twice by value needs a Copy bound (#4748)."""
+    code = """
+    shader RepeatedArg {
+        generic<T> T g(T a, T b) {
+            return a;
+        }
+        generic<T> T f(T x) {
+            return g(x, x);
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = f(v);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "pub fn g<T: Copy>(a: T, b: T) -> T" in generated_code
+    assert "pub fn f<T: Copy>(x: T) -> T" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_generic_function_calling_concrete_function_is_refused():
+    """Generic functions whose bodies only type-check per call site are refused (#4748)."""
+    code = """
+    shader G7 {
+        float combine(float a, float b) {
+            return a + b;
+        }
+        generic<T> T twice(T x) {
+            return combine(x, x);
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = twice(v);
+            }
+        }
+    }
+    """
+    with pytest.raises(RustLoweringRefused, match="combine"):
+        generate_code(parse_code(tokenize_code(code)))
