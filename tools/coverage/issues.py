@@ -45,6 +45,7 @@ LISTED = 40
 
 TOOLS = {
     "cuda": "nvcc",
+    "gles": "glslang",
     "glsl": "glslang",
     "hip": "hipcc",
     "hlsl": "DXC",
@@ -58,6 +59,9 @@ TOOLS = {
     "wgsl": "naga",
 }
 AREA = {"output": "area:codegen", "input": "area:frontend"}
+# The GLSL generator writes GLSL ES too, so a gles issue carries the GLSL backend label; .github/labels.yml has none
+# of its own.
+BACKEND_LABELS = {"gles": "backend:glsl"}
 # Each translation matrix cell from one of these languages to another has a tracking issue (:func:`pair_key`).
 PAIR_LANGUAGES = ("cuda", "glsl", "hlsl", "metal")
 
@@ -202,7 +206,7 @@ def tracking_labels(row: dict) -> tuple[str, ...]:
         return (LABEL, f"backend:{ir.LANGUAGE}", "area:frontend")
     return (
         LABEL,
-        f"backend:{row['language']}",
+        BACKEND_LABELS.get(row["language"], f"backend:{row['language']}"),
         f"direction:{row['direction']}",
         AREA[row["direction"]],
     )

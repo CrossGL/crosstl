@@ -25,6 +25,19 @@ def test_keys_are_marker_safe_and_round_trip():
     assert issues.marker_key(None) == ""
 
 
+def test_gles_issues_carry_the_glsl_backend_label():
+    # The GLSL generator writes GLSL ES, and the label taxonomy has no backend:gles.
+    row = backend_row("gles", "output", [feature_entry("x", "wrong")])
+    assert issues.bug_labels(row) == (
+        "bug",
+        issues.LABEL,
+        "backend:glsl",
+        "direction:output",
+        "area:codegen",
+    )
+    assert "backend:webgl" in issues.tracking_labels(backend_row("webgl", "output", []))
+
+
 def test_first_run_files_tracking_and_bug_issues():
     report = coverage_report(
         hlsl_row(), backend_row("glsl", "output", [feature_entry("x", "supported")])
