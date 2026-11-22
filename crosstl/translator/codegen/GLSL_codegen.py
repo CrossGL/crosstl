@@ -533,6 +533,9 @@ class GLSLCodeGen(
         self.current_glsl_source_function_id = None
         self.current_glsl_source_function_name = None
         self.glsl_function_stage_contexts = {}
+        self.glsl_stage_local_function_owners = {}
+        self.glsl_stage_local_function_names = {}
+        self.glsl_global_function_names = set()
         self.glsl_function_call_graph = {}
         self.glsl_function_call_locations = {}
         self.glsl_function_call_source_edges = {}
@@ -2926,6 +2929,19 @@ class GLSLCodeGen(
         self.current_glsl_source_function_id = None
         self.current_glsl_source_function_name = None
         self.glsl_function_stage_contexts = {}
+        self.glsl_stage_local_function_owners = {}
+        self.glsl_stage_local_function_names = {}
+        self.glsl_global_function_names = {
+            getattr(function, "name", None)
+            for function in getattr(ast, "functions", []) or []
+        }
+        for stage_type, stage in (getattr(ast, "stages", None) or {}).items():
+            for local_function in getattr(stage, "local_functions", []) or []:
+                stage_name = normalize_stage_name(stage_type)
+                self.glsl_stage_local_function_owners[id(local_function)] = stage_name
+                self.glsl_stage_local_function_names.setdefault(stage_name, set()).add(
+                    local_function.name
+                )
         self.glsl_function_call_graph = {}
         self.glsl_function_call_locations = {}
         self.glsl_function_call_source_edges = {}
