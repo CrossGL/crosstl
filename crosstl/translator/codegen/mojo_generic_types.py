@@ -410,8 +410,11 @@ class MojoGenericTypeMixin:
             return None
         if hasattr(size, "value"):
             return size.value
-        if hasattr(size, "name"):
+        if getattr(size, "name", None) is not None:
             return size.name
+        if hasattr(size, "name"):
+            # A constant expression such as ``N * 2``: an expression node has no name of its own.
+            return self.literal_int_value(size)
         return size
 
     def parse_generic_type_name(self, type_name):
