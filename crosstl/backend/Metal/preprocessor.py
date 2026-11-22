@@ -419,7 +419,15 @@ class MetalPreprocessor(
             self._materialize_explicit_template_struct_instantiations,
             MetalStructMethodError,
         )
+        lowered_source = processed
         processed = self._materialize_explicit_template_function_calls(processed)
+        if processed != lowered_source:
+            # A function template first called from a lowered member function (`combine<T, Op<T>>` in a member
+            # template) is instantiated only now; its body spells struct templates with the bound arguments
+            # (`apply_helper<uint, Add_uint> helper;`), which the late member lowering below needs as structs.
+            processed = self._materialize_explicit_template_struct_instantiations(
+                processed
+            )
         # This source reaches the CrossGL generic path, which cannot defer a SIMD-group
         # overload to each instantiation; the project materializer binds its own.
         constrained_source = processed

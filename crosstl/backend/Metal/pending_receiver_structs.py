@@ -33,6 +33,10 @@ _DEFERRED_ATTRIBUTE = "_deferred_receiver_structs"
 _MEMBER_CALL_RE = re.compile(
     r"(?:\.|->)\s*(?:template\s+)?[A-Za-z_]\w*\s*(?:<[^;{}()]*>\s*)?\("
 )
+# `Op op;` or `apply_helper<T, Op> helper;`: a local whose call `op(a, b)` is a call of its operator().
+_LOCAL_DECLARATION_RE = re.compile(
+    r"(?:^|[;{}])\s*(?:thread\s+)?[A-Za-z_][\w:]*\s*(?:<[^;{}()]*>)?\s+([A-Za-z_]\w*)\s*;"
+)
 
 
 def _unqualified(name: str) -> str:
@@ -42,7 +46,41 @@ def _unqualified(name: str) -> str:
 def _called_names(
     masked: str, call_re: re.Pattern[str], start: int, end: int
 ) -> list[tuple[int, str]]:
-    return [(match.start(1), match.group(1)) for match in call_re.finditer(masked, start, end)]
+    return [
+        (match.start(1), match.group(1))
+        for match in call_re.finditer(masked, start, end)
+    ]
+
+
+def _makes_receiver_call(masked: str, start: int, end: int) -> bool:
+    """Whether ``masked[start:end]`` calls a member, or calls a local declared there as a functor (``op(a, b)``)."""
+
+    if _MEMBER_CALL_RE.search(masked, start, end):
+        return True
+    body = masked[start:end]
+    for match in _LOCAL_DECLARATION_RE.finditer(body):
+        if re.search(
+            rf"(?<![\w.:]){re.escape(match.group(1))}\s*\(", body[match.end() :]
+        ):
+            return True
+    return False
+
+
+def _template_argument_names(masked: str, open_angle: int) -> set[str]:
+    """Identifiers in the template argument list that starts at ``masked[open_angle] == '<'``."""
+
+    depth = 0
+    for index in range(open_angle, len(masked)):
+        character = masked[index]
+        if character == "<":
+            depth += 1
+        elif character == ">":
+            depth -= 1
+            if depth == 0:
+                return set(re.findall(r"[A-Za-z_]\w*", masked[open_angle + 1 : index]))
+        elif character in ";{}":
+            break
+    return set()
 
 
 def pending_receiver_struct_names(
@@ -55,7 +93,9 @@ def pending_receiver_struct_names(
 
     if not getattr(preprocessor, _DEFERRAL_ATTRIBUTE, True) or "template" not in code:
         return set()
-    method_structs = [struct for struct in structs if struct.methods or struct.template_methods]
+    method_structs = [
+        struct for struct in structs if struct.methods or struct.template_methods
+    ]
     if not method_structs:
         return set()
     aggregate_spans = sorted(
@@ -77,12 +117,14 @@ def pending_receiver_struct_names(
     )
     uses: dict[str, set[str]] = {}
     for template in templates:
-        if not _MEMBER_CALL_RE.search(masked, template.body_start, template.span[1]):
+        if not _makes_receiver_call(masked, template.body_start, template.span[1]):
             continue
         named = set(primaries.get(template.name, ()))
         named.update(
             match.group(1)
-            for match in concrete_re.finditer(masked, template.span[0], template.span[1])
+            for match in concrete_re.finditer(
+                masked, template.span[0], template.span[1]
+            )
         )
         if named:
             uses.setdefault(template.name, set()).update(named)
@@ -94,10 +136,28 @@ def pending_receiver_struct_names(
         + "|".join(re.escape(name) for name in sorted({t.name for t in templates}))
         + r")\s*[<(]"
     )
+    # A member function of a concrete struct, a member template included, is lowered and instantiated in this pass,
+    # so the template calls in its body are pending like calls in concrete functions.
+    member_bodies = sorted(
+        span for struct in method_structs for span in struct.member_function_body_spans
+    )
     pending: set[str] = set()
+    call_arguments: dict[str, set[str]] = {}
     for position, name in _called_names(masked, call_re, 0, len(masked)):
-        if preprocessor._containing_span(position, list(template_spans)) is None:
+        if (
+            preprocessor._containing_span(position, list(template_spans)) is None
+            or preprocessor._containing_span(position, member_bodies) is not None
+        ):
             pending.add(name)
+            # `combine<T, Add<T>>(a, b)`: the instantiation calls members of the structs its arguments name.
+            open_angle = masked.find("<", position + len(name))
+            if (
+                open_angle != -1
+                and not masked[position + len(name) : open_angle].strip()
+            ):
+                call_arguments.setdefault(name, set()).update(
+                    _template_argument_names(masked, open_angle)
+                )
     worklist = sorted(pending)
     while worklist:
         name = worklist.pop()
@@ -115,6 +175,9 @@ def pending_receiver_struct_names(
         for name in pending
         for struct_name in uses.get(name, ())
     }
+    for name, arguments in sorted(call_arguments.items()):
+        if _reaches_receiver_call(name, templates, masked, call_re, uses):
+            needed |= {_unqualified(argument) for argument in arguments}
     if not needed:
         return set()
     specializations = preprocessor._materialized_struct_specializations
@@ -127,6 +190,16 @@ def pending_receiver_struct_names(
             and _unqualified(str(specializations[struct.name][0]).lstrip(":")) in needed
         )
     }
+    # A kept struct's member bodies are lowered in the later pass, so the structs they name (`Op op; op(a, b)` with
+    # `Op = Add<uint>`) keep their members for that pass too.
+    by_name = {struct.name: struct for struct in method_structs}
+    worklist = sorted(deferred)
+    while worklist:
+        start, end = by_name[worklist.pop()].span
+        for match in concrete_re.finditer(masked, start, end):
+            if match.group(1) not in deferred:
+                deferred.add(match.group(1))
+                worklist.append(match.group(1))
     if deferred:
         recorded = getattr(preprocessor, _DEFERRED_ATTRIBUTE, None)
         if recorded is None:
@@ -134,6 +207,33 @@ def pending_receiver_struct_names(
             setattr(preprocessor, _DEFERRED_ATTRIBUTE, recorded)
         recorded.update(deferred)
     return deferred
+
+
+def _reaches_receiver_call(
+    name: str,
+    templates: Sequence[Any],
+    masked: str,
+    call_re: re.Pattern[str],
+    uses: dict[str, set[str]],
+) -> bool:
+    """Whether template ``name``, or a template it calls, calls a member of a struct it names."""
+
+    seen = {name}
+    worklist = [name]
+    while worklist:
+        current = worklist.pop()
+        if current in uses:
+            return True
+        for template in templates:
+            if template.name != current:
+                continue
+            for _position, callee in _called_names(
+                masked, call_re, template.body_start, template.span[1]
+            ):
+                if callee not in seen:
+                    seen.add(callee)
+                    worklist.append(callee)
+    return False
 
 
 def deferred_receiver_structs(preprocessor: Any) -> set[str]:
