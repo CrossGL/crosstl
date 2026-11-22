@@ -37,31 +37,26 @@ def refuse_misplaced_builtin_functions(program, target) -> int:
 
     stages = _stages(program)
     program_functions = {}
-    defined_names = set()
     for function in getattr(program, "functions", None) or []:
         name = getattr(function, "name", None)
         if name:
-            defined_names.add(name)
             program_functions.setdefault(name, []).append(function)
-
-    for stage in stages:
-        functions = [getattr(stage, "entry_point", None)]
-        functions.extend(getattr(stage, "local_functions", None) or [])
-        defined_names.update(
-            name for name in (getattr(function, "name", None) for function in functions)
-            if name
-        )
+    program_names = set(program_functions)
 
     checked = 0
     for stage in stages:
         stage_name = _stage_name(getattr(stage, "stage", None))
+        own = [getattr(stage, "entry_point", None)]
+        own.extend(getattr(stage, "local_functions", None) or [])
+        # A helper declared in one stage block is visible only in that stage.
+        visible = program_names | {getattr(function, "name", None) for function in own}
         for function in _stage_functions(stage, program_functions):
             for node in _nodes(function):
                 if not isinstance(node, A.FunctionCallNode):
                     continue
                 name = call_name(node)
                 allowed_stages = _BUILTIN_FUNCTION_STAGES.get(name)
-                if allowed_stages is None or name in defined_names:
+                if allowed_stages is None or name in visible:
                     continue
                 checked += 1
                 if stage_name in allowed_stages:

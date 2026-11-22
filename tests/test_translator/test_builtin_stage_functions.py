@@ -85,9 +85,44 @@ def test_shared_subgroup_barrier_is_checked_in_reachable_helpers(tmp_path):
         _translate(tmp_path, FRAGMENT_HELPER)
 
     assert (
-        "subgroupMemoryBarrierShared in 'sharedBarrier' of the fragment stage"
-        in str(raised.value)
+        "subgroupMemoryBarrierShared in 'sharedBarrier' of the fragment stage" in str(
+            raised.value
+        )
     )
+
+
+VERTEX_HELPER = """shader Probe {
+    vertex {
+        void subgroupMemoryBarrierShared() { }
+        vec4 main(vec4 p @ POSITION) @ gl_Position {
+            subgroupMemoryBarrierShared();
+            return p;
+        }
+    }
+    fragment {
+        vec4 main(vec4 pos @ gl_FragCoord) @ gl_FragColor {
+            subgroupMemoryBarrierShared();
+            return vec4(pos.x);
+        }
+    }
+}
+"""
+
+
+def test_helper_declared_in_another_stage_does_not_hide_the_builtin(tmp_path):
+    with pytest.raises(BuiltinValueUnsupportedError) as raised:
+        _translate(tmp_path, VERTEX_HELPER)
+
+    assert "in 'main' of the fragment stage" in str(raised.value)
+
+
+def test_helper_declared_in_the_calling_stage_is_called(tmp_path):
+    source = FRAGMENT.replace(
+        "    fragment {\n",
+        "    fragment {\n        void subgroupMemoryBarrierShared() { }\n",
+    )
+    output = _translate(tmp_path, source)
+    assert "subgroupMemoryBarrierShared_();" in output
 
 
 def test_shared_subgroup_barrier_is_allowed_in_compute_stage(tmp_path):
