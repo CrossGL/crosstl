@@ -26,7 +26,9 @@ union WideLanes { uint2 words; uchar bytes[8]; };
 struct HalfPair { half d; half m; };
 union PairWord { uint word; HalfPair pair; half2 dm; };
 union Record { float4 data; float3 center; uint4 words; };
-union Split { uint2 words; uint word; ushort low; };
+// Split's member names are unique in this header: the HLSL and GLSL private pointer checks resolve a
+// member of an untyped local by name, so a uint[2] view named word would hide Lanes.word's type.
+union Split { uint2 pair_words; uint first; ushort low; };
 template <typename T> constexpr constant uint lanes_per_word = sizeof(uint) / sizeof(T);
 template <typename T> union Packed { T val[lanes_per_word<T>]; uint bits; };
 struct Holder { Bits values[2]; };
@@ -265,8 +267,8 @@ CASES = {
         [0x3F800000, 0x40400000, 5, 4],
     ),
     "partial_scalars": (
-        "Split value; value.words = uint2(0x44332211u, 0x88776655u); value.low = ushort(0xABCDu); uint word = value.word;",
-        ["value.words.x", "value.words.y", "word", "uint(value.low)"],
+        "Split value; value.pair_words = uint2(0x44332211u, 0x88776655u); value.low = ushort(0xABCDu); uint word = value.first;",
+        ["value.pair_words.x", "value.pair_words.y", "word", "uint(value.low)"],
         [0x4433ABCD, 0x88776655, 0x4433ABCD, 0xABCD],
     ),
 }
