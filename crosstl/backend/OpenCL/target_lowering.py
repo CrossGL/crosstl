@@ -36,6 +36,9 @@ OPENCL_TARGET_POINTER_HELPER_CODE = "opencl.target.pointer-helper-parameter"
 OPENCL_TARGET_BUILTIN_CODE = "opencl.target.unsupported-builtin"
 DIRECTX_BINDING_PROVENANCE_ANNOTATION = "directx.binding_provenance"
 DIRECTX_RELOCATABLE_BINDING_ANNOTATION = "directx.relocatable_binding"
+# The kernel whose parameter a program-scope resource or ``<kernel>_Args`` block was. A target that gives each entry
+# its own argument table (Metal) passes the declaration to that kernel only and checks its binding there.
+ENTRY_ARGUMENT_ANNOTATION = "entry_argument"
 _TARGET_SCALAR_TYPE_ALIASES = {
     "f32": "float",
     "f64": "double",
@@ -998,7 +1001,12 @@ def normalize_opencl_intermediate_for_target(cgl_ast):
                     next_binding,
                 )
             )
+            cgl_ast.cbuffers[-1].add_annotation(
+                ENTRY_ARGUMENT_ANNOTATION, function.name
+            )
 
+        for variable in global_variables:
+            variable.add_annotation(ENTRY_ARGUMENT_ANNOTATION, function.name)
         cgl_ast.global_variables.extend(global_variables)
         function.parameters = []
         function.attributes = _target_function_attributes(function)

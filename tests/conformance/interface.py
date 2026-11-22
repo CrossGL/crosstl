@@ -19,8 +19,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-INPUT, OUTPUT = 0, 1
-
 
 class InterfaceChanged(ValueError):
     """The artifact does not expose the storage-buffer compute interface of its source."""
@@ -184,8 +182,6 @@ def _hlsl_constant_buffers(text):
 
 
 def _hlsl(text, group, constants, input_count):
-    if input_count != 1:
-        raise InterfaceChanged("The D3D12 harness supports one input buffer")
     entry = _single(ENTRY_PATTERNS["hlsl"], text)
     blocks = _hlsl_constant_buffers(text)
     declared = re.findall(
@@ -211,13 +207,14 @@ def _hlsl(text, group, constants, input_count):
             "stride": _hlsl_stride(element, text) if element else 0,
         }
     bindings = _slots(list(resources), "HLSL register", input_count)
-    if resources[OUTPUT]["register"] != "u1":
-        raise InterfaceChanged("The output buffer must be the UAV u1")
+    # The inputs take slots 0 through n-1 and the output, which the shader writes, the UAV u<n>.
+    if resources[input_count]["register"] != f"u{input_count}":
+        raise InterfaceChanged(f"The output buffer must be the UAV u{input_count}")
     return {
         "entry": entry.group(4),
         "group": tuple(int(entry.group(i)) for i in (1, 2, 3)),
         "bindings": bindings,
-        "resources": [resources[INPUT], resources[OUTPUT]],
+        "resources": [resources[slot] for slot in bindings],
         "constants": _constants(blocks, constants, "HLSL constant buffers"),
     }
 
@@ -318,8 +315,8 @@ DISCOVER = {"metal": _metal, "hlsl": _hlsl, "glsl": _glsl, "spirv": _spirv}
 def interface(path, target, source_group, constants=False, *, input_count=1):
     """Entry point, one-dimensional workgroup size, ordered storage slots and constants block of an artifact.
 
-    ``input_count`` storage inputs occupy slots 0 through n-1, followed by the output at slot n.
-    D3D12 retains its single-input contract.
+    ``input_count`` storage inputs occupy slots 0 through n-1, followed by the output at slot n; HLSL's are the
+    registers of those numbers.
 
     ``constants`` says whether the case gives the host a constants block; the result's ``constants`` is then the
     block's ``slot`` (``None`` for push constants) and ``kind`` (``uniform`` or ``push``), and ``None`` otherwise.

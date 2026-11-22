@@ -270,16 +270,21 @@ def test_device_memory_imports_as_storage_buffers(tmp_path, suffix):
 
 
 @pytest.mark.parametrize("suffix", ["cu", "hip"])
-def test_initialized_device_memory_is_refused(tmp_path, suffix):
+def test_initialized_device_memory_is_a_device_variable(tmp_path, suffix):
+    # CUDA initializes the variable when the module loads; a buffer the host binds has no initial contents, so the
+    # import keeps it as one initialized object in device memory. Targets without program-scope device memory
+    # refuse it with a typed diagnostic.
     source = (
         "__device__ int g_uids = 0;\n__global__ void k(float* out) { out[0] = 1.0f; }\n"
     )
     if suffix == "hip":
         source = "#include <hip/hip_runtime.h>\n" + source
-    with pytest.raises(Exception, match="'g_uids' has an initializer") as raised:
-        _translate(tmp_path, source, "cgl", suffix)
-    language = "cuda" if suffix == "cu" else "hip"
-    assert raised.value.code == f"project.translate.{language}-import-unsupported"
+    crossgl = _translate(tmp_path, source, "cgl", suffix)
+    assert "var<device> g_uids: i32 = 0;" in crossgl
+    assert "__device__ int g_uids = 0;" in _translate(tmp_path, source, "cuda", suffix)
+    with pytest.raises(Exception, match="device variable 'g_uids'") as raised:
+        _translate(tmp_path, source, "directx", suffix)
+    assert raised.value.code == "project.translate.directx-device-variable-unsupported"
 
 
 # Native validators, when installed.

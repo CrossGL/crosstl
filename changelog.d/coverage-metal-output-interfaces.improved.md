@@ -1,0 +1,1 @@
+Coverage: the Metal output row compares the host interface (argument-table bindings, vertex attributes, stage inputs and outputs, render targets) that the Metal compiler records for each graphics probe's translation with the native Metal probe's, and reports a translation that changes it as wrong.

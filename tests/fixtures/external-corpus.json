@@ -83,6 +83,15 @@
       "repository": "https://github.com/shader-slang/slang",
       "commit": "adc996670ec281aa8a4ee131f30b324648cbbe60",
       "sourceUrl": "https://github.com/shader-slang/slang/blob/adc996670ec281aa8a4ee131f30b324648cbbe60/tests/compute/default-parameter.slang"
+    },
+    {
+      "id": "wgpu-standalone-hello-compute",
+      "path": "examples/standalone/01_hello_compute/src/shader.wgsl",
+      "sourceBackend": "wgsl",
+      "targets": ["cgl"],
+      "repository": "https://github.com/gfx-rs/wgpu",
+      "commit": "b233d204f72305cbdef9ffc9f04f0e029b1b696b",
+      "sourceUrl": "https://github.com/gfx-rs/wgpu/blob/b233d204f72305cbdef9ffc9f04f0e029b1b696b/examples/standalone/01_hello_compute/src/shader.wgsl"
     }
   ]
 }
