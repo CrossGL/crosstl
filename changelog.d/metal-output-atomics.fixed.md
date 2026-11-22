@@ -1,1 +1,1 @@
-Metal output now lowers `atomic_fetch_sub`, `atomic_load`, `atomic_store` and the 64-bit `atomic_max`/`atomic_min` instead of writing the calls verbatim onto plain device pointers, which the Metal compiler rejected (#2337).
+Metal output now lowers a discarded 64-bit `atomicMax`/`atomicMin` on a GLSL buffer-block member to `atomic_max_explicit`/`atomic_min_explicit` on `atomic_ulong`, and refuses a 64-bit min/max on threadgroup memory, which Metal has no form for (#2337).
