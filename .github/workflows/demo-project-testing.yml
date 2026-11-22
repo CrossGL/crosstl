@@ -2790,11 +2790,7 @@ jobs:
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-upstream-ops/adaptation.json
       - name: Build adapted upstream MLX
         run: |
@@ -2927,7 +2923,7 @@ jobs:
               2>&1 | tee .mlx-portable-upstream-ops/verification.log
       - name: Retain upstream op execution evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: ./demos/integrations/mlx/actions/upload-evidence
         with:
           name: mlx-portable-upstream-ops-${{ matrix.target }}-${{ matrix.group }}-${{ github.run_attempt }}
           path: .mlx-portable-upstream-ops
@@ -3929,11 +3925,7 @@ jobs:
       - name: Prepare pinned MLX
         run: |
           set -euo pipefail
-          git init mlx-upstream
-          git -C mlx-upstream config core.autocrlf false
-          git -C mlx-upstream remote add origin https://github.com/ml-explore/mlx.git
-          git -C mlx-upstream fetch --depth=1 origin "$MLX_COMMIT"
-          git -C mlx-upstream checkout --detach FETCH_HEAD
+          python -m demos.integrations.mlx.fetch_upstream mlx-upstream "$MLX_COMMIT"
           python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output .mlx-portable-conv/adaptation.json
       - name: Build adapted upstream MLX
         run: |
@@ -3962,7 +3954,7 @@ jobs:
               2>&1 | tee .mlx-portable-conv/conv.log
       - name: Retain convolution execution evidence
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: ./demos/integrations/mlx/actions/upload-evidence
         with:
           name: mlx-portable-conv-${{ matrix.target }}-${{ github.run_attempt }}
           path: .mlx-portable-conv
