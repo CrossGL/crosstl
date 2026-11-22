@@ -73,6 +73,7 @@ from .match_utils import (
     generate_match_expression_assignment,
     infer_match_expression_result_type,
 )
+from .metal_argument_tables import metal_entry_argument_table
 from .metal_array_arguments import MetalArrayArguments
 from .metal_array_copies import generate_metal_array_initializer
 from .metal_atomic_addresses import metal_vector_component_address
@@ -691,6 +692,9 @@ class MetalCodeGen(
         self.metal_deferred_register_bindings = []
         self.metal_hlsl_register_bindings_by_id = {}
         self.metal_source_binding_stage_by_id = {}
+        # The argument tables of the declaration whose binding is being reserved (metal_argument_tables.py).
+        self.metal_binding_tables = None
+        self.current_metal_argument_table = None
         self.metal_program_scope_value_globals = set()
         self.metal_program_scope_groupshared_globals = set()
         self.metal_lowered_program_scope_groupshared_globals_by_function = {}
@@ -1720,6 +1724,7 @@ class MetalCodeGen(
             self, METAL_FUNCTION_BODY_STATE_ATTRIBUTES
         )
         self.current_function_name = getattr(func, "name", None)
+        self.current_metal_argument_table = metal_entry_argument_table(func)
         self.current_function_return_wrapper = None
         self.current_local_identifier_remaps = {}
         self.current_metal_stage_output_return_active = False
@@ -1760,11 +1765,17 @@ class MetalCodeGen(
         )
 
         reserved_parameter_names.update(self.global_resource_parameter_names())
+        # An entry reads constant-block members through the blocks it takes.
+        function_cbuffers = [
+            cbuffer
+            for cbuffer in self.cbuffer_variables
+            if self.metal_current_entry_takes(cbuffer)
+        ]
         self.cbuffer_parameter_names = self.collect_cbuffer_parameter_names(
-            self.cbuffer_variables, reserved_names=reserved_parameter_names
+            function_cbuffers, reserved_names=reserved_parameter_names
         )
         self.cbuffer_member_references = self.collect_cbuffer_member_references(
-            self.cbuffer_variables
+            function_cbuffers
         )
         self.current_local_identifier_remaps = (
             self.collect_metal_local_identifier_remaps(

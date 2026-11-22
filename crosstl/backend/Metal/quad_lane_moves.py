@@ -12,7 +12,7 @@ module writes the calls whose arguments differ:
 * Every other permute reads the quad lane it computes from the caller's, ``WaveGetLaneIndex() & 3u``, with
   ``QuadReadLaneAt``, which accepts a lane that differs between threads:
 
-  - ``quad_shuffle_xor(data, mask)`` reads lane ``(lane ^ mask) & 3``;
+  - ``quad_shuffle_xor(data, mask)`` reads lane ``lane ^ mask`` for a mask below 4;
   - ``quad_shuffle_up(data, delta)`` reads lane ``lane - delta`` and leaves the lower ``delta`` lanes their own
     value, so it reads ``min(lane - delta, lane)`` in unsigned arithmetic, where ``lane - delta`` wraps above
     ``lane`` exactly when ``lane < delta``;
@@ -21,6 +21,15 @@ module writes the calls whose arguments differ:
   - ``quad_shuffle_rotate_up`` and ``quad_shuffle_rotate_down`` read ``(lane - delta) & 3`` and ``(lane + delta) & 3``.
 
   The mask or delta is evaluated once, before the read, as Metal evaluates it.
+
+* A lane, or a ``quad_shuffle_xor`` mask, of 4 or more names no lane of the quad-group, and Metal requires a valid
+  one. Apple GPUs then return the caller's own value from ``quad_shuffle``, ``quad_broadcast`` and
+  ``quad_shuffle_xor`` (measured on an M2 Max for operands up to 65535), so the import reads the caller's lane. A
+  run-time operand ``n`` selects from the nibble table ``0x3210 | own << 16``, entry ``min(n, 4)``: lanes 0 to 3
+  read themselves and anything larger the caller's lane, with ``n`` evaluated once. ``quad_shuffle_xor`` reads
+  ``lane ^ m`` for the mask ``m`` that table ``0x3210`` gives, which is 0 above 3. The shifts and rotations of
+  ``quad_shuffle_up``, ``quad_shuffle_down`` and ``quad_shuffle_rotate_*`` above already compute what Apple GPUs
+  compute for every delta.
 
 ``quad_shuffle_and_fill_*``, the prefix scans, ``quad_broadcast_first``, ``quad_elect`` and ``quad_is_first`` have no
 CrossGL operation yet; they keep their Metal names, which Metal output writes back and the other generators refuse.
@@ -39,12 +48,15 @@ _CLUSTERED = frozenset(
 )
 _ACROSS = {1: "QuadReadAcrossX", 2: "QuadReadAcrossY", 3: "QuadReadAcrossDiagonal"}
 _LANES = {
-    "quad_shuffle_xor": "(({lane} ^ {operand}) & 3u)",
+    "quad_shuffle_xor": "({lane} ^ ((0x3210u >> (min({operand}, 4u) << 2u)) & 3u))",
     "quad_shuffle_up": "min({lane} - {operand}, {lane})",
     "quad_shuffle_down": "(3u - min((3u - {lane}) - {operand}, 3u - {lane}))",
     "quad_shuffle_rotate_up": "(({lane} - {operand}) & 3u)",
     "quad_shuffle_rotate_down": "(({lane} + {operand}) & 3u)",
 }
+# The lane ``quad_shuffle`` and ``quad_broadcast`` read for a run-time lane: the lane itself below 4, the caller's
+# lane otherwise.
+_NAMED_LANE = "(((0x3210u | ({lane} << 16u)) >> (min({operand}, 4u) << 2u)) & 3u)"
 _INTEGER = re.compile(r"(0[xX][0-9a-fA-F]+|[0-9]+)[uUlL]*")
 # The value bits each integer scalar type keeps of a converted constant.
 _INTEGER_MASKS = {
@@ -115,10 +127,16 @@ def render_quad_lane_move(
     operand = arguments[1] if literal is None else f"{literal & 0xFFFF}u"
     pattern = _LANES.get(name)
     if pattern is None:
-        return f"QuadReadLaneAt({arguments[0]}, {operand})"
+        if literal is None:
+            lane = _NAMED_LANE.format(lane=QUAD_LANE, operand=operand)
+        else:
+            lane = operand if literal & 0xFFFF < 4 else QUAD_LANE
+        return f"QuadReadLaneAt({arguments[0]}, {lane})"
     if name == "quad_shuffle_xor" and literal is not None:
         across = _ACROSS.get(literal & 0xFFFF)
         if across is not None:
             return f"{across}({arguments[0]})"
+        # A mask of 0, or of 4 or more, reads the caller's own lane.
+        return f"QuadReadLaneAt({arguments[0]}, {QUAD_LANE})"
     lane = pattern.format(lane=QUAD_LANE, operand=operand)
     return f"QuadReadLaneAt({arguments[0]}, {lane})"

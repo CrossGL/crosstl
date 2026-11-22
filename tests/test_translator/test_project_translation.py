@@ -2430,7 +2430,6 @@ def test_scan_project_skips_known_unsupported_source_artifacts(
 
     expected_skipped = [
         {"path": "future.wesl", "reason": "unsupported-extension"},
-        {"path": "future.wgsl", "reason": "unsupported-extension"},
         {"path": "generated.webgl.glsl", "reason": "unsupported-extension"},
         {"path": "generated.webgl.glsl.json", "reason": "unsupported-extension"},
     ]
@@ -2443,12 +2442,12 @@ def test_scan_project_skips_known_unsupported_source_artifacts(
         ".webgl.glsl": 1,
         ".webgl.glsl.json": 1,
         ".wesl": 1,
-        ".wgsl": 1,
     }
     if explicit_include:
         expected_skipped_by_extension[".spv"] = 1
 
-    assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
+    # The WGSL front end reads .wgsl modules; WESL modules stay refused.
+    assert [unit.relative_path for unit in scan.units] == ["future.wgsl", "simple.cgl"]
     assert scan.skipped == expected_skipped
     assert payload["summary"]["skippedByReason"] == {
         "unsupported-extension": len(expected_skipped),
@@ -2465,10 +2464,11 @@ def test_scan_project_skips_known_unsupported_source_artifacts(
         assert (
             "Binary SPIR-V input files" in diagnostics_by_file["compiled.spv"].message
         )
-    assert diagnostics_by_file["future.wgsl"].code == "project.scan.unsupported-source"
-    assert "WGSL/WebGPU source files" in diagnostics_by_file["future.wgsl"].message
+    assert "future.wgsl" not in diagnostics_by_file
     assert diagnostics_by_file["future.wesl"].code == "project.scan.unsupported-source"
-    assert "WGSL/WebGPU source files" in diagnostics_by_file["future.wesl"].message
+    assert (
+        "provide the WGSL module (.wgsl)" in diagnostics_by_file["future.wesl"].message
+    )
     assert (
         diagnostics_by_file["generated.webgl.glsl"].code
         == "project.scan.unsupported-source"
@@ -2522,14 +2522,9 @@ def test_scan_project_reports_wgsl_unsupported_macro_forms_with_variant_context(
     }
 
     assert validation["success"] is True
-    assert payload["skipped"] == [
-        {"path": "shaders/native.wgsl", "reason": "unsupported-extension"}
-    ]
-    assert set(diagnostics_by_code) == {
-        "project.scan.empty",
-        "project.scan.unsupported-source",
-        "project.scan.unsupported-macro-form",
-    }
+    # The WGSL front end reads the module; its preprocessor lines are not WGSL and are reported.
+    assert payload["skipped"] == []
+    assert set(diagnostics_by_code) == {"project.scan.unsupported-macro-form"}
     macro_diagnostic = diagnostics_by_code["project.scan.unsupported-macro-form"]
     assert macro_diagnostic["sourceBackend"] == "wgsl"
     assert macro_diagnostic["variant"] == "debug"
@@ -2540,17 +2535,11 @@ def test_scan_project_reports_wgsl_unsupported_macro_forms_with_variant_context(
         macro_diagnostic["message"]
     )
     assert payload["summary"]["diagnosticsByCode"] == {
-        "project.scan.empty": 1,
         "project.scan.unsupported-macro-form": 1,
-        "project.scan.unsupported-source": 1,
     }
     assert payload["summary"]["diagnosticsBySourceBackend"] == {"wgsl": 1}
     assert payload["summary"]["diagnosticsByVariant"] == {"debug": 1}
-    assert payload["summary"]["missingCapabilityCounts"] == {
-        "macro.native": 1,
-        "repo.scan": 1,
-        "source.discovery": 1,
-    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"macro.native": 1}
 
 
 def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units(tmp_path):
@@ -23611,6 +23600,102 @@ def test_translate_project_runs_pinned_slang_external_corpus_fixture(tmp_path):
             }
         },
     }
+    assert external_corpus["entries"] == [
+        {
+            **manifest_entry,
+            "present": True,
+            "discovered": True,
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        }
+    ]
+
+
+def test_translate_project_runs_pinned_wgsl_external_corpus_fixture(tmp_path):
+    support_manifest = json.loads(
+        (ROOT / "tests" / "fixtures" / "external-corpus.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    manifest_entry = next(
+        entry
+        for entry in support_manifest["entries"]
+        if entry["id"] == "wgpu-standalone-hello-compute"
+    )
+    repo = tmp_path / "repo"
+    source_path = repo / manifest_entry["path"]
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        textwrap.dedent("""
+            @group(0) @binding(0)
+            var<storage, read> input: array<f32>;
+            @group(0) @binding(1)
+            var<storage, read_write> output: array<f32>;
+
+            @compute @workgroup_size(64)
+            fn doubleMe(@builtin(global_invocation_id) global_id: vec3<u32>) {
+                let index = global_id.x;
+                let array_length = arrayLength(&input);
+                if (global_id.x >= array_length) {
+                    return;
+                }
+                output[global_id.x] = input[global_id.x] * 2.0;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "name": "Pinned WGSL project fixture",
+                "entries": [manifest_entry],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["examples"]
+            targets = ["cgl"]
+            output_dir = "out"
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    artifact = payload["artifacts"][0]
+    translated = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    assert validation["success"] is True
+    assert payload["summary"]["unitsBySourceBackend"] == {"wgsl": 1}
+    assert payload["summary"]["artifactsBySourceBackend"] == {
+        "wgsl": {"artifactCount": 1, "translatedCount": 1, "failedCount": 0}
+    }
+    assert artifact["source"] == manifest_entry["path"]
+    assert artifact["sourceBackend"] == "wgsl"
+    assert artifact["target"] == "cgl"
+    assert artifact["status"] == "translated"
+    assert artifact["path"] == (
+        "out/cgl/examples/standalone/01_hello_compute/src/shader.cgl"
+    )
+    assert "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;" in (
+        translated
+    )
+    assert "buffer_dimensions(input_)" in translated
+    assert "output_[global_id.x] = (input_[global_id.x] * 2.0);" in translated
+    external_corpus = payload["externalCorpus"]
+    assert external_corpus["status"] == "ok"
+    assert external_corpus["summary"]["entriesBySourceBackend"] == {"wgsl": 1}
+    assert external_corpus["summary"]["presentCount"] == 1
+    assert external_corpus["summary"]["discoveredUnitCount"] == 1
     assert external_corpus["entries"] == [
         {
             **manifest_entry,
