@@ -21,6 +21,7 @@ from ..ast import (
 )
 from ..refusals import WGSLRefusal
 from .enum_utils import sanitize_type_name
+from .wgsl_clip_distances import binds_clip_distances, clip_distances_member_type
 from .wgsl_primitive_index import binds_primitive_index
 from .wgsl_stage_io import (
     member_interpolation,
@@ -92,6 +93,8 @@ class WGSLGenericStructMixin:
                 )
                 if binds_primitive_index(attributes):
                     self._uses_primitive_index = True
+            elif binds_clip_distances(attributes):
+                member_type = clip_distances_member_type(self, node.name, member)
             stage_array = self.stage_interface_array_member_info_for_type(member_type)
             base_location = (
                 implicit_location

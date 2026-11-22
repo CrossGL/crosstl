@@ -16,6 +16,7 @@ from ..refusals import WGSLRefusal
 from .fragment_output_targets import frag_data_attribute_index
 from .host_workgroup_size_ids import is_host_sized_workgroup
 from .stage_utils import normalize_stage_name
+from .wgsl_clip_distances import refuse_misplaced_clip_distances
 from .wgsl_primitive_index import refuse_misplaced_primitive_index
 from .wgsl_specialized_workgroup_size import specialized_workgroup_size
 from .wgsl_stage_io import (
@@ -79,6 +80,7 @@ class WGSLStageInterfaceMixin:
             stage_node, stage_node.entry_point
         )
         refuse_misplaced_primitive_index(self, entry_point, stage_name)
+        refuse_misplaced_clip_distances(self, entry_point, stage_name)
         previous_stage = self._current_stage_name
         previous_workgroup_size = self._current_workgroup_size
         previous_function_return_type = self._current_function_return_type
