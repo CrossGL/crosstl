@@ -6,13 +6,17 @@ from ..ast import (
     RayQueryOpNode,
     RayTracingOpNode,
 )
+from ..host_workgroup_size import HOST_WORKGROUP_SIZE_KEY, has_explicit_workgroup_size
 from ..refusals import MetalRefusal
 from .array_utils import (
     parse_array_type,
     split_array_type_suffix,
 )
+from .metal_conservative_depth import metal_conservative_depth_semantic
 from .metal_exact_lookups import metal_semantic_index
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
+from .metal_intersection_tags import metal_intersection_tags
+from .metal_post_tessellation import post_tessellation_plan
 from .metal_stage_refusals import refuse_metal_stages
 from .resource_array_bounds import DynamicIndexSizes
 from .resource_arrays import collect_resource_array_size_hints
@@ -384,19 +388,22 @@ class MetalStageEntryMixin:
         return assign_stage_entry_names(entries, used_names, self.stage_entry_base_name)
 
     def metal_stage_entry_functions(self, ast, expected_stage_name, target_stage=None):
-        if not stage_matches(target_stage, expected_stage_name):
-            return []
-
         functions = []
-        for func in getattr(ast, "functions", []) or []:
-            if function_stage_name(func) == expected_stage_name:
-                functions.append(func)
+        if stage_matches(target_stage, expected_stage_name):
+            for func in getattr(ast, "functions", []) or []:
+                if function_stage_name(func) == expected_stage_name:
+                    functions.append(func)
 
         for stage_type, stage in getattr(ast, "stages", {}).items():
-            if normalize_stage_name(stage_type) != expected_stage_name:
-                continue
+            stage_name = normalize_stage_name(stage_type)
             entry_point = getattr(stage, "entry_point", None)
-            if entry_point is not None:
+            if entry_point is None or not stage_matches(target_stage, stage_name):
+                continue
+            if stage_name == expected_stage_name or (
+                # A planned domain entry is written as a vertex function (:mod:`.metal_post_tessellation`).
+                expected_stage_name == "vertex"
+                and post_tessellation_plan(entry_point) is not None
+            ):
                 functions.append(entry_point)
         return functions
 
@@ -583,6 +590,9 @@ class MetalStageEntryMixin:
         self, member, default_member_semantics, struct_name=None
     ):
         if struct_name in self.metal_fragment_entry_output_struct_names:
+            depth = metal_conservative_depth_semantic(member)
+            if depth is not None:
+                return depth
             color = metal_fragment_output_color_semantic(self, member)
             if color is not None:
                 return color
@@ -837,7 +847,8 @@ class MetalStageEntryMixin:
         primitive_type = self.metal_ray_intersection_primitive_type(
             func, raw_return_type
         )
-        return f"[[intersection({primitive_type})]]"
+        tags = metal_intersection_tags(self, func, primitive_type)
+        return f"[[intersection({', '.join([primitive_type, *tags])})]]"
 
     def metal_ray_intersection_primitive_type(self, func, raw_return_type):
         for attr in getattr(func, "attributes", []) or []:
@@ -877,9 +888,16 @@ class MetalStageEntryMixin:
                 )
             return self.attribute_value_to_string(arguments[0])
 
-        if execution_config:
-            return self.metal_local_size_threadgroup_total(execution_config)
-        return None
+        if not execution_config:
+            return None
+        if execution_config.get(
+            HOST_WORKGROUP_SIZE_KEY
+        ) and not has_explicit_workgroup_size(execution_config):
+            # A Metal mesh or object function has no threadgroup size of its own: the host passes
+            # threadsPerObjectThreadgroup and threadsPerMeshThreadgroup when it draws. A stage imported from such a
+            # function keeps the host's choice, so no limit is declared.
+            return None
+        return self.metal_local_size_threadgroup_total(execution_config)
 
     def metal_stage_attribute_arguments(self, func, attribute_name):
         for attr in getattr(func, "attributes", []) or []:

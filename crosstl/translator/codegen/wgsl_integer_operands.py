@@ -9,7 +9,9 @@ WGSL bitwise ``&``, ``|`` and ``^`` need both operands of one type, while the C-
 across a vector operand. A scalar whose type already matches the vector's components, or an untyped literal, is
 replicated. When one operand is ``uint`` or ``uvecN`` and the other ``int`` or ``ivecN``, the signed operand is
 converted to the unsigned type first, as GLSL 4.60 does for ``&``, ``|`` and ``^`` (sections 5.9 and 4.1.10) and
-for the overloads of ``min``, ``max`` and ``clamp``; WGSL has no implicit conversions.
+for the overloads of ``min``, ``max`` and ``clamp``; WGSL has no implicit conversions. An ``int`` or ``uint``
+operand of an arithmetic or comparison operator whose other operand is floating-point is converted to that type, as
+GLSL 4.60 section 4.1.10 does; an untyped literal stays an abstract integer, which WGSL converts itself.
 """
 
 from __future__ import annotations
@@ -34,6 +36,7 @@ SHIFT_OPERATORS = frozenset({"<<", ">>"})
 BITWISE_OPERATORS = frozenset({"&", "|", "^"})
 MIXED_INTEGER_COMPARISON_OPERATORS = frozenset({"<", "<=", ">", ">=", "==", "!="})
 MIXED_INTEGER_ARITHMETIC_OPERATORS = frozenset({"+", "-", "*", "/", "%"})
+FLOAT_SCALARS = frozenset({"f16", "f32"})
 MIXED_INTEGER_OPERATORS = (
     MIXED_INTEGER_COMPARISON_OPERATORS | MIXED_INTEGER_ARITHMETIC_OPERATORS
 )
@@ -169,6 +172,25 @@ def wgsl_mixed_integer_operands(codegen, left, right):
         for arg_type, shape in zip(argument_types, shapes)
     ]
     rendered = [codegen.generate_expression(arg) for arg in arguments]
+
+    float_types = [t for t in scalar_types if t in FLOAT_SCALARS]
+    if float_types:
+        # GLSL converts an integer operand of a floating-point arithmetic or comparison operator to the
+        # floating-point type (GLSL 4.60 section 4.1.10); WGSL has no implicit conversions.
+        for index, arg in enumerate(arguments):
+            if scalar_types[index] not in ("i32", "u32") or is_abstract_integer_literal(
+                arg
+            ):
+                continue
+            vector_shape = shapes[index]
+            target_type = (
+                f"vec{vector_shape[1]}<{float_types[0]}>"
+                if vector_shape is not None
+                else float_types[0]
+            )
+            converted = codegen.concrete_negative_integer_literal(arg, rendered[index])
+            rendered[index] = f"{target_type}({converted})"
+        return tuple(rendered)
 
     if "u32" in scalar_types:
         for index, arg in enumerate(arguments):

@@ -1,6 +1,7 @@
 """Stage, enum and generic-function checks of the HIP generator: unsupported stages, ray, geometry, tessellation and mesh stage detection, the emulation helpers those stages need, and the matrix type helpers."""
 
 from ..ast import StructNode
+from .cuda_subscripts import matrix_column_members, matrix_column_view_helpers
 from .enum_utils import (
     collect_enum_struct_variant_fields,
     collect_enum_type_names,
@@ -309,14 +310,15 @@ class HipStageCheckMixin:
         def vector_constructor(scalar, size, args):
             return f"make_{scalar}{size}({', '.join(args)})"
 
-        lines = ["// CrossGL matrix value helpers"]
+        lines = matrix_column_view_helpers()
+        lines.append("// CrossGL matrix value helpers")
         for scalar in ("float", "double"):
             for columns in range(2, 5):
                 for rows in range(2, 5):
                     type_name = matrix_type(scalar, columns, rows)
                     count = columns * rows
                     params = ", ".join(f"{scalar} v{i}" for i in range(count))
-                    assignments = " ".join(f"m[{i}] = v{i};" for i in range(count))
+                    component_values = ", ".join(f"v{i}" for i in range(count))
                     zero = f"{scalar}(0)"
                     add_args = ", ".join(f"m[{i}] + rhs.m[{i}]" for i in range(count))
                     sub_args = ", ".join(f"m[{i}] - rhs.m[{i}]" for i in range(count))
@@ -367,9 +369,12 @@ class HipStageCheckMixin:
                             "            }",
                             "        }",
                             "    }",
-                            f"    __host__ __device__ {type_name}({params}) {{ {assignments} }}",
-                            f"    __host__ __device__ {scalar}& operator[](int index) {{ return m[index]; }}",
-                            f"    __host__ __device__ const {scalar}& operator[](int index) const {{ return m[index]; }}",
+                            # constexpr, so that a file-scope __device__ matrix constant is statically initialized.
+                            (
+                                f"    __host__ __device__ constexpr {type_name}({params})"
+                                f" : m{{{component_values}}} {{ }}"
+                            ),
+                            *matrix_column_members(scalar, columns, rows),
                             f"    __host__ __device__ {type_name} operator+(const {type_name}& rhs) const {{",
                             f"        return {type_name}({add_args});",
                             "    }",

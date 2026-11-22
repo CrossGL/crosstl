@@ -3,6 +3,7 @@
 from ..ast import (
     MemberAccessNode,
 )
+from ..semantics.array_values import array_constructor_shape
 from ..unhandled import UNHANDLED
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
@@ -80,6 +81,15 @@ class OpenGLCallExpressionMixin(OpenGLBuiltinCallFormMixin, OpenGLCallResolution
             and func_name in self.function_map
         ):
             func_name = self.function_map[func_name]
+        array_constructor = array_constructor_shape(expr)
+        if (
+            array_constructor is not None
+            and original_func_name not in self.function_return_types
+        ):
+            # ``i32[3](...)`` names its element in CrossGL; GLSL spells it ``int[3](...)``.
+            element, size = array_constructor
+            func_name = f"{self.map_type(element)}[{size}]"
+            callee = func_name
         self.validate_fragment_only_helper_call(original_func_name)
 
         handled = self.generate_glsl_resource_builtin_call(

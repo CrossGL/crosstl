@@ -2,6 +2,8 @@
 
 import re
 
+from ...CUDA.array_extents import declare_enumerators
+
 
 class HipTypeConversionMixin:
     """Type conversion members of ``HipToCrossGLConverter``."""
@@ -491,6 +493,8 @@ class HipTypeConversionMixin:
         self.emit(f"enum {name}{suffix} {{")
         self.indent_level += 1
 
+        # An enumerator is a constant an array extent can name (``float s[TILE * 2]``).
+        declare_enumerators(self.integer_constants, node)
         members = getattr(node, "members", None) or getattr(node, "variants", [])
         for member in members:
             if isinstance(member, tuple):

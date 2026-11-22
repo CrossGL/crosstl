@@ -14,6 +14,8 @@ from ..thread_hierarchy import (
     kernel_workgroup_size_attribute,
     normalize_threadgroup_size_option,
 )
+from .array_extents import IntegerConstants
+from .block_votes import BlockVoteLibrary, insert_block_vote_functions
 from .buffer_layout_import import EmittedBufferLayouts
 from .crossgl_codegen.cooperative_groups import CudaImportCooperativeGroupMixin
 from .crossgl_codegen.declarations import CudaImportDeclarationMixin
@@ -36,7 +38,19 @@ from .CudaAst import (
     UnaryOpNode,
     VariableNode,
 )
+from .directed_rounding import (
+    DirectedRoundingLibrary,
+    insert_directed_rounding_functions,
+)
+from .function_templates import (
+    collect_function_templates,
+    generic_prefix,
+    template_parameters,
+)
 from .keyword_renames import source_identifier_names
+from .parameter_defaults import parameter_default_suffix
+from .struct_methods import lower_struct_methods
+from .union_layout_import import UnionLayoutContracts
 
 # Warp intrinsics CrossGL keeps as CUDA calls; __syncwarp is a statement (visit_SyncNode).
 CUDA_WARP_INTRINSIC_CALLS = (frozenset(SHUFFLES) | OTHER_WARP_INTRINSICS) - {
@@ -304,6 +318,7 @@ class CudaToCrossGLConverter(
         self.threadgroup_size = normalize_threadgroup_size_option(threadgroup_size)
         self.indent_level = 0
         self.output = []
+        self.block_votes = BlockVoteLibrary(())
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
         self.unique_ptr_scopes = [set()]
@@ -316,6 +331,7 @@ class CudaToCrossGLConverter(
         self.cooperative_group_scopes = [{}]
         self.cuda_async_sync_scopes = [{}]
         self.variable_type_scopes = [{}]
+        self.integer_constants = IntegerConstants()
         self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = {}
         self.cuda_record_names = set()
@@ -328,6 +344,8 @@ class CudaToCrossGLConverter(
         # Inside a __global__ kernel or a __device__ function, where host runtime calls are refused.
         self.in_device_code = False
         self.namespace_constant_names = set()
+        self.function_templates = {}
+        self.directed_rounding = None
 
     def generate(self, ast_node):
         """Render ``ast_node`` as CrossGL, or raise :class:`CudaImportRefused` listing every construct it cannot carry."""
@@ -336,6 +354,7 @@ class CudaToCrossGLConverter(
     def render_program(self, ast_node):
         self.output = []
         self.indent_level = 0
+        lower_struct_methods(ast_node, self.refuse_import)
         self.source_identifier_names = source_identifier_names(ast_node)
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
@@ -357,15 +376,32 @@ class CudaToCrossGLConverter(
         self.cooperative_group_scopes = [{}]
         self.cuda_async_sync_scopes = [{}]
         self.variable_type_scopes = [{}]
+        self.integer_constants = IntegerConstants()
         self.warp_mask_value_scopes = [{}]
         self.namespace_aliases = getattr(ast_node, "namespace_aliases", {}) or {}
         self.global_resource_binding_count = 0
         self.function_body_depth = 0
         self.anonymous_enum_count = 0
         self.namespace_constant_names = set()
+        self.function_templates = collect_function_templates(ast_node)
         self.emitted_buffer_layouts = EmittedBufferLayouts("CUDA")
+        self.union_layout_contracts = UnionLayoutContracts("CUDA")
+        self.block_votes = BlockVoteLibrary(self.source_identifier_names)
+        self.directed_rounding = DirectedRoundingLibrary(self.source_identifier_names)
         self.visit(ast_node)
+        self.union_layout_contracts.apply(
+            self.output,
+            self.emitted_buffer_layouts.structs,
+            self.emitted_buffer_layouts.aliases,
+            self.refuse_import,
+        )
         self.emitted_buffer_layouts.apply(self.output)
+        insert_block_vote_functions(
+            self.output, self.block_votes, "// CUDA to CrossGL conversion"
+        )
+        insert_directed_rounding_functions(
+            self.output, self.directed_rounding, "// CUDA to CrossGL conversion"
+        )
         return "\n".join(self.output)
 
     def visit(self, node):
@@ -734,12 +770,22 @@ class CudaToCrossGLConverter(
                 mode = self.function_reference_parameters().mode(node, index)
                 if mode:
                     param_type = f"{mode} {param_type}"
-                params.append(f"{param_type} {param_name}")
+                default = parameter_default_suffix(
+                    self, node.name, param.name, param, "CUDA"
+                )
+                params.append(f"{param_type} {param_name}{default}")
 
             param_str = ", ".join(params)
             if function_requires_no_contraction(node):
                 self.emit(PRECISE_FUNCTION_ATTRIBUTE)
-            self.emit(f"{return_type} {function_name}({param_str}) {{")
+            prefix = generic_prefix(
+                self,
+                node,
+                "CUDA",
+                self.convert_cuda_type_to_crossgl,
+                f"{return_type} {param_str}",
+            )
+            self.emit(f"{prefix}{return_type} {function_name}({param_str}) {{")
 
             self.indent_level += 1
             self.push_packed_argument_scope()
@@ -749,6 +795,9 @@ class CudaToCrossGLConverter(
             self.push_cuda_async_sync_scope()
             self.push_variable_type_scope()
             self.push_warp_mask_value_scope()
+            for parameter in template_parameters(node) or []:
+                # A template value parameter hides a namespace constant of its name.
+                self.integer_constants.declare(parameter.name)
             for param in node.params:
                 self.register_variable_type(param.name, param.vtype)
                 self.register_unique_ptr_name(param.name, param.vtype)

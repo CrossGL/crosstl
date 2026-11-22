@@ -16,6 +16,31 @@ GL_KHR_shader_subgroup and the SPIR-V ``OpGroupNonUniform*`` instructions over t
 
 ``WaveActiveBitAnd``, ``WaveActiveBitOr`` and ``WaveActiveBitXor`` (and their scan and cluster forms) also accept
 ``bool`` operands, where they are the logical operators, as ``subgroupAnd(bool)`` is in GLSL.
+
+Partitioned operations take a ``uint4`` partition mask, as ``WaveMatch`` returns and Shader Model 6.5's
+``WaveMultiPrefix*`` functions take, and combine the active lanes whose bit is set in it. Every lane of a partition
+passes the same mask, and the mask contains the calling lane (GL_NV_shader_subgroup_partitioned; SPIR-V
+``PartitionedReduceNV`` and the partitioned scan group operations). The names are Slang's:
+
+* ``WaveMulti{Sum,Product,Min,Max,BitAnd,BitOr,BitXor}(value, mask)``: the reduction over the partition.
+* ``WaveMultiPrefixInclusive{Sum,Product,Min,Max,BitAnd,BitOr,BitXor}(value, mask)`` and
+  ``WaveMultiPrefixExclusive{Min,Max}(value, mask)``: scans over the lanes of the partition with a lower or equal
+  (exclusive: lower) lane index. Shader Model 6.5's ``WaveMultiPrefix{Sum,Product,BitAnd,BitOr,BitXor}`` are the
+  exclusive scans of the other operators.
+
+:mod:`crosstl.translator.semantics.partitioned_waves` lowers the partitioned operations to loops over the lanes of
+the subgroup for every target that does not register them as native.
+
+Rotations read the value of another lane at a fixed distance, wrapping around (GL_KHR_shader_subgroup_rotate; SPIR-V
+``OpGroupNonUniformRotateKHR``; MSL ``simd_shuffle_rotate_down``). ``delta`` is a dynamically uniform ``uint``:
+
+* ``WaveRotate(value, delta)``: the value of lane ``(WaveGetLaneIndex() + delta) & (WaveGetLaneCount() - 1)``.
+* ``WaveClusteredRotate(value, delta, clusterSize)``: the rotation within the aligned cluster of the calling lane,
+  the value of lane ``((WaveGetLaneIndex() + delta) & (clusterSize - 1)) + (WaveGetLaneIndex() & ~(clusterSize -
+  1))``. ``clusterSize`` is a constant power of two no larger than the subgroup.
+
+The result of reading an inactive lane is undefined. :mod:`crosstl.translator.semantics.subgroup_rotations` lowers the
+rotations to ``WaveReadLaneAt`` for every target that does not register them as native.
 """
 
 from __future__ import annotations
@@ -79,8 +104,37 @@ WAVE_EXTENDED_VALUE_OPERATIONS = frozenset(
 
 WAVE_BITWISE_OPERATORS = frozenset({"and", "or", "xor"})
 
-# GL_KHR_shader_subgroup_{basic,vote,arithmetic,ballot,shuffle,shuffle_relative,clustered,quad},
-# GL_NV_shader_subgroup_partitioned and GL_ARB_shader_group_vote functions that have a CrossGL wave operation.
+# Partitioned reductions and scans that take a ``uint4`` partition mask: name -> (operator, scope). The scope is
+# ``"reduce"``, ``"inclusive"`` or ``"exclusive"``. Shader Model 6.5's exclusive ``WaveMultiPrefix*`` scans of sum,
+# product and the bitwise operators are generator operations and are not listed here.
+WAVE_PARTITIONED_OPERATIONS = {
+    "WaveMultiSum": ("sum", "reduce"),
+    "WaveMultiProduct": ("product", "reduce"),
+    "WaveMultiMin": ("min", "reduce"),
+    "WaveMultiMax": ("max", "reduce"),
+    "WaveMultiBitAnd": ("and", "reduce"),
+    "WaveMultiBitOr": ("or", "reduce"),
+    "WaveMultiBitXor": ("xor", "reduce"),
+    "WaveMultiPrefixInclusiveSum": ("sum", "inclusive"),
+    "WaveMultiPrefixInclusiveProduct": ("product", "inclusive"),
+    "WaveMultiPrefixInclusiveMin": ("min", "inclusive"),
+    "WaveMultiPrefixInclusiveMax": ("max", "inclusive"),
+    "WaveMultiPrefixInclusiveBitAnd": ("and", "inclusive"),
+    "WaveMultiPrefixInclusiveBitOr": ("or", "inclusive"),
+    "WaveMultiPrefixInclusiveBitXor": ("xor", "inclusive"),
+    "WaveMultiPrefixExclusiveMin": ("min", "exclusive"),
+    "WaveMultiPrefixExclusiveMax": ("max", "exclusive"),
+}
+
+# Rotations: name -> argument count.
+WAVE_ROTATE_OPERATIONS = {
+    "WaveRotate": 2,
+    "WaveClusteredRotate": 3,
+}
+
+# GL_KHR_shader_subgroup_{basic,vote,arithmetic,ballot,shuffle,shuffle_relative,clustered,quad,rotate},
+# GL_EXT_shader_quad_control, GL_NV_shader_subgroup_partitioned and GL_ARB_shader_group_vote functions that have a
+# CrossGL wave operation.
 GLSL_SUBGROUP_FUNCTIONS = {
     "subgroupElect": "WaveIsFirstLane",
     "subgroupAll": "WaveActiveAllTrue",
@@ -133,12 +187,34 @@ GLSL_SUBGROUP_FUNCTIONS = {
     "subgroupQuadSwapHorizontal": "QuadReadAcrossX",
     "subgroupQuadSwapVertical": "QuadReadAcrossY",
     "subgroupQuadSwapDiagonal": "QuadReadAcrossDiagonal",
+    # GL_EXT_shader_quad_control; SPIR-V OpGroupNonUniformQuadAllKHR and OpGroupNonUniformQuadAnyKHR.
+    "subgroupQuadAll": "QuadAll",
+    "subgroupQuadAny": "QuadAny",
+    # GL_KHR_shader_subgroup_rotate.
+    "subgroupRotate": "WaveRotate",
+    "subgroupClusteredRotate": "WaveClusteredRotate",
     "subgroupPartitionNV": "WaveMatch",
     "subgroupPartitionedExclusiveAddNV": "WaveMultiPrefixSum",
     "subgroupPartitionedExclusiveMulNV": "WaveMultiPrefixProduct",
     "subgroupPartitionedExclusiveAndNV": "WaveMultiPrefixBitAnd",
     "subgroupPartitionedExclusiveOrNV": "WaveMultiPrefixBitOr",
     "subgroupPartitionedExclusiveXorNV": "WaveMultiPrefixBitXor",
+    "subgroupPartitionedExclusiveMinNV": "WaveMultiPrefixExclusiveMin",
+    "subgroupPartitionedExclusiveMaxNV": "WaveMultiPrefixExclusiveMax",
+    "subgroupPartitionedAddNV": "WaveMultiSum",
+    "subgroupPartitionedMulNV": "WaveMultiProduct",
+    "subgroupPartitionedMinNV": "WaveMultiMin",
+    "subgroupPartitionedMaxNV": "WaveMultiMax",
+    "subgroupPartitionedAndNV": "WaveMultiBitAnd",
+    "subgroupPartitionedOrNV": "WaveMultiBitOr",
+    "subgroupPartitionedXorNV": "WaveMultiBitXor",
+    "subgroupPartitionedInclusiveAddNV": "WaveMultiPrefixInclusiveSum",
+    "subgroupPartitionedInclusiveMulNV": "WaveMultiPrefixInclusiveProduct",
+    "subgroupPartitionedInclusiveMinNV": "WaveMultiPrefixInclusiveMin",
+    "subgroupPartitionedInclusiveMaxNV": "WaveMultiPrefixInclusiveMax",
+    "subgroupPartitionedInclusiveAndNV": "WaveMultiPrefixInclusiveBitAnd",
+    "subgroupPartitionedInclusiveOrNV": "WaveMultiPrefixInclusiveBitOr",
+    "subgroupPartitionedInclusiveXorNV": "WaveMultiPrefixInclusiveBitXor",
     # GLSL 4.60 (8.18, "Shader Invocation Group Functions") and GL_ARB_shader_group_vote. The invocation group is
     # implementation-defined; SPIR-V gives it subgroup scope (SPV_KHR_subgroup_vote OpSubgroupAllKHR and friends).
     "allInvocations": "WaveActiveAllTrue",

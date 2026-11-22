@@ -553,6 +553,7 @@ class ShaderStage(Enum):
     RAY_MISS = "ray_miss"
     RAY_ANY_HIT = "ray_any_hit"
     RAY_CALLABLE = "ray_callable"
+    NODE = "node"
 
 
 class ExecutionModel(Enum):
@@ -1292,6 +1293,12 @@ class ExpressionNode(ASTNode):
         self.vtype = expression_type
         self.name = getattr(self, "identifier", None)
         self.semantic = None
+
+
+# Annotation on a floating ``LiteralNode`` written with a suffix (``"f"`` for ``0.1f``, a binary32 value). An
+# unsuffixed floating literal denotes its exact decimal value, rounded once to the type its context requires, so
+# ``x * 0.1`` with a ``double`` ``x`` multiplies by the binary64 value nearest 0.1 (as in C, HLSL and WGSL).
+FLOAT_LITERAL_SUFFIX = "float_literal_suffix"
 
 
 class LiteralNode(ExpressionNode):

@@ -3,12 +3,17 @@
 from ..barrier_import import (
     spirv_barrier_statements,
 )
+from ..fragment_interlock_import import SPIRV_INTERLOCK_FUNCTIONS
 from ..image_texel_atomics import (
     fold_image_texel_atomic,
 )
 from ..integer_signedness_import import (
     spirv_integer_binary_expression,
 )
+from ..narrow_integer_import import (
+    spirv_narrow_integer_result,
+)
+from ..operation_locals import bind_operation_local
 from ..ray_tracing_import import (
     SpirvInstructionUnsupportedError,
 )
@@ -19,6 +24,8 @@ from ..struct_result_import import (
     spirv_extended_arithmetic_call,
     spirv_struct_result_call,
 )
+from ..subgroup_import import OPCODES as SPIRV_SUBGROUP_CALL_OPCODES
+from ..subgroup_import import spirv_subgroup_call
 from ..VulkanAst import (
     AssignmentNode,
     BinaryOpNode,
@@ -253,7 +260,8 @@ class VulkanFunctionBodyOperationMixin:
     ):
         """Translate a subgroup instruction of a function body; return True when it is handled.
 
-        Handles ``OpGroupNonUniformBroadcastFirst``, ``OpGroupNonUniformBroadcast``, the
+        Handles ``OpGroupNonUniformBroadcastFirst``, ``OpGroupNonUniformBroadcast``, the vote, ballot, shuffle,
+        quad, rotate and partition instructions of :mod:`..subgroup_import`, and the
         ``SPIRV_GROUP_NON_UNIFORM_REDUCTION_FUNCTIONS`` opcodes.
         """
         if result_id and opcode == "OpGroupNonUniformBroadcastFirst":
@@ -294,6 +302,20 @@ class VulkanFunctionBodyOperationMixin:
                         ),
                     ],
                 )
+                expression_type_ids[result_id] = operands[0]
+                return True
+
+        if result_id and opcode in SPIRV_SUBGROUP_CALL_OPCODES:
+            call = spirv_subgroup_call(
+                opcode,
+                operands,
+                lambda operand: self.spirv_assembly_operand_expression(
+                    operand, expressions, names, decorations, constants
+                ),
+                lambda operand: self.spirv_integer_constant_operand(operand, constants),
+            )
+            if call is not None:
+                expressions[result_id] = call
                 expression_type_ids[result_id] = operands[0]
                 return True
 
@@ -606,11 +628,24 @@ class VulkanFunctionBodyOperationMixin:
                 expression_type_ids.get(operands[2]) or constant_types.get(operands[2]),
                 types,
                 self.spirv_vector_type_name,
+                bind=lambda role, type_name, value: bind_operation_local(
+                    self,
+                    result_id,
+                    role,
+                    type_name,
+                    value,
+                    statements,
+                    names,
+                    decorations,
+                ),
             )
             if expression is None:
                 expression = BinaryOpNode(
                     lhs, self.SPIRV_SPEC_CONSTANT_BINARY_OPS[operation], rhs
                 )
+            expression = spirv_narrow_integer_result(
+                operation, operands[0], expression, types
+            )
             record_expression(result_id, operands[0], expression)
             return True
 
@@ -619,19 +654,20 @@ class VulkanFunctionBodyOperationMixin:
             and operation in self.SPIRV_SPEC_CONSTANT_UNARY_OPS
             and len(operands) >= 2
         ):
+            expression = UnaryOpNode(
+                self.SPIRV_SPEC_CONSTANT_UNARY_OPS[operation],
+                self.spirv_assembly_operand_expression(
+                    operands[1],
+                    expressions,
+                    names,
+                    decorations,
+                    constants,
+                ),
+            )
             record_expression(
                 result_id,
                 operands[0],
-                UnaryOpNode(
-                    self.SPIRV_SPEC_CONSTANT_UNARY_OPS[operation],
-                    self.spirv_assembly_operand_expression(
-                        operands[1],
-                        expressions,
-                        names,
-                        decorations,
-                        constants,
-                    ),
-                ),
+                spirv_narrow_integer_result(operation, operands[0], expression, types),
             )
             return True
         return False
@@ -663,7 +699,7 @@ class VulkanFunctionBodyOperationMixin:
 
         Handles ``OpFunctionCall``, ``OpAtomicStore``, ``OpImageWrite``, the
         ``SPIRV_GEOMETRY_EMIT_FUNCTIONS`` opcodes, the ``SPIRV_RAY_QUERY_STATEMENT_FUNCTIONS`` opcodes,
-        ``OpControlBarrier``, ``OpMemoryBarrier``, ``OpMemoryNamedBarrier``.
+        ``OpBeginInvocationInterlockEXT``, ``OpEndInvocationInterlockEXT``, ``OpControlBarrier``, ``OpMemoryBarrier``, ``OpMemoryNamedBarrier``.
         """
         if result_id and opcode == "OpFunctionCall" and len(operands) >= 2:
             call = FunctionCallNode(
@@ -717,6 +753,10 @@ class VulkanFunctionBodyOperationMixin:
                     constants,
                 )
             )
+            return True
+
+        if opcode in SPIRV_INTERLOCK_FUNCTIONS:
+            statements.append(FunctionCallNode(SPIRV_INTERLOCK_FUNCTIONS[opcode], []))
             return True
 
         if opcode in self.SPIRV_GEOMETRY_EMIT_FUNCTIONS:

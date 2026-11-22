@@ -14,9 +14,19 @@ the OpenGL GLSL emitter, forces ``#version 300 es``, inserts default precision
 qualifiers when they are absent, and rejects shader stages that WebGL cannot
 represent.
 
-WebGL is a target-only backend. Native WebGL source files such as
-``.webgl.glsl`` are intentionally rejected by the source registry so they do
-not fall through to OpenGL source parsing by accident.
+WebGL source
+------------
+
+WebGL 2 shaders are GLSL ES 3.00, a profile of GLSL that the GLSL frontend
+reads: their ``#version 300 es`` line defines ``GL_ES`` for the preprocessor
+and stays in the imported CrossGL. The source names ``webgl``, ``webgl2``,
+``essl`` and ``glsl-es`` select that frontend::
+
+    crosstl.translate("shader.frag", backend="metal", source_backend="webgl")
+
+``.webgl.glsl`` is the extension CrossTL writes WebGL output under, so the
+source registry does not read a file with it as source unless the source
+backend is named, and a project scan does not import translated output again.
 
 Supported Surface
 -----------------

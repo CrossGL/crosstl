@@ -268,8 +268,10 @@ def test_glsl_narrowed_wide_literals_require_int64(expression, expected):
 )
 def test_glsl_narrowed_wide_literals_reject_unsupported_profiles(profile, message):
     ast = parse(f"{profile}\nshader Literal {{ uint value() {{ return uint(1l); }} }}")
+    # A GLSL ES #version line asks for the gles target; opengl writes desktop GLSL.
+    target_profile = "gles" if profile.endswith(" es") else None
     with pytest.raises(ValueError, match=message):
-        GLSLCodeGen().generate(ast)
+        GLSLCodeGen(target_profile=target_profile).generate(ast)
 
 
 def _narrow_source(expression):

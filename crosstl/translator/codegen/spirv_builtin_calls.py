@@ -12,6 +12,7 @@ from .spirv_exact_lookups import (
     SPIRV_INTEGER_BIT_BUILTINS,
     spirv_scalar_key,
 )
+from .spirv_fragment_interlock import end_entry_interlock
 from .spirv_values import (
     SPIRVBuiltinLoweringError,
     SpirvId,
@@ -1210,6 +1211,7 @@ class SpirvBuiltinCallMixin:
             self.create_return_value(default_value)
             return
 
+        end_entry_interlock(self)
         self.emit("OpReturn")
 
     def create_return_value(self, value: SpirvId):

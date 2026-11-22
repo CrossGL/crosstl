@@ -25,6 +25,7 @@ from .match_utils import (
     generate_switch_match,
     is_switch_lowerable_match,
 )
+from .opengl_operand_forms import glsl_case_label
 from .opengl_values import (
     OpenGLCompoundAssignmentError,
     OpenGLForInIterableError,
@@ -1262,7 +1263,8 @@ class OpenGLCompoundStatementMixin:
     def generate_switch(self, node, indent):
         self.reject_glsl_software_subgroup_control_flow(node)
         indent_str = "    " * indent
-        expression = self.generate_expression(getattr(node, "expression", ""))
+        selector = getattr(node, "expression", "")
+        expression = self.generate_expression(selector)
 
         code = f"{indent_str}switch ({expression}) {{\n"
         for case in getattr(node, "cases", []) or []:
@@ -1270,7 +1272,7 @@ class OpenGLCompoundStatementMixin:
             if value is None:
                 label = "default"
             else:
-                label = f"case {self.generate_expression(value)}"
+                label = f"case {glsl_case_label(self, value, selector)}"
             code += self.generate_switch_case(
                 label, getattr(case, "statements", []), indent + 1
             )

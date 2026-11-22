@@ -61,10 +61,10 @@ REPRODUCERS = {
 }
 
 
-def _translate(tmp_path, name, source, backend="cgl"):
+def _translate(tmp_path, name, source, backend="cgl", source_options=None):
     path = tmp_path / name
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend)
+    return crosstl.translate(str(path), backend=backend, source_options=source_options)
 
 
 def _body(code, signature):
@@ -155,6 +155,8 @@ void main(uint3 id : SV_DispatchThreadID) {
     outp[id.x] = lanes[15];
 }
 """,
+            # half is binary16 only under DXC's -enable-16bit-types.
+            source_options={"enable_16bit_types": True},
         )
 
 

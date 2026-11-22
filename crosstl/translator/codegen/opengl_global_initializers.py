@@ -35,6 +35,12 @@ from .array_utils import (
 )
 from .fragment_output_targets import frag_data_attachment_index
 from .glsl_exact_lookups import glsl_unmapped_identifier
+from .glsl_fragment_depth_layout import (
+    DEPTH_LAYOUTS,
+    depth_layout,
+    is_fragment_depth_output,
+    stage_depth_redeclaration,
+)
 from .glsl_invariant_builtins import (
     has_invariant_attribute,
     invariant_builtin_redeclaration,
@@ -951,16 +957,18 @@ class OpenGLGlobalInitializerMixin:
                     self.current_identifier_aliases[source_name] = builtin_name
                 else:
                     self.current_identifier_aliases.pop(source_name, None)
+            stage_name = getattr(
+                self, "current_global_stage_io_stage", self.current_target_stage
+            )
+            code = stage_depth_redeclaration(self, node, stage_name)
             if has_invariant_attribute(node):
-                return invariant_builtin_redeclaration(
+                code += invariant_builtin_redeclaration(
                     self,
                     builtin_name,
-                    getattr(
-                        self, "current_global_stage_io_stage", self.current_target_stage
-                    ),
+                    stage_name,
                     source_name or builtin_name,
                 )
-            return ""
+            return code
 
         vtype, _, array_suffix, _ = self.resource_declaration_shape(node)
         mapped_type = f"{self.map_type(vtype)}{array_suffix}"
@@ -1049,7 +1057,12 @@ class OpenGLGlobalInitializerMixin:
         if not mapped_semantic.startswith("gl_"):
             return None
         if self.glsl_variable_layout_prefix(node).strip():
-            return None
+            # The depth output keeps its built-in name with a depth layout alone: the layout goes on the
+            # ``gl_FragDepth`` redeclaration (GLSL 4.60 section 4.4.2.3).
+            if mapped_semantic != "gl_FragDepth" or self.glsl_variable_layout_names(
+                node
+            ) - set(DEPTH_LAYOUTS):
+                return None
         return mapped_semantic
 
     def fragment_output_variable_builtin_target(self, node):
@@ -1204,7 +1217,22 @@ class OpenGLGlobalInitializerMixin:
             layout_parts.append(layout_part)
         if not layout_parts:
             return ""
+        depth = depth_layout(node, node_name)
+        if depth is not None and not is_fragment_depth_output(self, node):
+            raise OpenGLRefusal(
+                f"GLSL cannot apply the conservative depth layout '{depth}' to "
+                f"'{node_name}': only a fragment shader's gl_FragDepth takes a depth "
+                "layout (GLSL 4.60 section 4.4.2.3)"
+            )
         return f"layout({', '.join(layout_parts)}) "
+
+    def glsl_variable_layout_names(self, node):
+        """The layout qualifier names (``location``, ``depth_less``, ...) of ``node``'s layout prefix."""
+        prefix = self.glsl_variable_layout_prefix(node).strip()
+        if not prefix:
+            return set()
+        inner = prefix[len("layout(") : -1]
+        return {part.split("=")[0].strip() for part in inner.split(",") if part.strip()}
 
     def is_glsl_stage_io_metadata_attribute(self, attr):
         attr_name = getattr(attr, "name", None)

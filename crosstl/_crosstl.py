@@ -17,6 +17,7 @@ from .backend.OpenCL.target_lowering import (
     normalize_opencl_intermediate_for_target,
     validate_opencl_intermediate_for_target,
 )
+from .output_target import target_for_output
 from .translator.codegen import (
     backend_names,
     get_backend_extension,
@@ -392,7 +393,7 @@ def _target_program(
         if source_spec.name == "hip" and normalized_backend == "directx":
             cgl_ast = normalize_opencl_intermediate_for_target(cgl_ast)
         program = cgl_ast
-    apply_rule_carrying(program, source_spec.name, normalized_backend)
+    apply_rule_carrying(program, source_spec.name, normalized_backend, entry_point)
     lower_default_arguments(program)
     target.program = program
     return target
@@ -561,12 +562,18 @@ def _run_single_file(args):
         print(f"Error: Input file {args.input} not found")
         return 1
 
-    output_path = args.output or _derive_single_file_output(args.input, args.backend)
+    # Without --backend, an output file's extension names the target; standard output and a derived output file
+    # get CrossGL.
+    backend = args.backend
+    if not backend:
+        stdout = not args.output or _is_stdout_output(args.output)
+        backend = "cgl" if stdout else target_for_output(args.output)
+    output_path = args.output or _derive_single_file_output(args.input, backend)
     write_stdout = _is_stdout_output(output_path)
     defines = _parse_project_define_overrides(getattr(args, "define", None))
     generated = translate(
         args.input,
-        backend=args.backend,
+        backend=backend,
         save_shader=None if write_stdout else output_path,
         format_output=not args.no_format,
         source_backend=getattr(args, "source_backend", None),
@@ -590,8 +597,8 @@ def _legacy_parser():
     parser.add_argument(
         "--backend",
         "-b",
-        default="cgl",
-        help=f"Target backend ({supported_backends})",
+        help=f"Target backend ({supported_backends}); default: named by the --output "
+        "file's extension, or cgl",
     )
     parser.add_argument("--output", "-o", help="Output file path; use '-' for stdout")
     parser.add_argument(
@@ -7202,8 +7209,8 @@ def _build_parser():
     translate_parser.add_argument(
         "--backend",
         "-b",
-        default="cgl",
-        help=f"Target backend ({supported_backends})",
+        help=f"Target backend ({supported_backends}); default: named by the --output "
+        "file's extension, or cgl",
     )
     translate_parser.add_argument(
         "--output", "-o", help="Output file path; use '-' for stdout"

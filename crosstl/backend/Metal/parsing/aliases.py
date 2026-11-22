@@ -334,6 +334,7 @@ class MetalAliasParsingMixin:
         if self.current_token[0] == "LBRACE":
             self.eat("LBRACE")
             members = self.parse_struct_members()
+            nested_structs = list(self.last_struct_nested_aggregates)
             self.eat("RBRACE")
             alias_name, array_sizes, type_suffix, grouped_suffix = (
                 self.parse_declarator()
@@ -346,6 +347,7 @@ class MetalAliasParsingMixin:
             union_node = StructNode(union_name, members)
             union_node.typedef_tag = tag_name
             union_node.aggregate_kind = "union"
+            union_node.nested_structs = nested_structs
             union_node.is_typedef_aggregate = True
             union_node.typedef_array_sizes = array_sizes
             union_node.typedef_declarator_type_suffix = type_suffix
@@ -453,6 +455,8 @@ class MetalAliasParsingMixin:
         if self.current_token[0] == "LBRACE":
             self.eat("LBRACE")
             members = self.parse_struct_members()
+            # Aggregates defined among the members, such as an unnamed union, are declared with the struct.
+            nested_structs = list(self.last_struct_nested_aggregates)
             self.eat("RBRACE")
             struct_attributes.extend(self.parse_attributes())
             alias_name, array_sizes, type_suffix, grouped_suffix = (
@@ -465,6 +469,7 @@ class MetalAliasParsingMixin:
             self.register_known_type(struct_name)
             struct_node = StructNode(struct_name, members)
             struct_node.typedef_tag = tag_name
+            struct_node.nested_structs = nested_structs
             struct_node.is_typedef_aggregate = True
             struct_node.attributes = struct_attributes
             struct_node.alignas = alignas_specs

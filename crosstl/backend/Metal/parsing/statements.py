@@ -217,10 +217,15 @@ class MetalStatementParsingMixin:
             return False
         if self.tokens[idx][0] not in {"IDENTIFIER", "METAL"}:
             return False
-        if self.tokens[idx + 1][0] != "SCOPE":
+        idx += 1
+        # `Tile<T, M, N>::Frag_type::add(...)` is a call too: a qualified name that ends in a call has no
+        # declarator, so it cannot declare an object ([dcl.decl], [temp.res]/6).
+        if self.tokens[idx][0] == "LESS_THAN":
+            idx = self.skip_template_argument_list_at(idx)
+        if idx >= len(self.tokens) or self.tokens[idx][0] != "SCOPE":
             return False
 
-        idx += 2
+        idx += 1
         while idx < len(self.tokens):
             if self.tokens[idx][0] not in SCOPED_IDENTIFIER_PART_TOKENS:
                 return False

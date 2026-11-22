@@ -37,7 +37,6 @@ from ..ast import (
     PointerAccessNode,
     PointerReinterpretNode,
     PointerType,
-    PreprocessorNode,
     PrimitiveType,
     RangeNode,
     RayQueryOpNode,
@@ -94,7 +93,6 @@ from .enum_utils import (
     infer_enum_constructor_type,
     sanitize_type_name,
 )
-from .exponent_builtins import emit_glsl_exponent_helpers
 from .generic_concrete_call_results import concrete_overload_results_differ
 from .generic_emission_order import mark_generic_function_emitted
 from .generic_function_utils import (
@@ -114,11 +112,14 @@ from .generic_struct_utils import (
     collect_generic_struct_specializations,
     infer_struct_constructor_type,
 )
-from .glsl_builtin_extensions import require_builtin_extensions
+from .glsl_call_helpers import emit_glsl_call_helpers
+from .glsl_compute_derivative_groups import compute_derivative_group_layout
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
 from .glsl_entry_resource_names import glsl_entry_resource_parameter_names
 from .glsl_exact_lookups import glsl_call_names_resolving_to
 from .glsl_float_atomic_storage import FloatAtomicStorage
+from .glsl_fragment_depth_layout import entry_depth_redeclarations
+from .glsl_fragment_interlock import plan_fragment_interlock, wrap_fragment_interlock
 from .glsl_guarded_offsets import call_offset_relation
 from .glsl_helper_stage_guards import (
     glsl_helper_stage_macros,
@@ -132,12 +133,17 @@ from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
 from .glsl_invariant_builtins import invariant_builtin_redeclarations
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
+from .glsl_program_requirements import finish_glsl_program_requirements
+from .glsl_quad_lane_reads import glsl_quad_lane_read_call, quad_lane_read_needs_helper
 from .glsl_ray_queries import (
     glsl_ray_desc_declaration,
     glsl_ray_query_constant_expression,
 )
 from .glsl_refusals import input_attachment_refusal_reason
-from .glsl_shadow_lod import require_shadow_lod_extension
+from .glsl_source_directives import (
+    glsl_source_directives,
+    glsl_target_profile_is_es,
+)
 from .glsl_specialization_dependents import (
     constant_source_name,
     partition_constants_by_specialization_dependency,
@@ -147,12 +153,13 @@ from .glsl_stage_entries import refuse_repeated_stage_entries
 from .glsl_stage_input_values import stage_input_struct_value_declarations
 from .glsl_stage_output_values import (
     flattened_stage_output_assignment,
+    refuse_unwritten_entry_return,
     render_flattened_stage_output_store,
     render_stage_struct_value_return,
 )
 from .glsl_target_builtins import OPENGL_UNAVAILABLE_BUILTINS
 from .glsl_union_storage import UnionStorage
-from .glsl_vulkan_descriptor_sets import descriptor_binding_macro_definition
+from .glsl_vulkan_resources import VulkanResourceForms
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -372,6 +379,8 @@ class GLSLCodeGen(
 
     # Desktop GLSL converts integer literals to float and uint implicitly.
     GLSL_IMPLICIT_LITERAL_CONVERSIONS = True
+    # Whether every program is written as GLSL ES, whatever its ``#version`` line (:mod:`.glsl_source_directives`).
+    GLSL_ES_OUTPUT = False
     GLSL_UNAVAILABLE_BUILTINS = OPENGL_UNAVAILABLE_BUILTINS
     GLSL_WAVE_ADDITIONAL_EXTENSION_REQUIREMENTS = {
         "WaveMatch",
@@ -412,8 +421,12 @@ class GLSLCodeGen(
         software_subgroup_width=None,
         private_pointer_out_of_bounds_read="error",
         cooperative_matrix_mma_profile=None,
+        target_profile=None,
     ):
         """Initialize GLSL type maps and per-generation stage/resource state."""
+        self.glsl_es_target = self.GLSL_ES_OUTPUT or glsl_target_profile_is_es(
+            target_profile
+        )
         self.float_atomic_storage = FloatAtomicStorage(self)
         self.metadata_preconditions = []
         self.immutable_storage = []
@@ -454,6 +467,8 @@ class GLSLCodeGen(
         self.glsl_float_remainder_types = set()
         self.glsl_precise_float_remainder_types = set()
         self.glsl_integer_dot_types = set()
+        self.glsl_vulkan_resources = VulkanResourceForms()
+        self.glsl_vulkan_resource_exclusions = frozenset()
         self.reset_glsl_emulated_matrices()
         self.reset_glsl_hlsl_structured_buffers()
         self.reset_glsl_hlsl_cbuffers()
@@ -640,6 +655,7 @@ class GLSLCodeGen(
         self.required_glsl_boolean_order_helpers = set()
         self.required_glsl_metal_math_helpers = set()
         self.glsl_exponent_helpers = {}
+        self.glsl_quad_lane_read_helpers = {}
         self.glsl_half_helper_names = {}
         self.glsl_half_bitcast_helper_names = {}
         self.glsl_bfloat_helper_names = {}
@@ -1844,17 +1860,8 @@ class GLSLCodeGen(
             invocation_count + self.software_subgroup_width - 1
         ) // self.software_subgroup_width
 
-        if any(
-            self.glsl_wave_size_attribute(attribute)
-            for attribute in getattr(entry_function, "attributes", []) or []
-        ):
-            raise self.glsl_software_subgroup_error(
-                "OpenGL software subgroup lowering cannot be combined with a "
-                "hardware WaveSize contract",
-                workgroup_size=concrete_workgroup_size,
-                reason="hardware-contract-conflict",
-                source_location=getattr(entry_function, "source_location", None),
-            )
+        # Refuses a WaveSize other than the software subgroup width.
+        self.glsl_exact_subgroup_width(entry_function, "compute")
 
         all_records = self.glsl_software_subgroup_operation_records(
             ast,
@@ -2751,9 +2758,10 @@ class GLSLCodeGen(
         for operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
             if operation not in operations:
                 continue
-            line = self.GLSL_WAVE_EXTENSION_REQUIREMENTS.get(operation)
-            if line and line not in lines:
-                lines.append(line)
+            required = self.GLSL_WAVE_EXTENSION_REQUIREMENTS.get(operation) or ""
+            for line in required.splitlines():
+                if line not in lines:
+                    lines.append(line)
             if operation in self.GLSL_WAVE_ADDITIONAL_EXTENSION_REQUIREMENTS:
                 shuffle_line = "#extension GL_KHR_shader_subgroup_shuffle : require"
                 if shuffle_line not in lines:
@@ -2780,12 +2788,14 @@ class GLSLCodeGen(
         )
         ast = lower_reference_aliases(ast)
         ast = lower_private_vector_views(ast, "opengl")
+        separate_ast = ast
         ast, self.combined_sampler_records = lower_combined_sampler_pairs(
             ast, self.LOWERING_REFUSAL_TYPE.label
         )
         self.combined_sampler_pairs = (getattr(ast, "annotations", None) or {}).get(
             COMBINED_SAMPLER_PAIRS, []
         )
+        self.glsl_vulkan_resources = VulkanResourceForms.plan(self, separate_ast, ast)
         self.glsl_narrow_scalars_promote = narrow_scalars_promote(ast)
         ast = self.with_glsl_builtin_option_prelude(ast)
         if self.software_subgroup_width is not None:
@@ -3036,6 +3046,9 @@ class GLSLCodeGen(
         self.current_target_stage = target_stage
         self.glsl_tessellation_input_extents = {}
         self.current_glsl_extensions = self.glsl_preprocessor_extensions(ast)
+        self.glsl_fragment_interlock_plan = plan_fragment_interlock(
+            self, ast, target_stage
+        )
         self.glsl_vulkan_memory_model = declares_vulkan_memory_model(
             getattr(ast, "preprocessors", None), self.current_glsl_extensions
         )
@@ -3336,35 +3349,11 @@ class GLSLCodeGen(
         self.validate_glsl_software_subgroup_contract(ast, target_stage)
         self.enforce_concrete_glsl_types = True
         code = ""
-        preprocessors = getattr(ast, "preprocessors", []) or []
-        version_line = None
-        extra_lines = []
-        for directive in preprocessors:
-            if not self.should_emit_glsl_preprocessor_directive(directive):
-                continue
-            if isinstance(directive, PreprocessorNode):
-                if directive.directive == "precision":
-                    line = (
-                        f"precision {directive.content};"
-                        if directive.content
-                        else "precision;"
-                    )
-                else:
-                    line = f"#{directive.directive} {directive.content}".strip()
-            else:
-                line = str(directive).strip()
-            if line.startswith("#version") and version_line is None:
-                version_line = line
-            elif line and self.should_emit_glsl_preprocessor_line(line):
-                extra_lines.append(line)
-        if version_line is None:
-            version_line = self.default_glsl_version_line(ast, target_stage)
-        required_version_line = getattr(self, "glsl_required_version_line", None)
-        if required_version_line is not None:
-            version_line = required_version_line
+        version_line, extra_lines = glsl_source_directives(self, ast, target_stage)
         self.glsl_raised_version_line = None
         self.glsl_emission_requirements = []
         self.glsl_descriptor_binding_macro_used = False
+        self.glsl_spirv_location_macro_used = False
         self.current_glsl_version_line = version_line
         self.current_glsl_disabled_extensions = {
             match.group(1)
@@ -3379,6 +3368,7 @@ class GLSLCodeGen(
         self.current_glsl_resource_binding_layouts_supported = (
             self.glsl_resource_binding_layouts_supported(version_line)
         )
+        self.glsl_vulkan_resources.activate(self, version_line)
         exact_subgroup_width = self.glsl_stage_exact_subgroup_width(ast, target_stage)
         self.current_glsl_exact_subgroup_width = exact_subgroup_width
         code += f"{version_line}\n"
@@ -3776,6 +3766,7 @@ class GLSLCodeGen(
         code += self.generate_constants(ast, struct_dependent_constants)
         code += stage_io_code
         code += invariant_builtin_redeclarations(self, target_stage)
+        code += entry_depth_redeclarations(self, target_stage)
         code += self.generate_glsl_enum_constructor_functions(self.struct_payload_enums)
         code += self.generate_glsl_generic_enum_constructor_functions(
             self.generic_enum_specializations,
@@ -4116,7 +4107,14 @@ class GLSLCodeGen(
                 qualifier_parts.append("uniform")
                 if precision_qualifiers:
                     qualifier_parts.append(precision_qualifiers)
-                code += f"{' '.join(qualifier_parts)} {declaration};\n"
+                code += self.glsl_vulkan_resources.declaration(
+                    source_var_name,
+                    var_name,
+                    " ".join(qualifier_parts),
+                    declaration,
+                    mapped_type,
+                    array_suffix,
+                )
                 self.record_glsl_resource_binding(
                     node,
                     source_var_name,
@@ -4234,6 +4232,7 @@ class GLSLCodeGen(
             self.prepare_glsl_resource_function_specializations(ast, target_stage)
         finally:
             self.enforce_concrete_glsl_types = previous_enforce_concrete_glsl_types
+        code += self.glsl_vulkan_resources.sampler_declarations(self)
         generated_helper_insertion_index = len(code)
         functions = getattr(ast, "functions", [])
         helper_stage_macros = glsl_helper_stage_macros(self, ast)
@@ -4511,7 +4510,7 @@ class GLSLCodeGen(
             + self.generate_glsl_trailing_zero_helpers()
             + self.generate_glsl_boolean_order_helpers()
             + self.generate_glsl_metal_math_helpers()
-            + emit_glsl_exponent_helpers(self)
+            + emit_glsl_call_helpers(self)
             + self.generate_glsl_half_helpers()
             + self.generate_glsl_half_bitcast_helpers()
             + self.generate_glsl_bfloat_helpers()
@@ -4545,23 +4544,15 @@ class GLSLCodeGen(
                 + cooperative_matrix_support
                 + code[cooperative_matrix_support_insertion_index:]
             )
-        if self.glsl_descriptor_binding_macro_used:
-            code = (
-                code[:cooperative_matrix_support_insertion_index]
-                + descriptor_binding_macro_definition()
-                + code[cooperative_matrix_support_insertion_index:]
-            )
+        code = self.glsl_vulkan_resources.with_prelude(
+            code,
+            cooperative_matrix_support_insertion_index,
+            self.glsl_descriptor_binding_macro_used,
+            self.glsl_spirv_location_macro_used,
+        )
         code = self.finish_generic_resource_helper_refusals(code)
         self.validate_glsl_function_call_graph()
-        code = self.ensure_glsl_version_supports_generated_layouts(code)
-        if getattr(self, "glsl_shadow_lod_extension_used", False):
-            code = require_shadow_lod_extension(code)
-        code = self.ensure_glsl_formatted_image_load_support(code)
-        code = self.ensure_glsl_precise_support(code)
-        code = require_builtin_extensions(
-            code, getattr(self, "glsl_stage_builtin_extensions", ())
-        )
-        return self.ensure_glsl_int64_support(code)
+        return finish_glsl_program_requirements(self, code)
 
     def annotate_glsl_control_flow_intervals(self, function):
         constants = self.initial_literal_int_constants(function)
@@ -8729,9 +8720,13 @@ class GLSLCodeGen(
         is_native_stage_entry = (entry_name or "main") == "main"
         if shader_type in {"compute", "mesh", "task"} and is_native_stage_entry:
             code += self.generate_compute_layout(execution_config)
+            code += compute_derivative_group_layout(
+                self, shader_type, stage_layout_qualifiers, execution_config
+            )
 
         if shader_type in stage_entry_types:
             code += f"void {entry_name or 'main'}() {{\n"
+            interlock_body_start = len(code)
             self.current_function_return_type = "void"
             self.current_glsl_precise_return_type = None
             if shader_type == "compute" and is_native_stage_entry:
@@ -8744,6 +8739,7 @@ class GLSLCodeGen(
                 func, return_type
             )
             code += f"{return_type} {declaration_name}({params_str}) {{\n"
+            interlock_body_start = len(code)
 
         previous_sampler_parameters = self.current_sampler_parameters
         previous_texture_parameters = self.current_texture_parameters
@@ -8978,6 +8974,9 @@ class GLSLCodeGen(
             previous_private_pointer_function_name
         )
 
+        code = wrap_fragment_interlock(
+            self, shader_type, entry_name, code, interlock_body_start
+        )
         code += "}\n\n"
         return code
 
@@ -9270,6 +9269,7 @@ class GLSLCodeGen(
                         + distance_output_epilogue(self, indent_str)
                         + f"{indent_str}return;\n"
                     )
+                refuse_unwritten_entry_return(self, stmt.value)
                 value = self.generate_expression_with_expected(stmt.value, None)
                 return (
                     self.generate_glsl_statement_code(value, indent)
@@ -9752,7 +9752,7 @@ class GLSLCodeGen(
             return "shared "
         if is_compile_time:
             return "const "
-        if "static" in qualifiers or "thread" in qualifiers:
+        if qualifiers & {"private", "static", "thread"}:
             # Static and thread-address-space globals are private to each
             # invocation, which is what a GLSL global without a storage
             # qualifier is.
@@ -10787,6 +10787,9 @@ class GLSLCodeGen(
             helper = self.GLSL_WAVE_MULTI_PREFIX_HELPERS[operation]
             return f"{helper}({value}, {mask})"
 
+        if quad_lane_read_needs_helper(operation, arguments):
+            return glsl_quad_lane_read_call(self, arguments)
+
         mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
         if mapped is None:
             return self.glsl_wave_diagnostic_expression(
@@ -11051,6 +11054,9 @@ class GLSLCodeGen(
             texture_name = f"{sampled_type}({texture_name}, {sampler_name})"
         else:
             self.record_glsl_combined_sampler_use(args[0], args[1])
+            texture_name = self.glsl_vulkan_resources.sampled(
+                args, texture_name, sampler_name
+            )
         mapped_args = [texture_name, coord] + [
             self.generate_expression(arg) for arg in extra_args
         ]

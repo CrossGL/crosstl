@@ -386,6 +386,12 @@ class SlangGeometryStagesMixin:
             attr_name = self.slang_stage_attribute_name(attr)
             if attr_name is None or attr_name == "numthreads":
                 continue
+            if stage_name == "tessellation_evaluation" and attr_name in {
+                "outputtopology",
+                "partitioning",
+            }:
+                # The hull states these for Slang; the domain stage takes no such attribute.
+                continue
 
             arguments = getattr(attr, "arguments", []) or []
             if not arguments:

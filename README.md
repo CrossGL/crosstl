@@ -14,8 +14,9 @@ directly and generate every target from one source file.
 
 CI rebuilds this chart on every push to `main` and every night. Each language has a feature list generated from
 pinned upstream specifications and compiler tables. Every feature gets a probe: CrossTL translates it, and the
-language's reference compiler or validator checks the result. Where CI has a runtime for the language, on a GPU or
-on Mesa's software drivers, the translated compute probes also run and must compute what the native probes compute.
+language's reference compiler or validator checks the result. Where CI has a runtime for the language, on a GPU, on
+Mesa's software drivers or on Direct3D 12 WARP, the translated compute probes also run and must compute what the
+native probes compute.
 CI has no runtime for CUDA, HIP, OpenCL C, Mojo or WebGL, so the chart marks those rows compile-only. The score is
 supported / (supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
 defines each outcome and lists every gap behind each bar.
@@ -63,14 +64,17 @@ glsl = crosstl.translate("blur.hlsl", backend="opengl")
 crossgl = crosstl.translate("blur.hlsl", backend="cgl")
 ```
 
-or from the command line:
+or from the command line, where the target comes from the output file's extension:
 
 ```bash
-crosstl translate saxpy.cgl --backend directx --output saxpy.hlsl
+crosstl saxpy.cgl -o saxpy.hlsl
+crosstl blur.hlsl -o blur.metal
 crosstl translate saxpy.cgl --backend vulkan --output -
 ```
 
-`python -m crosstl` is the same command. The `examples/` directory has larger CrossGL programs.
+`--backend` chooses the target explicitly; without it, `-o -` writes CrossGL to standard output. An output file
+name whose extension names no language CrossTL writes is refused. `python -m crosstl` is the same command. The
+`examples/` directory has larger CrossGL programs.
 
 ## Languages
 
@@ -80,8 +84,8 @@ crosstl translate saxpy.cgl --backend vulkan --output -
 | HLSL | `directx` | measured | measured |
 | Metal | `metal` | measured | measured |
 | SPIR-V assembly | `vulkan` | measured | measured |
-| WGSL | `wgsl` | measured | not offered |
-| GLSL ES 3.00 (WebGL 2) | `webgl` | measured | not offered |
+| WGSL | `wgsl` | measured | measured |
+| GLSL ES 3.00 (WebGL 2) | `webgl` | measured | measured |
 | CUDA | `cuda` | measured | measured |
 | HIP | `hip` | measured | measured |
 | Slang | `slang` | measured | measured |
@@ -89,7 +93,9 @@ crosstl translate saxpy.cgl --backend vulkan --output -
 | Mojo | `mojo` | measured | measured |
 | OpenCL C | | not offered | measured |
 
-A measured direction has a row in [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md).
+A measured direction has a row in [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md), and
+each language has [a page of its own](https://github.com/CrossGL/crosstl/blob/coverage/languages/index.md) with its
+scores by category, the language pairs it translates to and from, and every gap.
 CrossTL has no OpenCL C generator, so the OpenCL C input row checks the HLSL that CrossTL writes from each OpenCL C
 probe. The language names `glsl`, `hlsl`, `msl` and `spirv` work as backend names too, and `cgl` writes the CrossGL a
 native source imports to. CrossGL has its own coverage row, CrossGL IR, which measures how many of the features of

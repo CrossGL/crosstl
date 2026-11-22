@@ -12,6 +12,7 @@ from ..aggregate_scalar_conversions import (
 from ..implicit_constructor_conversions import convert_user_call_arguments
 from ..instance_static_members import render_instance_static_struct_member
 from ..matrix_columns import MetalMatrixColumnsError, matrix_columns_object
+from ..member_aggregates import promoted_member_access
 from ..MetalAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -22,8 +23,18 @@ from ..MetalAst import (
     TernaryOpNode,
     VariableNode,
 )
+from ..ordered_atomics import refuse_unfenced_atomic_call
+from ..quad_lane_moves import render_quad_lane_move
 from ..sparse_color import METAL_SPARSE_TEXTURE_METHODS, import_sparse_color_member
-from ..static_member_calls import unresolved_static_member_call_owner
+from ..static_member_calls import (
+    refuse_dependent_member_call,
+    unresolved_static_member_call_owner,
+)
+from ..vote_masks import (
+    render_ballot_call,
+    render_vote_mask_conversion,
+    render_vote_mask_method,
+)
 from .support import (
     MetalDivisionProfileError,
     MetalStructMethodCallResolutionError,
@@ -187,6 +198,15 @@ class MetalExpressionMixin:
 
     def generate_function_call_expression(self, expr, is_main=False):
         """Render a Metal free function or constructor call as CrossGL syntax."""
+        if len(getattr(expr, "args", None) or ()) == 1:
+            vote_mask = render_vote_mask_conversion(
+                self, expr.name, expr.args[0], is_main
+            )
+            if vote_mask is not None:
+                return vote_mask
+        ballot = render_ballot_call(self, expr, is_main)
+        if ballot is not None:
+            return ballot
         filled_matrix = self.generate_metal_make_filled_matrix(expr, is_main)
         if filled_matrix is not None:
             return filled_matrix
@@ -266,6 +286,7 @@ class MetalExpressionMixin:
         )
         if sync_call is not None:
             return sync_call
+        refuse_unfenced_atomic_call(self, expr)
         atomic_call = self.metal_atomic_function_call(
             expr.name, expr.args, is_main, getattr(expr, "source_location", None)
         )
@@ -384,6 +405,9 @@ class MetalExpressionMixin:
             expr.args,
             getattr(expr, "source_location", None),
         )
+        refuse_dependent_member_call(
+            self, materialized_name, getattr(expr, "source_location", None)
+        )
         unbound_member = unresolved_static_member_call_owner(self, materialized_name)
         if unbound_member is not None:
             raise MetalStructMethodCallResolutionError(
@@ -405,7 +429,7 @@ class MetalExpressionMixin:
                 self.generate_sampler_constructor_arg(arg, is_main) for arg in expr.args
             )
         else:
-            args = ", ".join(
+            rendered = [
                 (
                     wrapper_arguments[index]
                     if index in wrapper_arguments
@@ -414,7 +438,13 @@ class MetalExpressionMixin:
                     )
                 )
                 for index in range(len(expr.args))
+            ]
+            quad_call = render_quad_lane_move(
+                self, materialized_name, function_name, expr, rendered
             )
+            if quad_call is not None:
+                return quad_call
+            args = ", ".join(rendered)
         if metal_fast_math_operation(materialized_name) == function_name:
             # CrossGL keeps the namespace for the Metal backend; its parser
             # hands every other backend the plain builtin.
@@ -447,6 +477,9 @@ class MetalExpressionMixin:
 
     def generate_method_call_expression(self, expr, is_main=False):
         """Render a Metal method call as CrossGL syntax."""
+        vote_method = render_vote_mask_method(self, expr, is_main)
+        if vote_method is not None:
+            return vote_method
         sparse_member = import_sparse_color_member(self, expr, is_main)
         if sparse_member is not None:
             return sparse_member
@@ -536,6 +569,9 @@ class MetalExpressionMixin:
 
     def generate_member_access_expression(self, expr, is_main=False):
         """Render a Metal member access as CrossGL syntax."""
+        promoted = promoted_member_access(self, expr)
+        if promoted is not None:
+            return self.generate_member_access_expression(promoted, is_main)
         if expr.member == "value" and isinstance(expr.object, VariableNode):
             constant = self.render_integral_constant_binding(expr.object.name)
             if constant is not None:
@@ -710,6 +746,11 @@ class MetalExpressionMixin:
 
     def generate_cast_expression(self, expr, is_main=False):
         """Render a Metal cast expression as CrossGL syntax."""
+        vote_mask = render_vote_mask_conversion(
+            self, expr.target_type, expr.expression, is_main
+        )
+        if vote_mask is not None:
+            return vote_mask
         compound_literal = self.generate_metal_compound_literal(expr, is_main)
         if compound_literal is not None:
             return compound_literal
@@ -792,6 +833,12 @@ class MetalExpressionMixin:
 
     def generate_vector_constructor_expression(self, expr, is_main=False):
         """Render a Metal vector constructor as CrossGL syntax."""
+        if len(getattr(expr, "args", None) or ()) == 1:
+            vote_mask = render_vote_mask_conversion(
+                self, expr.type_name, expr.args[0], is_main
+            )
+            if vote_mask is not None:
+                return vote_mask
         profiled_constructor = self.generate_metal_half_widening_constructor(
             expr.type_name, expr.args, is_main
         )

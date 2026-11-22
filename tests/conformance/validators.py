@@ -13,7 +13,7 @@ from crosstl.translator.codegen.host_workgroup_size_ids import (
 )
 
 from .interface import hlsl_reflected_strides
-from .native import METAL_LANGUAGE_VERSION
+from .native import METAL_LANGUAGE_VERSIONS
 from .process import CommandResult, require_artifact, run
 from .toolchains import tool
 
@@ -103,6 +103,22 @@ def _hlsl(path, output, entry, config, profile):
     return [result, dump], {"strides": hlsl_reflected_strides(dump.log)}
 
 
+def _metal(path, output, config):
+    """Compile under the oldest MSL version that accepts the artifact and name it for the driver compile.
+
+    A rejection under every version reports the newest compiler's diagnostics.
+    """
+    for major, minor in METAL_LANGUAGE_VERSIONS:
+        command = [*tool("metal").command, f"-std=metal{major}.{minor}"]
+        command += ["-c", path, "-o", output]
+        command += ["-fno-fast-math"] if config == "strict" else ["-ffast-math"]
+        result = require_artifact(run(command), output)
+        if result.status != "rejected":
+            break
+    reflection = {"metal_language": [major, minor]}
+    return [result], reflection if result.status == "accepted" else {}
+
+
 def validate(
     path,
     target,
@@ -123,11 +139,7 @@ def validate(
         missing = _missing("metal")
         if missing:
             return [missing], {}
-        major, minor = METAL_LANGUAGE_VERSION
-        command = [*tool("metal").command, f"-std=metal{major}.{minor}"]
-        command += ["-c", path, "-o", output]
-        command += ["-fno-fast-math"] if config == "strict" else ["-ffast-math"]
-        return [require_artifact(run(command), output)], {}
+        return _metal(path, output, config)
     if target == "glsl":
         missing = _missing("glslangValidator")
         if missing:

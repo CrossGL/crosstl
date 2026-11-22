@@ -57,6 +57,7 @@ from ..templates.lexical import FAMILY as LEXICAL
 from ..templates.lexical import FILL, SPREAD4, reserved
 from ..templates.memory import CROSSGL as MEMORY
 from ..templates.meshes import CROSSGL as MESHES
+from ..templates.meshes import METAL_CROSSGL as METAL_MESHES
 from ..templates.orientation import CROSSGL as ORIENTATION_CROSSGL
 from ..templates.packing import CROSSGL as PACKING_CROSSGL
 from ..templates.pipeline import CROSSGL as PIPELINE
@@ -70,6 +71,7 @@ from ..templates.portability import (
     intrinsic_names,
 )
 from ..templates.primitives import CROSSGL as PRIMITIVES
+from ..templates.promotion import CROSSGL as PROMOTION
 from ..templates.qualifiers import CROSSGL as QUALIFIERS
 from ..templates.rasterization import CROSSGL as RASTERIZATION
 from ..templates.rays import CROSSGL as RAYS
@@ -83,6 +85,7 @@ from ..templates.subgroups import CROSSGL as SUBGROUPS
 from ..templates.tasks import CROSSGL as TASKS
 from ..templates.tessellation import CROSSGL as TESSELLATION
 from ..templates.textures import CROSSGL as TEXTURES
+from ..templates.unions import CROSSGL as UNIONS
 from ..templates.values import BASIS
 from ..templates.values import FAMILY as VALUES
 from ..templates.vectors import GLSL as VECTORS
@@ -93,6 +96,15 @@ from .dialect import POINTS_IN_AND_OUT
 
 def _scalar(spelling: str, source: str = "iin") -> Template:
     return Template(f"{spelling} v = {spelling}({source}[i]);\noutp[i] = float(v * v);")
+
+
+def _narrow(spelling: str) -> Template:
+    """An 8- or 16-bit integer type's probe. CrossGL promotes the operands to int, so the product converts back to
+    the type, and every target computes the wrapped product (:func:`..templates.base.narrow_scalar`).
+    """
+    return Template(
+        f"{spelling} v = {spelling}(iin[i]);\noutp[i] = float({spelling}(v * v));"
+    )
 
 
 _FRAGMENT = (
@@ -171,7 +183,8 @@ _TESSELLATION_STAGES = {
         + "    struct DomainOutput {\n        vec4 position @ SV_Position;\n    }\n"
         "    tessellation_evaluation {\n"
         "        DomainOutput main(PatchConstants constants, vec3 coord @ SV_DomainLocation,\n"
-        "                          OutputPatch<ControlPoint, 3> patch) @domain(tri) {\n"
+        "                          OutputPatch<ControlPoint, 3> patch) @domain(tri)\n"
+        "            @partitioning(integer) @outputtopology(triangle_ccw) {\n"
         "            DomainOutput output;\n"
         "            output.position = patch[0].position * coord.x + patch[1].position * coord.y"
         " + patch[2].position * coord.z;\n            return output;\n        }\n    }\n}\n"
@@ -292,6 +305,8 @@ CONSTRUCTS: dict[str, Template] = {
     **COMPONENTS,
     **POINTERS,
     **MEMORY,
+    **UNIONS,
+    **PROMOTION,
     **SUBGROUPS,
     **SPECIALIZATIONS,
     **QUALIFIERS,
@@ -331,10 +346,10 @@ CONSTRUCTS: dict[str, Template] = {
     "runtime-array-length": Template("outp[i] = float(outp.length());"),
     "half": _scalar("half", "fin"),
     "double": _scalar("double", "fin"),
-    "int8": _scalar("int8_t"),
-    "uint8": _scalar("uint8_t"),
-    "int16": _scalar("int16_t"),
-    "uint16": _scalar("uint16_t"),
+    "int8": _narrow("int8_t"),
+    "uint8": _narrow("uint8_t"),
+    "int16": _narrow("int16_t"),
+    "uint16": _narrow("uint16_t"),
     "int64": _scalar("int64_t"),
     "uint64": _scalar("uint64_t"),
     "shared-memory": Template(
@@ -381,4 +396,28 @@ CONSTRUCTS: dict[str, Template] = {
             "            if (input.uv.x < 0.5) {\n                discard;\n            }\n",
         )
     ),
+}
+
+# The CrossGL probes of one language's constructs that differ from :data:`CONSTRUCTS`, as ``{language: {name:
+# template}}``. Direct3D rounds a float converted to a 16-bit float toward zero, where CrossGL rounds it to nearest, so
+# HLSL's half probe converts a value binary16 holds exactly (:data:`..templates.hlsl.HALF`).
+FOR_LANGUAGE: dict[str, dict[str, Template]] = {
+    "hlsl": {
+        "half": Template(
+            "half v = half(float(int(fin[i] * 256.0)) * 0.00390625);\noutp[i] = float(v * v);"
+        ),
+    },
+    # Metal's intersection function hands its hit back as a result structure and takes no buffer
+    # (:data:`..templates.metal`), so its CrossGL probe has the same form and the translation the same arguments.
+    "metal": {
+        **METAL_MESHES,
+        "intersection": Template(
+            program="shader Probe {\n    struct BoxResult {\n        bool accept @ accept_intersection;\n"
+            "        float distance @ distance;\n    }\n    ray_intersection {\n"
+            "        BoxResult main(float min_distance @ min_distance) @bounding_box {\n"
+            "            BoxResult result;\n            result.accept = true;\n"
+            "            result.distance = min_distance;\n            return result;\n"
+            "        }\n    }\n}\n"
+        ),
+    },
 }

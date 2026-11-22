@@ -32,6 +32,7 @@ from ..ast import (
 )
 from .array_utils import get_array_size_from_node
 from .assignment_values import is_reevaluable_place
+from .rust_gpu_builtins import BARRIERS
 
 
 class RustStatementMixin:
@@ -48,6 +49,12 @@ class RustStatementMixin:
             binding_keyword = self.local_let_keyword(stmt)
             binding_name = self.rust_identifier(stmt.name)
             rust_type = self.map_type(vtype)
+            if self.pointer_type_parts(rust_type) is not None:
+                # Dereferencing a raw pointer needs unsafe code that rust-gpu's SPIR-V pointer model does not
+                # accept for a pointer into a storage buffer or a local.
+                self.refuse_lowering(
+                    f"pointer local: '{stmt.name}' ({vtype}) is not lowered to a rust-gpu reference"
+                )
             default_array_initializer = self.local_array_default_initializer(rust_type)
             if initial_value is not None:
                 increment_init = self.generate_increment_initializer_declaration(
@@ -155,6 +162,10 @@ class RustStatementMixin:
                             return_expr,
                             indent,
                         )
+                    if self.current_rust_stage_outputs:
+                        return self.generate_rust_stage_output_return(
+                            indent_str, return_expr
+                        )
                     if self.current_rust_output_parameters:
                         return self.generate_rust_output_return(indent_str, return_expr)
                     return f"{indent_str}return {return_expr};\n"
@@ -165,6 +176,9 @@ class RustStatementMixin:
                 return f"{indent_str}return;\n"
 
         elif isinstance(stmt, BreakNode):
+            switch_label = self.active_switch_label()
+            if switch_label is not None:
+                return f"{indent_str}break {switch_label};\n"
             context = self.active_do_while_context()
             if context:
                 break_flag = context["break_flag"]
@@ -172,20 +186,22 @@ class RustStatementMixin:
             return f"{indent_str}break;\n"
 
         elif isinstance(stmt, ContinueNode):
+            label = self.loop_jump_label()
             if self.active_do_while_context():
-                return f"{indent_str}break;\n"
+                return f"{indent_str}break{label};\n"
             context = self.active_for_context()
             if context:
                 update = context["update"]
-                return f"{indent_str}{update};\n{indent_str}continue;\n"
-            return f"{indent_str}continue;\n"
+                if str(update).strip():
+                    return f"{indent_str}{update};\n{indent_str}continue{label};\n"
+            return f"{indent_str}continue{label};\n"
 
         elif hasattr(stmt, "__class__") and "ExpressionStatement" in str(
             stmt.__class__
         ):
             if hasattr(stmt, "expression"):
                 if self.is_discard_statement(stmt):
-                    return f"{indent_str}gpu::discard();\n"
+                    return f"{indent_str}spirv_std::arch::kill();\n"
                 expression = self.generate_discarded_expression(stmt.expression)
                 if getattr(stmt, "is_tail_expression", False):
                     return f"{indent_str}{expression}\n"
@@ -195,18 +211,25 @@ class RustStatementMixin:
 
         elif isinstance(stmt, ArrayAccessNode):
             # ArrayAccessNode as statement - likely misclassified
-            return f"{indent_str}// Unhandled ArrayAccessNode: {stmt}\n"
+            return self.refuse_lowering(
+                "statement: an array element read as a statement"
+            )
 
         elif isinstance(stmt, SyncNode):
             return self.generate_sync_statement(stmt, indent)
 
+        elif stmt is None:
+            # An empty statement.
+            return ""
         else:
             # Try to generate as expression
-            expr_result = self.generate_expression(stmt)
+            expr_result = self.generate_discarded_expression(stmt)
             if expr_result and expr_result.strip():
                 return f"{indent_str}{expr_result};\n"
             else:
-                return f"{indent_str}// Unhandled statement: {type(stmt).__name__}\n"
+                return self.refuse_lowering(
+                    f"statement: {type(stmt).__name__} has no Rust lowering"
+                )
 
     def is_discard_statement(self, stmt):
         expression = getattr(stmt, "expression", None)
@@ -216,10 +239,12 @@ class RustStatementMixin:
         """Render a SyncNode as a Rust synchronization call."""
         indent_str = "    " * indent
         sync_type = getattr(stmt, "sync_type", "")
-        rust_name = self.sync_map.get(sync_type)
-        if rust_name is None:
-            return self.refuse_lowering(f"synchronization {sync_type or '<unnamed>'}")
-        return f"{indent_str}{rust_name}();\n"
+        call = BARRIERS.get(sync_type)
+        if call is None:
+            return self.refuse_lowering(
+                f"synchronization {sync_type or '<unnamed>'} has no rust-gpu barrier"
+            )
+        return f"{indent_str}{call};\n"
 
     def local_value_default_initializer(self, rust_type):
         scalar_initializer = self.rust_scalar_default_literal(rust_type)
@@ -545,6 +570,12 @@ class RustStatementMixin:
         inferred_type = self.expression_result_type(initial_value)
         if inferred_type is not None:
             return inferred_type
+        if isinstance(initial_value, ArrayLiteralNode):
+            # An initializer list is never a float: refuse rather than declare the binding with a wrong type.
+            self.refuse_lowering(
+                f"local '{getattr(node, 'name', '')}': the element type of its untyped initializer list "
+                "cannot be inferred"
+            )
         return "float"
 
     def statement_body_terminates_inner_loop(self, body):
@@ -660,25 +691,52 @@ class RustStatementMixin:
     def generate_for(self, node, indent):
         indent_str = "    " * indent
 
-        init = self.generate_statement(node.init, 0).strip()
-        if init.endswith(";"):
-            init = init[:-1]
-        condition = self.generate_condition_expression(node.condition)
-        update = self.generate_discarded_expression(node.update)
+        # C scopes a for-init declaration to the loop, so the lowering is a block: { init; while cond { body; update; } }.
+        inner = indent + 1
+        inner_str = "    " * inner
+        init_parts = []
+        for init_stmt in self.statement_list(node.init):
+            part = self.generate_statement(init_stmt, 0).strip()
+            if part.endswith(";"):
+                part = part[:-1]
+            if part:
+                init_parts.append(part)
+        init = f";\n{inner_str}".join(init_parts)
+        condition = (
+            self.generate_condition_expression(node.condition)
+            if node.condition is not None
+            else ""
+        )
+        if not str(condition).strip():
+            condition = "true"
+        update = "; ".join(
+            part
+            for part in (
+                str(self.generate_discarded_expression(item)).strip()
+                for item in self.statement_list(node.update)
+            )
+            if part
+        )
 
-        code = f"{indent_str}{init};\n"
-        code += f"{indent_str}while {condition} {{\n"
-
+        code = f"{indent_str}{{\n"
+        if init:
+            code += f"{inner_str}{init};\n"
+        body = ""
         self.loop_depth += 1
         self.for_contexts.append({"loop_depth": self.loop_depth, "update": update})
+        label = self.enter_loop_label()
         try:
             for stmt in self.statement_list(node.body):
-                code += self.generate_statement(stmt, indent + 1)
+                body += self.generate_statement(stmt, inner + 1)
         finally:
+            prefix = self.exit_loop_label(label)
             self.for_contexts.pop()
             self.loop_depth -= 1
+        code += f"{inner_str}{prefix}while {condition} {{\n" + body
 
-        code += f"{indent_str}    {update};\n"
+        if str(update).strip():
+            code += f"{inner_str}    {update};\n"
+        code += f"{inner_str}}}\n"
         code += f"{indent_str}}}\n"
 
         return code
@@ -690,14 +748,16 @@ class RustStatementMixin:
             pattern = self.rust_identifier(pattern)
         iterable = self.generate_for_in_iterable(getattr(node, "iterable", None))
 
-        code = f"{indent_str}for {pattern} in {iterable} {{\n"
-
+        body = ""
         self.loop_depth += 1
+        label = self.enter_loop_label()
         try:
             for stmt in self.statement_list(getattr(node, "body", [])):
-                code += self.generate_statement(stmt, indent + 1)
+                body += self.generate_statement(stmt, indent + 1)
         finally:
+            prefix = self.exit_loop_label(label)
             self.loop_depth -= 1
+        code = f"{indent_str}{prefix}for {pattern} in {iterable} {{\n" + body
 
         code += f"{indent_str}}}\n"
         return code
@@ -716,28 +776,32 @@ class RustStatementMixin:
         indent_str = "    " * indent
         condition = self.generate_condition_expression(node.condition)
 
-        code = f"{indent_str}while {condition} {{\n"
-
+        body = ""
         self.loop_depth += 1
+        label = self.enter_loop_label()
         try:
             for stmt in self.statement_list(node.body):
-                code += self.generate_statement(stmt, indent + 1)
+                body += self.generate_statement(stmt, indent + 1)
         finally:
+            prefix = self.exit_loop_label(label)
             self.loop_depth -= 1
+        code = f"{indent_str}{prefix}while {condition} {{\n" + body
 
         code += f"{indent_str}}}\n"
         return code
 
     def generate_loop(self, node, indent):
         indent_str = "    " * indent
-        code = f"{indent_str}loop {{\n"
-
+        body = ""
         self.loop_depth += 1
+        label = self.enter_loop_label()
         try:
             for stmt in self.statement_list(node.body):
-                code += self.generate_statement(stmt, indent + 1)
+                body += self.generate_statement(stmt, indent + 1)
         finally:
+            prefix = self.exit_loop_label(label)
             self.loop_depth -= 1
+        code = f"{indent_str}{prefix}loop {{\n" + body
 
         code += f"{indent_str}}}\n"
         return code
@@ -749,19 +813,21 @@ class RustStatementMixin:
         condition = self.generate_condition_expression(node.condition)
 
         code = f"{indent_str}let mut {break_flag}: bool = false;\n"
-        code += f"{indent_str}loop {{\n"
-        code += f"{indent_str}    loop {{\n"
-
+        body = ""
         self.loop_depth += 1
         self.do_while_contexts.append(
             {"loop_depth": self.loop_depth, "break_flag": break_flag}
         )
+        label = self.enter_loop_label()
         try:
             for stmt in self.statement_list(node.body):
-                code += self.generate_statement(stmt, indent + 2)
+                body += self.generate_statement(stmt, indent + 2)
         finally:
+            prefix = self.exit_loop_label(label)
             self.do_while_contexts.pop()
             self.loop_depth -= 1
+        code += f"{indent_str}loop {{\n"
+        code += f"{indent_str}    {prefix}loop {{\n" + body
 
         if not self.statement_body_terminates_inner_loop(node.body):
             code += f"{indent_str}        break;\n"
@@ -780,6 +846,10 @@ class RustStatementMixin:
         """Render an expression whose value is unused, such as a for update."""
         if isinstance(expr, AssignmentNode):
             return self.generate_assignment(expr)
+        if isinstance(expr, UnaryOpNode):
+            op = self.map_operator(getattr(expr, "operator", getattr(expr, "op", "")))
+            if op in {"++", "--"}:
+                return self.generate_increment_update(expr.operand, op)
         return self.generate_expression(expr)
 
     def generate_assignment_value(self, node):

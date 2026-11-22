@@ -14,7 +14,9 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .fragment_output_targets import frag_data_attachment_index
+from .metal_argument_tables import metal_argument_tables
 from .metal_buffer_arrays import expand_entry_buffer_array
+from .metal_conservative_depth import metal_conservative_depth_semantic
 from .metal_entry_return import (
     metal_entry_return_attribute,
     metal_entry_return_semantic_key,
@@ -25,7 +27,9 @@ from .metal_exact_lookups import (
 )
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_invariant_position import metal_invariant_attribute_suffix
+from .metal_raster_order_groups import metal_raster_order_group_attribute
 from .metal_signed_builtins import metal_signed_builtin_parameter_name
+from .metal_stage_input_merge import nested_stage_input_attribute_indices
 from .metal_varyings import (
     is_metal_varying_builtin,
     metal_varying_attribute,
@@ -552,6 +556,14 @@ class MetalStageInterfaceMixin:
             ]
             if attribute_index is not None
         }
+        for parameter in parameters:
+            if parameter.get("nested_struct") is not None:
+                # A structure parameter merged into the stage input keeps its members' attributes.
+                used_attributes.update(
+                    nested_stage_input_attribute_indices(
+                        self, parameter["nested_struct"]
+                    )
+                )
         next_attribute = 0
         for parameter in parameters:
             attribute = parameter.get("attribute")
@@ -599,6 +611,9 @@ class MetalStageInterfaceMixin:
 
     def metal_stage_output_parameter_attribute(self, parameter, stage_name):
         if stage_name == "fragment":
+            depth = metal_conservative_depth_semantic(parameter)
+            if depth is not None:
+                return f" [[{depth}]]"
             color = metal_fragment_output_color_semantic(self, parameter)
             if color is not None:
                 return f" [[{color}]]"
@@ -919,9 +934,20 @@ class MetalStageInterfaceMixin:
         return metal_semantic_key(self, semantic)
 
     def append_global_resource_parameters(
-        self, params_str, func_name=None, func=None, filter_writable_textures=False
+        self,
+        params_str,
+        func_name=None,
+        func=None,
+        filter_writable_textures=False,
+        shader_type=None,
     ):
         resource_params = []
+
+        def ordered(variable, declaration):
+            return metal_raster_order_group_attribute(
+                variable, shader_type, declaration
+            )
+
         dependencies = None
         entry_point_dependencies = (
             self.entry_point_global_resource_dependencies(func)
@@ -944,6 +970,8 @@ class MetalStageInterfaceMixin:
         if self.cbuffer_variables:
             for cbuffer in self.cbuffer_variables:
                 cbuffer_name = getattr(cbuffer, "name", None)
+                if not self.metal_current_entry_takes(cbuffer):
+                    continue
                 if (
                     cbuffer_dependencies is not None
                     and cbuffer_name not in cbuffer_dependencies
@@ -963,6 +991,8 @@ class MetalStageInterfaceMixin:
                 address_space,
             ) in self.metal_buffer_resource_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if not self.metal_current_entry_takes(buffer_variable):
+                    continue
                 if dependencies is not None and buffer_name not in dependencies:
                     continue
                 declaration = self.format_metal_buffer_resource_parameter(
@@ -972,7 +1002,10 @@ class MetalStageInterfaceMixin:
                     address_space,
                     buffer_variable,
                 )
-                resource_params.append(f"{declaration} [[buffer({i})]]")
+                resource_params.append(
+                    f"{declaration} [[buffer({i})]]"
+                    f"{ordered(buffer_variable, declaration)}"
+                )
         if self.texture_variables:
             for (
                 texture_variable,
@@ -981,6 +1014,8 @@ class MetalStageInterfaceMixin:
                 array_size,
             ) in self.texture_variables:
                 texture_name = getattr(texture_variable, "name", None)
+                if not self.metal_current_entry_takes(texture_variable):
+                    continue
                 if (
                     texture_dependencies is not None
                     and texture_name not in texture_dependencies
@@ -992,7 +1027,10 @@ class MetalStageInterfaceMixin:
                     texture_name,
                     array_size,
                 )
-                resource_params.append(f"{declaration} [[texture({i})]]")
+                resource_params.append(
+                    f"{declaration} [[texture({i})]]"
+                    f"{ordered(texture_variable, declaration)}"
+                )
         if self.acceleration_structure_variables:
             for (
                 acceleration_structure_variable,
@@ -1003,6 +1041,8 @@ class MetalStageInterfaceMixin:
                 acceleration_structure_name = getattr(
                     acceleration_structure_variable, "name", None
                 )
+                if not self.metal_current_entry_takes(acceleration_structure_variable):
+                    continue
                 if (
                     dependencies is not None
                     and acceleration_structure_name not in dependencies
@@ -1024,6 +1064,8 @@ class MetalStageInterfaceMixin:
                 visible_function_table_name = getattr(
                     visible_function_table_variable, "name", None
                 )
+                if not self.metal_current_entry_takes(visible_function_table_variable):
+                    continue
                 if (
                     dependencies is not None
                     and visible_function_table_name not in dependencies
@@ -1043,6 +1085,10 @@ class MetalStageInterfaceMixin:
                 intersection_function_table_name = getattr(
                     intersection_function_table_variable, "name", None
                 )
+                if not self.metal_current_entry_takes(
+                    intersection_function_table_variable
+                ):
+                    continue
                 if (
                     dependencies is not None
                     and intersection_function_table_name not in dependencies
@@ -1062,13 +1108,16 @@ class MetalStageInterfaceMixin:
                 array_size,
             ) in self.structured_buffer_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if not self.metal_current_entry_takes(buffer_variable):
+                    continue
                 if dependencies is not None and buffer_name not in dependencies:
                     continue
                 declaration = self.format_structured_buffer_parameter(
                     buffer_type, buffer_name, array_size, buffer_variable
                 )
                 resource_params.extend(
-                    expand_entry_buffer_array(
+                    parameter + ordered(buffer_variable, declaration)
+                    for parameter in expand_entry_buffer_array(
                         self,
                         declaration,
                         i,
@@ -1083,6 +1132,8 @@ class MetalStageInterfaceMixin:
                 array_size,
             ) in self.structured_buffer_length_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if not self.metal_current_entry_takes(buffer_variable):
+                    continue
                 if dependencies is not None and buffer_name not in dependencies:
                     continue
                 declaration = self.format_structured_buffer_length_parameter(
@@ -1104,6 +1155,8 @@ class MetalStageInterfaceMixin:
                 array_size,
             ) in self.structured_buffer_counter_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if not self.metal_current_entry_takes(buffer_variable):
+                    continue
                 if dependencies is not None and buffer_name not in dependencies:
                     continue
                 declaration = self.format_structured_buffer_counter_parameter(
@@ -1125,13 +1178,16 @@ class MetalStageInterfaceMixin:
                 array_size,
             ) in self.glsl_buffer_block_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if not self.metal_current_entry_takes(buffer_variable):
+                    continue
                 if dependencies is not None and buffer_name not in dependencies:
                     continue
                 declaration = self.format_glsl_buffer_block_parameter(
                     block, buffer_name, array_size
                 )
                 resource_params.extend(
-                    expand_entry_buffer_array(
+                    parameter + ordered(buffer_variable, declaration)
+                    for parameter in expand_entry_buffer_array(
                         self,
                         declaration,
                         i,
@@ -1141,6 +1197,8 @@ class MetalStageInterfaceMixin:
         if self.sampler_variables:
             for sampler_variable, i, array_size in self.sampler_variables:
                 sampler_name = getattr(sampler_variable, "name", None)
+                if not self.metal_current_entry_takes(sampler_variable):
+                    continue
                 if (
                     sampler_dependencies is not None
                     and sampler_name not in sampler_dependencies
@@ -1155,6 +1213,12 @@ class MetalStageInterfaceMixin:
         if params_str:
             return f"{params_str}, {', '.join(resource_params)}"
         return ", ".join(resource_params)
+
+    def metal_current_entry_takes(self, node):
+        """Whether the function being generated takes ``node``: an entry takes its own argument table only."""
+        tables = metal_argument_tables(node)
+        table = self.current_metal_argument_table
+        return tables is None or table is None or table in tables
 
     def entry_point_global_resource_dependencies(self, func):
         dependencies = set(self.direct_global_resource_dependencies(func))

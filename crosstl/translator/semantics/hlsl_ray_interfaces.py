@@ -230,10 +230,10 @@ def _uses_glsl_spelling(program, variables):
                 or node.name in _UNSUPPORTED_BUILTINS
             ):
                 return True
-            if (
-                isinstance(node, A.RayTracingOpNode)
-                and node.operation == "TraceRay"
-                and len(node.arguments) == 11
+            if isinstance(node, A.RayTracingOpNode) and (
+                (node.operation == "TraceRay" and len(node.arguments) == 11)
+                # reportIntersectionEXT(t, kind): a stage that declares no hit attributes still reports them.
+                or (node.operation == "ReportHit" and len(node.arguments) == 2)
             ):
                 return True
     return False

@@ -32,6 +32,7 @@ from ..ast import (
     TernaryOpNode,
     UnaryOpNode,
     VariableNode,
+    WaveOpNode,
     WhileNode,
 )
 from ..refusals import WGSLRefusal
@@ -45,6 +46,7 @@ from .enum_utils import (
 from .precise_evaluation import refuse_precise_evaluation
 from .relational_builtins import lower_relational_builtins, wgsl_logical_not_operand
 from .sampler_pairs import canonicalize_separate_textures
+from .spirv_union_storage import lower_union_storage
 from .stage_utils import normalize_stage_name, requested_stage_name
 from .wgsl_array_constructors import (
     wgsl_array_constructor,
@@ -104,11 +106,10 @@ from .wgsl_matrix_inverse import (
     is_matrix_inverse_call,
     wgsl_matrix_inverse_call,
 )
+from .wgsl_matrix_resize import wgsl_matrix_resize
+from .wgsl_multisampled_textures import WGSLMultisampledTextureMixin
 from .wgsl_narrow_storage import narrow_storage_word_type
 from .wgsl_parameter_lowering import WGSLParameterLoweringMixin
-from .wgsl_primitive_index import (
-    is_int_primitive_index_member,
-)
 from .wgsl_program_collection import WGSLProgramCollectionMixin
 from .wgsl_program_sections import WGSLProgramSectionMixin
 from .wgsl_reference_argument_copies import WGSLReferenceArgumentCopiesMixin
@@ -122,8 +123,12 @@ from .wgsl_struct_initializers import (
     wgsl_struct_array_initializer,
     wgsl_struct_initializer,
 )
+from .wgsl_subgroup_operations import wgsl_wave_operation, wgsl_wave_result_type
 from .wgsl_texture_calls import WGSLTextureCallMixin
+from .wgsl_texture_gather import GATHER_OPERATIONS, WGSLTextureGatherMixin
 from .wgsl_type_names import WGSLTypeNameMixin
+from .wgsl_uniform_registers import wgsl_uniform_register_load
+from .wgsl_unsigned_builtin_members import is_int_builtin_member
 from .wgsl_unsigned_negation import wgsl_unsigned_negation
 from .wgsl_value_side_effects import WGSLValueSideEffectsMixin, is_increment
 from .wgsl_value_types import WGSLValueTypeMixin
@@ -165,6 +170,8 @@ class WGSLCodeGen(
     WGSLCallLoweringMixin,
     WGSLMathCallMixin,
     WGSLTextureCallMixin,
+    WGSLTextureGatherMixin,
+    WGSLMultisampledTextureMixin,
     WGSLConstructorMixin,
     WGSLTypeNameMixin,
     WGSLBuiltinOptionMixin,
@@ -280,6 +287,14 @@ class WGSLCodeGen(
         "sv_groupid": "workgroup_id",
         "num_workgroups": "num_workgroups",
         "gl_numworkgroups": "num_workgroups",
+        "subgroup_size": "subgroup_size",
+        "gl_subgroupsize": "subgroup_size",
+        "subgroup_invocation_id": "subgroup_invocation_id",
+        "gl_subgroupinvocationid": "subgroup_invocation_id",
+        "num_subgroups": "num_subgroups",
+        "gl_numsubgroups": "num_subgroups",
+        "subgroup_id": "subgroup_id",
+        "gl_subgroupid": "subgroup_id",
     }
     BUILTIN_IDENTIFIER_ALIASES = {
         "gl_Position": "position",
@@ -294,6 +309,12 @@ class WGSLCodeGen(
         "gl_WorkGroupID": "workgroup_id",
         "SV_GroupID": "workgroup_id",
         "gl_NumWorkGroups": "num_workgroups",
+        # The subgroup built-in inputs (WGSL section 13.3.1.1). naga 30 reads them without the
+        # `enable subgroups;` directive and rejects that directive as not yet implemented.
+        "gl_SubgroupSize": "subgroup_size",
+        "gl_SubgroupInvocationID": "subgroup_invocation_id",
+        "gl_NumSubgroups": "num_subgroups",
+        "gl_SubgroupID": "subgroup_id",
     }
     WORKGROUP_SIZE_IDENTIFIER_ALIASES = {"gl_WorkGroupSize"}
     INPUT_BUILTIN_TYPE_MAP = {
@@ -305,6 +326,10 @@ class WGSLCodeGen(
         "local_invocation_index": "u32",
         "workgroup_id": "vec3<u32>",
         "num_workgroups": "vec3<u32>",
+        "subgroup_size": "u32",
+        "subgroup_invocation_id": "u32",
+        "num_subgroups": "u32",
+        "subgroup_id": "u32",
     }
     FUNCTION_NAME_MAP = {
         "atan2": "atan2",
@@ -364,12 +389,16 @@ class WGSLCodeGen(
     }
     STAGE_INPUT_BUILTINS = {
         "vertex": {"instance_index", "vertex_index"},
-        "fragment": {"position"},
+        "fragment": {"position", "subgroup_invocation_id", "subgroup_size"},
         "compute": {
             "global_invocation_id",
             "local_invocation_id",
             "local_invocation_index",
+            "num_subgroups",
             "num_workgroups",
+            "subgroup_id",
+            "subgroup_invocation_id",
+            "subgroup_size",
             "workgroup_id",
         },
     }
@@ -603,6 +632,7 @@ class WGSLCodeGen(
         "textureprojoffset",
         "texturequerylevels",
         "texturequerylod",
+        "texturesamples",
         "texturesize",
         "texelfetch",
         "texelfetchoffset",
@@ -817,6 +847,7 @@ class WGSLCodeGen(
 
     def __init__(self):
         self._current_stage_name = None
+        self._helper_stage_names = {}
         self._current_workgroup_size = None
         self._workgroup_size_overrides = WorkgroupSizeOverrides(None)
         self._location_counters = {"in": 0, "out": 0, "generic": 0}
@@ -833,6 +864,7 @@ class WGSLCodeGen(
         self._pointer_identifier_scopes = []
         self._parameter_plan_stack = []
         self._value_type_scopes = []
+        self._local_mutability_scopes = []
         self._resource_alias_scopes = []
         self._module_identifier_names = {}
         self._function_identifier_names = {}
@@ -854,6 +886,7 @@ class WGSLCodeGen(
         self._module_storage_access_modes = {}
         self._used_access_mode_identifiers = set()
         self._read_only_module_names = set()
+        self._addressable_module_names = set()
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
@@ -861,6 +894,8 @@ class WGSLCodeGen(
         self._sampled_texture_array_dispatch_helpers = {}
         self._frexp_modf_helpers = {}
         self._matrix_inverse_helpers = {}
+        self._matrix_resize_helpers = {}
+        self._uniform_registers = None
         self._half_conversion_helpers = {}
         self._constant_values = {}
         self._specialization_plan = WGSLSpecializationPlan({}, set(), set())
@@ -884,7 +919,7 @@ class WGSLCodeGen(
         self._builtin_option_specializations = {}
         self._generic_function_specializer = None
         self._uses_primitive_index = False
-        self._primitive_index_int_members = set()
+        self._int_builtin_members = {}
         self._enum_type_names = set()
         self._enum_variant_constants = {}
 
@@ -894,6 +929,7 @@ class WGSLCodeGen(
     def generate_program(self, ast, target_stage=None):
         refuse_cooperative_matrices(ast, label="WGSL", target="wgsl")
         refuse_precise_evaluation(ast, label="WGSL", target="wgsl")
+        ast = lower_union_storage(ast, "wgsl")
         target_stage = requested_stage_name(target_stage)
         # WGSL textures are separate objects: a separate CrossGL texture (texture2DShadow, utexture2D,
         # texture2DMS) declares the same texture as its combined spelling, with its explicit samplers kept.
@@ -1213,6 +1249,10 @@ class WGSLCodeGen(
             )
         if isinstance(expr, LiteralNode):
             return self.generate_literal(expr)
+        if self._uniform_registers is not None:
+            register_value = wgsl_uniform_register_load(self, expr)
+            if register_value is not None:
+                return register_value
         if isinstance(expr, IdentifierNode):
             enum_constant = self._enum_variant_constants.get(expr.name)
             if enum_constant is not None:
@@ -1231,9 +1271,10 @@ class WGSLCodeGen(
             if not self.is_local_identifier(expr.name):
                 cbuffer_access = self._cbuffer_member_accesses.get(expr.name)
                 if cbuffer_access:
-                    if self.is_bool_type(self._cbuffer_member_types.get(expr.name)):
-                        return f"({cbuffer_access} != 0u)"
-                    return cbuffer_access
+                    bool_value = self.uniform_bool_value(
+                        cbuffer_access, self._cbuffer_member_types.get(expr.name)
+                    )
+                    return bool_value or cbuffer_access
             return self.identifier_name(expr.name)
         if isinstance(expr, BinaryOpNode):
             option_none_comparison = self.generate_builtin_option_none_comparison(
@@ -1315,10 +1356,11 @@ class WGSLCodeGen(
             if stage_matrix is not None:
                 return stage_matrix
             member_name = self.member_access_identifier_name(expr)
-            if self.is_uniform_bool_member_access(expr):
+            uniform_bool_type = self.uniform_bool_member_type(expr)
+            if uniform_bool_type is not None:
                 access = f"{self.generate_expression(expr.object_expr)}.{member_name}"
-                return f"({access} != 0u)"
-            if is_int_primitive_index_member(self, expr):
+                return self.uniform_bool_value(access, uniform_bool_type)
+            if is_int_builtin_member(self, expr):
                 access = f"{self.generate_expression(expr.object_expr)}.{member_name}"
                 return f"i32({access})"
             if isinstance(
@@ -1365,12 +1407,17 @@ class WGSLCodeGen(
             )
             if narrowed is not None:
                 return narrowed
+            resized = wgsl_matrix_resize(self, expr.target_type, expr.expression)
+            if resized is not None:
+                return resized
             return (
                 f"{self.type_name_string(expr.target_type)}"
                 f"({self.generate_expression(expr.expression)})"
             )
         if isinstance(expr, RangeNode):
             raise WGSLRefusal("WGSL target does not support range expressions")
+        if isinstance(expr, WaveOpNode):
+            return wgsl_wave_operation(self, expr)
         if isinstance(expr, AssignmentNode):
             self.reject_unordered_side_effect(expr)
         raise WGSLRefusal(
@@ -1545,6 +1592,9 @@ class WGSLCodeGen(
                 )
                 if diagonal is not None:
                     return diagonal
+                resized = wgsl_matrix_resize(self, function_name, node.arguments[0])
+                if resized is not None:
+                    return resized
             args = self.generate_type_constructor_call_arguments(
                 function_name, node.arguments
             )
@@ -1668,6 +1718,12 @@ class WGSLCodeGen(
             return self.generate_texture_sample_compare_level_offset_call(
                 function_name, args
             )
+        if normalized_name in GATHER_OPERATIONS:
+            return self.generate_texture_gather_call(function_name, args)
+        if normalized_name == "texturequerylevels":
+            return self.generate_texture_query_levels_call(function_name, args)
+        if normalized_name == "texturesamples":
+            return self.generate_texture_samples_call(function_name, args)
         if normalized_name == "texturesize":
             return self.generate_texture_dimensions_call(args)
         if normalized_name == "imagesize":
@@ -1736,6 +1792,8 @@ class WGSLCodeGen(
         return dict(sorted(specializations.items()))
 
     def expression_type(self, expr):
+        if isinstance(expr, WaveOpNode):
+            return wgsl_wave_result_type(self, expr)
         if isinstance(expr, IdentifierNode):
             if expr.name in self._enum_variant_constants:
                 return "i32"
@@ -1775,6 +1833,15 @@ class WGSLCodeGen(
                 self.expression_type(expr.true_expr),
                 self.expression_type(expr.false_expr),
             )
+        if (
+            isinstance(expr, UnaryOpNode)
+            and expr.operator == "*"
+            and not expr.is_postfix
+        ):
+            # A dereferenced pointer local (wgsl_pointer_locals) has its pointee type.
+            pointer_type = self.expression_type(expr.operand)
+            if isinstance(pointer_type, PointerType):
+                return pointer_type.pointee_type
         if (
             isinstance(expr, UnaryOpNode)
             and expr.operator in {"-", "+", "~"}
@@ -1982,6 +2049,11 @@ class WGSLCodeGen(
         if left_vector is not None and right_vector is not None:
             if left_vector == right_vector:
                 return left_type
+            # GLSL converts an integer vector operand to the other operand's float vector type (4.1.10).
+            if left_vector[1] == right_vector[1]:
+                elements = {left_vector[0], right_vector[0]}
+                if elements in ({"f32", "i32"}, {"f32", "u32"}):
+                    return f"vec{left_vector[1]}<f32>"
             return None
         if left_vector is not None and right_scalar is not None:
             return left_type
@@ -1991,6 +2063,8 @@ class WGSLCodeGen(
             return left_scalar
         if {left_scalar, right_scalar} == {"i32", "u32"}:
             return "u32"
+        if {left_scalar, right_scalar} in ({"f32", "i32"}, {"f32", "u32"}):
+            return "f32"
         if left_type == right_type:
             return left_type
         return None

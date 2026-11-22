@@ -23,6 +23,7 @@ from .parsing.lookahead import CudaLookaheadMixin
 from .parsing.macros import CudaMacroMixin
 from .parsing.records import CudaRecordMixin
 from .parsing.statements import CudaStatementMixin
+from .parsing.struct_methods import CudaStructMethodMixin
 from .parsing.types import CudaTypeMixin
 from .parsing.variable_declarations import CudaVariableDeclarationMixin
 
@@ -32,6 +33,7 @@ class CudaParser(
     CudaFunctionNameMixin,
     CudaAliasMixin,
     CudaRecordMixin,
+    CudaStructMethodMixin,
     CudaMacroMixin,
     CudaFunctionMixin,
     CudaTypeMixin,
@@ -405,6 +407,8 @@ class CudaParser(
                     typedefs.append(aliases)
             elif self.is_struct_or_class_declaration_start():
                 structs.append(self.parse_struct())
+                # Where the struct's member functions go among the free functions.
+                structs[-1].function_index = len(functions)
             elif self.current_token[0] == "ENUM":
                 structs.append(self.parse_enum())
             elif self.is_linkage_block_start():
@@ -465,6 +469,7 @@ class CudaParser(
             includes, functions, structs, global_variables, kernels, typedefs=typedefs
         )
         shader.namespace_aliases = dict(self.namespace_aliases)
+        shader.struct_method_names = sorted(self.struct_method_names)
         return shader
 
     def eat(self, expected_type):

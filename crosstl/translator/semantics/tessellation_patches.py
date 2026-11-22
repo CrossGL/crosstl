@@ -79,6 +79,7 @@ from .stage_varyings import (
     type_name,
     varying_declaration,
 )
+from .system_values import SystemValueError, lookup_system_value
 
 __all__ = ["TessellationPatchUnsupportedError", "lower_tessellation_patches"]
 
@@ -96,6 +97,14 @@ _PATCH_FUNCTION_PARAMETERS = {"gl_PrimitiveID": "gl_PrimitiveID"}
 _DOMAIN_PARAMETERS = {"gl_PrimitiveID": "gl_PrimitiveID"}
 _HULL_ONLY_ATTRIBUTES = frozenset({"patchconstantfunc", "maxtessfactor"})
 _DOMAIN_FROM_HULL = ("partitioning", "outputtopology")
+# Tessellation system values that :mod:`.system_values` leaves in their ``SV_`` spelling, and the GLSL built-in the
+# HLSL importer writes for each (``crosstl/backend/DirectX/import_tables.py``).
+_SYSTEM_VALUE_BUILTINS = {
+    "SV_TessFactor": "gl_TessLevelOuter",
+    "SV_InsideTessFactor": "gl_TessLevelInner",
+    "SV_OutputControlPointID": "gl_InvocationID",
+    "SV_DomainLocation": "gl_TessCoord",
+}
 
 
 class TessellationPatchUnsupportedError(TranslationDiagnostic):
@@ -128,6 +137,7 @@ def lower_tessellation_patches(program, target) -> int:
                 found[name] = stage
     if not found:
         return 0
+    _spell_system_values(program, found.values())
     lowering = _TessellationLowering(program, target)
     hull = None
     if "tessellation_control" in found:
@@ -137,6 +147,36 @@ def lower_tessellation_patches(program, target) -> int:
     for stage in found.values():
         lowering.patch_helpers(stage)
     return len(found)
+
+
+def _spell_system_values(program, found):
+    """Name the tessellation system values of ``program`` by the GLSL built-ins this lowering reads.
+
+    CrossGL accepts ``@SV_TessFactor``, ``@SV_InsideTessFactor``, ``@SV_OutputControlPointID`` and
+    ``@SV_DomainLocation`` as well as ``@gl_TessLevelOuter``, ``@gl_TessLevelInner``, ``@gl_InvocationID`` and
+    ``@gl_TessCoord``. The structure members and the parameters of the tessellation stages' functions take the GLSL
+    spelling; a semantic index other than 0 keeps its spelling, so the lowering still refuses it.
+    """
+    structs = list(getattr(program, "structs", None) or [])
+    functions = list(getattr(program, "functions", None) or [])
+    for stage in found:
+        structs += list(getattr(stage, "local_structs", None) or [])
+        functions += list(getattr(stage, "local_functions", None) or [])
+        if getattr(stage, "entry_point", None) is not None:
+            functions.append(stage.entry_point)
+    nodes = [m for s in structs if isinstance(s, A.StructNode) for m in s.members]
+    nodes += [p for f in functions for p in getattr(f, "parameters", None) or []]
+    for node in nodes:
+        for attr in getattr(node, "attributes", None) or []:
+            try:
+                found_value = lookup_system_value(getattr(attr, "name", ""))
+            except SystemValueError:
+                continue
+            if found_value is None or found_value[1]:
+                continue
+            spelling = _SYSTEM_VALUE_BUILTINS.get(found_value[0].name)
+            if spelling is not None:
+                attr.name = spelling
 
 
 class _Interface:

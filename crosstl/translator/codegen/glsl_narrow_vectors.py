@@ -12,9 +12,9 @@ shifts). The reduced value keeps the 32-bit type the emitter already reports for
 around it are unchanged.
 
 Scalar operations keep their narrow type like the explicit arithmetic types of GLSL, HLSL and SPIR-V, except when
-the translation's source promotes narrow scalar operands to ``int`` first (C++ [conv.prom], C99 6.3.1.1): there a
-scalar result is computed exactly in 32 bits. Vector operations keep their narrow type for every source (MSL
-section 2.2 and OpenCL C 6.3 do not promote vectors).
+the translation's source promotes narrow scalar operands to ``int`` first (C++ [conv.prom], C99 6.3.1.1), as CrossGL
+itself, MSL, CUDA, HIP and OpenCL C do: there a scalar result is computed exactly in 32 bits. Vector operations
+keep their narrow type for every source (MSL section 2.2 and OpenCL C 6.3 do not promote vectors).
 """
 
 from __future__ import annotations
@@ -31,8 +31,9 @@ __all__ = [
     "narrow_vector_unary_result",
 ]
 
-# Sources whose narrow scalar operands are promoted to int before arithmetic, as recorded by rule carrying.
-SCALAR_PROMOTING_SOURCES = frozenset({"metal", "cuda", "hip", "opencl"})
+# Sources whose narrow scalar operands are promoted to int before arithmetic, as recorded by rule carrying. CrossGL
+# itself (``cgl``) promotes like MSL (``semantics/narrow.py`` PROMOTING_SOURCES).
+SCALAR_PROMOTING_SOURCES = frozenset({"metal", "cuda", "hip", "opencl", "cgl"})
 
 # Operators whose result can leave the operand range (``semantics/narrow.py`` uses the same set).
 RANGE_CHANGING_BINARY = frozenset({"+", "-", "*", "/", "%", "<<"})

@@ -13,6 +13,7 @@ from typing import (
 )
 
 from ..overload_ranking import shared_template_parameter_positions
+from ..reference_binding import argument_binds_parameter
 from .support import (
     IDENTIFIER_RE,
     METAL_BUILTIN_MEMBER_RECEIVER_TEMPLATE_RE,
@@ -375,7 +376,23 @@ class MetalReceiverMethodMixin:
                         or inferred_type
                     )
             inferred_types.append(inferred_type)
-        return declared_types == inferred_types
+        # A reference parameter binds an argument of its referenced type
+        # (reference_binding.py), although the two spellings differ.
+        return all(
+            argument_binds_parameter(
+                self,
+                declared_type,
+                inferred_type,
+                self._normalize_function_parameter_type_text(parameter),
+                argument,
+                local_view,
+                buffer_view,
+                structs_by_name,
+            )
+            for declared_type, inferred_type, parameter, argument in zip(
+                declared_types, inferred_types, fixed_parameters, call_arguments
+            )
+        )
 
     def _select_concrete_method_for_call(
         self,

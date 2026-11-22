@@ -5,8 +5,11 @@ using namespace metal;
 struct Light {
     int enabled;
     int type;
-    float3 position;
-    float3 target;
+    char _pad2[8];
+    packed_float3 position;
+    char _pad3[4];
+    packed_float3 target;
+    char _pad4[4];
     float4 color;
 };
 struct FragmentInput {
@@ -20,7 +23,7 @@ struct Uniforms {
     float4 colDiffuse;
     Light lights[4];
     float4 ambient;
-    float3 viewPos;
+    packed_float3 viewPos;
 };
 // Fragment Shader
 fragment float4 fragment_main(FragmentInput input [[stage_in]], constant Uniforms& uniforms [[buffer(0)]], texture2d<float> texture0 [[texture(0)]], sampler texture0Sampler [[sampler(0)]]) {
@@ -28,17 +31,17 @@ fragment float4 fragment_main(FragmentInput input [[stage_in]], constant Uniform
     float4 texelColor = texture0.sample(texture0Sampler, input.fragTexCoord);
     float3 lightDot = float3(0.0);
     float3 normal = normalize(input.fragNormal);
-    float3 viewD = normalize(uniforms.viewPos - input.fragPosition);
+    float3 viewD = normalize(float3(uniforms.viewPos) - input.fragPosition);
     float3 specular = float3(0.0);
     float4 tint = uniforms.colDiffuse * input.fragColor;
     for (int i = 0; i < 4; i++) {
         if (uniforms.lights[i].enabled == 1) {
             float3 light = float3(0.0);
             if (uniforms.lights[i].type == 0) {
-                light = -normalize(uniforms.lights[i].target - uniforms.lights[i].position);
+                light = -normalize(float3(uniforms.lights[i].target) - float3(uniforms.lights[i].position));
             }
             if (uniforms.lights[i].type == 1) {
-                light = normalize(uniforms.lights[i].position - input.fragPosition);
+                light = normalize(float3(uniforms.lights[i].position) - input.fragPosition);
             }
             float NdotL = max(dot(normal, light), 0.0);
             lightDot += uniforms.lights[i].color.rgb * NdotL;

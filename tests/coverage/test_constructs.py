@@ -117,6 +117,53 @@ def test_only_the_kernel_languages_list_a_device_global():
     assert "device float acc[64] = {1.0, 2.0, 4.0};" in crossgl_probe.source
 
 
+def test_only_the_languages_with_a_union_type_list_union():
+    listing = {
+        language
+        for language in templates.TEMPLATES
+        if "union" in {f.name for f in constructs.features(language, GRAMMAR)}
+    }
+    assert listing == {"cuda", "hip", "metal", "opencl", "rust"}
+    declarations = {
+        "cuda": "union Bits {\n    float f;\n    unsigned int u;\n};",
+        "hip": "union Bits {\n    float f;\n    unsigned int u;\n};",
+        "metal": "union Bits {\n    float f;\n    uint u;\n};",
+        "opencl": "typedef union {\n    float f;\n    uint u;\n} Bits;",
+        "rust": "#[repr(C)]\nunion Bits {\n    f: f32,\n    u: u32,\n}",
+    }
+    for language, declaration in declarations.items():
+        source = probes.build(construct_feature(language, "union"), language).source
+        assert declaration in source, language
+        # The float member is written, then the integer member is read and written, then the float member is read.
+        write, reinterpret, read = (
+            source.index(text)
+            for text in (
+                "f: fin[i]" if language == "rust" else "b.f = fin[i];",
+                "b.u = (b.u >> 16)",
+                "outp[i] = b.f;",
+            )
+        )
+        assert write < reinterpret < read, language
+    crossgl_probe = probes.build(construct_feature("metal", "union"), "crossgl")
+    assert (
+        "@union_layout(4, 4, little_endian, metal)\n    struct Bits {"
+        in crossgl_probe.source
+    )
+    assert crossgl_probe.source.count("@union_member_layout(0, 4, 4)") == 2
+
+
+def test_the_union_probe_tells_shared_storage_from_separate_members():
+    import numpy as np
+
+    fin = execution.inputs("fin")
+    bits = fin.view(np.uint32)
+    shared = ((bits >> 16) | np.uint32(0x3F800000)).view(np.float32)
+    # Members stored apart: the integer reads as zero and the float keeps its input.
+    separate = fin
+    assert ((shared >= 1.0) & (shared < 2.0)).all()
+    assert (shared != separate).all()
+
+
 def test_only_opencl_lists_its_vector_component_names():
     names = {"vector-halves", "numeric-components"}
     listing = {
@@ -583,3 +630,78 @@ def test_c_operator_probes_cast_rather_than_construct():
         ], language
     unsigned = templates.TEMPLATES["cuda"]["unsigned-division"].body
     assert unsigned.startswith("unsigned int a = (unsigned int)iin[i] + 7u;")
+
+
+def test_only_the_languages_with_8_bit_arithmetic_list_integer_promotion():
+    listing = {
+        language
+        for language in templates.TEMPLATES
+        if "integer-promotion" in {
+            f.name for f in constructs.features(language, GRAMMAR)
+        }
+    }
+    assert listing == {
+        "cuda",
+        "glsl",
+        "hip",
+        "metal",
+        "mojo",
+        "opencl",
+        "rust",
+        "slang",
+        "spirv",
+    }
+    # The languages that multiply at the operands' width widen them first; C, C++ and MSL promote them.
+    products = {
+        "glsl": "outp[i] = float(int(v) * int(v));",
+        "slang": "outp[i] = float(int(v) * int(v));",
+        "rust": "outp[i] = ((v as i32) * (v as i32)) as f32;",
+        "cuda": "outp[i] = float(v * v);",
+        "metal": "outp[i] = float(v * v);",
+        "opencl": "outp[i] = (float)(v * v);",
+        "crossgl": "outp[i] = float(v * v);",
+    }
+    for language, product in products.items():
+        source = probes.build(
+            construct_feature(
+                "metal" if language == "crossgl" else language, "integer-promotion"
+            ),
+            language,
+        ).source
+        assert product in source, language
+
+
+def test_8_and_16_bit_type_probes_convert_the_product_back_where_operands_promote():
+    expected = {
+        "crossgl": "outp[i] = float(int8_t(v * v));",
+        "cuda": "outp[i] = float(int8_t(v * v));",
+        "hip": "outp[i] = float(int8_t(v * v));",
+        "metal": "outp[i] = float(char(v * v));",
+        "opencl": "outp[i] = (float)((char)(v * v));",
+        # GLSL and Slang multiply at 8 bits, so their product is already the wrapped one.
+        "glsl": "outp[i] = float(v * v);",
+        "slang": "outp[i] = float(v * v);",
+    }
+    for language, product in expected.items():
+        source = probes.build(
+            construct_feature("metal" if language == "crossgl" else language, "int8"),
+            language,
+        ).source
+        assert product in source, language
+    assert (
+        "outp[i] = float(ushort(v * v));" in probes.build(
+            construct_feature("metal", "uint16"), "metal"
+        ).source
+    )
+
+
+def test_the_promotion_probes_tell_a_promoted_product_from_a_wrapped_one():
+    import numpy as np
+
+    iin = execution.inputs("iin")
+    promoted = iin * iin
+    wrapped = promoted.astype(np.int8).astype(np.int32)
+    # Some inputs leave the 8-bit range when squared, so the two products differ; no 16-bit product wraps.
+    assert (promoted != wrapped).any()
+    assert (promoted == promoted.astype(np.int16)).all()
+    assert (promoted <= 255).all()
