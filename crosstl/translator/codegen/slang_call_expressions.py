@@ -2,6 +2,7 @@
 
 from ..ast import (
     AssignmentNode,
+    BinaryOpNode,
     FunctionCallNode,
     MemberAccessNode,
     UnaryOpNode,
@@ -75,7 +76,19 @@ class SlangCallExpressionMixin:
             )
         ):
             false_value, true_value, condition = node.args
-            if self.convert_type(self.expression_result_type(condition)) != "bool":
+            condition_is_matrix_comparison = (
+                isinstance(condition, BinaryOpNode)
+                and str(getattr(condition, "op", getattr(condition, "operator", "")))
+                in {"<", ">", "<=", ">=", "==", "!="}
+                and any(
+                    self.is_matrix_value_type(self.expression_result_type(operand))
+                    for operand in (condition.left, condition.right)
+                )
+            )
+            if (
+                self.convert_type(self.expression_result_type(condition)) != "bool"
+                or condition_is_matrix_comparison
+            ):
                 return self.refuse_lowering(
                     "matrix select condition must be a scalar bool",
                     self.generate_expression(false_value),

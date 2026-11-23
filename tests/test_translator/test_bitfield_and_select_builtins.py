@@ -94,6 +94,17 @@ MATRIX_SELECT_VECTOR_CONDITION = """shader MatrixSelectVectorCondition {
     }
 }"""
 
+MATRIX_SELECT_MATRIX_COMPARISON = """shader MatrixSelectMatrixComparison {
+    compute {
+        @numthreads(1, 1, 1)
+        void main() {
+            mat2 m0 = mat2(1.0);
+            mat2 m1 = mat2(2.0);
+            mat2 chosen = select(m1, m0, m0 > m1);
+        }
+    }
+}"""
+
 BITFIELD_CALL = re.compile(r"\bbitfield(?:Extract|Insert)\(")
 
 
@@ -344,9 +355,12 @@ def test_matrix_select_with_side_effecting_values_is_refused(generator):
     "generator",
     [GLSLCodeGen, MetalCodeGen, SlangCodeGen, WGSLCodeGen],
 )
-def test_matrix_select_requires_a_scalar_bool_condition(generator):
+@pytest.mark.parametrize(
+    "source", [MATRIX_SELECT_VECTOR_CONDITION, MATRIX_SELECT_MATRIX_COMPARISON]
+)
+def test_matrix_select_requires_a_scalar_bool_condition(generator, source):
     with pytest.raises(ValueError, match="scalar.bool|scalar-bool") as raised:
-        generator().generate(parse(MATRIX_SELECT_VECTOR_CONDITION))
+        generator().generate(parse(source))
     assert hasattr(raised.value, "project_diagnostic_code")
 
 
@@ -378,7 +392,7 @@ def test_slang_matrix_select_keeps_matrix_type_in_vector_product():
 
     slang = SlangCodeGen().generate(parse(source))
 
-    assert "mul((flag ? m0 : m1), value)" in slang
+    assert "return (flag ? m0 : m1) * value;" in slang
 
 
 def test_wgsl_boolean_mix_with_an_inline_comparison_selector(tmp_path):

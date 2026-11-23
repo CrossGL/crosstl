@@ -10647,7 +10647,19 @@ class GLSLCodeGen(
         if func_name == "select" and self.is_matrix_value_type(self.map_type(types[0])):
             if self.map_type(types[0]) != self.map_type(types[1]):
                 reject("matrix-operand-type-mismatch")
-            if self.map_type(types[2]) != "bool":
+            condition = args[2]
+            condition_is_matrix_comparison = (
+                isinstance(condition, BinaryOpNode)
+                and self.map_operator(condition.op)
+                in self.GLSL_VECTOR_RELATIONAL_FUNCTIONS
+                and any(
+                    self.is_matrix_value_type(
+                        self.map_type(self.glsl_source_expression_type(operand))
+                    )
+                    for operand in (condition.left, condition.right)
+                )
+            )
+            if self.map_type(types[2]) != "bool" or condition_is_matrix_comparison:
                 reject("matrix-condition-not-scalar-bool")
             false_value, true_value, condition = args
             if not all(
