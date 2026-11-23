@@ -17,7 +17,11 @@ from __future__ import annotations
 
 from crosstl.translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
-__all__ = ["OpenCLGlobalVariableUnsupportedError", "refuse_writable_global_variable"]
+__all__ = [
+    "OpenCLGlobalVariableUnsupportedError",
+    "is_read_only_global_variable",
+    "refuse_writable_global_variable",
+]
 
 _CONSTANT_SPACE = frozenset({"__constant", "__constant__", "constant"})
 # Program-scope declarations in these spaces are invalid OpenCL C; another part of the importer decides them.
@@ -48,6 +52,13 @@ def _is_read_only(qualifiers: set[str], vtype: str) -> bool:
     return bool(_READ_ONLY & (qualifiers | set(vtype.replace("[", " ").split())))
 
 
+def is_read_only_global_variable(node) -> bool:
+    """Whether a program-scope declaration cannot be written after initialization."""
+    qualifiers = set(getattr(node, "qualifiers", None) or [])
+    vtype = str(getattr(node, "vtype", "") or "")
+    return bool(qualifiers & _CONSTANT_SPACE) or _is_read_only(qualifiers, vtype)
+
+
 def refuse_writable_global_variable(node, *, program_scope: bool) -> None:
     """Raise :class:`OpenCLGlobalVariableUnsupportedError` when ``node`` declares a writable global-space variable.
 
@@ -55,12 +66,12 @@ def refuse_writable_global_variable(node, *, program_scope: bool) -> None:
     variable is in the global address space; a ``__global float *p`` local is a private pointer into it.
     """
     qualifiers = set(getattr(node, "qualifiers", None) or [])
-    vtype = str(getattr(node, "vtype", "") or "")
+    str(getattr(node, "vtype", "") or "")
     if qualifiers & (_CONSTANT_SPACE | _OTHER_SPACES):
         return
     if not program_scope and "static" not in qualifiers:
         return
-    if _is_read_only(qualifiers, vtype):
+    if is_read_only_global_variable(node):
         return
     where = "program-scope" if program_scope else "function-scope static"
     raise OpenCLGlobalVariableUnsupportedError(

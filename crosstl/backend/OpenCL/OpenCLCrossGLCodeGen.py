@@ -34,7 +34,10 @@ from .array_extents import format_opencl_array_extent
 from .compare_exchange import OpenCLCompareExchangeMixin, is_compare_exchange
 from .conversions import format_conversion, is_conversion_name
 from .enumerations import OpenCLEnumerationMixin
-from .global_variables import refuse_writable_global_variable
+from .global_variables import (
+    is_read_only_global_variable,
+    refuse_writable_global_variable,
+)
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 from .pointer_results import OpenCLPointerResultMixin
 from .sizeof_scopes import OpenCLSizeofScopeMixin
@@ -941,7 +944,9 @@ class OpenCLToCrossGLConverter(
         return (
             self.indent_level == 0
             and "__global__" in (getattr(node, "qualifiers", None) or [])
+            and "extern" not in (getattr(node, "qualifiers", None) or [])
             and "*" not in str(getattr(node, "vtype", ""))
+            and not is_read_only_global_variable(node)
         )
 
     def visit_opencl_program_scope_device_global(self, node):
