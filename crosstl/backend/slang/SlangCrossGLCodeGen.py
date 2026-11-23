@@ -1288,7 +1288,12 @@ class SlangToCrossGLConverter(SlangMatrixImportMixin, SlangStorageImageAccessMix
             )
             for index, p in enumerate(func.params)
         )
-        semantic = self.map_semantic(getattr(func, "semantic", None))
+        semantic = (
+            None
+            if getattr(self, "module_has_explicit_stage_entries", False)
+            and not self.is_entry_like_function(func)
+            else self.map_semantic(getattr(func, "semantic", None))
+        )
         semantic_suffix = f" {semantic}" if semantic else ""
         if self.should_preserve_slang_stage_entry_name(func, function_qualifier):
             semantic_suffix += " @ stage_entry"
