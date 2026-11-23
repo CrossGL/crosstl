@@ -186,6 +186,14 @@ class OpenGLCallResolutionMixin:
         call_args = self.glsl_padded_array_constructor_arguments(
             original_func_name, call_args, expr
         )
+        if argument_parameter_infos is None:
+            # A scalar where a vector or matrix element is expected must be
+            # written as the element type's constructor (#3636).
+            argument_parameter_infos = (
+                self.glsl_array_constructor_element_parameter_infos(
+                    original_func_name, call_args, expr
+                )
+            )
         args = ", ".join(
             self.generate_function_call_arguments(
                 argument_func_name,
