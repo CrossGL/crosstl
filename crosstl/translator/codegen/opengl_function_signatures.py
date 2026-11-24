@@ -1030,6 +1030,21 @@ class OpenGLFunctionSignatureMixin:
             if source_key not in visited:
                 visit(source_key)
 
+    def glsl_function_visible_from_current_stage(self, function):
+        """Whether a call from the function being emitted can name ``function``.
+
+        A helper declared inside one stage block is emitted only in that stage, so
+        a call from another stage never resolves to it. A program-scope function is
+        emitted in every stage, so it sees only program-scope helpers: a call from
+        it never resolves to a stage-local helper either, and names the built-in
+        when one of that name exists.
+        """
+        owner = getattr(self, "glsl_stage_local_function_owners", {}).get(id(function))
+        if owner is None:
+            return True
+        current_stage = getattr(self, "current_glsl_function_stage", None)
+        return current_stage is not None and owner == current_stage
+
     def resolve_glsl_function_overload(
         self, function_name, arguments, *, call_node=None
     ):
@@ -1040,6 +1055,7 @@ class OpenGLFunctionSignatureMixin:
                 getattr(function, "parameters", getattr(function, "params", [])) or []
             )
             == len(arguments)
+            and self.glsl_function_visible_from_current_stage(function)
         ]
         if not candidates:
             return None

@@ -893,16 +893,51 @@ class OpenGLProgramOptionMixin:
                 self.GLSL_SUBGROUP_BASIC_BUILTINS | subgroup_semantic_names
             ):
                 return True
-            for node in self.walk_ast(root):
-                if not isinstance(node, FunctionCallNode):
-                    continue
-                function_name = self.function_call_name(node)
-                if (
-                    function_name in self.GLSL_SUBGROUP_BARRIER_FUNCTIONS
-                    and function_name not in self.function_return_types
-                ):
-                    return True
+            for scope in self.glsl_call_scopes(root):
+                for node in self.walk_ast(scope):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    function_name = self.function_call_name(node)
+                    if (
+                        function_name in self.GLSL_SUBGROUP_BARRIER_FUNCTIONS
+                        and not self.glsl_function_defined_for_scope(
+                            function_name, scope
+                        )
+                    ):
+                        return True
         return False
+
+    @staticmethod
+    def glsl_call_scopes(root):
+        """The parts of ``root`` whose calls see different helper functions."""
+        stages = getattr(root, "stages", None)
+        if not stages:
+            return [root]
+        scopes = list(stages.values())
+        scopes.extend(getattr(root, "functions", []) or [])
+        return scopes
+
+    def glsl_function_defined_for_scope(self, function_name, scope):
+        """Whether a call to ``function_name`` inside ``scope`` names a user function.
+
+        A helper declared inside one stage block is emitted only in that stage, so
+        a call from any other stage — or from a program-scope function, which is
+        emitted in every stage — still names the built-in.
+        """
+        if function_name not in self.function_return_types:
+            return False
+        if function_name in self.glsl_global_function_names:
+            return True
+        defined_in_a_stage = any(
+            function_name in names
+            for names in self.glsl_stage_local_function_names.values()
+        )
+        if not defined_in_a_stage:
+            return True
+        return any(
+            getattr(function, "name", None) == function_name
+            for function in getattr(scope, "local_functions", []) or []
+        )
 
     def uses_nonuniform_ext(self, ast):
         for node in self.walk_ast(ast):
