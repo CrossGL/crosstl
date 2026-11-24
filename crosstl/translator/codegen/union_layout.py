@@ -336,6 +336,30 @@ class UnionLayoutCollector:
                 alignment=alignment,
             )
 
+        if base_type == "u16vec2" and getattr(
+            self.generator, "union_u16_lane_views", False
+        ):
+            if extent is None and word_count == 1:
+                return {"kind": "u16x2", "type": type_name}
+            if extent == word_count:
+                return {
+                    "kind": "u16x2_array",
+                    "type": type_name,
+                    "extent": extent,
+                }
+            raise self.error(
+                node,
+                reason="member-storage-shape-mismatch",
+                detail=(
+                    f"16-bit lane view '{type_name}' does not provide one u16vec2 "
+                    f"per canonical word ({word_count} required)"
+                ),
+                member=member,
+                member_type=type_name,
+                size=size,
+                alignment=alignment,
+            )
+
         mapped_base = self.generator.map_type(base_type)
         vector = re.fullmatch(r"([uib]?)vec([234])", mapped_base)
         if vector:
@@ -365,13 +389,13 @@ class UnionLayoutCollector:
 
         scalar_match = re.fullmatch(r"(uint|int|float)([234])?", mapped_base)
         if scalar_match is None:
+            supported = "32-bit scalar/vector or u8vec4 word view"
+            if getattr(self.generator, "union_u16_lane_views", False):
+                supported = "32-bit scalar/vector or u8vec4/u16vec2 word view"
             raise self.error(
                 node,
                 reason="member-shape-unsupported",
-                detail=(
-                    f"member type '{type_name}' is not a supported 32-bit "
-                    "scalar/vector or u8vec4 word view"
-                ),
+                detail=(f"member type '{type_name}' is not a supported {supported}"),
                 member=member,
                 member_type=type_name,
                 size=size,
