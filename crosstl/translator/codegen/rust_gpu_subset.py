@@ -3,7 +3,8 @@
 The generator writes ``#![no_std]`` crates for rust-gpu 0.11: compute entry points whose storage buffers, uniform
 values, workgroup memory and built-in inputs are entry-point parameters (:mod:`.rust_gpu_interface`), glam vectors
 and matrices, structs, and the built-in functions :mod:`.rust_gpu_builtins` names. Images and samplers are
-spirv-std ``Image!`` and ``Sampler`` bindings (:mod:`.rust_gpu_images`). Other stages and resources (HLSL buffer
+spirv-std ``Image!`` and ``Sampler`` bindings (:mod:`.rust_gpu_images`), and inline ray queries spirv-std
+``RayQuery`` locals (:mod:`.rust_gpu_ray_queries`). Other stages and resources (HLSL buffer
 objects, GLSL buffer blocks, constant buffers), and globals a program writes, which rust-gpu cannot declare as
 statics, are refused here by name before any code is written, so a program either compiles with rust-gpu or is
 refused with every reason listed.
@@ -22,7 +23,6 @@ from ..ast import (
     MeshOpNode,
     PointerReinterpretNode,
     PointerType,
-    RayQueryOpNode,
     RayTracingOpNode,
     TextureNode,
     TextureOpNode,
@@ -30,6 +30,7 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
 )
+from ..ray_query_vocabulary import ray_query_constant
 from .ast_walk import walk_ast_values
 from .rust_gpu_images import rust_gpu_image_declaration_refusal
 from .rust_gpu_interface import COMPUTE_BUILTIN_INPUTS
@@ -44,7 +45,6 @@ _NODE_REASONS = (
     (BufferOpNode, "buffer object operations"),
     (WaveOpNode, "subgroup operations"),
     (RayTracingOpNode, "ray tracing operations"),
-    (RayQueryOpNode, "ray queries"),
     (MeshOpNode, "mesh shader outputs"),
     (CooperativeMatrixOpNode, "cooperative matrix operations"),
     (PointerReinterpretNode, "pointer reinterpretation"),
@@ -190,6 +190,8 @@ def _undeclared_builtin_names(ast):
             and name.startswith("gl_")
             and name not in declared
             and COMPUTE_BUILTIN_INPUTS.get(name) is None
+            # GLSL's ray flag and intersection kind constants are values (rust_gpu_ray_queries).
+            and ray_query_constant(name) is None
         ):
             names.add(name)
     return sorted(names)

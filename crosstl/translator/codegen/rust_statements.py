@@ -33,6 +33,7 @@ from ..ast import (
 from .array_utils import get_array_size_from_node
 from .assignment_values import is_reevaluable_place
 from .rust_gpu_builtins import BARRIERS
+from .rust_gpu_ray_queries import rust_gpu_ray_query_declaration
 
 
 class RustStatementMixin:
@@ -46,6 +47,9 @@ class RustStatementMixin:
             initial_value = getattr(stmt, "initial_value", None)
             vtype = self.variable_declaration_type(stmt, initial_value)
             self.register_variable_type(stmt.name, vtype, scope="local")
+            ray_query = rust_gpu_ray_query_declaration(self, stmt, vtype)
+            if ray_query is not None:
+                return f"{indent_str}{ray_query}\n"
             binding_keyword = self.local_let_keyword(stmt)
             binding_name = self.rust_identifier(stmt.name)
             rust_type = self.map_type(vtype)
