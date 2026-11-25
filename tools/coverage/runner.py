@@ -29,6 +29,8 @@ from .semantic import identify, instructions, lower
 
 OUTPUT_BACKENDS = {
     "cuda": "cuda",
+    # GLSL ES 3.x, the opengl backend's gles target.
+    "gles": "gles",
     "glsl": "opengl",
     "hip": "hip",
     "hlsl": "directx",

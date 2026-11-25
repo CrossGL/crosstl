@@ -15929,7 +15929,8 @@ def test_codegen_mixed_ssbo_invalid_glsl_atomic_operand_types_raise(
             "Cannot preserve OpenGL float atomic storage: unresolved-storage-allocation"
             if expected_type == "float"
             else "OpenGL buffer block atomic 'atomicAdd' requires a scalar int or "
-            f"uint buffer block member for block.value: got {expected_type}"
+            "uint buffer block member, or an int64_t or uint64_t one, for "
+            f"block.value: got {expected_type}"
         ),
     ):
         GLSLCodeGen().generate(shader_ast)

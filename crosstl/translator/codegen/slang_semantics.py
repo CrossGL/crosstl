@@ -10,6 +10,10 @@ from .hlsl_image_formats import slang_image_format_prefix
 from .slang_conservative_depth import SLANG_DEPTH_SEMANTICS
 from .slang_exact_lookups import slang_semantic_spelling_is_valid
 from .slang_resource_memory import slang_resource_memory_prefix
+from .slang_view_shading_rate import (
+    SLANG_PRIMITIVE_SHADING_RATE_STAGES,
+    validate_slang_view_shading_rate_inputs,
+)
 
 
 class SlangSemanticsMixin:
@@ -438,8 +442,10 @@ class SlangSemanticsMixin:
             "gl_barycoordnoperspext",
             "gl_sampleid",
             "gl_samplemaskin",
+            "gl_shadingrateext",
             "gl_tesscoord",
             "gl_vertexid",
+            "gl_viewindex",
             "gl_workgroupid",
         }
         if lower_name in input_only_sources:
@@ -455,6 +461,8 @@ class SlangSemanticsMixin:
             return "stencil_ref"
         if lower_name == "gl_samplemask" or mapped_upper == "SV_COVERAGE":
             return "coverage"
+        if lower_name == "gl_primitiveshadingrateext":
+            return "primitive_shading_rate"
         if lower_name == "gl_tesslevelouter" or mapped_upper == "SV_TESSFACTOR":
             return "tess_factor"
         if lower_name == "gl_tesslevelinner" or mapped_upper == "SV_INSIDETESSFACTOR":
@@ -493,6 +501,13 @@ class SlangSemanticsMixin:
             return False
         base_type, array_suffix = split_array_type_suffix(str(mapped_type))
         return not array_suffix and base_type == "float"
+
+    def is_slang_int_scalar_type(self, type_name):
+        mapped_type = self.convert_type(type_name)
+        if mapped_type is None:
+            return False
+        base_type, array_suffix = split_array_type_suffix(str(mapped_type))
+        return not array_suffix and base_type == "int"
 
     def is_slang_uint_scalar_type(self, type_name):
         mapped_type = self.convert_type(type_name)
@@ -547,6 +562,19 @@ class SlangSemanticsMixin:
                 "expected float type"
             )
 
+        if kind == "primitive_shading_rate":
+            if self.is_slang_int_scalar_type(
+                type_name
+            ) or self.is_slang_uint_scalar_type(type_name):
+                return
+            raise SlangRefusal(
+                f"Unsupported {semantic} {context} for Slang codegen; "
+                "expected int or uint type"
+            )
+        if kind == "stencil_ref" and self.is_slang_int_scalar_type(type_name):
+            # GLSL declares gl_FragStencilRefARB an int; slangc writes an int SV_StencilRef as the SPIR-V
+            # FragStencilRefEXT output, which takes a 32-bit integer of either signedness.
+            return
         if kind in {"coverage", "stencil_ref"} and not self.is_slang_uint_scalar_type(
             type_name
         ):
@@ -584,6 +612,7 @@ class SlangSemanticsMixin:
             "coverage": {"fragment"},
             "depth": {"fragment"},
             "stencil_ref": {"fragment"},
+            "primitive_shading_rate": SLANG_PRIMITIVE_SHADING_RATE_STAGES,
         }[kind]
         if shader_stage not in allowed_stages:
             allowed = ", ".join(sorted(allowed_stages))
@@ -702,6 +731,7 @@ class SlangSemanticsMixin:
         shader_stage = self.slang_shader_stage_name(shader_type)
         rules = self.slang_stage_input_semantic_rules().get(shader_stage, {})
         seen_system_semantics = {}
+        validate_slang_view_shading_rate_inputs(self, shader_type, parameters)
 
         for parameter in parameters or []:
             semantic = self.semantic_from_node(parameter)

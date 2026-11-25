@@ -51,8 +51,8 @@ Built-in targets
    * - OpenGL / GLSL
      - ``opengl``
      - ``glsl``, ``ogl``
-     - n/a
-     - n/a
+     - ``gles``, ``opengles``
+     - ``opengl-es``
      - ``.glsl``
    * - WebGL / GLSL ES
      - ``webgl``
