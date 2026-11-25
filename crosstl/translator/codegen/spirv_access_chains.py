@@ -8,6 +8,7 @@ from typing import (
 
 from .generic_function_utils import generic_function_parameters
 from .spirv_specialization_conversions import specialization_constituent
+from .spirv_tessellation_levels import load_tessellation_level_value
 from .spirv_uniform_block_arrays import require_non_uniform_block_array_indexing
 from .spirv_values import SpirvId
 
@@ -218,6 +219,9 @@ class SpirvAccessChainMixin:
             )
 
         if not self.is_sample_mask_builtin_variable(variable_id):
+            levels = load_tessellation_level_value(self, variable_id, result_type)
+            if levels is not None:
+                return levels
             variable_type = self.pointer_pointee_type(variable_id)
             if (
                 variable_type is not None
