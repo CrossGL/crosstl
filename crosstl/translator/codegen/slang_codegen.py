@@ -45,6 +45,7 @@ from .builtin_result_types import (
     builtin_call_result_type,
 )
 from .c_family_operands import postfix_operand
+from .call_graph import validate_recursion_free
 from .comma_expressions import (
     c_family_comma_expression,
     comma_result_operand,
@@ -130,6 +131,7 @@ from .slang_resource_memory import (
     helper_resource_argument_names,
 )
 from .slang_semantics import SlangSemanticsMixin
+from .slang_shader_records import slang_shader_record_declaration
 from .slang_stage_attributes import SlangStageAttributesMixin
 from .slang_stage_interface import SlangStageInterfaceMixin
 from .slang_stage_parameters import SlangStageParametersMixin
@@ -456,6 +458,7 @@ class SlangCodeGen(
         refuse_cooperative_matrices(ast, label="Slang", target="slang")
         self.slang_narrow_scalars_promote = source_promotes_narrow_scalars(ast)
         ast = lower_union_storage(ast, "slang")
+        validate_recursion_free(ast, "slang")
         ast = lower_slang_builtin_input_members(ast)
         # Slang textures are separate objects, as in HLSL: a separate CrossGL texture declares the same Texture2D.
         ast = canonicalize_separate_textures(ast)
@@ -966,6 +969,9 @@ class SlangCodeGen(
         return "static const " if constant else "static "
 
     def generate_global_variable(self, node):
+        shader_record = slang_shader_record_declaration(self, node)
+        if shader_record is not None:
+            return shader_record
         direct_buffer_type = self.slang_glsl_buffer_array_resource_type(node)
         if direct_buffer_type is not None:
             self.register_variable_type(node.name, direct_buffer_type, node)

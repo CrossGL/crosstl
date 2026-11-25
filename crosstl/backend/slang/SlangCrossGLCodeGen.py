@@ -1951,12 +1951,21 @@ class SlangToCrossGLConverter(
         return f"{lhs} {op} {rhs}"
 
     SHADER_RECORD_ATTRIBUTES = frozenset({"vk::shader_record", "shader_record"})
+    # The record layout each ConstantBuffer layout argument gives; std140 is a constant buffer's default.
+    SHADER_RECORD_LAYOUTS = {
+        None: "std140",
+        "DefaultDataLayout": "std140",
+        "Std140DataLayout": "std140",
+        "Std430DataLayout": "std430",
+        "ScalarDataLayout": "scalar",
+    }
 
     def generate_shader_record(self, node):
-        """``[[vk::shader_record]] ConstantBuffer<T> name;`` as CrossGL's shader record block, or None.
+        """``[[vk::shader_record]] ConstantBuffer<T[, L]> name;`` as CrossGL's shader record block, or None.
 
-        slangc places the record in the ShaderRecordBufferKHR storage class with std140 offsets, the layout of
-        its constant buffers (slangc 2026.20). It does not know DXC's ``vk::shader_record_ext`` spelling.
+        slangc places the record in the ShaderRecordBufferKHR storage class with the offsets of the constant
+        buffer's layout argument ``L``: std140 by default, std430 for ``Std430DataLayout`` and scalar for
+        ``ScalarDataLayout`` (slangc 2026.20). It does not know DXC's ``vk::shader_record_ext`` spelling.
         """
         if not any(
             str(attribute.get("name", "")).lower() in self.SHADER_RECORD_ATTRIBUTES
@@ -1964,7 +1973,8 @@ class SlangToCrossGLConverter(
         ):
             return None
         match = re.fullmatch(
-            r"\s*ConstantBuffer\s*<\s*(\w+)\s*>\s*", str(getattr(node, "vtype", ""))
+            r"\s*ConstantBuffer\s*<\s*(\w+)\s*(?:,\s*(\w+)\s*)?>\s*",
+            str(getattr(node, "vtype", "")),
         )
         if isinstance(node, AssignmentNode) or match is None or node.array_sizes:
             raise SlangImportRefused(
@@ -1973,10 +1983,18 @@ class SlangToCrossGLConverter(
                     "shader record declaration CrossGL reads"
                 ]
             )
+        layout = self.SHADER_RECORD_LAYOUTS.get(match.group(2))
+        if layout is None:
+            raise SlangImportRefused(
+                [
+                    f"shader record '{node.name}' has the layout '{match.group(2)}', which is none of "
+                    "DefaultDataLayout, Std140DataLayout, Std430DataLayout and ScalarDataLayout"
+                ]
+            )
         record_type = self.map_type(match.group(1))
         name = self.format_identifier(node.name)
         return (
-            f"    {record_type} {name} @glsl_buffer_block(shaderRecordEXT, std140);\n"
+            f"    {record_type} {name} @glsl_buffer_block(shaderRecordEXT, {layout});\n"
         )
 
     def generate_global_variable(self, node):
