@@ -172,6 +172,16 @@ class OpenCLImageReadUnsupportedError(TranslationDiagnostic):
     code = CODE_PREFIX + "opencl-image-read-unsupported"
 
 
+class OpenCLPrintfValueUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C ``printf`` whose result is read.
+
+    OpenCL C ``printf`` returns an ``int``, 0 when it ran and -1 otherwise (OpenCL C 3.0 section 6.15.14). CrossGL
+    ``printf`` is the Vulkan debug print, which returns nothing, so only a ``printf`` statement is imported.
+    """
+
+    code = CODE_PREFIX + "opencl-printf-value-unsupported"
+
+
 class OpenCLToCrossGLConverter(
     OpenCLVectorComponentMixin,
     OpenCLEnumerationMixin,
@@ -446,8 +456,10 @@ class OpenCLToCrossGLConverter(
         self.normalize_target_safe_cgl = normalize_target_safe_cgl
         self.opencl_image_access = {}
         self.opencl_sampler_states = {}
+        self.opencl_printf_statements = set()
 
     def generate(self, ast_node):
+        self.opencl_printf_statements = set()
         self.opencl_sizeof_symbols = {}
         self.opencl_current_function_name = None
         self.opencl_event_tokens = set()
@@ -1043,6 +1055,15 @@ class OpenCLToCrossGLConverter(
         func_name = getattr(node, "name", None)
         if isinstance(func_name, str):
             raw_args = getattr(node, "args", []) or []
+            if (
+                func_name == "printf"
+                and id(node) not in self.opencl_printf_statements
+                and not self.is_user_defined_function(func_name)
+            ):
+                raise OpenCLPrintfValueUnsupportedError(
+                    "OpenCL C printf returns an int (0, or -1 on failure), and CrossGL printf, the Vulkan "
+                    "debug print, returns nothing, so its result cannot be read"
+                )
             image_write = self.format_opencl_image_write(func_name, raw_args)
             if image_write is not None:
                 return image_write
@@ -1545,6 +1566,9 @@ class OpenCLToCrossGLConverter(
         return int(match.group(1) or match.group(2))
 
     def emit_statement(self, stmt):
+        if isinstance(stmt, FunctionCallNode) and stmt.name == "printf":
+            # A printf statement discards the result CrossGL's printf does not have.
+            self.opencl_printf_statements.add(id(stmt))
         if self.emit_opencl_compare_exchanges(stmt):
             return
         if self.is_opencl_prefetch_call(stmt):
