@@ -340,4 +340,17 @@ METAL_ATTRIBUTE_SEMANTICS = {
     "threads_per_simdgroup": "gl_SubgroupSize",
     "threadgroups_per_grid": "gl_NumWorkGroups",
     "stage_in": "",
+    # Vertex amplification's index is the view a multiview draw renders (GL_EXT_multiview's gl_ViewIndex).
+    "amplification_id": "gl_ViewIndex",
+}
+
+# Metal names an interpolation's mode and sampling location with one attribute; CrossGL states them apart, as
+# GLSL and HLSL do (``noperspective centroid``), so every generator reads the same pair.
+METAL_INTERPOLATION_SEMANTICS = {
+    "center_perspective": "smooth",
+    "center_no_perspective": "noperspective",
+    "centroid_perspective": "centroid",
+    "centroid_no_perspective": "noperspective @centroid",
+    "sample_perspective": "sample",
+    "sample_no_perspective": "noperspective @sample",
 }

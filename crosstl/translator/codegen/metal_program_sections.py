@@ -45,6 +45,9 @@ from .metal_global_emission import (
 from .metal_hlsl_matrix import (
     metal_hlsl_matrix_prelude,
 )
+from .metal_integer_sign import (
+    emit_metal_integer_sign_helpers,
+)
 from .metal_post_tessellation import post_tessellation_plan
 from .metal_safe_math import (
     METAL_SAFE_MATH_PRAGMA,
@@ -348,6 +351,7 @@ class MetalProgramSectionMixin:
         code += emit_metal_wave_extension_helpers(self)
         code += emit_metal_exponent_helpers(self)
         code += emit_metal_bit_scan_helpers(self)
+        code += emit_metal_integer_sign_helpers(self)
         code += emit_metal_texture_residency_helpers(self)
         code += emit_metal_extended_arithmetic_helpers(self)
         code += self.generate_metal_ray_query_helpers()
