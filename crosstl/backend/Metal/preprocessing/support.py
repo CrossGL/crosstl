@@ -89,7 +89,7 @@ METAL_RECEIVER_DECLARATION_RE = re.compile(
     r"threadgroup_imageblock|device|constant)\s+)*)"
     # `return op(a, b)` and `else op = x;` are statements, not declarations of `op`.
     r"(?!(?:return|else|case|goto|throw|delete|new|sizeof|do|co_return|co_yield)\b)"
-    r"(?P<type>[A-Za-z_]\w*)"
+    r"(?P<type>(?:::\s*)?(?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*)"
     r"(?P<trailing>(?:\s+(?:const|volatile|thread|threadgroup|"
     r"threadgroup_imageblock|device|constant))*)\s*"
     r"(?P<indirection>\*+|&&|&)?"

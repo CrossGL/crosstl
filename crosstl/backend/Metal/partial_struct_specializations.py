@@ -398,6 +398,25 @@ def more_specialized(
     return deduces(other, candidate) and not deduces(candidate, other)
 
 
+def select_most_specialized(
+    candidates: Sequence[tuple[Sequence[str], Sequence[str]]],
+) -> int | None:
+    """The index of the candidate more specialized than every other one, or None when there is none.
+
+    Each candidate is ``(argument patterns, template parameters)``, as for :func:`more_specialized`.
+    """
+
+    best = [
+        index
+        for index, candidate in enumerate(candidates)
+        if all(
+            other_index == index or more_specialized(candidate, other)
+            for other_index, other in enumerate(candidates)
+        )
+    ]
+    return best[0] if len(best) == 1 else None
+
+
 def select_partial_specialization(
     specializations: Sequence[tuple[object, Sequence[str], Sequence[str]]],
     concrete_arguments: Sequence[str],
@@ -434,16 +453,8 @@ def select_partial_specialization(
         )
     if not matched:
         return NO_MATCH, None, {}, ""
-    best = [
-        entry
-        for entry in matched
-        if all(
-            other is entry
-            or more_specialized((entry[1], entry[2]), (other[1], other[2]))
-            for other in matched
-        )
-    ]
-    if len(best) != 1:
+    best = select_most_specialized([(entry[1], entry[2]) for entry in matched])
+    if best is None:
         return (
             UNDECIDED,
             None,
@@ -451,7 +462,7 @@ def select_partial_specialization(
             "no matching partial specialization is more specialized than the others: "
             + "; ".join(f"<{', '.join(entry[1])}>" for entry in matched),
         )
-    declaration, _patterns, _parameters, bindings = best[0]
+    declaration, _patterns, _parameters, bindings = matched[best]
     return MATCH, declaration, dict(bindings), ""
 
 

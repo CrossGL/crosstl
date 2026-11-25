@@ -313,6 +313,10 @@ class MetalSourceOverloadMixin:
         )
         if not text or text == "auto":
             return None
+        if "::" in text:
+            # ``ops::P`` names the struct a parameter declared inside ``namespace ops`` spells ``P``; the struct
+            # table knows it by that unqualified name when no other namespace declares one.
+            text = self.canonical_concrete_struct_alias_target(text) or text
         return text
 
     def metal_source_overload_type_descriptor(self, metal_type):

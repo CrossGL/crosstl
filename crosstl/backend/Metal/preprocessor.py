@@ -143,6 +143,7 @@ from .static_member_constants import (
     materialized_struct_for_template_id,
     static_member_constant_substituter,
 )
+from .struct_homonyms import distinct_struct_homonyms
 from .swizzle_types import infer_swizzle_type
 from .template_carried_reachability import template_carried_reachable_spans
 from .template_constants import unresolved_constant_references
@@ -371,6 +372,7 @@ class MetalPreprocessor(
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
         processed = self._canonicalize_metal_library_matrix_typedefs(processed)
+        processed = distinct_struct_homonyms(processed)
         if re.search(r"\b(?:fp|FP_CONTRACT)\b", processed):
             # Inspect active expanded tokens before materialization changes the
             # lexical scope of a directive or prunes its containing template.
@@ -3476,6 +3478,7 @@ class MetalPreprocessor(
                 matching_partials: List[Tuple[_MetalTemplateStruct, Dict[str, str]]] = (
                     []
                 )
+                matching_patterns: List[List[str]] = []
                 has_unmaterializable_partial = False
                 for (
                     partial_template,
@@ -3511,8 +3514,14 @@ class MetalPreprocessor(
                         has_unmaterializable_partial = True
                     else:
                         matching_partials.append((partial_template, bindings))
-                self._require_unique_constrained_struct_partial(
-                    ident, resolved_arguments, matching_partials
+                        matching_patterns.append(canonical_specialization_arguments)
+                matching_partials = self._most_specialized_struct_partials(
+                    ident,
+                    resolved_arguments,
+                    matching_partials,
+                    matching_patterns,
+                    code=code,
+                    position=i,
                 )
                 if matching_partials or has_unmaterializable_partial:
                     resolved_constraint = len(matching_partials) == 1 and any(
