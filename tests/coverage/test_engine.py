@@ -38,7 +38,7 @@ def test_report_groups_results_and_marks_directions_not_offered():
             "no probe",
         ),
     ]
-    data = report.build(results, ["glsl", "wgsl"], ["output", "input"])
+    data = report.build(results, ["glsl", "opencl"], ["output", "input"])
     backends = {(b["language"], b["direction"]): b for b in data["backends"]}
     assert backends["glsl", "output"]["score"] == 100.0
     assert backends["glsl", "output"]["counts"]["untested"] == 1
@@ -46,7 +46,7 @@ def test_report_groups_results_and_marks_directions_not_offered():
         "abs",
         "texture",
     ]
-    assert backends["wgsl", "input"]["offered"] is False
+    assert backends["opencl", "output"]["offered"] is False
     assert ("glsl", "input") not in backends
     assert backends["glsl", "output"]["validator"] == "glslangValidator"
     assert "not offered" in report.summary(data)
@@ -71,7 +71,7 @@ def test_coverage_json_stores_features_as_rows_and_each_diagnostic_once(tmp_path
             semantic="GLSL.std.450:Fma",
         ),
     ]
-    data = report.build(results, ["glsl", "wgsl"], ["output", "input"])
+    data = report.build(results, ["glsl", "opencl"], ["output", "input"])
     path = tmp_path / "coverage.json"
     report.write(data, path)
 
@@ -83,8 +83,8 @@ def test_coverage_json_stores_features_as_rows_and_each_diagnostic_once(tmp_path
     assert "\n" not in path.read_text().rstrip("\n")
     assert report.load(path) == data
     # A backend that is not offered has no features to store as rows.
-    assert stored["wgsl"] == next(
-        b for b in data["backends"] if b["language"] == "wgsl"
+    assert stored["opencl"] == next(
+        b for b in data["backends"] if b["language"] == "opencl"
     )
 
 
@@ -99,7 +99,7 @@ def _split(tmp_path, data):
 def test_the_coverage_branch_keeps_each_backends_features_in_its_own_file(tmp_path):
     data = report.build(
         [Result(ABS, "output", "supported"), Result(ABS, "input", "wrong", "bad")],
-        ["glsl", "wgsl"],
+        ["glsl", "opencl"],
         ["output", "input"],
     )
     path = _split(tmp_path, data)
@@ -112,7 +112,7 @@ def test_the_coverage_branch_keeps_each_backends_features_in_its_own_file(tmp_pa
     assert index["glsl", "input"]["counts"]["wrong"] == 1
     assert not any("features" in b for b in index.values())
     # A backend that is not offered has no feature file.
-    assert "file" not in index["wgsl", "input"]
+    assert "file" not in index["opencl", "output"]
     stored = json.loads((tmp_path / "features/glsl-input.json").read_text())
     assert (stored["language"], stored["direction"], stored["details"]) == (
         "glsl",

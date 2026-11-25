@@ -44,7 +44,6 @@ NOT_OFFERED = {
         "input",
     ): "GLSL ES sources are read as GLSL, which the GLSL and WebGL input rows measure",
     ("opencl", "output"): "CrossTL has no OpenCL C generator",
-    ("wgsl", "input"): "CrossTL has no WGSL source frontend",
 }
 
 

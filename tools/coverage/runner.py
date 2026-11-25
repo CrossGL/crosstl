@@ -56,6 +56,7 @@ INPUT_BACKENDS = {
     "slang": "slang",
     "spirv": "vulkan",
     "webgl": "webgl",
+    "wgsl": "wgsl",
 }
 # The target a language's probes fall back to when the reference compiler rejects a native probe for its usual target.
 # slangc writes invalid SPIR-V for some operations its HLSL target compiles, such as an OpAtomicCompareExchange on
