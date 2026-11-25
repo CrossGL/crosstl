@@ -45,6 +45,7 @@ from .builtin_result_types import (
     builtin_call_result_type,
 )
 from .c_family_operands import postfix_operand
+from .call_graph import validate_recursion_free
 from .comma_expressions import (
     c_family_comma_expression,
     comma_result_operand,
@@ -462,6 +463,9 @@ class SlangCodeGen(
         if self._generating:
             return self.generate_program(ast)
         refuse_cooperative_matrices(ast, label="Slang", target="slang")
+        # slangc rejects every recursive function (error E55201), so refuse call cycles before any lowering
+        # rewrites the program; self tail calls are first rewritten as loops by validate_recursion_free.
+        validate_recursion_free(ast, "slang")
         self.slang_narrow_scalars_promote = source_promotes_narrow_scalars(ast)
         ast = lower_union_storage(ast, "slang")
         ast = lower_slang_builtin_input_members(ast)

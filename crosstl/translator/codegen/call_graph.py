@@ -3,7 +3,8 @@
 Vulkan SPIR-V (VUID-StandaloneSpirv-None-04634) and WGSL (section 5) forbid static recursion. Metal allows recursive
 calls only in kernel functions from Metal 2.4, and only to the call-stack depth the host sets on the pipeline
 (``maxCallStackDepth``, default 1); a translated artifact cannot carry that setting, and a deeper recursion hangs the
-GPU (conformance case ``u_recursion``). These targets therefore refuse any cycle in the static call graph with a
+GPU (conformance case ``u_recursion``). Slang rejects recursive functions outright (``error[E55201]: recursion not
+allowed``). These targets therefore refuse any cycle in the static call graph with a
 :class:`RecursionUnsupportedError` before code generation, instead of emitting the cycle unchanged.
 
 The graph has one node per function declaration: program functions, stage-local functions and stage entry points,
@@ -45,6 +46,9 @@ RECURSION_FREE_TARGETS = {
         "Metal allows recursive calls only in kernel functions (MSL 2.4 and later) and only to the call-stack depth "
         "the host sets on the pipeline (maxCallStackDepth, default 1); the translated artifact cannot carry that "
         "depth, and exceeding it hangs the GPU"
+    ),
+    "slang": (
+        "Slang forbids recursion: slangc rejects recursive functions with error E55201 (recursion not allowed)"
     ),
 }
 
