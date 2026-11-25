@@ -422,10 +422,9 @@ def test_mojo_reads_block_reductions_and_probes_them_over_one_workgroup():
     # block_size is keyword-only and required; the probe passes the invocations of one subgroup probe's workgroup.
     assert block_sum.spelling == f"block.sum[block_size={THREADS}]"
     assert block_sum.signature == Signature(Type("float"), (Param(Type("float")),))
-    assert block_sum.crossgl == ""
-    assert block_sum.note == (
-        "CrossGL reduces, scans and broadcasts over a subgroup only, not over a workgroup"
-    )
+    # CrossGL's workgroup reduction, which gives every invocation the sum, as block.sum's default broadcast does.
+    assert block_sum.crossgl == "workgroupAdd"
+    assert block_sum.note == ""
 
 
 def test_mojo_reads_the_gpu_index_functions_but_not_the_index_values():

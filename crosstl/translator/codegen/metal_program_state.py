@@ -50,6 +50,7 @@ from .metal_grid_quads import collect_metal_grid_quad_widths
 from .metal_matrix_builtins import (
     MetalMatrixBuiltins,
 )
+from .metal_restrict import metal_restrict_suffix
 from .metal_signed_builtins import (
     collect_metal_signed_builtin_members,
 )
@@ -568,6 +569,9 @@ class MetalProgramStateMixin:
             block = self.lowered_glsl_buffer_blocks.get(getattr(node, "name", None))
             if block is not None:
                 block["memory"] = self.resource_memory_qualifier_prefix(
+                    node, getattr(node, "var_type", None)
+                )
+                block["restrict"] = metal_restrict_suffix(
                     node, getattr(node, "var_type", None)
                 )
         self.metal_specialization_macro_constants = (

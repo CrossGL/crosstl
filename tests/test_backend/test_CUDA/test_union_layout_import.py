@@ -17,7 +17,6 @@ import pytest
 
 import crosstl
 from crosstl.backend.import_refusals import CudaImportRefused
-from crosstl.translator.codegen.metal_codegen import UnsupportedMetalFeatureError
 
 BITS = """
 union Bits {
@@ -176,9 +175,11 @@ def test_directx_and_opengl_read_the_bits_that_were_written(tmp_path):
     assert "b.u" not in glsl
 
 
-def test_metal_refuses_to_rebuild_a_cuda_union(tmp_path):
-    with pytest.raises(UnsupportedMetalFeatureError, match="source ABI 'cuda'"):
-        _translate(tmp_path, BITS, "metal")
+def test_metal_rebuilds_the_cuda_union(tmp_path):
+    # MSL lays a union out by C++ rules, as nvcc does: float and uint are 4 bytes aligned to 4 in both.
+    code = _flat(_translate(tmp_path, BITS, "metal"))
+    assert "union Bits {" in code
+    assert "struct Bits" not in code
 
 
 # A kernel without launch bounds leaves its workgroup size to the host.

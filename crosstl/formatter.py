@@ -151,6 +151,9 @@ class CodeFormatter:
             "BasedOnStyle": style_map.get(language, "LLVM"),
             "SortIncludes": False,
         }
+        if language == ShaderLanguage.RUST:
+            # Rust has no adjacent string literal concatenation, so a split literal (an asm! line) does not compile.
+            style_config["BreakStringLiterals"] = False
         if (
             "// crosstl-resource-origin:" in code
             or "// crosstl-resource-storage:" in code

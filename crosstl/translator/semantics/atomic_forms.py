@@ -19,6 +19,11 @@ the CUDA and HIP generators replaced them with a comment and ``0``, so the opera
 * the statement ``atomicCompSwap(dest, compare, value, original)``, or ``atomicCompareExchange`` with the same
   arguments, into ``original = atomicCompSwap(dest, compare, value)``;
 * the statement ``InterlockedCompareStore(dest, compare, value)`` into ``atomicCompSwap(dest, compare, value)``;
+* the shader model 6.6 ``float`` forms ``InterlockedCompareExchangeFloatBitwise(dest, compare, value, original)``
+  and ``InterlockedCompareStoreFloatBitwise(dest, compare, value)`` the same way. They compare the bits of the
+  values, which is what CrossGL's ``atomicCompSwap`` on a ``float`` does: the OpenGL generator keeps such a
+  destination in ``uint`` words and compares ``floatBitsToUint`` of the operands, and the other generators refuse
+  a ``float`` destination;
 * any remaining three-argument ``atomicCompareExchange`` call into ``atomicCompSwap``.
 
 HLSL assigns ``original`` after the operation, as the rewritten assignment does. A call whose name a function of the
@@ -63,6 +68,12 @@ _RETURNING_OUT_ORIGINAL = frozenset(
 _COMPARE_SWAP = "atomicCompSwap"
 _COMPARE_EXCHANGE = "atomicCompareExchange"
 _COMPARE_STORE = "InterlockedCompareStore"
+_FLOAT_BITWISE_COMPARE_EXCHANGE = "InterlockedCompareExchangeFloatBitwise"
+_FLOAT_BITWISE_COMPARE_STORE = "InterlockedCompareStoreFloatBitwise"
+_COMPARE_EXCHANGES = frozenset(
+    {_COMPARE_SWAP, _COMPARE_EXCHANGE, _FLOAT_BITWISE_COMPARE_EXCHANGE}
+)
+_COMPARE_STORES = frozenset({_COMPARE_STORE, _FLOAT_BITWISE_COMPARE_STORE})
 TARGETS = frozenset(
     {"opengl", "glsl", "vulkan", "spirv", "metal", "cuda", "hip", "rust"}
 )
@@ -103,9 +114,9 @@ class _AtomicWalker(ScopedWalker):
             return None
         if name in _RETURNING_OUT_ORIGINAL and len(arguments) == 3:
             return A.AssignmentNode(arguments[2], call(name, arguments[:2]))
-        if name in (_COMPARE_SWAP, _COMPARE_EXCHANGE) and len(arguments) == 4:
+        if name in _COMPARE_EXCHANGES and len(arguments) == 4:
             return A.AssignmentNode(arguments[3], call(_COMPARE_SWAP, arguments[:3]))
-        if name == _COMPARE_STORE and len(arguments) == 3:
+        if name in _COMPARE_STORES and len(arguments) == 3:
             return call(_COMPARE_SWAP, arguments)
         return None
 

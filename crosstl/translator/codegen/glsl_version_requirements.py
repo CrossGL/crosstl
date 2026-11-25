@@ -31,6 +31,7 @@ from .glsl_vulkan_descriptor_sets import DESCRIPTOR_BINDING_MACRO
 __all__ = [
     "ARRAYS_OF_ARRAYS",
     "GLSLRequirement",
+    "NOPERSPECTIVE_QUALIFIER",
     "VARIABLE_GATHER_OFFSET",
     "ES_OPAQUE_TYPES",
     "declares_array_of_arrays",
@@ -475,6 +476,21 @@ _PLAIN_INTERFACE = re.compile(
 _PLAIN_BUFFER_BLOCK = re.compile(
     r"^(?:(?:" + "|".join(sorted(_INTERFACE_QUALIFIERS)) + r")\s+)*buffer\s+\w+\s*\{?"
 )
+# The ``noperspective`` interpolation qualifier arrived in GLSL 1.30; GLSL ES reserves the word at every version,
+# and only GL_NV_shader_noperspective_interpolation provides it.
+NOPERSPECTIVE_QUALIFIER = GLSLRequirement(
+    "the 'noperspective' qualifier",
+    130,
+    None,
+    (),
+    ("GL_NV_shader_noperspective_interpolation",),
+)
+# ``noperspective`` among the qualifiers that open a declaration, after an optional ``layout(...)``.
+_NOPERSPECTIVE_DECLARATION = re.compile(
+    r"^(?:layout\s*\([^()]*(?:\([^()]*\)[^()]*)*\)\s*)?(?:(?:"
+    + "|".join(sorted(_INTERFACE_QUALIFIERS - {"noperspective"}))
+    + r")\s+)*noperspective\s+[A-Za-z_]"
+)
 _COMMENTS = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
 _EXTENSION_LINE = re.compile(
     r"^\s*#\s*extension\s+([A-Za-z_]\w*)\s*:\s*(?:enable|require|warn)\b", re.M
@@ -671,6 +687,8 @@ def generated_program_requirements(code, stage_names=(), guard_macros=None):
             stripped, stage, member_ids, sampler_arrays
         ):
             found.setdefault(requirement, None)
+        if _NOPERSPECTIVE_DECLARATION.match(stripped):
+            found.setdefault(NOPERSPECTIVE_QUALIFIER, None)
     for requirement in stage_requirements(stage_names):
         found.setdefault(requirement, None)
     enabled = program_extensions(code)

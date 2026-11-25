@@ -46,6 +46,27 @@ shader Probe {
 }
 """
 
+# SPIR-V and HIP input declare a stage built-in as a stage variable, and module-scope helpers read it by name.
+DECLARED_INPUT = """
+shader Probe {
+    buffer float* outp;
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+        uint3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;
+        void main() {
+            uint first = gl_GlobalInvocationID[0];
+            outp[invocation()] = shifted(float(first));
+        }
+    }
+    uint invocation() {
+        return gl_GlobalInvocationID[0];
+    }
+    float shifted(float x) {
+        return x * 2.0 + float(invocation());
+    }
+}
+"""
+
 VERTEX = """
 shader Probe {
     vertex {
@@ -161,6 +182,33 @@ def test_a_helper_reuses_the_entry_parameter_carrying_the_builtin(
 
 
 @pytest.mark.parametrize(
+    ("backend", "binding"),
+    [
+        ("directx", r"uint3 (\w+) : SV_DispatchThreadID"),
+        ("metal", r"uint3 (\w+)\s+\[\[thread_position_in_grid\]\]"),
+        ("slang", r"uint3 (\w+) : SV_DispatchThreadID"),
+        ("wgsl", r"@builtin\(global_invocation_id\) (\w+): vec3<u32>"),
+    ],
+)
+def test_helpers_receive_a_builtin_the_stage_declares_as_an_input(
+    tmp_path, backend, binding
+):
+    code = _translate(tmp_path, DECLARED_INPUT, backend)
+
+    # The generator binds the declared input once, in the entry point, which passes it on.
+    assert len(re.findall(binding, code)) == 1, code
+    bound = re.search(binding, code).group(1)
+    assert re.search(rf"\binvocation\({bound}\)", code), code
+    assert re.search(rf"\bshifted\([^;]*, {bound}\)", code), code
+    invocation, invocation_body = _helper(code, "invocation")
+    assert "cgl_GlobalInvocationID" in invocation, code
+    assert "gl_GlobalInvocationID" not in invocation_body.replace("cgl_", ""), code
+    # shifted reads the input only through invocation, and passes its own parameter on.
+    assert re.search(r"\binvocation\(cgl_GlobalInvocationID_?\d*\)", code), code
+    _validate(tmp_path, backend, code, "cs")
+
+
+@pytest.mark.parametrize(
     ("backend", "vertex_id"),
     [
         ("directx", r"uint (\w+) : SV_VertexID"),
@@ -201,7 +249,7 @@ def test_fragment_helpers_receive_builtins_on_slang_and_wgsl(
 
 
 @pytest.mark.parametrize("backend", ["opengl", "vulkan"])
-@pytest.mark.parametrize("source", [COMPUTE, VERTEX])
+@pytest.mark.parametrize("source", [COMPUTE, VERTEX, DECLARED_INPUT])
 def test_targets_with_builtin_globals_keep_reading_them(tmp_path, backend, source):
     code = _translate(tmp_path, source, backend)
 

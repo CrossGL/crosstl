@@ -179,22 +179,5 @@ class CudaImportResourceMixin:
             f"vec{dimensions}", clamped + list(coord_args[texel_dimensions:]), "i32"
         )
 
-    def cuda_surface_element_type(self, type_name):
-        if not type_name:
-            return None
-        type_name = self.strip_type_qualifiers(self.resolve_type_alias(type_name))
-        if self.has_array_suffix(type_name):
-            return type_name.split("[", 1)[0].strip()
-        if "*" in type_name:
-            return type_name.replace("*", "").strip()
-        return type_name
-
-    def cuda_surface_value_byte_size(self, value_type):
-        if not value_type:
-            return None
-        value_type = self.strip_type_qualifiers(self.resolve_type_alias(value_type))
-        value_type = value_type.replace("*", "").strip()
-        return self.CUDA_SURFACE_VALUE_BYTE_SIZES.get(value_type)
-
     def format_unsupported_cuda_resource_expression(self, kind, member, fallback):
         return self.refuse_import(f"CUDA {kind}.{member} has no CrossGL form", fallback)

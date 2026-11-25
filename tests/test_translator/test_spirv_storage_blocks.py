@@ -147,6 +147,51 @@ def test_runtime_array_blocks_are_rewritten_for_every_source(source):
     assert [a.name for a in variable.attributes][0] == "glsl_buffer_block"
 
 
+@pytest.mark.parametrize(
+    "members,var_type",
+    [("float a[];", "RWStructuredBuffer"), ("uint head; int a[];", "Block")],
+    ids=["flat", "header"],
+)
+def test_unused_runtime_array_blocks_are_rewritten(members, var_type):
+    # A module keeps the binding of a buffer its entry point never reads; its block struct ends in a runtime
+    # array, which no target can declare as a plain struct.
+    program = spirv_like("return;", members=members)
+    assert normalize_spirv_storage_blocks(program, "vulkan", "metal")
+    assert program.global_variables[0].var_type.name == var_type
+    if var_type == "RWStructuredBuffer":
+        assert not program.structs
+
+
+def test_unused_fixed_size_blocks_are_left_alone():
+    program = spirv_like("return;", members="uint head; int a[2];")
+    assert not normalize_spirv_storage_blocks(program, "vulkan", "directx")
+    assert program.global_variables[0].var_type.name == "RWStructuredBuffer"
+
+
+@pytest.mark.parametrize("target", ["metal", "glsl", "hlsl"])
+def test_unused_runtime_array_block_keeps_its_binding(tmp_path, target):
+    source = tmp_path / "unused.cgl"
+    source.write_text(
+        """
+        shader S {
+            struct Read { float fin[]; };
+            RWStructuredBuffer<Read> unused @set(0) @binding(0);
+            struct Write { uint outp[]; };
+            RWStructuredBuffer<Write> used @set(0) @binding(1);
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                uint3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;
+                void main() { used[0].outp[gl_GlobalInvocationID.x] = 1u; }
+            }
+        }
+        """,
+        encoding="utf-8",
+    )
+    code = crosstl.translate(str(source), backend=BACKEND[target], format_output=False)
+    assert "fin[]" not in code
+    check_natively(tmp_path, target, code)
+
+
 def test_only_spirv_sources_rewrite_fixed_size_blocks():
     program = spirv_like("v[0].head = 0u;", members="uint head; int a[2];")
     assert not normalize_spirv_storage_blocks(program, "opengl", "directx")

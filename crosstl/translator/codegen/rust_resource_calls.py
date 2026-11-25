@@ -8,6 +8,7 @@ from ..ast import (
 )
 from ..refusals import RustRefusal
 from .rust_exact_lookups import RUST_RAY_TRACING_INTRINSICS
+from .rust_gpu_images import generate_rust_gpu_image_call
 
 
 class RustResourceCallMixin:
@@ -123,6 +124,9 @@ class RustResourceCallMixin:
         raise RustRefusal(f"Unsupported Rust texture member operation {member}")
 
     def generate_texture_operation_call(self, operation, args):
+        image_call = generate_rust_gpu_image_call(self, operation, args)
+        if image_call is not None:
+            return image_call
         if operation in self.rust_hlsl_texture_member_operations():
             if not args:
                 raise RustRefusal(f"Unsupported Rust texture operation {operation}")
@@ -187,10 +191,14 @@ class RustResourceCallMixin:
         return None
 
     def generate_texture_helper_call(self, helper_name, args):
+        # rust-gpu output defines no texture helper functions: a texture read reaches here only when
+        # rust_gpu_images has no spirv-std method for it, so it is refused rather than written as a call to a
+        # helper that does not exist.
         self.validate_rust_texture_helper_call(helper_name, args)
-        generated_args = ", ".join(self.generate_expression(arg) for arg in args or [])
-        callable_name = self.rust_imported_math_callable_name(helper_name)
-        return f"{callable_name}({generated_args})"
+        return self.refuse_lowering(
+            f"texture operation: '{helper_name}' has no spirv-std lowering for these operands",
+            "Default::default()",
+        )
 
     def rust_hlsl_texture_member_operations(self):
         return {

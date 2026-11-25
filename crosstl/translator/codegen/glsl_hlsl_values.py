@@ -13,6 +13,7 @@ import re
 from ..ast import FunctionCallNode
 from .array_utils import split_array_type_suffix
 from .float_remainder_assignment import float_remainder_assignment
+from .glsl_half_conversions import glsl_half_conversion_call
 from .glsl_version_floor import require_integer_mix
 
 
@@ -399,6 +400,9 @@ class GLSLHlslValueMixin:
                 for argument in arguments
             )
             return f"packDouble2x32(uvec2({low}, {high}))"
+        half_conversion = glsl_half_conversion_call(self, func_name, arguments)
+        if half_conversion is not None:
+            return half_conversion
         if func_name == "dot" and len(arguments) == 2:
             integer_dot = self.generate_glsl_integer_dot(arguments)
             if integer_dot is not None:
