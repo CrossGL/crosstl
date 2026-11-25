@@ -1,0 +1,1 @@
+Fixed CUDA and HIP storage-image store codegen so scalar type casts (such as `u32(...)`) and CrossGL vector expressions preserve their real component width instead of falling back to 4-component helpers like `cgl_r32ui_element(uint4)`.

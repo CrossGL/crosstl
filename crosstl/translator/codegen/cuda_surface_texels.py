@@ -268,17 +268,77 @@ def declared_surface_texel(node, image_type, attribute_value_to_string):
 _CUDA_VALUE_WIDTH = re.compile(
     r"(?:float|int|uint|half|double|bool|char|uchar|short|ushort|long|ulong|longlong|ulonglong)([1-4])?"
 )
+_CROSSGL_VECTOR_WIDTH = re.compile(
+    r"(?:(?:b|i|u|f16|float16|int16|uint16)?vec([2-4])|vec([2-4])<[^>]+>|cgl_half([2-4]))"
+)
+_SCALAR_VALUE_TYPES = frozenset(
+    {
+        "unsigned int",
+        "unsigned",
+        "signed int",
+        "unsigned char",
+        "signed char",
+        "unsigned short",
+        "short int",
+        "unsigned short int",
+        "long int",
+        "unsigned long",
+        "unsigned long int",
+        "long long",
+        "long long int",
+        "unsigned long long",
+        "unsigned long long int",
+        "int8_t",
+        "uint8_t",
+        "int16_t",
+        "uint16_t",
+        "int32_t",
+        "uint32_t",
+        "int64_t",
+        "uint64_t",
+        "__half",
+        "i8",
+        "u8",
+        "i16",
+        "u16",
+        "i32",
+        "u32",
+        "i64",
+        "u64",
+        "f16",
+        "f32",
+        "f64",
+        "int8",
+        "uint8",
+        "int16",
+        "uint16",
+        "int32",
+        "uint32",
+        "int64",
+        "uint64",
+        "float16",
+        "float32",
+        "float64",
+        "float16_t",
+        "min16float",
+        "min16int",
+        "min16uint",
+    }
+)
 
 
 def cuda_value_width(type_name):
-    """Components of a CUDA scalar or vector type: 1 for ``uint``, 2 for ``float2``; ``None`` otherwise."""
+    """Components of a scalar or vector value type: 1 for ``uint``/``u32``, 2 for ``float2``/``uvec2``; ``None`` otherwise."""
     text = str(type_name or "").strip()
-    if text in {"unsigned int", "unsigned", "signed int", "__half"}:
+    if text in _SCALAR_VALUE_TYPES:
         return 1
     match = _CUDA_VALUE_WIDTH.fullmatch(text)
-    if match is None:
-        return None
-    return int(match.group(1) or 1)
+    if match is not None:
+        return int(match.group(1) or 1)
+    vector_match = _CROSSGL_VECTOR_WIDTH.fullmatch(text)
+    if vector_match is not None:
+        return int(next(group for group in vector_match.groups() if group is not None))
+    return None
 
 
 def _call_arguments(node):

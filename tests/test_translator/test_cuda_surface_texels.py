@@ -221,7 +221,12 @@ def test_texel_types_and_widths():
     )
     assert cuda_value_width("uint") == 1
     assert cuda_value_width("unsigned int") == 1
+    assert cuda_value_width("unsigned char") == 1
+    assert cuda_value_width("u32") == 1
+    assert cuda_value_width("f16") == 1
     assert cuda_value_width("float2") == 2
+    assert cuda_value_width("uvec2") == 2
+    assert cuda_value_width("vec3<u32>") == 3
     assert cuda_value_width("int4") == 4
     assert cuda_value_width("MyStruct") is None
 
@@ -278,3 +283,51 @@ def test_formats_without_a_surface_element_are_refused(
     )
     with pytest.raises(LoweringRefused, match=reason):
         _translate(tmp_path, backend, declaration, COPY.format(texel=texel))
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_scalar_cast_store_passes_through_to_r32ui_surface(tmp_path, backend):
+    body = "imageStore(img, ivec2(0, 0), u32(fin[i]));"
+    code = _translate(tmp_path, backend, "@format(r32ui) uimage2D img;", body)
+    assert "cgl_r32ui_element" not in code
+    write = re.search(r"surf2Dwrite\(([^;]*)\);", code)
+    assert write is not None, code
+    assert write.group(1).startswith("static_cast<unsigned int>(fin[i]), img, "), write
+    _compile(tmp_path, code, backend)
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_crossgl_vector_store_uses_matching_width_helper(tmp_path, backend):
+    body = "imageStore(img, ivec2(0, 0), uvec2(u32(fin[i]), 0u));"
+    code = _translate(tmp_path, backend, "@format(r32ui) uimage2D img;", body)
+    assert "cgl_r32ui_element2(make_uint2(" in code, code
+    assert "cgl_r32ui_element(uint4" not in code
+    _compile(tmp_path, code, backend)
+
+
+@pytest.mark.parametrize(
+    ("backend", "source_suffix", "header", "surface_type"),
+    [
+        ("cuda", "cu", "cuda_runtime.h", "cudaSurfaceObject_t"),
+        ("hip", "hip", "hip/hip_runtime.h", "hipSurfaceObject_t"),
+    ],
+)
+def test_surface_round_trip_r32ui_scalar_cast(
+    tmp_path, backend, source_suffix, header, surface_type
+):
+    from tools.coverage import runner
+
+    src = (
+        f"#include <{header}>\n"
+        f"__global__ void probe(const float* fin, float* outp, int n, {surface_type} img) {{\n"
+        "    int i = blockIdx.x * blockDim.x + threadIdx.x;\n"
+        "    if (i >= n) return;\n"
+        "    surf2Dwrite((unsigned int)fin[i], img, 0, 0);\n"
+        "    outp[i] = 0.0f;\n"
+        "}\n"
+    )
+    cgl = runner.translate(src, f".{source_suffix}", "cgl", backend)
+    out = runner.translate(cgl, ".cgl", backend, "cgl")
+    assert "cgl_r32ui_element" not in out
+    assert "surf2Dwrite(static_cast<unsigned int>(fin[i]), img," in out
+    _compile(tmp_path, out, backend)
