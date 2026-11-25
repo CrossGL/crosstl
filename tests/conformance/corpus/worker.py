@@ -1,8 +1,8 @@
 """Persistent translation worker: one JSON job per stdin line, one JSON result per protocol line.
 
 The protocol uses a duplicate of the original stdout, and fd 1 is redirected to stderr, so nothing the
-translator prints can corrupt it. Only ``crosstl.translate`` is timed; process start-up and imports are not part
-of a unit's latency.
+translator prints can corrupt it. Only ``crosstl.translate_artifacts`` is timed; process start-up and imports are not
+part of a unit's latency.
 """
 
 import json
@@ -30,41 +30,61 @@ def markers(text):
     )
 
 
-def translate_job(job, translate):
+def translate_job(job, translate_artifacts):
     """Translate one job; ``seconds`` is wall time and ``cpuSeconds`` the worker's CPU time, which a loaded
     machine inflates far less."""
-    return _translate_job(job, translate, time.perf_counter(), time.process_time())
+    return _translate_job(
+        job, translate_artifacts, time.perf_counter(), time.process_time()
+    )
 
 
-def _translate_job(job, translate, started, cpu_started):
+def _translate_job(job, translate_artifacts, started, cpu_started):
+    """``crosstl.translate_artifacts`` writes a target whose compilation unit holds one entry per stage (GLSL) one
+    artifact per entry, importing the source once; the cell is translated only when every entry is, and an entry's
+    failure is the cell's."""
     options = {
         "include_paths": job.get("includeDirs") or None,
         "defines": job.get("defines") or None,
     }
     options = {name: value for name, value in options.items() if value}
     try:
-        try:
-            code = translate(
-                job["source"],
-                backend=job["backend"],
-                format_output=False,
-                source_backend=job["sourceBackend"],
-                **options,
-            )
-        except Exception as error:  # noqa: BLE001 - classified below, never raised
-            stage_entries = getattr(error, "stage_entries", None)
-            if not stage_entries:
-                raise
-            return _translate_entries(job, stage_entries, options, started, cpu_started)
+        artifacts = translate_artifacts(
+            job["source"],
+            job["backend"],
+            format_output=False,
+            source_backend=job["sourceBackend"],
+            **options,
+        )
         seconds = time.perf_counter() - started
-        code = code or ""
-        Path(job["artifact"]).parent.mkdir(parents=True, exist_ok=True)
-        Path(job["artifact"]).write_text(code, encoding="utf-8")
+        if len(artifacts) == 1 and artifacts[0].entry_point is None:
+            code = artifacts[0].code or ""
+            Path(job["artifact"]).parent.mkdir(parents=True, exist_ok=True)
+            Path(job["artifact"]).write_text(code, encoding="utf-8")
+            return {
+                "status": "translated",
+                "seconds": seconds,
+                "cpuSeconds": time.process_time() - cpu_started,
+                "markers": markers(code),
+            }
+        entries, total = [], 0
+        for index, artifact in enumerate(artifacts):
+            path = entry_artifact(job["artifact"], index, artifact.entry_point)
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+            Path(path).write_text(artifact.code or "", encoding="utf-8")
+            total += markers(artifact.code or "")
+            entries.append(
+                {
+                    "entry": artifact.entry_point,
+                    "stage": artifact.stage,
+                    "artifact": path,
+                }
+            )
         return {
             "status": "translated",
             "seconds": seconds,
             "cpuSeconds": time.process_time() - cpu_started,
-            "markers": markers(code),
+            "markers": total,
+            "entryArtifacts": entries,
         }
     except RecursionError as error:
         return _failure(error, "translator-error", None, started, cpu_started)
@@ -96,50 +116,18 @@ def entry_artifact(artifact, index, entry):
     return str(path.with_name(f"{path.stem}.{index}.{safe}{path.suffix}"))
 
 
-def _translate_entries(job, stage_entries, options, started, cpu_started):
-    """Translate each entry to its own artifact, for a target whose compilation unit holds one entry per stage
-    (GLSL). The cell is translated only when every entry is; an entry's failure is the cell's.
-    """
-    from crosstl import translate_entries
-
-    names = [name for _stage, name in stage_entries]
-    artifacts = translate_entries(
-        job["source"],
-        job["backend"],
-        names,
-        format_output=False,
-        source_backend=job["sourceBackend"],
-        **options,
-    )
-    seconds = time.perf_counter() - started
-    entries, total = [], 0
-    for index, (stage, name) in enumerate(stage_entries):
-        path = entry_artifact(job["artifact"], index, name)
-        Path(path).parent.mkdir(parents=True, exist_ok=True)
-        Path(path).write_text(artifacts[name] or "", encoding="utf-8")
-        total += markers(artifacts[name] or "")
-        entries.append({"entry": name, "stage": stage, "artifact": path})
-    return {
-        "status": "translated",
-        "seconds": seconds,
-        "cpuSeconds": time.process_time() - cpu_started,
-        "markers": total,
-        "entryArtifacts": entries,
-    }
-
-
 def main():
     protocol = os.fdopen(os.dup(1), "w", encoding="utf-8")
     os.dup2(2, 1)
     sys.stdout = sys.stderr
     sys.setrecursionlimit(20000)
-    from crosstl import translate
+    from crosstl import translate_artifacts
 
     protocol.write(json.dumps({"ready": True}) + "\n")
     protocol.flush()
     for line in sys.stdin:
         job = json.loads(line)
-        result = {"id": job["id"], **translate_job(job, translate)}
+        result = {"id": job["id"], **translate_job(job, translate_artifacts)}
         protocol.write(json.dumps(result) + "\n")
         protocol.flush()
 

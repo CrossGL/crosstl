@@ -16,6 +16,7 @@ from ..declarator_lists import split_struct_declarator_lists
 from ..integral_constant_locals import (
     fold_concrete_function_integral_constant_arithmetic,
 )
+from ..pending_receiver_structs import pending_receiver_struct_names
 from ..qualified_member_types import resolve_qualified_struct_member_types
 from ..static_member_constants import resolve_retained_static_member_owners
 from .support import (
@@ -205,6 +206,16 @@ class MetalStructMemberLoweringMixin:
             if (struct.methods or struct.template_methods)
             and self._containing_span(struct.span[0], local_owner_spans) is None
         ]
+        # A struct whose members a pending function template call needs keeps them until the call is instantiated.
+        deferred_receivers = pending_receiver_struct_names(
+            self, code, structs_with_methods, template_declaration_spans
+        )
+        if deferred_receivers:
+            structs_with_methods = [
+                struct
+                for struct in structs_with_methods
+                if struct.name not in deferred_receivers
+            ]
         if not structs_with_methods:
             return self._canonicalize_qualified_struct_alias_templates(
                 expose_alias_template_owners(self, code, structs), structs

@@ -44,6 +44,7 @@ from .generic_function_utils import (
 from .generic_global_types import collect_constant_and_cbuffer_member_types
 from .lowering_refusals import refuse_unsupported
 from .mojo_arithmetic_conversions import MojoArithmeticConversionMixin
+from .mojo_buffer_objects import MojoBufferObjectMixin
 from .mojo_builtin_calls import MojoBuiltinCallMixin
 from .mojo_call_expressions import MojoCallExpressionMixin
 from .mojo_expression_nodes import MojoExpressionNodeMixin
@@ -234,6 +235,7 @@ __all__ = [
 
 class MojoCodeGen(
     MojoKernelArgumentMixin,
+    MojoBufferObjectMixin,
     MojoPrivateGlobalMixin,
     MojoStageContractMixin,
     MojoReturnAliasMixin,
@@ -579,7 +581,7 @@ class MojoCodeGen(
         self.function_return_resource_static_field_aliases = {}
         self.stage_local_function_extra_params = {}
         self.variable_types = {}
-        self.reset_mojo_kernel_arguments()
+        self.reset_mojo_kernel_arguments(ast)
         self.reset_mojo_private_globals()
         self.enum_types = {}
         self.enum_variant_aliases = {}
@@ -830,7 +832,13 @@ class MojoCodeGen(
             header += MOJO_WAVE_IMPORTS
         header += "\n"
 
-        return header + self.generate_required_helpers() + wave_helpers + code
+        return (
+            header
+            + self.generate_required_helpers()
+            + self.mojo_buffer_object_helper_source()
+            + wave_helpers
+            + code
+        )
 
     def reject_parameterized_generic_enum_specializations(self, ast):
         if not self.generic_enum_struct_definitions:

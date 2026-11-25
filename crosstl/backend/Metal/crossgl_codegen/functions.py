@@ -36,6 +36,7 @@ from ..MetalAst import (
     WhileNode,
 )
 from ..ordered_atomics import fenced_atomic_statement
+from ..pointer_return_handles import returns_whole_buffer_parameters
 from ..sparse_color import import_sparse_color_assignment
 from ..vote_masks import vote_mask_default_initializer
 
@@ -112,9 +113,9 @@ class MetalFunctionMixin:
         for child in self.iter_ast_children(node):
             self.collect_identifier_references(child, found)
 
-    def map_function_return_type(self, return_type, qualifiers=None):
+    def map_function_return_type(self, return_type, qualifiers=None, function=None):
         pointer_buffer_type = self.map_pointer_return_buffer_type(
-            return_type, qualifiers=qualifiers
+            return_type, qualifiers=qualifiers, function=function
         )
         if pointer_buffer_type:
             return pointer_buffer_type
@@ -123,7 +124,9 @@ class MetalFunctionMixin:
             return str(mapped_type).rstrip()[:-1].rstrip()
         return mapped_type
 
-    def map_pointer_return_buffer_type(self, return_type, qualifiers=None):
+    def map_pointer_return_buffer_type(
+        self, return_type, qualifiers=None, function=None
+    ):
         element_type = self.pointer_element_type(return_type)
         if not element_type:
             return None
@@ -145,6 +148,13 @@ class MetalFunctionMixin:
         if qualifier_names & {"thread", "threadgroup"}:
             const = "const " if "const" in qualifier_names else ""
             space = "threadgroup" if "threadgroup" in qualifier_names else "thread"
+            return f"{const}{space} {self.map_type(element_type)}*"
+        if function is not None and not returns_whole_buffer_parameters(
+            function, self.iter_ast_children
+        ):
+            # A buffer handle carries no offset: a function returning an interior pointer keeps its pointer type.
+            const = "const " if "const" in qualifier_names else ""
+            space = "constant" if "constant" in qualifier_names else "device"
             return f"{const}{space} {self.map_type(element_type)}*"
         buffer_type = (
             "StructuredBuffer"

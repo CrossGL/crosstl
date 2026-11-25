@@ -53,6 +53,7 @@ from .cuda_shared_memory import helper_shared_variables
 from .cuda_stage_attributes import CudaStageAttributeMixin
 from .cuda_stage_checks import CudaStageCheckMixin
 from .cuda_statements import CudaStatementMixin
+from .cuda_surface_texels import CudaSurfaceTexelMixin
 from .cuda_tables import (
     CUDA_64BIT_BITCAST_FUNCTIONS,
     CUDA_BITCAST_FUNCTION_TARGETS,
@@ -148,6 +149,7 @@ class CudaCodeGen(
     CudaVectorTypeMixin,
     CudaTextureMixin,
     CudaTexelBufferMixin,
+    CudaSurfaceTexelMixin,
     CudaGatherMixin,
     LoweringRefusalMixin,
     PreciseEvaluationMixin,
@@ -218,6 +220,7 @@ class CudaCodeGen(
         self.match_temp_variable_index = 0
         self.variable_types = {}
         self.image_resource_accesses = {}
+        self.surface_texels = {}
         self.buffer_resource_accesses = {}
         self.glsl_buffer_block_accesses = {}
         self.glsl_buffer_block_layouts = {}
@@ -371,6 +374,7 @@ class CudaCodeGen(
         self.current_function_return_type = None
         self.match_temp_variable_index = 0
         self.image_resource_accesses = {}
+        self.surface_texels = {}
         self.buffer_resource_accesses = {}
         self.glsl_buffer_block_accesses = {}
         self.glsl_buffer_block_layouts = {}
@@ -911,7 +915,10 @@ class CudaCodeGen(
                     if array_initializer.strip():
                         declaration += f" = {array_initializer}"
                     return declaration
-                declaration += f" = {self.visit(initial_value)}"
+                value = self.visit_in_texel_context(
+                    initial_value, self.map_type(var_type)
+                )
+                declaration += f" = {value}"
             return declaration
 
         return node.name
@@ -954,7 +961,13 @@ class CudaCodeGen(
             target = self.visit(node.target)
         finally:
             self.assignment_lhs_depth -= 1
-        value = self.visit(node.value)
+        value = (
+            self.visit_in_texel_context(
+                node.value, self.expression_result_type(node.target)
+            )
+            if operator == "="
+            else self.visit(node.value)
+        )
         compound_binary_ops = {
             "+=": "+",
             "-=": "-",

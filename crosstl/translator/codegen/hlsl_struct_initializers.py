@@ -24,12 +24,13 @@ def _constructor_fields(codegen, expr, expected_type=None):
     """Return ``(fields, arguments)`` for a positional struct constructor, or ``None``.
 
     A brace list ``{a, b}`` initializing a struct of ``expected_type`` counts as its constructor.
+    It may give fewer values than the struct has fields; the fields it leaves out are zero.
     """
     if isinstance(expr, ArrayLiteralNode) and expected_type is not None:
         type_name = codegen.type_name_string(expected_type)
         expr_arguments = list(expr.elements or [])
         fields = codegen.hlsl_struct_constructor_fields(type_name)
-        if fields and len(fields) == len(expr_arguments):
+        if fields and 0 < len(expr_arguments) <= len(fields):
             return fields, expr_arguments
         return None
     if isinstance(expr, ConstructorNode):
@@ -77,6 +78,10 @@ def _render(codegen, expr, expected_type):
         _render(codegen, argument, field_type)
         for (_name, field_type), argument in zip(fields, arguments)
     ]
+    rendered.extend(
+        codegen.hlsl_value_initialized_expression(expr, field_type)
+        for _name, field_type in fields[len(arguments) :]
+    )
     return "{" + ", ".join(rendered) + "}"
 
 

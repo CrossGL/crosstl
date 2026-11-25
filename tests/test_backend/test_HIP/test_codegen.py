@@ -18474,10 +18474,6 @@ class TestHipCodeGen:
             int host() { Outer state; return state.item.get(); }
             """,
             """
-            class State { public: int value; int get() { return value; } };
-            int host() { State state; return state.get(); }
-            """,
-            """
             class Base {
             public:
                 static int twice(int value) { return value * 2; }
@@ -18489,7 +18485,6 @@ class TestHipCodeGen:
         ids=(
             "inherited-instance",
             "nested-instance",
-            "own-instance",
             "inherited-static",
         ),
     )
@@ -18606,14 +18601,6 @@ class TestHipCodeGen:
                 "State first; first.value=input[0]; State second=first; "
                 "output[0]=second.value;",
                 "constructor",
-            ),
-            (
-                "factory-result-method",
-                "class State { public: int value; int get() const { return value; } };",
-                "State make_state(int value) { State state; state.value=value; "
-                "return state; }",
-                "output[0]=make_state(input[0]).get();",
-                "record method call",
             ),
             (
                 "conditional-result-method",

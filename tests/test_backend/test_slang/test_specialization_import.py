@@ -16,6 +16,7 @@ import crosstl.translator as cgl_translator
 from crosstl.backend.import_refusals import SlangImportRefused
 from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
+from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 
 ENTRY = """
@@ -195,12 +196,60 @@ def test_misstated_specialization_constants_are_refused(declarations, reason):
 
 
 @pytest.mark.parametrize(
-    "declarations,numthreads,named",
+    "declarations,numthreads,layout",
     [
         (
             "[vk::constant_id(0)] const int size = 8;\n",
             "size, 1, 1",
-            "x dimension size",
+            "local_size_x = 8, local_size_y = 1, local_size_z = 1, local_size_x_id = 0",
+        ),
+        (
+            "[vk::constant_id(3)] const uint wide = 16u;\n"
+            "[SpecializationConstant] const int tall = 2;\n",
+            "wide, tall, 1",
+            "local_size_x = 16, local_size_y = 2, local_size_z = 1, local_size_x_id = 3, "
+            "local_size_y_id = 0",
+        ),
+    ],
+)
+def test_specialized_workgroup_size_names_the_constant_id(
+    declarations, numthreads, layout
+):
+    # slangc sizes the workgroup from the constant (LocalSizeId), so the pipeline's value sets the size.
+    source = declarations + (
+        "RWStructuredBuffer<float> outp;\n"
+        '[shader("compute")]\n'
+        f"[numthreads({numthreads})]\n"
+        "void main(uint3 id : SV_DispatchThreadID) { outp[id.x] = 1.0; }\n"
+    )
+    code = to_crossgl(source)
+
+    assert f"layout({layout}) in;" in code
+    cgl_translator.parse(code)
+
+
+def test_slang_output_names_the_workgroup_size_constant():
+    code = to_crossgl(
+        "[vk::constant_id(0)] const int size = 4;\n"
+        "RWStructuredBuffer<float> outp;\n"
+        '[shader("compute")]\n'
+        "[numthreads(size, 1, 1)]\n"
+        "void main(uint3 id : SV_DispatchThreadID) { outp[id.x] = float(size); }\n"
+    )
+    slang = SlangCodeGen().generate(cgl_translator.parse(code))
+
+    # One constant of id 0: a second one would overlap the program's own (slangc warning E39001).
+    assert slang.count("vk::constant_id(0)") == 1
+    assert "[numthreads(size, 1, 1)]" in slang
+
+
+@pytest.mark.parametrize(
+    "declarations,numthreads,named",
+    [
+        (
+            "[vk::constant_id(0)] const int size = 8;\n",
+            "size * 2, 1, 1",
+            "x dimension size*2",
         ),
         (
             "[SpecializationConstant] const int size = 8;\n"
@@ -210,7 +259,9 @@ def test_misstated_specialization_constants_are_refused(declarations, reason):
         ),
     ],
 )
-def test_specialized_workgroup_size_is_refused(declarations, numthreads, named):
+def test_computed_specialized_workgroup_size_is_refused(
+    declarations, numthreads, named
+):
     source = declarations + (
         "RWStructuredBuffer<float> outp;\n"
         '[shader("compute")]\n'

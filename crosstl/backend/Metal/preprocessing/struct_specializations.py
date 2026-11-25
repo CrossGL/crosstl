@@ -9,6 +9,7 @@ from typing import (
     Tuple,
 )
 
+from ..partial_struct_specializations import select_most_specialized
 from ..source_analysis_cache import memoized
 from ..text_scanners import strip_top_level_default_value
 from .support import (
@@ -123,33 +124,99 @@ class MetalStructSpecializationMixin:
             return None
         return bindings
 
-    def _require_unique_constrained_struct_partial(
+    def _most_specialized_struct_partials(
         self,
         name: str,
         arguments: List[str],
         matches: List[Tuple[_MetalTemplateStruct, Dict[str, str]]],
-    ) -> None:
-        if len(matches) < 2 or not any(
-            re.search(r"\benable_if(?:_t)?\s*<", argument)
-            for template, _bindings in matches
-            for argument in (
-                self._template_struct_specialization_arguments(template) or []
-            )
-        ):
-            return
+        patterns: List[List[str]],
+        *,
+        code: str,
+        position: int,
+    ) -> List[Tuple[_MetalTemplateStruct, Dict[str, str]]]:
+        """Keep the one most specialized of several matching partial specializations.
+
+        A template-id that several partial specializations match names the most specialized one, and is
+        ill-formed when none is more specialized than all the others ([temp.spec.partial.order]). Falling
+        back to the primary template in either case would change the field types silently.
+        """
+
+        if len(matches) < 2:
+            return matches
         signature = self._template_specialization_signature(name, arguments)
-        raise MetalTemplateSpecializationError(
-            f"Metal struct specialization '{signature}' has multiple viable partial "
-            "specializations whose ordering is not supported. Selecting its primary "
-            "declaration could change the field types or storage layout.",
-            requested_signature=signature,
-            requested_arguments=tuple(arguments),
-            callee_template=name,
-            suggested_action=(
-                "provide an explicit concrete specialization until partial "
-                "specialization ordering is supported"
-            ),
-        )
+        ordering_patterns = []
+        for (template, _bindings), template_patterns in zip(matches, patterns):
+            resolved = self._partial_struct_ordering_patterns(
+                template, template_patterns, code, position
+            )
+            if resolved is None:
+                raise MetalTemplateSpecializationError(
+                    f"Metal struct specialization '{signature}' has multiple viable "
+                    "partial specializations whose ordering is not supported: one "
+                    "is constrained by an enable_if that depends on its template "
+                    "parameters. Selecting its primary declaration could change the "
+                    "field types or storage layout.",
+                    requested_signature=signature,
+                    requested_arguments=tuple(arguments),
+                    callee_template=name,
+                    suggested_action=(
+                        "provide an explicit concrete specialization for these "
+                        "template arguments"
+                    ),
+                )
+            ordering_patterns.append((resolved, list(template.template_parameters)))
+        best = select_most_specialized(ordering_patterns)
+        if best is None:
+            spelled = "; ".join(
+                f"<{', '.join(template_patterns)}>" for template_patterns in patterns
+            )
+            raise MetalTemplateSpecializationError(
+                f"Metal struct specialization '{signature}' is ambiguous: it matches "
+                f"the partial specializations {spelled}, and none of them is more "
+                "specialized than all the others.",
+                requested_signature=signature,
+                requested_arguments=tuple(arguments),
+                callee_template=name,
+                suggested_action=(
+                    "declare a partial or explicit specialization that is more "
+                    "specialized than the matching ones"
+                ),
+            )
+        return [matches[best]]
+
+    def _partial_struct_ordering_patterns(
+        self,
+        template: _MetalTemplateStruct,
+        patterns: List[str],
+        code: str,
+        position: int,
+    ) -> Optional[List[str]]:
+        """A partial specialization's patterns with each non-dependent enable_if replaced by its type.
+
+        Returns None when a constraint depends on the partial specialization's own parameters, because
+        ordering through such a non-deduced context is not implemented.
+        """
+
+        parameters = set(template.template_parameters)
+        resolved = []
+        for pattern in patterns:
+            if not re.search(r"\benable_if(?:_t)?\s*<", pattern):
+                resolved.append(pattern)
+                continue
+            if parameters & set(IDENTIFIER_RE.findall(pattern)):
+                return None
+            try:
+                result = self._constrained_partial_struct_argument(
+                    pattern, {}, template, code, position
+                )
+            except self._UnrecognizedConstraint:
+                return None
+            if result is None:
+                return None
+            resolved.append(
+                self._canonicalize_partial_struct_specialization_argument(result)
+            )
+        return resolved
 
     def _constrained_partial_struct_argument(
         self,

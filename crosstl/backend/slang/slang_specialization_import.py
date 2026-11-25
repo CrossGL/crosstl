@@ -22,7 +22,8 @@ from ..import_refusals import SlangImportRefused
 __all__ = [
     "specialization_attribute",
     "specialization_ids",
-    "specialized_workgroup_sizes",
+    "specialization_constant_defaults",
+    "specialized_workgroup_layout",
 ]
 
 _EXPLICIT = "vk::constant_id"
@@ -127,24 +128,58 @@ def specialization_ids(global_nodes, exported=()):
     return ids
 
 
-def specialized_workgroup_sizes(numthreads, specialized_names):
-    """Refuse a ``[numthreads]`` dimension that names a specialization constant or a global derived from one.
+def specialization_constant_defaults(global_nodes, ids, exported=()):
+    """``{name: (SpecId, initializer)}`` of each specialization constant of ``ids`` that has an initializer.
 
-    Slang sizes the SPIR-V workgroup from the constant (``LocalSizeId``), so the pipeline's value sets the size.
-    CrossGL's ``layout(local_size_x = ...)`` takes a constant expression fixed at translation time, which would keep
-    only the default.
+    ``ids`` is :func:`specialization_ids` of the same declarations.
     """
-    if not specialized_names:
-        return
+    defaults = {}
+    for node in _assignments(list(global_nodes) + list(exported)):
+        entry = ids.get(id(node.left))
+        if entry is not None and entry[0] is node.left:
+            defaults[node.left.name] = (entry[1], node.right)
+    return defaults
+
+
+def _assignments(node):
+    if isinstance(node, (list, tuple)):
+        for item in node:
+            yield from _assignments(item)
+    elif isinstance(node, AssignmentNode):
+        yield node
+
+
+def specialized_workgroup_layout(numthreads, specialized_names, constants):
+    """The ``local_size_*`` and ``local_size_*_id`` entries of CrossGL's ``layout(...) in;`` for ``[numthreads]``.
+
+    A dimension that names a specialization constant, ``[numthreads(size, 1, 1)]`` with ``[vk::constant_id(0)] const
+    int size = 64;``, is ``local_size_x_id = 0`` with the default ``local_size_x = 64``: the pipeline's value sets the
+    size, as slangc's ``LocalSizeId`` does. ``constants`` maps such a constant's name to its id and its default, the
+    integer literal it is initialized with. A dimension computed from a specialization constant (or from a global
+    that follows one), or a constant whose default is not an integer literal, is refused: CrossGL fixes every other
+    workgroup size at translation time.
+    """
+    sizes, ids = [], []
     for axis, argument in zip("xyz", numthreads):
+        text = str(argument).strip()
+        if text in constants:
+            spec_id, default = constants[text]
+            literal = re.fullmatch(r"\+?([0-9]+)[uU]?", str(default).strip())
+            if literal is not None:
+                sizes.append(f"local_size_{axis} = {int(literal.group(1))}")
+                ids.append(f"local_size_{axis}_id = {spec_id}")
+                continue
         names = sorted(
-            set(re.findall(r"[A-Za-z_]\w*", str(argument))) & set(specialized_names)
+            set(re.findall(r"[A-Za-z_]\w*", text)) & set(specialized_names or ())
         )
         if names:
             raise SlangImportRefused(
                 [
                     f"numthreads {axis} dimension {argument} depends on specialization "
-                    f"constant {', '.join(names)}; CrossGL fixes the workgroup size at "
-                    "translation time"
+                    f"constant {', '.join(names)}; CrossGL specializes a workgroup dimension that "
+                    "names an integer specialization constant with a literal default, and fixes any "
+                    "other at translation time"
                 ]
             )
+        sizes.append(f"local_size_{axis} = {argument}")
+    return ", ".join(sizes + ids)

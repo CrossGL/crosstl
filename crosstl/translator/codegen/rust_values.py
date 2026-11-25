@@ -136,7 +136,9 @@ class RustValueMixin:
         constant_value = self.rust_predefined_constant_expression(name)
         if constant_value is not None:
             return constant_value
-        value = self.lazy_static_identifier_expression(name)
+        value = self.rust_workgroup_reference_place(
+            name
+        ) or self.lazy_static_identifier_expression(name)
         if self.should_clone_identifier_value(name):
             return self.clone_value_expression(value)
         return value

@@ -20,6 +20,7 @@ from . import (
     probes,
     rustgpu,
     spirv_input,
+    tint,
     validators,
 )
 from .features.spirv import is_core
@@ -56,6 +57,7 @@ INPUT_BACKENDS = {
     "slang": "slang",
     "spirv": "vulkan",
     "webgl": "webgl",
+    "wgsl": "wgsl",
 }
 # The target a language's probes fall back to when the reference compiler rejects a native probe for its usual target.
 # slangc writes invalid SPIR-V for some operations its HLSL target compiles, such as an OpAtomicCompareExchange on
@@ -143,7 +145,10 @@ def _checker(language: str, target: str) -> str:
     versions = [
         validators.version(tool) for tool in validators.toolchain(language, target)
     ]
-    code = [Path(module.__file__).read_bytes() for module in (validators, rustgpu)]
+    code = [
+        Path(module.__file__).read_bytes() for module in (validators, rustgpu, tint)
+    ]
+    code.append(tint.SCRIPT.read_bytes())
     return "\n".join(versions + [hashlib.sha256(b"\0".join(code)).hexdigest()])
 
 

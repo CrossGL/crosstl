@@ -1,0 +1,1 @@
+Coverage: wrong results that ptxas rejects are grouped by cause again. nvcc names its intermediate files after the compiling process, so each diagnostic quoted a different temporary path and every probe became a cause of its own; the path is now the probe's own name, and the SPIR-V to CUDA cell lists 9 causes instead of 226.

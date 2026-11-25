@@ -52,7 +52,6 @@ def _emitted_float_helper_name(code, parameters, expression):
         ("subgroupExecutionBarrier", "subgroupBarrier"),
         ("subgroupMemoryBarrier", "subgroupMemoryBarrier"),
         ("subgroupMemoryBarrierBuffer", "subgroupMemoryBarrierBuffer"),
-        ("subgroupMemoryBarrierShared", "subgroupMemoryBarrierShared"),
         ("subgroupMemoryBarrierImage", "subgroupMemoryBarrierImage"),
     ],
 )
@@ -64,6 +63,23 @@ def test_webgl_refuses_subgroup_barriers(tmp_path, barrier, desktop_spelling):
     assert f"{desktop_spelling}();" in desktop
     assert "#extension GL_KHR_shader_subgroup_basic : require" in desktop
     _assert_refuses_without_output(tmp_path, source, barrier)
+
+
+def test_fragment_subgroup_memory_barrier_shared_fails_closed(tmp_path):
+    # GL_KHR_shader_subgroup declares subgroupMemoryBarrierShared only for compute
+    # shaders (GL_EXT_mesh_shader adds task and mesh), so desktop GLSL refuses a
+    # fragment-stage call, and WebGL 2 refuses every subgroup barrier.
+    source = tmp_path / "barrier.cgl"
+    source.write_text(
+        _fragment("pos.x", statements="subgroupMemoryBarrierShared();"),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        BuiltinValueUnsupportedError, match="subgroupMemoryBarrierShared"
+    ):
+        crosstl.translate(str(source), backend="opengl", format_output=False)
+    _assert_refuses_without_output(tmp_path, source, "subgroupMemoryBarrierShared")
 
 
 @pytest.mark.parametrize(
@@ -178,10 +194,12 @@ fragment float4 colour(float4 pos [[position]]) {
         ("WaveGetLaneCount", "float(WaveGetLaneCount())", "gl_SubgroupSize"),
         ("WaveIsFirstLane", "WaveIsFirstLane() ? 1.0 : 0.0", "subgroupElect("),
         ("WaveActiveSum", "WaveActiveSum(pos.x)", "subgroupAdd("),
+        # A stage whose only subgroup operations are boolean votes uses
+        # GL_ARB_shader_group_vote in desktop GLSL.
         (
             "WaveActiveAllTrue",
             "WaveActiveAllTrue(pos.x > 0.0) ? 1.0 : 0.0",
-            "subgroupAll(",
+            "allInvocationsARB(",
         ),
         (
             "WaveActiveBallot",

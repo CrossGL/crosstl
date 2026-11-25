@@ -370,3 +370,28 @@ __global__ void k(float* o) {
 
     assert "S_ref" not in cgl and "S_get" not in cgl
     assert "o[1] = s.v;" in cgl
+
+
+def test_a_member_function_with_a_while_loop_is_lowered(tmp_path):
+    # The pass used to refuse a WhileNode in a member function body as a construct it does not handle.
+    source = """
+struct Counter {
+    int n;
+    __device__ int odd() const {
+        int left = n;
+        int count = 0;
+        while (left > 0) { left--; if (left % 2) count++; }
+        return count;
+    }
+};
+__global__ void k(int* o) {
+    Counter c;
+    c.n = o[0];
+    o[1] = c.odd();
+}
+"""
+    cgl = _compact(_translate(tmp_path, source))
+
+    assert "i32 Counter_odd(Counter this_)" in cgl
+    assert "var left: i32 = this_.n;" in cgl
+    assert "o[1] = Counter_odd(c);" in cgl
