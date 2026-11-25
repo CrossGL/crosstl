@@ -14,6 +14,7 @@ from ..ast import (
     WaveOpNode,
 )
 from .glsl_builtin_extensions import BUILTIN_EXTENSIONS
+from .glsl_version_floor import glsl_version_reaches
 
 __all__ = ["OpenGLGroupVoteMixin"]
 
@@ -36,11 +37,9 @@ class OpenGLGroupVoteMixin:
         show is a bool (#3009).
         """
         version_line = getattr(self, "current_glsl_version_line", None)
-        # GL_ARB_shader_group_vote requires OpenGL 4.3, and glslang declares its functions only from #version 430.
         version_number = self.glsl_version_number(version_line)
         if (
             version_number is None
-            or version_number < 430
             or self.software_subgroup_width is not None
             or self.glsl_version_is_es(version_line)
             or self.GLSL_GROUP_VOTE_EXTENSION in getattr(
@@ -97,6 +96,13 @@ class OpenGLGroupVoteMixin:
                     and self.glsl_is_bool_vote_operand(node.arguments[0], bool_names)
                 ):
                     return None
+        # GL_ARB_shader_group_vote requires OpenGL 4.3, and glslang declares its functions only from #version 430.
+        # A program without a #version line of its own rises to 4.30 for them rather than needing
+        # GL_KHR_shader_subgroup_vote, which drivers such as Mesa's llvmpipe do not implement.
+        if version_number < 430 and not glsl_version_reaches(
+            self, "boolean group votes with GL_ARB_shader_group_vote", 430, None
+        ):
+            return None
         return "" if version_number >= 460 else "ARB"
 
     def set_glsl_stage_group_vote_suffix(self, ast, target_stage=None):

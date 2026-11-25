@@ -224,8 +224,10 @@ def test_webgl_refuses_subgroup_intrinsics(
     source.write_text(_fragment(expression), encoding="utf-8")
 
     desktop = crosstl.translate(str(source), backend="opengl", format_output=False)
-    # GL_KHR_shader_subgroup needs GLSL 1.40, so the lowest core version applies.
-    assert desktop.startswith("#version 330 core\n")
+    # GL_KHR_shader_subgroup needs GLSL 1.40, so the lowest core version applies; GL_ARB_shader_group_vote
+    # needs GLSL 4.30.
+    lowest = "430" if glsl_operation.endswith("ARB(") else "330"
+    assert desktop.startswith(f"#version {lowest} core\n")
     assert glsl_operation in desktop
 
     output = tmp_path / "out.frag"

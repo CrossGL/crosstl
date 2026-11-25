@@ -60,7 +60,8 @@ def _glslang(tmp_path, code, name="vote.comp"):
 def test_a_boolean_vote_needs_only_arb_shader_group_vote(tmp_path, vote):
     generated = _opengl(_probe(vote))
 
-    assert generated.startswith(f"#version 450 core\n{ARB_VOTE}\n")
+    # A compute shader needs GLSL 4.30, which is also the lowest version with GL_ARB_shader_group_vote.
+    assert generated.startswith(f"#version 430 core\n{ARB_VOTE}\n")
     assert "GL_KHR_shader_subgroup" not in generated
     assert f"bool r = {vote}ARB(a0);" in generated
     assert "subgroup" not in generated
