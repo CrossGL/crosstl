@@ -12,7 +12,6 @@ from crosstl.backend.SPIRV.VulkanParser import VulkanParser
 from crosstl.translator import parse as parse_crossgl
 from crosstl.translator.ast import ShaderStage
 from crosstl.translator.codegen.metal_codegen import MetalCodeGen
-from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.source_registry import BINARY_SPIRV_UNSUPPORTED_MESSAGE
 
@@ -9812,14 +9811,12 @@ def test_translate_api_accepts_spirv_layout_source(tmp_path):
     shader_path = tmp_path / "layout_vertex.spvasm"
     shader_path.write_text(LAYOUT_SHADER, encoding="utf-8")
 
-    # The uniform block imports as a CrossGL constant buffer, which the rust-gpu output binds as a uniform struct.
-    # The vertex input imports as a module-scope '@input' variable that no shared pass gathers into the entry
-    # point's input, so the rust-gpu output refuses it rather than reading a zero-valued static.
-    with pytest.raises(
-        RustLoweringRefused,
-        match="module-scope input 'position' is not passed to an entry point",
-    ):
-        crosstl.translate(str(shader_path), backend="rust", format_output=False)
+    # The uniform block imports as a CrossGL constant buffer, which the rust-gpu output binds as a uniform struct,
+    # and the module-scope vertex input is gathered into the entry point's input structure.
+    rust_code = crosstl.translate(str(shader_path), backend="rust", format_output=False)
+    assert "#[spirv(vertex)]" in rust_code
+    assert "#[spirv(location = 0)] input_position: Vec3" in rust_code
+    assert "#[spirv(position)] out_position: &mut Vec4" in rust_code
 
 
 def test_translate_api_accepts_spirv_push_constant_layout_source(tmp_path):

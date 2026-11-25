@@ -176,3 +176,40 @@ def test_storage_buffers_take_the_lowest_free_bindings(tmp_path):
 def test_blocks_the_struct_cannot_hold_are_refused(block, body, message):
     with pytest.raises(RustLoweringRefused, match=message):
         _rust(_kernel(block, body))
+
+
+def test_declared_compute_builtin_input_is_an_entry_parameter(tmp_path):
+    """A stage variable ``@input`` with a compute built-in reads the built-in, not a zero-valued static."""
+    code = _rust("""
+        shader Probe {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer float* outp;
+                uint3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;
+                void main() {
+                    outp[gl_GlobalInvocationID[0]] = 1.0;
+                }
+            }
+        }
+        """)
+    assert "#[spirv(global_invocation_id)] gl_GlobalInvocationID: UVec3" in code
+    assert "GL_GLOBAL_INVOCATION_ID" not in code
+    assert_generated_rust_smoke_compiles(code, tmp_path)
+
+
+def test_module_scope_stage_input_left_by_the_shared_passes_is_refused():
+    """A module-scope ``@input`` that is not a compute built-in has no entry parameter to read, so it is refused."""
+    source = """
+        shader Probe {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer float* outp;
+                float level @input @location(0);
+                void main() {
+                    outp[0] = level;
+                }
+            }
+        }
+        """
+    with pytest.raises(RustLoweringRefused, match="module-scope input 'level'"):
+        _rust(source)

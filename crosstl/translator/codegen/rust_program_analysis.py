@@ -39,6 +39,7 @@ from .rust_gpu_interface import (
     UNIFORM_VALUE_KIND,
     WORKGROUP_KIND,
     builtin_input_infos,
+    declared_builtin_input_info,
     is_uniform_value,
     is_workgroup_array,
     slice_type_name,
@@ -217,6 +218,12 @@ class RustProgramAnalysisMixin:
                 continue
             declared.add(name)
             type_name = self.rust_variable_source_type(node)
+            builtin = declared_builtin_input_info(node)
+            if builtin is not None and self.map_type(type_name) == self.map_type(
+                builtin["type_name"]
+            ):
+                resources[name] = builtin
+                continue
             interface = self.rust_gpu_interface_info(node, type_name)
             if interface is not None:
                 resources[name] = interface
