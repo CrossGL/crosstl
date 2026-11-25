@@ -55,6 +55,8 @@ GATHER_GREEN = "return textureGatherCompare(depth, cmp, position.xy, 0.5, 1);"
 SAMPLE_POSITION = "return vec4(textureSamplePosition(msTexture, 1), textureSamplePosition(msArray, 2));"
 
 TARGETS = ["directx", "metal", "opengl", "vulkan", "slang", "wgsl"]
+# HLSL output writes SampleCmpBias and GatherCmpGreen/Blue/Alpha (hlsl_texture_operands.py).
+UNREGISTERED_TARGETS = [target for target in TARGETS if target != "directx"]
 
 
 def _write(tmp_path, body, name="probe.cgl"):
@@ -105,7 +107,7 @@ def test_crossgl_output_keeps_the_operands(tmp_path, body):
     assert body.removeprefix("return ").removesuffix(";") in out
 
 
-@pytest.mark.parametrize("target", TARGETS)
+@pytest.mark.parametrize("target", UNREGISTERED_TARGETS)
 @pytest.mark.parametrize("form", sorted(COMPARE_BIAS_CALLS))
 def test_unregistered_targets_refuse_compare_bias(tmp_path, target, form):
     path = _write(tmp_path, COMPARE_BIAS_CALLS[form])
@@ -132,7 +134,7 @@ def test_unbiased_comparisons_are_unchanged(tmp_path):
     assert "depth.SampleCmp(cmp, position.xy, 0.5)" in hlsl
 
 
-@pytest.mark.parametrize("target", TARGETS)
+@pytest.mark.parametrize("target", UNREGISTERED_TARGETS)
 def test_unregistered_targets_refuse_gather_compare_components(tmp_path, target):
     with pytest.raises(TextureOperandUnsupportedError) as caught:
         crosstl.translate(_write(tmp_path, GATHER_GREEN), backend=target)
@@ -197,7 +199,7 @@ def test_glsl_cites_gl_sample_position(tmp_path):
 def test_biased_shadow_samples_stay_refused_until_a_target_registers(tmp_path):
     body = "return vec4(texture(shadowMap, vec3(position.xy, 0.5), 1.0));"
     with pytest.raises(ShadowSampleUnsupportedError, match="level-of-detail bias"):
-        crosstl.translate(_write(tmp_path, body), backend="directx")
+        crosstl.translate(_write(tmp_path, body), backend="vulkan")
 
 
 def test_a_registered_target_receives_the_compare_form_with_its_bias(

@@ -46,7 +46,9 @@ def plan_entry_input_locations(codegen, parameters, execution_model):
 
     ``parameters`` are ``(parameter, value type)`` pairs of the stage inputs, in declaration order.
     """
-    planned, taken, loose = {}, set(), []
+    # Inputs read through a patch parameter are already placed; the other inputs avoid their locations, as the
+    # tessellation control stage places its per-patch outputs after its control-point outputs.
+    planned, taken, loose = {}, _occupied_locations(codegen, "Input"), []
     for param, value_type in parameters:
         struct_name = value_type.type.base_type
         members = codegen.current_struct_members.get(struct_name)

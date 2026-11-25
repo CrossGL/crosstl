@@ -47,6 +47,7 @@ from .crossgl_codegen.runtime_graph_calls import HipRuntimeGraphCallMixin
 from .crossgl_codegen.runtime_memory_calls import HipRuntimeMemoryCallMixin
 from .crossgl_codegen.runtime_module_calls import HipRuntimeModuleCallMixin
 from .crossgl_codegen.statements import HipStatementMixin
+from .crossgl_codegen.struct_methods import lower_hip_struct_methods
 from .crossgl_codegen.surfaces import HipSurfaceMixin
 from .crossgl_codegen.textures import HipTextureMixin
 from .crossgl_codegen.type_conversion import HipTypeConversionMixin
@@ -671,6 +672,7 @@ class HipToCrossGLConverter(
     def render_program(self, ast_node):
         self.output = []
         self.indent_level = 0
+        lower_hip_struct_methods(ast_node, self.refuse_import)
         self.source_identifier_names = source_identifier_names(ast_node)
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []

@@ -27,7 +27,6 @@ from ..ast import (
     TextureOpNode,
     UnaryOpNode,
     VariableNode,
-    WaveOpNode,
 )
 from .ast_walk import walk_ast_values
 from .rust_gpu_interface import COMPUTE_BUILTIN_INPUTS
@@ -40,7 +39,6 @@ _NODE_REASONS = (
     (TextureOpNode, "texture operations"),
     (AtomicOpNode, "atomic operations"),
     (BufferOpNode, "buffer object operations"),
-    (WaveOpNode, "subgroup operations"),
     (RayTracingOpNode, "ray tracing operations"),
     (RayQueryOpNode, "ray queries"),
     (MeshOpNode, "mesh shader outputs"),

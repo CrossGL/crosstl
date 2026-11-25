@@ -34,7 +34,8 @@ shader main {
             RustCodeGen,
             "#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] particles: &mut [Particles]",
         ),
-        (MojoCodeGen, "var particles: RWStructuredBuffer[Particles]"),
+        # A Mojo kernel receives a structured buffer as a pointer to its first element.
+        (MojoCodeGen, "particles: UnsafePointer[Particles, MutAnyOrigin]"),
         (CudaCodeGen, "Particles* particles;"),
         (HLSLCodeGen, "RWStructuredBuffer<Particles> particles : register(u0);"),
         (

@@ -1001,6 +1001,8 @@ class VulkanSPIRVCodeGen(
             "SV_INSTANCEID": "gl_InstanceID",
             "GL_INSTANCEINDEX": "gl_InstanceIndex",
             "SV_PRIMITIVEID": "gl_PrimitiveID",
+            # Metal input writes [[position_in_patch]] as HLSL's domain location.
+            "SV_DOMAINLOCATION": "gl_TessCoord",
             "SV_VIEWID": "gl_ViewIndex",
             "SV_ISFRONTFACE": "gl_FrontFacing",
             "SV_SAMPLEINDEX": "gl_SampleID",

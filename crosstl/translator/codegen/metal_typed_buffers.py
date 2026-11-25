@@ -30,6 +30,9 @@ boolean or aggregate elements (Metal texture buffers hold 16- and 32-bit integer
 to a ``Buffer<T>``, a read-modify-write whose buffer or index has side effects, a store or increment inside a larger
 expression, an element passed to an ``out``/``inout`` parameter, a typed buffer in a structure or a return type, and
 any other use of the buffer.
+
+GLSL output applies the same rewrite (``target="GLSL"``): its ``samplerBuffer`` and ``imageBuffer`` texel buffers
+hold the same texels and take the same ``texelFetch``, ``imageLoad``, ``imageStore`` and image atomic calls.
 """
 
 from __future__ import annotations
@@ -72,19 +75,23 @@ _TEXEL_CALLS = frozenset(
     }
 )
 _SWIZZLES = {1: "x", 2: "xy", 3: "xyz"}
+# What each output language calls the texel buffers a typed buffer becomes; ``texel buffers`` otherwise.
+_TEXEL_BUFFER_NOUNS = {"Metal": "texture buffers"}
 _SCOPES = (A.BlockNode, A.ForNode, A.ForInNode, A.FunctionNode)
 _OUT_QUALIFIERS = frozenset({"out", "inout"})
 
 
-def lower_metal_typed_buffers(program, refuse):
+def lower_metal_typed_buffers(program, refuse, target="Metal"):
     """A copy of ``program`` whose typed buffers are texel buffers; ``program`` itself when it declares none.
 
-    ``refuse(reason)`` receives one reason per construct that has no faithful Metal lowering.
+    ``refuse(reason)`` receives one reason per construct that has no faithful lowering. ``target`` names the output
+    language in those reasons: GLSL output applies the same rewrite to reach its ``samplerBuffer`` and
+    ``imageBuffer`` texel buffers, which hold the same 16- and 32-bit texels.
     """
     if not isinstance(program, A.ShaderNode) or not _has_typed_buffers(program):
         return program
     lowered = copy.deepcopy(program)
-    return _Lowerer(lowered, refuse or (lambda _reason: None)).run()
+    return _Lowerer(lowered, refuse or (lambda _reason: None), target).run()
 
 
 def _typed_buffer(type_node):
@@ -211,9 +218,10 @@ def _texel_buffer_type(type_node, texel):
 class _Lowerer:
     """One walk over the program with lexical scopes, rewriting each typed-buffer access in place."""
 
-    def __init__(self, program, refuse):
+    def __init__(self, program, refuse, target="Metal"):
         self.program = program
         self.refuse = refuse
+        self.target = target
         self.scope = TypeScope(program)
         self.functions = {
             getattr(function, "name", None): function
@@ -425,7 +433,7 @@ class _Lowerer:
                 if name not in _TEXEL_CALLS and function is None:
                     self.refuse(
                         f"typed buffer '{_buffer_name(argument)}' passed to '{name}', which has no texel-buffer "
-                        "form in Metal"
+                        f"form in {self.target}"
                     )
                 continue
             if self.element_access(argument) is None or position >= len(parameters):
@@ -538,8 +546,8 @@ class _Lowerer:
             texel = _texel_type(element)
             if texel is None:
                 self.refuse(
-                    f"{kind}<{_type_text(element)}> '{name}': Metal texture buffers hold texels of one to four 16- "
-                    "or 32-bit integer or floating-point components"
+                    f"{kind}<{_type_text(element)}> '{name}': {self.target} {_TEXEL_BUFFER_NOUNS.get(self.target, 'texel buffers')} "
+                    "hold texels of one to four 16- or 32-bit integer or floating-point components"
                 )
                 continue
             replacement = _texel_buffer_type(declared, texel)
@@ -557,7 +565,7 @@ class _Lowerer:
             )
             if returned is not None:
                 self.refuse(
-                    f"function '{function.name}' returns a {returned[0]}, which Metal cannot return"
+                    f"function '{function.name}' returns a {returned[0]}, which {self.target} cannot return"
                 )
 
 

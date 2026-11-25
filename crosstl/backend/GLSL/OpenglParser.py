@@ -5,6 +5,7 @@ import re
 from crosstl.translator.refusals import OpenGLSyntaxError
 
 from ..switch_clauses import record_default_position
+from .atomic_counter_offsets import AtomicCounterOffsets
 from .default_block_layouts import (
     DefaultBlockLayouts,
     member_layouts_with_block_matrix_order,
@@ -516,6 +517,7 @@ class GLSLParser:
         structs = []
         preprocessor = []
         layouts = []
+        counter_offsets = AtomicCounterOffsets()
 
         while self.current_token[0] != "EOF":
             self.skip_newlines()
@@ -576,6 +578,7 @@ class GLSLParser:
                 layouts.append(
                     self.parse_type_only_layout_declaration(qualifiers, layout)
                 )
+                counter_offsets.default(layouts[-1])
                 continue
 
             if self.is_qualifier_only_declaration_start(qualifiers, layout):
@@ -665,6 +668,7 @@ class GLSLParser:
                 for var in declarations:
                     lowered = {q.lower() for q in var.qualifiers or []}
                     if "uniform" in lowered:
+                        counter_offsets.place(var)
                         uniforms.append(var)
                     elif "const" in lowered:
                         constants.append(var)

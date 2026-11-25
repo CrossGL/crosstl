@@ -70,7 +70,7 @@ from .wgsl_constructors import WGSLConstructorMixin
 from .wgsl_cube_texture_offsets import (
     OFFSET_TEXTURE_LOOKUPS,
     WGSLCubeTextureOffsetUnsupportedError,
-    is_cube_array_texture_type,
+    is_cube_texture_type,
 )
 from .wgsl_entry_outputs import (
     EntryOutputLoweringError,
@@ -132,6 +132,7 @@ from .wgsl_struct_initializers import (
     wgsl_struct_array_initializer,
     wgsl_struct_initializer,
 )
+from .wgsl_subgroup_directives import add_subgroup_directives
 from .wgsl_subgroup_operations import wgsl_wave_operation, wgsl_wave_result_type
 from .wgsl_texture_calls import WGSLTextureCallMixin
 from .wgsl_texture_gather import GATHER_OPERATIONS, WGSLTextureGatherMixin
@@ -319,8 +320,8 @@ class WGSLCodeGen(
         "gl_WorkGroupID": "workgroup_id",
         "SV_GroupID": "workgroup_id",
         "gl_NumWorkGroups": "num_workgroups",
-        # The subgroup built-in inputs (WGSL section 13.3.1.1). naga 30 reads them without the
-        # `enable subgroups;` directive and rejects that directive as not yet implemented.
+        # The subgroup built-in inputs (WGSL section 13.3.1.1), which need `enable subgroups;`
+        # (wgsl_subgroup_directives).
         "gl_SubgroupSize": "subgroup_size",
         "gl_SubgroupInvocationID": "subgroup_invocation_id",
         "gl_NumSubgroups": "num_subgroups",
@@ -1005,6 +1006,7 @@ class WGSLCodeGen(
             helper_section_index,
             lines,
         )
+        add_subgroup_directives(lines)
         return "\n".join(lines).rstrip() + "\n"
 
     def stage_output_lowerings(self, ast, target_stage, existing_structs):
@@ -1719,7 +1721,7 @@ class WGSLCodeGen(
         if normalized_name in FILTERED_TEXTURE_LOOKUPS and args:
             self.refuse_integer_texture_sample(args[0], function_name)
         if normalized_name in OFFSET_TEXTURE_LOOKUPS and args:
-            self.refuse_cube_array_texture_offset(args[0], function_name)
+            self.refuse_cube_texture_offset(args[0], function_name)
         if normalized_name == "texture":
             return self.generate_texture_sample_call(function_name, args)
         if normalized_name == "texturelod":
@@ -1761,9 +1763,9 @@ class WGSLCodeGen(
             f"{function_name} yet"
         )
 
-    def refuse_cube_array_texture_offset(self, texture_expr, function_name):
+    def refuse_cube_texture_offset(self, texture_expr, function_name):
         texture_type = self.sampled_texture_type(self.expression_type(texture_expr))
-        if is_cube_array_texture_type(texture_type):
+        if is_cube_texture_type(texture_type):
             raise WGSLCubeTextureOffsetUnsupportedError(
                 function_name, self.generate_expression(texture_expr)
             )
