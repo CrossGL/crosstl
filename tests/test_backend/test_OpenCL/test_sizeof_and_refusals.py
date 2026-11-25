@@ -5,6 +5,7 @@ import pytest
 from crosstl.backend.OpenCL.OpenCLCrossGLCodeGen import (
     OpenCLAtomicFunctionUnsupportedError,
     OpenCLBlockUnsupportedError,
+    OpenCLPrintfValueUnsupportedError,
     OpenCLSizeofUnsupportedError,
     OpenCLToCrossGLConverter,
 )
@@ -132,3 +133,61 @@ def test_block_literal_is_refused():
     ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
     with pytest.raises(OpenCLBlockUnsupportedError, match="block literals have no"):
         OpenCLToCrossGLConverter().generate(ast)
+
+
+def test_printf_statements_are_imported():
+    crossgl = to_crossgl("""
+        __kernel void k(__global float* x) {
+            printf("%f", x[0]);
+            for (int j = 0; j < 2; j++) if (j == 1) printf("%d", j);
+        }
+        """)
+    assert 'printf("%f", x[0]);' in crossgl
+    assert 'printf("%d", j);' in crossgl
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        'int r = printf("%f", x[0]); o[0] = r;',
+        'o[0] = printf("%f", x[0]);',
+        'if (printf("%f", x[0]) == 0) o[0] = 1;',
+    ],
+)
+def test_printf_results_are_refused(statement):
+    # OpenCL C printf returns an int; CrossGL printf, the Vulkan debug print, returns nothing.
+    source = f"__kernel void k(__global float* x, __global int* o) {{ {statement} }}"
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
+    with pytest.raises(
+        OpenCLPrintfValueUnsupportedError, match="its result cannot be read"
+    ):
+        OpenCLToCrossGLConverter().generate(ast)
+
+
+def test_a_printf_the_program_defines_returns_its_value():
+    crossgl = to_crossgl("""
+        int printf(int v) { return v + 1; }
+        __kernel void k(__global int* o) { o[0] = printf(2); }
+        """)
+    assert "o[0] = printf(2);" in crossgl
+
+
+def test_opencl_inline_asm_raises_opencl_import_refused():
+    from crosstl.backend.import_refusals import OpenCLImportRefused
+
+    source = """
+    __kernel void probe(__global int* outp) {
+        int v = 1;
+        __asm__ volatile("" : "+r"(v));
+        outp[0] = v;
+    }
+    """
+    ast = OpenCLParser(OpenCLLexer(source).tokenize()).parse()
+    with pytest.raises(OpenCLImportRefused) as exc_info:
+        OpenCLToCrossGLConverter().generate(ast)
+    err = exc_info.value
+    assert err.source_name == "opencl"
+    assert err.missing_capabilities == ("opencl.import",)
+    assert err.code == "project.translate.opencl-import-unsupported"
+    assert "OpenCL C inline asm" in str(err)
+    assert "HIP" not in str(err)

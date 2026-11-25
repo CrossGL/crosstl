@@ -37,6 +37,10 @@ from ..refusals import MetalRefusal
 from .array_utils import format_c_style_array_declaration, split_array_type_suffix
 from .metal_keyword_identifiers import METAL_KEYWORD_IDENTIFIERS
 from .metal_reference_argument_aliasing import metal_reference_argument_aliases
+from .metal_reference_parameters import (
+    binds_address_space_reference,
+    has_parameter_value_type,
+)
 from .metal_refusals import MetalLoweringRefused
 from .stage_utils import (
     function_stage_name,
@@ -129,9 +133,14 @@ class MetalHlslFunctionMixin:
 
         Locals and parameters live in the thread address space, as do their
         struct fields and array elements. Vector components, buffer elements,
-        threadgroup or constant data and resource texels need a temporary.
+        threadgroup or constant data and resource texels need a temporary, and
+        so does an 8- or 16-bit integer struct field: the struct keeps the
+        declared width (``uchar value;``) while the parameter has the widened
+        computation type (``thread uint&``).
         """
         if not self.metal_argument_is_whole_storage_lvalue(expr):
+            return False
+        if self.metal_argument_has_narrow_member_storage(expr):
             return False
         name = self.expression_name(self.metal_argument_storage_root(expr))
         if not isinstance(name, str) or name not in self.local_variable_types:
@@ -147,6 +156,36 @@ class MetalHlslFunctionMixin:
                 or local_type.startswith(("device ", "constant ", "threadgroup "))
             )
         )
+
+    def metal_argument_has_narrow_member_storage(self, expr):
+        """Whether ``expr`` is (an element of) a struct field stored narrower than it computes.
+
+        Aggregates keep the declared width of 8- and 16-bit integers (``metal_struct_storage_type``), while locals and
+        reference parameters use the widened type ``map_type`` gives, so such an lvalue cannot bind ``thread uint&``.
+        """
+        return self.metal_argument_narrow_member_storage_type(expr) is not None
+
+    def metal_narrow_member_vector_storage_type(self, expr):
+        """The storage type (``uchar4``) through which a copy of the narrow vector field ``expr`` converts, else None.
+
+        A copy-in/copy-out temporary has the widened type (``uint4``). Metal converts integer scalars implicitly, so a
+        scalar field copies as it is, but it converts vectors only explicitly.
+        """
+        storage = self.metal_argument_narrow_member_storage_type(expr)
+        return storage if storage is not None and storage[-1] in "234" else None
+
+    def metal_argument_narrow_member_storage_type(self, expr):
+        """The declared storage type (``uchar``, ``uchar4``) of the narrow struct field ``expr`` names, else None."""
+        node = expr
+        while isinstance(node, ArrayAccessNode):
+            node = node.array
+        if not isinstance(node, MemberAccessNode):
+            return None
+        result_type = self.expression_result_type(expr)
+        storage = self.metal_native_narrow_bitcast_storage_type(result_type)
+        if storage is None or storage == self.map_type(result_type):
+            return None
+        return storage
 
     def metal_expression_is_side_effect_free(self, expr):
         if id(expr) in self.metal_sequenced_call_ids:
@@ -337,8 +376,14 @@ class MetalHlslFunctionMixin:
             )
             declared_type = self.map_type(self.type_name_string(raw_type))
             source = self.generate_expression(argument)
+            narrow_storage = self.metal_narrow_member_vector_storage_type(argument)
             if qualifier == "inout":
-                prologue += f"{indent_str}{declared_type} {name} = {source};\n"
+                initial = (
+                    f"{declared_type}({source})"
+                    if narrow_storage is not None
+                    else source
+                )
+                prologue += f"{indent_str}{declared_type} {name} = {initial};\n"
             else:
                 prologue += f"{indent_str}{declared_type} {name};\n"
             substitutions[id(argument)] = name
@@ -356,6 +401,8 @@ class MetalHlslFunctionMixin:
                 target, write_conversion = layout_store
                 if write_conversion:
                     value = f"{write_conversion}({name})"
+            if value == name and narrow_storage is not None:
+                value = f"{narrow_storage}({name})"
             epilogue += f"{indent_str}{target} = {value};\n"
         previous = self.metal_argument_substitutions
         self.metal_argument_substitutions = {**previous, **substitutions}
@@ -793,6 +840,12 @@ class MetalHlslFunctionMixin:
         ):
             return self.generate_expression(arg)
         if self.metal_reference_parameter_qualifier_for(func_name, index) is not None:
+            return self.generate_expression(arg)
+        if binds_address_space_reference(
+            self, func_name, index
+        ) and has_parameter_value_type(self, arg, param_type):
+            # The parameter is a `constant T&` or `device T&` reference, which binds
+            # the argument itself; a conversion would leave no object to bind.
             return self.generate_expression(arg)
         if (
             self.is_metal_bfloat_storage_read(arg)

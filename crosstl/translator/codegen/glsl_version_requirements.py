@@ -19,11 +19,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
+from .glsl_compute_derivative_groups import DERIVATIVE_GROUP_EXTENSIONS
+from .glsl_fragment_depth_layout import DEPTH_LAYOUTS as _DEPTH_LAYOUTS
+from .glsl_fragment_interlock import INTERLOCK_LAYOUTS
+from .glsl_spirv_varying_locations import (
+    spirv_location_macro_definition,
+    strip_spirv_location_macro,
+)
 from .glsl_vulkan_descriptor_sets import DESCRIPTOR_BINDING_MACRO
 
 __all__ = [
     "ARRAYS_OF_ARRAYS",
     "GLSLRequirement",
+    "NOPERSPECTIVE_QUALIFIER",
     "VARIABLE_GATHER_OFFSET",
     "ES_OPAQUE_TYPES",
     "declares_array_of_arrays",
@@ -233,6 +241,12 @@ _BUILTIN_FUNCTION_GROUPS = (
         ),
         (430, 310, ("GL_ARB_shader_storage_buffer_object",) + _COMPUTE, ()),
     ),
+    # No GLSL version declares the interlock functions without GL_ARB_fragment_shader_interlock, and GLSL ES has
+    # no ARB interlock extension.
+    (
+        ("beginInvocationInterlockARB", "endInvocationInterlockARB"),
+        (None, None, ("GL_ARB_fragment_shader_interlock",), ()),
+    ),
 )
 # A non-constant ``textureGatherOffset`` offset (GLSL 4.60 and GLSL ES 3.20, section 8.9.4); the emitter records
 # it while it renders, since the program text does not show whether an offset is a constant expression.
@@ -352,6 +366,21 @@ _LAYOUT_REQUIREMENTS = {
     "uniform_block_layout": GLSLRequirement(
         "a uniform block layout", 330, 300, ("GL_ARB_uniform_buffer_object",)
     ),
+    # Conservative depth layouts on the gl_FragDepth redeclaration (GLSL 4.20 section 4.4.2.3). glslang refuses the
+    # redeclaration below GLSL 4.20 even with GL_ARB_conservative_depth enabled ("identifiers starting with gl_ are
+    # reserved"), so desktop output raises its version; GLSL ES has the layouts only through
+    # GL_EXT_conservative_depth.
+    "depth": GLSLRequirement(
+        "a conservative depth layout",
+        420,
+        None,
+        (),
+        ("GL_EXT_conservative_depth",),
+    ),
+    # glslang accepts the GL_ARB_fragment_shader_interlock modes only from GLSL 4.50, extension or not.
+    "interlock": GLSLRequirement("a fragment shader interlock layout", 450, None),
+    # GL_KHR_compute_shader_derivatives and GL_NV_compute_shader_derivatives apply to GLSL 4.50 and later.
+    "derivative_group": GLSLRequirement("a compute derivative group layout", 450, None),
 }
 _STAGE_REQUIREMENTS = {
     "geometry": GLSLRequirement(
@@ -443,6 +472,21 @@ _PLAIN_INTERFACE = re.compile(
 )
 _PLAIN_BUFFER_BLOCK = re.compile(
     r"^(?:(?:" + "|".join(sorted(_INTERFACE_QUALIFIERS)) + r")\s+)*buffer\s+\w+\s*\{?"
+)
+# The ``noperspective`` interpolation qualifier arrived in GLSL 1.30; GLSL ES reserves the word at every version,
+# and only GL_NV_shader_noperspective_interpolation provides it.
+NOPERSPECTIVE_QUALIFIER = GLSLRequirement(
+    "the 'noperspective' qualifier",
+    130,
+    None,
+    (),
+    ("GL_NV_shader_noperspective_interpolation",),
+)
+# ``noperspective`` among the qualifiers that open a declaration, after an optional ``layout(...)``.
+_NOPERSPECTIVE_DECLARATION = re.compile(
+    r"^(?:layout\s*\([^()]*(?:\([^()]*\)[^()]*)*\)\s*)?(?:(?:"
+    + "|".join(sorted(_INTERFACE_QUALIFIERS - {"noperspective"}))
+    + r")\s+)*noperspective\s+[A-Za-z_]"
 )
 _COMMENTS = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
 _EXTENSION_LINE = re.compile(
@@ -549,6 +593,12 @@ def _layout_line_requirements(ids, declaration, stage):
         requirements.append(_LAYOUT_REQUIREMENTS["interface"])
     if any(qualifier.startswith("local_size_") for qualifier in ids):
         requirements.append(_LAYOUT_REQUIREMENTS["local_size"])
+    if ids & _DEPTH_LAYOUTS:
+        requirements.append(_LAYOUT_REQUIREMENTS["depth"])
+    if ids & INTERLOCK_LAYOUTS:
+        requirements.append(_LAYOUT_REQUIREMENTS["interlock"])
+    if ids & DERIVATIVE_GROUP_EXTENSIONS.keys():
+        requirements.append(_LAYOUT_REQUIREMENTS["derivative_group"])
     return requirements
 
 
@@ -591,7 +641,8 @@ def generated_program_requirements(code, stage_names=(), guard_macros=None):
     body = _COMMENTS.sub("", str(code or ""))
     struct_names = frozenset(_STRUCT_NAME.findall(body))
     for line in body.splitlines():
-        stripped = line.strip()
+        # A varying's SPIR-V location expands to nothing in an OpenGL compilation.
+        stripped = strip_spirv_location_macro(line.strip())
         stage = stage_of(stripped)
         if stage is None:
             continue
@@ -610,14 +661,21 @@ def generated_program_requirements(code, stage_names=(), guard_macros=None):
             found.setdefault(BUILTIN_FUNCTION_REQUIREMENTS[match.group(1)], None)
         for match in _TYPE_USE.finditer(stripped):
             found.setdefault(TYPE_REQUIREMENTS[match.group(1)], None)
+        if _NOPERSPECTIVE_DECLARATION.match(stripped):
+            found.setdefault(NOPERSPECTIVE_QUALIFIER, None)
     for requirement in stage_requirements(stage_names):
         found.setdefault(requirement, None)
     return list(found)
 
 
 def program_extensions(code):
-    """The extensions a rendered program enables with ``enable``, ``require`` or ``warn``."""
-    return set(_EXTENSION_LINE.findall(str(code or "")))
+    """The extensions an OpenGL compilation of a rendered program enables with ``enable``, ``require`` or ``warn``.
+
+    The extension in the SPIR-V branch of the varying location macro is not one of them: an OpenGL compilation
+    skips that branch, so its varyings still need a ``#version`` that has their other layouts.
+    """
+    body = str(code or "").replace(spirv_location_macro_definition(), "")
+    return set(_EXTENSION_LINE.findall(body))
 
 
 def resolve_version_line(version_line, requirements, extensions, can_raise=True):

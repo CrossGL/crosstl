@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass
 
 from .. import ast as A
+from ..workgroup_operations import WORKGROUP_COLLECTIVES, WORKGROUP_VOTES
 from .rule_table import CONVERSION_SIGNATURES, CONVERT_SAT_GENERIC
 
 
@@ -456,6 +457,11 @@ class TypeScope:
         direct = type_from_name(name)
         if direct is not None:
             return direct
+        if name in WORKGROUP_COLLECTIVES and name not in self.functions:
+            # A workgroup vote is a bool; every other collective has its first operand's type.
+            if name in WORKGROUP_VOTES:
+                return BOOL
+            return self.infer(arguments[0]) if arguments else None
         if name in ("and", "or") and name not in self.functions:
             lanes = [value.lanes for value in map(self.infer, arguments) if value]
             return BOOL.with_lanes(max(lanes, default=1))
@@ -478,6 +484,9 @@ class TypeScope:
             for argument in arguments[1:]:
                 result = arithmetic_result(result, self.infer(argument))
             return result
+        if name == "textureSamplePosition" and name not in self.functions:
+            # A multisample texture's sample position relative to the pixel centre (:mod:`.texture_operands`).
+            return FLOAT32.with_lanes(2)
         texel = self._infer_texel_call(name, arguments)
         if texel is not None:
             return texel

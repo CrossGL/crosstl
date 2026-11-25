@@ -13,7 +13,7 @@ from crosstl.translator.codegen.host_workgroup_size_ids import (
 )
 
 from .interface import hlsl_reflected_strides
-from .native import METAL_LANGUAGE_VERSION
+from .native import METAL_LANGUAGE_VERSIONS
 from .process import CommandResult, require_artifact, run
 from .toolchains import tool
 
@@ -22,6 +22,17 @@ BACKENDS = {"metal": "metal", "hlsl": "directx", "glsl": "opengl", "spirv": "vul
 SOURCE_BACKENDS = {"glsl": "opengl", "hlsl": "directx"}
 BINARIES = {"metal": ".air", "hlsl": ".dxil", "glsl": ".spv", "spirv": ".spv"}
 HLSL_PROFILE = "cs_6_6"
+# The later compute profiles a kernel compiles under, oldest first, when DXC rejects it at an older one only because it
+# calls an operation of a later shader model: SampleCmpLevel and GatherRaw need Shader Model 6.7, SampleCmpGrad,
+# SampleCmpBias and Barrier 6.8. The Direct3D 12 device of the Windows CI creates pipelines at each of them
+# (test_native_runtimes.test_d3d12_device_runs_the_harness_shader_model) but not at cs_6_9.
+HLSL_LATER_PROFILES = ("cs_6_7", "cs_6_8")
+# DXC's diagnostics for an operation that a later shader model introduced: Sema's availability check names the
+# model, and the validator names the opcode it does not allow under the profile.
+_LATER_SHADER_MODEL = re.compile(
+    r"requires shader model \d+\.\d+ or greater|"
+    r"Opcode \w+ not valid in shader model \w+_\d+_\d+"
+)
 CONFIGS = ("strict", "relaxed")
 ENVIRONMENTS = ("vulkan1.1", "vulkan1.2", "vulkan1.3")
 # HLSL 2021 native 16-bit scalar, vector and matrix types exist only under `dxc -enable-16bit-types` (Shader Model 6.2).
@@ -72,16 +83,45 @@ def dxil_is_signed(path):
     return header[:4] == b"DXBC" and any(header[4:20])
 
 
+def later_profiles(profile):
+    """``profile`` and the later profiles of :data:`HLSL_LATER_PROFILES` a kernel may fall back to, oldest first."""
+    match = re.fullmatch(r"cs_(\d+)_(\d+)", profile)
+    if match is None:
+        return (profile,)
+    model = (int(match.group(1)), int(match.group(2)))
+    later = tuple(
+        candidate
+        for candidate in HLSL_LATER_PROFILES
+        if tuple(int(part) for part in candidate.split("_")[1:]) > model
+    )
+    return (profile, *later)
+
+
+def _compile_hlsl(dxc, path, output, entry, config, profile):
+    """Compile under the oldest of :func:`later_profiles` that DXC accepts the kernel under.
+
+    A kernel moves to a later profile only when DXC names a later shader model in its rejection; any other rejection,
+    and a rejection under every profile, reports the last profile's diagnostics.
+    """
+    for candidate in later_profiles(profile):
+        command = [*dxc, path, "-T", candidate, "-E", entry, "-HV", "2021"]
+        command += ["-Fo", output, *hlsl_arguments(path)]
+        if config == "strict":
+            command.append("-Gis")
+        result = require_artifact(run(command), output)
+        if result.status != "rejected" or not _LATER_SHADER_MODEL.search(
+            result.log or ""
+        ):
+            break
+    return result
+
+
 def _hlsl(path, output, entry, config, profile):
     missing = _missing("dxc")
     if missing:
         return [missing], {}
     dxc = tool("dxc").command
-    command = [*dxc, path, "-T", profile, "-E", entry, "-HV", "2021", "-Fo", output]
-    command += hlsl_arguments(path)
-    if config == "strict":
-        command.append("-Gis")
-    result = require_artifact(run(command), output)
+    result = _compile_hlsl(dxc, path, output, entry, config, profile)
     if result.status != "accepted":
         return [result], {}
     if not dxil_is_signed(output):
@@ -101,6 +141,22 @@ def _hlsl(path, output, entry, config, profile):
             CommandResult(dump.command, "harness-error", dump.returncode, dump.log),
         ], {}
     return [result, dump], {"strides": hlsl_reflected_strides(dump.log)}
+
+
+def _metal(path, output, config):
+    """Compile under the oldest MSL version that accepts the artifact and name it for the driver compile.
+
+    A rejection under every version reports the newest compiler's diagnostics.
+    """
+    for major, minor in METAL_LANGUAGE_VERSIONS:
+        command = [*tool("metal").command, f"-std=metal{major}.{minor}"]
+        command += ["-c", path, "-o", output]
+        command += ["-fno-fast-math"] if config == "strict" else ["-ffast-math"]
+        result = require_artifact(run(command), output)
+        if result.status != "rejected":
+            break
+    reflection = {"metal_language": [major, minor]}
+    return [result], reflection if result.status == "accepted" else {}
 
 
 def validate(
@@ -123,11 +179,7 @@ def validate(
         missing = _missing("metal")
         if missing:
             return [missing], {}
-        major, minor = METAL_LANGUAGE_VERSION
-        command = [*tool("metal").command, f"-std=metal{major}.{minor}"]
-        command += ["-c", path, "-o", output]
-        command += ["-fno-fast-math"] if config == "strict" else ["-ffast-math"]
-        return [require_artifact(run(command), output)], {}
+        return _metal(path, output, config)
     if target == "glsl":
         missing = _missing("glslangValidator")
         if missing:

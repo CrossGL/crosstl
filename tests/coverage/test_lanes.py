@@ -66,9 +66,30 @@ def test_operations_every_invocation_must_call_keep_every_invocation_active():
 
 
 @pytest.mark.parametrize(
+    "language, name, crossgl",
+    [
+        ("mojo", "block.sum", "workgroupAdd"),
+        ("mojo", "block.prefix_sum", "workgroupInclusiveAdd"),
+        ("mojo", "block.broadcast", "workgroupBroadcast({0}, 0u)"),
+        ("opencl", "work_group_reduce_add", ""),
+        ("opencl", "work_group_scan_exclusive_max", ""),
+        ("opencl", "work_group_broadcast", ""),
+    ],
+)
+def test_workgroup_collectives_run_one_workgroup_whose_invocations_all_call(
+    language, name, crossgl
+):
+    operation = feature(language, name, crossgl=crossgl)
+    assert lanes.cooperative(operation) and not lanes.divergent(operation)
+
+
+@pytest.mark.parametrize(
     "operation",
     [
         feature("glsl", "sin", crossgl="sin"),
+        # A workgroup barrier returns nothing, and workgroupUniformLoad reads workgroup memory, not values.
+        feature("wgsl", "workgroupBarrier", Signature(VOID, ()), "workgroupBarrier"),
+        feature("wgsl", "workgroupUniformLoad", crossgl="workgroupUniformLoad"),
         # GLSL's all() and any() reduce a vector, not a subgroup; HIP's __all and __any are warp votes.
         feature("glsl", "all", Signature(Type("bool"), (Param(Type("bool", (3,))),))),
         feature("metal", "simdgroup_multiply", crossgl=""),

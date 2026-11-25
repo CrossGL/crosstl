@@ -4,6 +4,8 @@ Every generated program here is also compiled with glslangValidator when it is i
 that carry several stages.
 """
 
+import functools
+import re
 import shutil
 import subprocess
 
@@ -17,6 +19,7 @@ from crosstl.translator.codegen.glsl_refusals import (
 )
 from crosstl.translator.codegen.glsl_version_requirements import (
     BUILTIN_FUNCTION_REQUIREMENTS,
+    NOPERSPECTIVE_QUALIFIER,
     generated_program_requirements,
     resolve_version_line,
     with_es_default_precisions,
@@ -36,7 +39,14 @@ def compile_with_glslang(tmp_path, code, stage):
     assert result.returncode == 0, result.stdout + result.stderr
 
 
-def generate(source, stage=None, codegen=GLSLCodeGen):
+def generate(source, stage=None, codegen=None):
+    # The opengl target writes desktop GLSL whatever the #version line says, so a program with a GLSL ES #version
+    # line is generated for the gles target, which writes GLSL ES.
+    if codegen is None:
+        if re.search(r"^\s*#version\s+\d+\s+es\b", source, re.M):
+            codegen = functools.partial(GLSLCodeGen, target_profile="gles")
+        else:
+            codegen = GLSLCodeGen
     ast = crosstl.translator.parse(source)
     if stage is None:
         return codegen().generate(ast)
@@ -406,3 +416,89 @@ def test_fixed_version_refuses_instead_of_raising():
             "the target is #version 300 es"
         ],
     )
+
+
+NOPERSPECTIVE_SHADER = """
+{version}
+shader NoPerspective {{
+    struct FragmentInput {{ vec2 uv @ noperspective; }}
+    struct FragmentOutput {{ vec4 color @ gl_FragColor; }}
+    fragment {{
+        FragmentOutput main(FragmentInput input) {{
+            FragmentOutput output;
+            output.color = vec4(input.uv, 0.0, 1.0);
+            return output;
+        }}
+    }}
+}}
+"""
+
+
+def test_es_refuses_noperspective_qualifier():
+    # GLSL ES reserves 'noperspective' at every version; only
+    # GL_NV_shader_noperspective_interpolation provides it (#5060).
+    with pytest.raises(OpenGLLoweringRefused) as raised:
+        generate(NOPERSPECTIVE_SHADER.format(version="#version 300 es"), "fragment")
+
+    assert (
+        "the 'noperspective' qualifier requires "
+        "GL_NV_shader_noperspective_interpolation" in str(raised.value)
+    )
+
+
+def test_webgl_refuses_noperspective_qualifier():
+    with pytest.raises(WebGLLoweringRefused) as raised:
+        generate(
+            NOPERSPECTIVE_SHADER.format(version=""),
+            "fragment",
+            codegen=WebGLCodeGen,
+        )
+
+    assert "the 'noperspective' qualifier requires" in str(raised.value)
+
+
+def test_desktop_keeps_noperspective_qualifier(tmp_path):
+    code = generate(
+        NOPERSPECTIVE_SHADER.format(version="#version 330 core"), "fragment"
+    )
+
+    assert code.startswith("#version 330 core\n")
+    assert re.search(r"\bnoperspective in vec2 uv;", code)
+    compile_with_glslang(tmp_path, code, "frag")
+
+
+def test_noperspective_extension_satisfies_es(tmp_path):
+    code = (
+        "#version 300 es\n"
+        "#extension GL_NV_shader_noperspective_interpolation : require\n"
+        "precision highp float;\n"
+        "noperspective in vec2 uv;\n"
+        "layout(location = 0) out vec4 color;\n"
+        "void main() { color = vec4(uv, 0.0, 1.0); }\n"
+    )
+    requirements = generated_program_requirements(code, ["fragment"])
+
+    assert NOPERSPECTIVE_QUALIFIER in requirements
+    assert resolve_version_line(
+        "#version 300 es",
+        requirements,
+        {"GL_NV_shader_noperspective_interpolation"},
+    ) == ("#version 300 es", [])
+    compile_with_glslang(tmp_path, code, "frag")
+
+
+def test_noperspective_requirement_ignores_identifiers():
+    def needs_noperspective(line):
+        return NOPERSPECTIVE_QUALIFIER in generated_program_requirements(
+            line, ["fragment"]
+        )
+
+    assert needs_noperspective("noperspective in vec2 uv;")
+    assert needs_noperspective(
+        "layout(location = 0) noperspective centroid in vec2 uv;"
+    )
+    assert needs_noperspective("centroid noperspective out vec2 uv;")
+    assert needs_noperspective("CROSSGL_LOCATION(0) noperspective in vec2 uv;")
+    assert needs_noperspective("noperspective vec2 uv;")
+    assert not needs_noperspective("float noperspective_weight = 1.0;")
+    assert not needs_noperspective("smooth in vec2 uv;")

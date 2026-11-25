@@ -14,6 +14,10 @@ its probe keeps every invocation active, and so does the probe of an operation t
 must call: OpenCL C's ``cl_khr_subgroups`` functions and its subgroup pipe reservations ("must be encountered by all
 work items in a sub-group", OpenCL C 3.0, section 6.15.16). Barriers return no value to compare, and stay
 single-invocation probes.
+
+A workgroup collective (CrossGL's ``workgroupAdd``, OpenCL C's ``work_group_reduce_add``, ...) combines the values of
+every invocation of the workgroup, so its probe runs as the same one workgroup too, and every invocation makes the
+call, as each of them must (OpenCL C 3.0, section 6.15.15).
 """
 
 from __future__ import annotations
@@ -36,6 +40,11 @@ _OPERATION = re.compile(
 _WARP = re.compile(
     r"__(?:shfl|ballot|activemask|uni_sync|(?:all|any)(?:_sync)?$|reduce_\w+_sync|match_\w+_sync|hip_ds_\w*permute)"
 )
+# Workgroup reductions, scans, votes and broadcasts, in lower case and without underscores: CrossGL's and OpenCL C's.
+_WORKGROUP = re.compile(
+    r"workgroup(?:inclusive|exclusive)?(?:add|mul|min|max|and|or|xor)$|workgroup(?:all|any|broadcast)$"
+    r"|workgroup(?:reduce|scaninclusive|scanexclusive)"
+)
 # Groups of operations that every invocation of the subgroup must call, by language.
 _UNIFORM = {"opencl": frozenset({"cl_khr_subgroups", "pipe"})}
 # Those that read the value of a lane they name, in lower case and without underscores.
@@ -52,7 +61,13 @@ def _names(feature: Feature) -> list[str]:
 
 
 def _operation(name: str) -> bool:
-    return bool(_WARP.match(name) or _OPERATION.match(name.replace("_", "")))
+    return bool(_WARP.match(name) or _OPERATION.match(name.replace("_", ""))) or (
+        _workgroup(name)
+    )
+
+
+def _workgroup(name: str) -> bool:
+    return bool(_WORKGROUP.match(name.replace("_", "")))
 
 
 def cooperative(feature: Feature) -> bool:
@@ -66,6 +81,8 @@ def cooperative(feature: Feature) -> bool:
 def divergent(feature: Feature) -> bool:
     """Whether the probe of the subgroup operation ``feature`` leaves the invocations :data:`SKIPPED` names inactive."""
     if feature.group in _UNIFORM.get(feature.language, ()):
+        return False
+    if any(_workgroup(name) for name in _names(feature)):
         return False
     return cooperative(feature) and not any(
         _NAMED_LANE.search(name.replace("_", "")) for name in _names(feature)

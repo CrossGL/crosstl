@@ -4,6 +4,7 @@ from copy import deepcopy
 from enum import Enum
 from typing import Any, Dict, List, Optional, Sequence, Union
 
+from .ast_copy import node_deepcopy
 from .cooperative_matrix import (
     get_cooperative_matrix_fragment_mapping,
     has_cooperative_matrix_fragment_mapping,
@@ -18,6 +19,9 @@ class ASTNode:
         self.source_location = source_location
         self.annotations = annotations or {}
         self.parent = None
+
+    # The same copy as ``copy.deepcopy``'s default protocol, built directly (:mod:`.ast_copy`).
+    __deepcopy__ = node_deepcopy
 
     def accept(self, visitor):
         """Dispatch this node to a visitor method named for its class."""
@@ -549,6 +553,7 @@ class ShaderStage(Enum):
     RAY_MISS = "ray_miss"
     RAY_ANY_HIT = "ray_any_hit"
     RAY_CALLABLE = "ray_callable"
+    NODE = "node"
 
 
 class ExecutionModel(Enum):
@@ -1288,6 +1293,12 @@ class ExpressionNode(ASTNode):
         self.vtype = expression_type
         self.name = getattr(self, "identifier", None)
         self.semantic = None
+
+
+# Annotation on a floating ``LiteralNode`` written with a suffix (``"f"`` for ``0.1f``, a binary32 value). An
+# unsuffixed floating literal denotes its exact decimal value, rounded once to the type its context requires, so
+# ``x * 0.1`` with a ``double`` ``x`` multiplies by the binary64 value nearest 0.1 (as in C, HLSL and WGSL).
+FLOAT_LITERAL_SUFFIX = "float_literal_suffix"
 
 
 class LiteralNode(ExpressionNode):

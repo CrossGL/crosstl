@@ -25,6 +25,7 @@ __all__ = [
     "explicit_specialization_index",
     "explicit_specialization_refusals",
     "explicit_specializations",
+    "functions_by_called_name",
 ]
 
 EXPLICIT_SPECIALIZATION_ATTRIBUTE = "explicit_specialization"
@@ -69,6 +70,25 @@ def explicit_specializations(functions):
         if marked is not None:
             found.append((function, marked[0], tuple(marked[1])))
     return found
+
+
+def functions_by_called_name(functions):
+    """The functions a call of each name may run, for reachability from an entry point.
+
+    A call names a generic primary, and the generator that monomorphizes it runs the explicit specialization
+    whose template arguments match the call's instead of the primary's body. The specializations are concrete
+    functions under their own names, so a call of the primary reaches each of them as well as the primary.
+    """
+    functions = [function for function in functions or [] if function is not None]
+    by_name = {}
+    for function in functions:
+        name = getattr(function, "name", None)
+        if name:
+            by_name.setdefault(name, []).append(function)
+    for function, primary, _arguments in explicit_specializations(functions):
+        if function not in by_name.get(primary, ()):
+            by_name.setdefault(primary, []).append(function)
+    return by_name
 
 
 def _canonical_vector_spelling(type_name):

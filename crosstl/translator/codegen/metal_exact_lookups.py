@@ -107,6 +107,7 @@ METAL_ATTRIBUTE_NAMES = frozenset(
         "opaque",
         "origin",
         "primitive_data",
+        "time",
         "user_instance_id",
         "world_space_direction",
         "world_space_origin",

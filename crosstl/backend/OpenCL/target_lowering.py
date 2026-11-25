@@ -29,6 +29,7 @@ from crosstl.translator.ast import (
 )
 from crosstl.translator.host_workgroup_size import function_entry_execution_config
 from crosstl.translator.renames import renamed
+from crosstl.translator.validation import IMAGE_FORMAT_METADATA_NAMES
 
 OPENCL_TARGET_UNSUPPORTED_CODE = "opencl.target.unsupported"
 OPENCL_TARGET_UNRESOLVED_HELPER_CODE = "opencl.target.unresolved-helper"
@@ -36,6 +37,9 @@ OPENCL_TARGET_POINTER_HELPER_CODE = "opencl.target.pointer-helper-parameter"
 OPENCL_TARGET_BUILTIN_CODE = "opencl.target.unsupported-builtin"
 DIRECTX_BINDING_PROVENANCE_ANNOTATION = "directx.binding_provenance"
 DIRECTX_RELOCATABLE_BINDING_ANNOTATION = "directx.relocatable_binding"
+# The kernel whose parameter a program-scope resource or ``<kernel>_Args`` block was. A target that gives each entry
+# its own argument table (Metal) passes the declaration to that kernel only and checks its binding there.
+ENTRY_ARGUMENT_ANNOTATION = "entry_argument"
 _TARGET_SCALAR_TYPE_ALIASES = {
     "f32": "float",
     "f64": "double",
@@ -424,12 +428,33 @@ def _binding_attribute(binding):
     )
 
 
+# The attributes of a storage parameter its structured buffer keeps: the layout, and the memory qualifiers that
+# leave the buffer's type alone (``@restrict``, ``@coherent``, ``@volatile``), which the GLSL, SPIR-V and Metal
+# generators write on a buffer as they do on a parameter.
+_KEPT_STORAGE_ATTRIBUTES = frozenset(
+    {"buffer_layout", "restrict", "coherent", "volatile"}
+)
+
+
 def _layout_attributes(parameter):
-    """The ``@buffer_layout`` of a storage parameter, which its structured buffer keeps."""
+    """The ``@buffer_layout`` and memory qualifiers of a storage parameter, which its structured buffer keeps."""
     return [
         attribute
         for attribute in getattr(parameter, "attributes", []) or []
-        if str(getattr(attribute, "name", "")).lower() == "buffer_layout"
+        if str(getattr(attribute, "name", "")).lower() in _KEPT_STORAGE_ATTRIBUTES
+    ]
+
+
+def _resource_attributes(parameter):
+    """The image format of a texture or image parameter (``@format(r32f)``, ``@texel(float)``, ``@r32f``).
+
+    The global the parameter becomes keeps it, so a target declares the image with the texel its accesses use.
+    """
+    return [
+        attribute
+        for attribute in getattr(parameter, "attributes", []) or []
+        if str(getattr(attribute, "name", "")).lower()
+        in {"format", "texel", *IMAGE_FORMAT_METADATA_NAMES}
     ]
 
 
@@ -979,7 +1004,10 @@ def normalize_opencl_intermediate_for_target(cgl_ast):
                         VariableNode(
                             parameter.name,
                             _clone_target_type(getattr(parameter, "param_type", None)),
-                            attributes=[_binding_attribute(binding)],
+                            attributes=[
+                                _binding_attribute(binding),
+                                *_resource_attributes(parameter),
+                            ],
                         ),
                         (
                             "OpenCL target-lowered resource parameter "
@@ -998,7 +1026,12 @@ def normalize_opencl_intermediate_for_target(cgl_ast):
                     next_binding,
                 )
             )
+            cgl_ast.cbuffers[-1].add_annotation(
+                ENTRY_ARGUMENT_ANNOTATION, function.name
+            )
 
+        for variable in global_variables:
+            variable.add_annotation(ENTRY_ARGUMENT_ANNOTATION, function.name)
         cgl_ast.global_variables.extend(global_variables)
         function.parameters = []
         function.attributes = _target_function_attributes(function)

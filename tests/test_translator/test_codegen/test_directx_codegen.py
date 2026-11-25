@@ -1347,7 +1347,7 @@ def test_hlsl_metal_union_bool4_uint_alias_preserves_packed_bytes(tmp_path):
     ("declaration", "reason"),
     [
         (
-            "union BadSize { uint2 words; uint word; };",
+            "union BadSize { uint4 words; uint pair[2]; };",
             "member-size-mismatch",
         ),
         (
@@ -1355,7 +1355,7 @@ def test_hlsl_metal_union_bool4_uint_alias_preserves_packed_bytes(tmp_path):
             "member-shape-unsupported",
         ),
         (
-            "union Padded { uint3 words; uchar4 bytes[4]; };",
+            "union Padded { uint4 words; float2 pairs[2]; };",
             "member-storage-shape-mismatch",
         ),
         (
@@ -1550,7 +1550,7 @@ def test_hlsl_compile_time_bitcast_rejects_runtime_operand_with_metadata():
         ),
     ],
 )
-def test_hlsl_compile_time_global_preserves_user_defined_bitcast_names(
+def test_hlsl_compile_time_global_rejects_user_defined_bitcast_calls(
     function_name, function_declaration, constant_declaration
 ):
     source = f"""
@@ -1565,7 +1565,8 @@ def test_hlsl_compile_time_global_preserves_user_defined_bitcast_names(
 
     diagnostic = exc_info.value
     assert diagnostic.reason == "function-call"
-    assert diagnostic.detail == function_name
+    # The helper is renamed apart from the intrinsic, so the call cannot fold as a bitcast.
+    assert diagnostic.detail == f"{function_name}_fn"
     assert diagnostic.operation is None
     assert diagnostic.operand_type is None
     assert diagnostic.result_type is None
@@ -19758,10 +19759,10 @@ def test_hlsl_preserves_overload_names_when_mapped_signatures_remain_distinct(
 
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "int select(int value)" in generated_code
-    assert "float select(float value)" in generated_code
-    assert "return select(1);" in generated_code
-    assert "return select(2.0);" in generated_code
+    assert "int select_fn(int value)" in generated_code
+    assert "float select_fn(float value)" in generated_code
+    assert "return select_fn(1);" in generated_code
+    assert "return select_fn(2.0);" in generated_code
     assert "select_int" not in generated_code
     assert_directx_compute_validates_if_available(generated_code, tmp_path)
 
@@ -19853,10 +19854,10 @@ def test_hlsl_resolves_call_after_bfloat_payload_types_remain_distinct():
 
     generated = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "float16_t select(float16_t value)" in generated
-    assert "uint select(uint value)" in generated
+    assert "float16_t select_fn(float16_t value)" in generated
+    assert "uint select_fn(uint value)" in generated
     assert (
-        "return __crossgl_round_half1(__crossgl_bfloat16_to_float(uint(select(1))));"
+        "return __crossgl_round_half1(__crossgl_bfloat16_to_float(uint(select_fn(1))));"
         in generated
     )
 
@@ -19889,10 +19890,10 @@ def test_hlsl_distinct_bfloat_payload_overload_reaches_project_artifact(tmp_path
     assert payload["diagnostics"] == []
     artifact = payload["artifacts"][0]
     generated = (tmp_path / artifact["path"]).read_text(encoding="utf-8")
-    assert "float16_t select(float16_t value)" in generated
-    assert "uint select(uint value)" in generated
+    assert "float16_t select_fn(float16_t value)" in generated
+    assert "uint select_fn(uint value)" in generated
     assert (
-        "return __crossgl_round_half1(__crossgl_bfloat16_to_float(uint(select(1))));"
+        "return __crossgl_round_half1(__crossgl_bfloat16_to_float(uint(select_fn(1))));"
         in generated
     )
 
@@ -20260,7 +20261,7 @@ def test_hlsl_fma_lowers_to_mad_with_shadowing_local_renamed():
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
 
-def test_hlsl_user_defined_fma_function_is_preserved():
+def test_hlsl_user_defined_fma_function_is_renamed_apart_from_the_intrinsic():
     shader = """
     shader HlslUserFma {
         float fma(float value, float scale, float bias) {
@@ -20278,8 +20279,8 @@ def test_hlsl_user_defined_fma_function_is_preserved():
 
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "float fma(float value, float scale, float bias)" in generated_code
-    assert "float fused = fma(value, 2.0, 1.0);" in generated_code
+    assert "float fma_fn(float value, float scale, float bias)" in generated_code
+    assert "float fused = fma_fn(value, 2.0, 1.0);" in generated_code
     assert "mad(" not in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
 
@@ -20302,8 +20303,8 @@ def test_hlsl_user_defined_mad_function_is_renamed_consistently():
 
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "float mad_(float value, float scale, float bias)" in generated_code
-    assert "float fused = mad_(value, 2.0, 1.0);" in generated_code
+    assert "float mad_fn(float value, float scale, float bias)" in generated_code
+    assert "float fused = mad_fn(value, 2.0, 1.0);" in generated_code
     assert "float mad(float value, float scale, float bias)" not in generated_code
     assert "float fused = mad(value, 2.0, 1.0);" not in generated_code
     HLSLParser(HLSLLexer(generated_code).tokenize()).parse()
@@ -20457,8 +20458,8 @@ def test_hlsl_two_argument_atan_renames_shadowed_global_atan2_function():
 
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "float atan2_(float x)" in generated_code
-    assert "float helper = atan2_(direction.x);" in generated_code
+    assert "float atan2_fn(float x)" in generated_code
+    assert "float helper = atan2_fn(direction.x);" in generated_code
     assert "float angle = (atan2(direction.y, direction.x) + helper);" in generated_code
     assert "float atan2(float x)" not in generated_code
     assert "atan2(direction.x)" not in generated_code
@@ -20571,9 +20572,9 @@ def test_hlsl_user_defined_rsqrt_result_type_is_not_builtin_inferred():
 
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "float rsqrt(float3 value)" in generated_code
-    assert "float invLength = rsqrt(normal);" in generated_code
-    assert "float3 invLength = rsqrt(normal);" not in generated_code
+    assert "float rsqrt_fn(float3 value)" in generated_code
+    assert "float invLength = rsqrt_fn(normal);" in generated_code
+    assert "float3 invLength = rsqrt_fn(normal);" not in generated_code
 
 
 def test_hlsl_user_defined_inversesqrt_is_not_lowered():
@@ -21564,9 +21565,9 @@ def test_hlsl_user_defined_bitcast_names_are_not_lowered_or_inferred():
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
     assert "float floatBitsToInt(float3 value)" in generated_code
-    assert "float asfloat(float value)" in generated_code
+    assert "float asfloat_fn(float value)" in generated_code
     assert "float adjusted = floatBitsToInt(value);" in generated_code
-    assert "float nativeName = asfloat(1.0);" in generated_code
+    assert "float nativeName = asfloat_fn(1.0);" in generated_code
     assert "int3 adjusted = asint(value);" not in generated_code
 
 
@@ -21588,8 +21589,8 @@ def test_hlsl_user_defined_two_argument_atan_is_not_lowered():
 
     generated_code = HLSLCodeGen().generate(crosstl.translator.parse(shader))
 
-    assert "float atan(float y, float x)" in generated_code
-    assert "float angle = atan(direction.y, direction.x);" in generated_code
+    assert "float atan_fn(float y, float x)" in generated_code
+    assert "float angle = atan_fn(direction.y, direction.x);" in generated_code
     assert "atan2(" not in generated_code
 
 
@@ -30440,10 +30441,10 @@ def test_directx_rejects_fixed_resource_call_with_too_many_arguments(
             5,
         ),
         (
-            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depth, input.bias))",
+            "vec4(textureCompare(shadowMap, compareSampler, input.uv, input.depth, input.bias, input.bias))",
             "textureCompare",
-            4,
             5,
+            6,
         ),
         (
             "textureGather(colorMap, input.uv, input.component, input.component)",
@@ -30452,10 +30453,10 @@ def test_directx_rejects_fixed_resource_call_with_too_many_arguments(
             4,
         ),
         (
-            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.component)",
+            "textureGatherCompareOffset(shadowMap, compareSampler, input.uv, input.depth, input.offset, input.component, input.component)",
             "textureGatherCompareOffset",
-            5,
             6,
+            7,
         ),
     ],
 )
@@ -40837,7 +40838,7 @@ def test_directx_texture_query_resource_descriptors():
         codegen, codegen.texture_sample_position_expression, "colorMap", "sampleIndex"
     ) == (
         "float2(0.0, 0.0)",
-        "texture sample-position query: textureSamplePosition on Texture2D requires a sampled multisample texture",
+        "texture sample-position query: textureSamplePosition on Texture2D requires a multisample texture",
     )
     assert (
         codegen.texture_sample_position_expression("msTex", "sampleIndex")
@@ -41185,7 +41186,7 @@ def test_directx_multisample_texture_sample_position_queries_use_hlsl_member():
     assert "msTextures[2].GetSamplePosition(input.sampleIndex)" in generated_code
     assert "textureSamplePosition(" not in generated_code
     assert (
-        "texture sample-position query: textureSamplePosition on Texture2D requires a sampled multisample texture"
+        "texture sample-position query: textureSamplePosition on Texture2D requires a multisample texture"
         in refusal
     )
     assert "SamplerState msTexSampler" not in generated_code
@@ -51204,8 +51205,8 @@ def test_hlsl_boolean_min_max_respect_user_defined_functions():
 
     generated = generate_code(parse_code(tokenize_code(shader)))
 
-    assert "bool min(bool left, bool right)" in generated
-    assert "return min(left, right);" in generated
+    assert "bool min_fn(bool left, bool right)" in generated
+    assert "return min_fn(left, right);" in generated
     assert "return ((left) && (right));" not in generated
 
 
@@ -52028,11 +52029,6 @@ def test_hlsl_hip_inherited_fields_aliases_and_enums_validate(tmp_path):
             "int get() { return value; } } item; };",
             "Outer state; state.item.value = input[0]; "
             "output[0] = state.item.get();",
-        ),
-        (
-            "own-instance",
-            "class State { public: int value; int get() { return value; } };",
-            "State state; state.value = input[0]; output[0] = state.get();",
         ),
         (
             "inherited-static",

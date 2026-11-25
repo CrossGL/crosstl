@@ -13,9 +13,9 @@ import re
 import struct
 from pathlib import Path
 
+from . import directx_resources, metal_textures
 from .process import run
 
-FILES = ("input.bin", "output.bin")
 CONSTANTS = "constants.bin"
 VULKAN_TIMEOUT = 15
 
@@ -24,6 +24,11 @@ VULKAN_TIMEOUT = 15
 # newest version on an Apple GPU but older than 3.1 on the Apple Paravirtual device of hosted macOS runners, so one
 # artifact compiled under two languages. MSL 3.1 is the first with ``bfloat`` (MSL specification section 2.1).
 METAL_LANGUAGE_VERSION = (3, 1)
+# An artifact that MSL 3.1 rejects compiles under the oldest later version that accepts it, offline and then in the
+# driver: ``coherent(device)`` arrives in MSL 3.2, ``pack_float_to_snorm10a2`` in 4.0 and the atomic functions without
+# ``_explicit`` in 4.1, the version the coverage validators check (tools/coverage/validators.py METAL_STANDARD). An
+# artifact keeps one language either way, and every artifact MSL 3.1 accepts keeps 3.1.
+METAL_LANGUAGE_VERSIONS = ((3, 1), (3, 2), (4, 0), (4, 1))
 
 
 class DriverRejected(RuntimeError):
@@ -67,10 +72,32 @@ def _constants(job, *kinds):
     return block, (Path(job["directory"]) / CONSTANTS).read_bytes()
 
 
-def metal_language_version(metal):
-    """``METAL_LANGUAGE_VERSION`` as an ``MTLLanguageVersion``, whose value is the major version shifted left 16."""
-    major, minor = METAL_LANGUAGE_VERSION
+def metal_language_version(metal, version=METAL_LANGUAGE_VERSION):
+    """``version`` as an ``MTLLanguageVersion``, whose value is the major version shifted left 16."""
+    major, minor = version
     return getattr(metal, f"MTLLanguageVersion{major}_{minor}", major << 16 | minor)
+
+
+def _metal_function(Metal, library, entry):
+    """The entry function, specialized when it declares ``[[function_constant(n)]]`` values.
+
+    A function that reads function constants builds a pipeline only once specialized (Metal Shading Language
+    Specification, "Program Scope Function Constants"). The harness sets no value, so ``is_function_constant_defined``
+    is false for each constant and the kernel takes the default it writes, as a SPIR-V, GLSL or HLSL kernel does
+    without a specialization value.
+    """
+    function = library.newFunctionWithName_(entry)
+    if function is None:
+        raise RuntimeError(f"Missing Metal entry {entry}")
+    constants = function.functionConstantsDictionary()
+    if constants is None or not len(constants):
+        return function
+    function, error = library.newFunctionWithName_constantValues_error_(
+        entry, Metal.MTLFunctionConstantValues.new(), None
+    )
+    if function is None:
+        raise DriverRejected(f"Metal function specialization: {error}")
+    return function
 
 
 def execute_metal(job):
@@ -81,7 +108,11 @@ def execute_metal(job):
         raise RuntimeError("No Metal device")
     identity = _expect(job, str(device.name()))
     options = Metal.MTLCompileOptions.new()
-    options.setLanguageVersion_(metal_language_version(Metal))
+    options.setLanguageVersion_(
+        metal_language_version(
+            Metal, tuple(job.get("metal_language", METAL_LANGUAGE_VERSION))
+        )
+    )
     strict = job["config"] == "strict"
     options.setMathMode_(Metal.MTLMathModeSafe if strict else Metal.MTLMathModeFast)
     options.setMathFloatingPointFunctions_(
@@ -94,9 +125,7 @@ def execute_metal(job):
     )
     if library is None:
         raise DriverRejected(f"Metal driver compile: {error}")
-    function = library.newFunctionWithName_(job["entry"])
-    if function is None:
-        raise RuntimeError(f"Missing Metal entry {job['entry']}")
+    function = _metal_function(Metal, library, job["entry"])
     pipeline, error = device.newComputePipelineStateWithFunction_error_(function, None)
     if pipeline is None:
         raise DriverRejected(f"Metal pipeline: {error}")
@@ -130,6 +159,8 @@ def execute_metal(job):
         encoder.setBuffer_offset_atIndex_(buffer, 0, binding)
     if constants is not None:
         encoder.setBuffer_offset_atIndex_(constants, 0, block["slot"])
+    # Held until the command buffer completes.
+    textures = metal_textures.bind(Metal, device, encoder, job)
     # Metal hosts dispatch exactly `threads` threads (non-uniform threadgroups); the other APIs can only launch
     # whole workgroups, which is the hazard the partial-threadgroup cases measure.
     encoder.dispatchThreads_threadsPerThreadgroup_(
@@ -138,6 +169,7 @@ def execute_metal(job):
     encoder.endEncoding()
     command.commit()
     command.waitUntilCompleted()
+    del textures
     if command.error() is not None:
         raise RuntimeError(f"Metal execution: {command.error()}")
     for _, buffer, filename in buffers:
@@ -150,8 +182,14 @@ def execute_metal(job):
 def execute_opengl(job):
     import moderngl
 
+    from . import glsl_resources
+
+    if job.get("ordered"):
+        # llvmpipe reads its thread count when the worker's first context starts; without threads it runs the
+        # workgroups in index order, so atomic results do not depend on scheduling (:mod:`.glsl_resources`).
+        os.environ["LP_NUM_THREADS"] = "0"
     context = moderngl.create_standalone_context(require=430, backend="egl")
-    buffers, shader = [], None
+    buffers, shader, resources = [], None, {}
     try:
         identity = _expect(
             job, f"{context.info['GL_RENDERER']}; {context.info['GL_VERSION']}"
@@ -172,6 +210,7 @@ def execute_opengl(job):
             constants = context.buffer(data)
             buffers.append((constants, None))
             constants.bind_to_uniform_block(block["slot"])
+        resources = glsl_resources.bind(job)
         shader.run(group_x=_groups(job))
         context.finish()
         for buffer, filename in buffers:
@@ -179,6 +218,7 @@ def execute_opengl(job):
                 (Path(job["directory"]) / filename).write_bytes(buffer.read())
         return {"device": identity, "runtime": job["runtime"]}
     finally:
+        glsl_resources.release(resources)
         for buffer, _ in buffers:
             buffer.release()
         if shader is not None:
@@ -327,13 +367,17 @@ D3D12_TIMEOUT = 45
 def d3d12_request(job, shader):
     """Encode one dispatch for the buffer-view worker: an allocation per buffer, each view at its own register.
 
+    The inputs are ``input.bin`` and ``input<k>.bin`` at their registers in slot order, and ``output.bin`` is last.
+
     A ``ByteAddressBuffer`` gets a raw view (``R32_TYPELESS`` with the raw flag) and a ``StructuredBuffer`` a
     structured view of its reflected stride, as HLSL requires; the constants block becomes a constant-buffer view
-    padded to 256 bytes. Returns the request bytes and the buffer files in allocation order.
+    padded to 256 bytes. The job's other resources (``extras``) follow as :mod:`.directx_resources` encodes them.
+    Returns the request bytes, the buffer files in allocation order and the size of every allocation.
     """
     directory = Path(job["directory"])
     allocations, views, files = [], [], []
-    for resource, filename in zip(job["resources"], FILES):
+    filenames = buffer_files(len(job["resources"]) - 1)
+    for resource, filename in zip(job["resources"], filenames, strict=True):
         data = (directory / filename).read_bytes()
         register = resource["register"]
         kind = {"t": D3D12_SRV, "u": D3D12_UAV}[register[0]]
@@ -357,14 +401,21 @@ def d3d12_request(job, shader):
         padded = data.ljust(max(256, -(-len(data) // 256) * 256), b"\0")
         views.append((D3D12_CBV, block["slot"], len(allocations), 0, 0, len(padded)))
         allocations.append(padded)
+    encoded = [struct.pack("<4I2Q", *view) for view in views]
+    # Textures, samplers and the other resources go last, in the worker's extended views.
+    extra_allocations, extra_views = directx_resources.views(
+        job.get("extras", []), len(allocations)
+    )
+    allocations += extra_allocations
+    encoded += extra_views
     parts = [struct.pack("<II", D3D12_REQUEST, len(allocations))]
     for allocation in allocations:
         parts += [struct.pack("<Q", len(allocation)), allocation]
     parts += [
         struct.pack("<IQ", 1, len(shader)),
         shader,
-        struct.pack("<4I", _groups(job), 1, 1, len(views)),
-        *(struct.pack("<4I2Q", *view) for view in views),
+        struct.pack("<4I", _groups(job), 1, 1, len(encoded)),
+        *encoded,
     ]
     return b"".join(parts), files, [len(allocation) for allocation in allocations]
 

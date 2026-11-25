@@ -32,10 +32,10 @@ shader main {
     [
         (
             RustCodeGen,
-            "static PARTICLES: std::sync::LazyLock<RWStructuredBuffer<Particles>> = "
-            "std::sync::LazyLock::new(|| Default::default());",
+            "#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] particles: &mut [Particles]",
         ),
-        (MojoCodeGen, "var particles: RWStructuredBuffer[Particles]"),
+        # A Mojo kernel receives a structured buffer as a pointer to its first element.
+        (MojoCodeGen, "particles: UnsafePointer[Particles, MutAnyOrigin]"),
         (CudaCodeGen, "Particles* particles;"),
         (HLSLCodeGen, "RWStructuredBuffer<Particles> particles : register(u0);"),
         (
@@ -52,6 +52,11 @@ def test_generic_resource_types_preserve_element_type(codegen_cls, expected):
     if codegen_cls in (CudaCodeGen, HipCodeGen):
         # CUDA and HIP declare only kernels.
         shader = shader.replace("vertex {", "compute {")
+    if codegen_cls is RustCodeGen:
+        # rust-gpu binds a buffer as a parameter of the entry points that use it.
+        shader = shader.replace("vertex {", "compute {").replace(
+            "void main() {", "void main() {\n            particles[0].mass = 1.0;"
+        )
     ast = parse(shader)
 
     generated_code = codegen_cls().generate(ast)

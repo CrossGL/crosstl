@@ -92,9 +92,6 @@ CORE = {
     "OpFwidth": ("fwidth", ""),
     "OpFwidthCoarse": ("fwidthCoarse", ""),
     "OpFwidthFine": ("fwidthFine", ""),
-    "OpGroupNonUniformAll": ("allInvocations", ""),
-    "OpGroupNonUniformAllEqual": ("allInvocationsEqual", ""),
-    "OpGroupNonUniformAny": ("anyInvocation", ""),
     "OpIAddCarry": ("uaddCarry", ""),
     "OpIEqual": ("equal", "int"),
     "OpINotEqual": ("notEqual", "int"),
@@ -129,6 +126,12 @@ CORE = {
     "OpSLessThan": ("lessThan", "int"),
     "OpSLessThanEqual": ("lessThanEqual", "int"),
     "OpSMulExtended": ("imulExtended", ""),
+    # glslang compiles GLSL 4.60's vote functions to the SPV_KHR_subgroup_vote instructions. The core
+    # OpGroupNonUniformAll, Any and AllEqual are probed with GL_KHR_shader_subgroup_vote's subgroupAll, subgroupAny
+    # and subgroupAllEqual, as that specification maps them, so an importer is measured on both encodings.
+    "OpSubgroupAllEqualKHR": ("allInvocationsEqual", ""),
+    "OpSubgroupAllKHR": ("allInvocations", ""),
+    "OpSubgroupAnyKHR": ("anyInvocation", ""),
     "OpTranspose": ("transpose", ""),
     "OpUGreaterThan": ("greaterThan", "uint"),
     "OpUGreaterThanEqual": ("greaterThanEqual", "uint"),

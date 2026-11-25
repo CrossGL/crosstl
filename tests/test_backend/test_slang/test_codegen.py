@@ -486,7 +486,7 @@ def test_generic_typealias_codegen_from_slang_neural_modules():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "typedef Array<uint32_t, Dim> uvec<intDim>;" in generated_code
+    assert "typedef Array<uint32_t, Dim> uvec<int Dim>;" in generated_code
 
 
 def test_typealias_logical_not_generic_argument_codegen_reparse():
@@ -1129,9 +1129,7 @@ def test_fragment_sv_position_parameter_codegen_uses_frag_coord():
     generated_code = generate_code(ast)
 
     assert "vec4 fragmentMain(vec4 pos @ gl_FragCoord) @ gl_FragColor" in generated_code
-    assert (
-        "vec4 vertexMain(vec3 position @ in_Position) @ gl_Position" in generated_code
-    )
+    assert "vec4 vertexMain(vec3 position @ Position) @ gl_Position" in generated_code
     cgl_translator.parse(generated_code)
 
 
@@ -1206,7 +1204,7 @@ def test_precise_output_parameter_modifier_codegen_from_hlsl_variable_syntax():
     output_param = ast.functions[0].params[1]
     assert output_param.qualifiers == ["out", "precise"]
     assert (
-        "void main(in vec3 inPos @ in_Position, out vec4 outPos @ gl_Position)"
+        "void main(in vec3 inPos @ Position, out vec4 outPos @ gl_Position)"
         in generated_code
     )
     assert "precise" not in generated_code
@@ -1596,9 +1594,11 @@ def test_generic_function_declaration_after_name_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "float GetRayT(uint rayInlineFlags)" in generated_code
+    # CrossGL declares a generic value parameter by its name, which each specialization substitutes.
+    assert "float GetRayT<RAY_QUERY_FLAGS>(uint rayInlineFlags)" in generated_code
     assert "return 0.0;" in generated_code
     assert "<let" not in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_generic_struct_declaration_after_name_codegen():
@@ -1760,7 +1760,8 @@ def test_reverse_codegen_erases_builtin_generic_where_constraints_from_wave_matr
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "void matMad(" in generated_code
+    # ``int R0`` is a value parameter, which CrossGL declares by its name.
+    assert "void matMad<T, R0>(" in generated_code
     assert "where" not in generated_code
     assert "__BuiltinFloatingPointType" not in generated_code
     cgl_translator.parse(generated_code)
@@ -3996,6 +3997,65 @@ def test_slang_user_function_named_like_barrier_intrinsic_is_not_remapped():
     assert "allMemoryBarrier" not in generated_code
     assert "workgroupBarrier" not in generated_code
     assert "memoryBarrierShared" not in generated_code
+
+
+CUDA_THREAD_BUILTINS_SOURCE = """
+RWStructuredBuffer<uint> outp;
+
+[shader("compute")]
+[numthreads(64, 1, 1)]
+void main()
+{
+    uint3 t = cudaThreadIdx();
+    uint3 b = cudaBlockIdx();
+    uint3 d = cudaBlockDim();
+    uint i = b.x * d.x + t.x;
+    outp[i] = i;
+}
+"""
+
+
+def test_slang_cuda_thread_builtins_import_as_crossgl_invocation_values():
+    # #4636: Slang declares these for its CUDA target only (hlsl.meta.slang),
+    # returning threadIdx, blockIdx and blockDim.
+    generated_code = generate_code(
+        parse_code(tokenize_code(CUDA_THREAD_BUILTINS_SOURCE))
+    )
+
+    assert "uint3 t = gl_LocalInvocationID;" in generated_code.replace("uvec3", "uint3")
+    assert "uint3 b = gl_WorkGroupID;" in generated_code.replace("uvec3", "uint3")
+    assert "uint3 d = gl_WorkGroupSize;" in generated_code.replace("uvec3", "uint3")
+    assert "cuda" not in generated_code
+    cgl_translator.parse(generated_code)
+
+
+@pytest.mark.parametrize("backend", ["metal", "vulkan", "directx", "opengl"])
+def test_slang_cuda_thread_builtins_reach_every_target(tmp_path, backend):
+    source = tmp_path / "probe.slang"
+    source.write_text(CUDA_THREAD_BUILTINS_SOURCE)
+
+    output = translate(str(source), backend=backend)
+
+    assert "cudaThreadIdx" not in output
+    assert "cudaBlockIdx" not in output
+    assert "cudaBlockDim" not in output
+
+
+def test_slang_user_function_named_like_a_cuda_thread_builtin_is_not_remapped():
+    code = """
+    uint3 cudaThreadIdx() { return uint3(7, 0, 0); }
+
+    [shader("compute")]
+    [numthreads(1, 1, 1)]
+    void main() {
+        uint3 t = cudaThreadIdx();
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "cudaThreadIdx()" in generated_code
+    assert "gl_LocalInvocationID" not in generated_code
 
 
 def test_slang_sincos_builtin_from_stdlib_reference_lowers_to_crossgl_assignments():

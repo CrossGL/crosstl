@@ -6,6 +6,11 @@ glslang names every temporary it creates for an ``in`` argument ``param``. The i
 redeclared variable, which every target compiler rejects. :func:`function_local_names` gives the function its own
 name table in which each parameter and local keeps its name the first time it appears and later ones take the first
 ``name_N`` no id in the module is named.
+
+C-family scoping lets a local hide a function of the same name for the rest of its scope, so GLSL, HLSL and MSL
+reject ``float twice; ... twice(x)``. glslang names a local after its source variable, which may share a name with a
+function of the module, so a parameter or local named like one of the module's functions (``reserved``) also takes the
+first free ``name_N``.
 """
 
 from __future__ import annotations
@@ -25,25 +30,28 @@ def _local_ids(raw_instructions):
             yield result_id
 
 
-def function_local_names(raw_instructions, names):
-    """``names``, or a copy of it in which the function's locals and parameters have distinct names."""
+def function_local_names(raw_instructions, names, reserved=frozenset()):
+    """``names``, or a copy of it in which the function's locals and parameters have distinct names.
+
+    A local or parameter is also renamed when its name is in ``reserved``, the names of the module's functions.
+    """
     local_ids = list(dict.fromkeys(_local_ids(raw_instructions)))
     seen = {}
     for value_id in local_ids:
         name = names.get(value_id)
         if name:
             seen[name] = seen.get(name, 0) + 1
-    if all(count == 1 for count in seen.values()):
+    if all(count == 1 and name not in reserved for name, count in seen.items()):
         return names
 
     local = dict(names)
-    used = {name for name in names.values() if name}
+    used = {name for name in names.values() if name} | set(reserved)
     kept = set()
     for value_id in local_ids:
         name = names.get(value_id)
         if not name:
             continue
-        if name not in kept:
+        if name not in kept and name not in reserved:
             kept.add(name)
             continue
         suffix = 1

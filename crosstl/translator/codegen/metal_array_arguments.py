@@ -30,10 +30,11 @@ import re
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
-    FunctionCallNode,
+    IdentifierNode,
     LiteralNode,
     MemberAccessNode,
     PrimitiveType,
+    VariableNode,
 )
 from ..semantics.rewrite import is_pure
 from .array_utils import fold_array_type_counts, split_array_type_suffix
@@ -95,11 +96,21 @@ class MetalArrayArguments:
             return None
         parameter_type = self._value_array_type(parameter)
         if parameter_type is None:
-            return None
+            # An ``out`` or ``inout`` array parameter is the same ``T*``, through which the callee writes the
+            # ``array<T, N>`` local's own elements.
+            written_type = self._value_array_type(parameter, writing=True)
+            if written_type is None or not isinstance(
+                arg, (IdentifierNode, VariableNode, ArrayAccessNode)
+            ):
+                return None
+            return self._returned_array(func_name, arg, written_type, writing=True)
         returned = self._returned_array(func_name, arg, parameter_type)
         if returned is not None:
             return returned
-        if not self._needs_copy(arg, parameter):
+        if not (
+            self._needs_copy(arg, parameter)
+            or codegen.metal_expression_is_value_array(arg)
+        ):
             return None
         mapped = codegen.map_type(parameter_type)
         base, suffix = split_array_type_suffix(mapped)
@@ -122,37 +133,38 @@ class MetalArrayArguments:
             and self._needs_copy(arg, parameter)
         )
 
-    def _returned_array(self, func_name, arg, parameter_type):
-        """``f(...).data()`` for the ``array<T, N>`` result of a user function, or ``None`` for other arguments.
+    def _returned_array(self, func_name, arg, parameter_type, *, writing=False):
+        """``v.data()`` for an ``array<T, N>`` value bound to a C-array parameter, or ``None`` for other arguments.
 
-        The Metal emitter returns a CrossGL array as ``metal::array<T, N>``, which does not convert to the ``T*`` a C
-        array parameter takes. Its ``data()`` points into the temporary, which lives until the end of the full
-        expression that contains the call ([class.temporary]/4). A nested array would need ``array<T, M>*`` to
-        become ``T (*)[M]``, so it is refused.
+        The Metal emitter returns a CrossGL array as ``metal::array<T, N>`` and holds a local that takes such a
+        result, or that the function returns, as one too. It does not convert to the ``T*`` a C array parameter
+        takes. Its ``data()`` points at its elements: a local's own, which an ``out`` or ``inout`` parameter writes,
+        or a call result's, which live until the end of the full expression that contains the call
+        ([class.temporary]/4). A nested array would need ``array<T, M>*`` to become ``T (*)[M]``: a nested local is
+        passed as a thread copy of its elements instead (``None``), and the rest is refused.
         """
         codegen = self.codegen
-        if not isinstance(arg, FunctionCallNode):
-            return None
-        callee = codegen.expression_name(getattr(arg, "name", None))
-        if callee not in codegen.user_function_names:
-            return None
-        selected = codegen.metal_user_function_overload_for_call(
-            callee, list(getattr(arg, "args", None) or [])
-        )
-        if selected is None:
-            return None
-        return_type = codegen.metal_effective_function_return_type(selected)
-        if not isinstance(return_type, str) or "[" not in return_type:
-            return None
+        local = isinstance(arg, (IdentifierNode, VariableNode, ArrayAccessNode))
+        if local:
+            if not codegen.metal_expression_is_value_array(arg):
+                return None
+            source = "this array<T, N> local"
+        else:
+            if not codegen.metal_expression_returns_value_array(arg):
+                return None
+            callee = codegen.expression_name(getattr(arg, "name", None))
+            source = f"the nested array result of '{callee}'"
         parts = _array_parts(parameter_type)
         if parts is None:
             return None
-        if "[" in parts[0]:
-            return codegen.refuse_lowering(
-                f"array argument to '{func_name}': Metal returns the nested array of '{callee}' as "
-                "array<array<T, M>, N>, which has no conversion to a C array parameter"
-            )
-        return f"{codegen.generate_expression(arg)}.data()"
+        if "[" not in parts[0]:
+            return f"{codegen.generate_expression(arg)}.data()"
+        if local and not writing:
+            return None
+        return codegen.refuse_lowering(
+            f"array argument to '{func_name}': Metal holds {source} as array<array<T, M>, N>, which has no "
+            "conversion to a C array parameter"
+        )
 
     def _needs_copy(self, arg, parameter):
         """An array literal, an array outside thread storage, or a read-only array bound to a mutable parameter.
@@ -189,13 +201,26 @@ class MetalArrayArguments:
         )
         return parameters[index] if index < len(parameters) else None
 
-    def _value_array_type(self, parameter):
-        """Folded CrossGL type of a by-value ``thread`` array parameter with literal extents, or ``None``."""
+    def _value_array_type(self, parameter, *, writing=False):
+        """Folded CrossGL type of a by-value ``thread`` array parameter with literal extents, or ``None``.
+
+        ``writing`` asks for an ``out`` or ``inout`` array parameter instead.
+        """
         codegen = self.codegen
         raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
-        if raw_type is None or not codegen.is_array_type_node(raw_type):
+        if raw_type is None:
             return None
-        if codegen.parameter_qualifier_names(parameter) & _WRITING_QUALIFIERS:
+        type_text = codegen.type_name_string(raw_type)
+        if not codegen.is_array_type_node(raw_type):
+            # ``typedef float Triple[3]; float f(Triple t)`` takes a C array too.
+            type_text = codegen.type_name_string(
+                codegen.resolve_metal_type_alias(type_text)
+            )
+            if "[" not in type_text:
+                return None
+        if bool(codegen.parameter_qualifier_names(parameter) & _WRITING_QUALIFIERS) != (
+            writing
+        ):
             return None
         if codegen.parameter_address_space(parameter) not in (None, "thread"):
             return None
@@ -206,7 +231,7 @@ class MetalArrayArguments:
         ):
             return None
         folded = fold_array_type_counts(
-            codegen.type_name_string(raw_type),
+            type_text,
             getattr(codegen, "literal_int_constants", None) or {},
         )
         type_name = folded

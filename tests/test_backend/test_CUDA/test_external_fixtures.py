@@ -1242,12 +1242,14 @@ def test_cufftdx_scoped_storage_types_codegen_reparse():
     }
     """
 
-    crossgl = cuda_to_crossgl(source)
+    crossgl, message = cuda_import_partial_output(cuda_to_crossgl, source)
 
     assert "array<FFT_value_type>" in crossgl
-    assert "array<FFT::value_type, FFT_storage_size>" in crossgl
     assert "data: array<FFT::value_type>" not in crossgl
-    assert_crossgl_reparse(crossgl)
+    # A static member of a class the importer did not read has no CrossGL extent spelling.
+    assert (
+        "CUDA array extent 'FFT::storage_size' is not an integral constant" in message
+    )
 
 
 def test_cuda_samples_dependent_scoped_and_enum_types_codegen_reparse():
@@ -1324,20 +1326,25 @@ def test_cuda_programming_guide_syncthreads_predicate_variants_codegen_reparse()
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl, message = cuda_import_partial_output(
-        CudaToCrossGLConverter().generate, ast
-    )
+    crossgl = CudaToCrossGLConverter().generate(ast)
 
     assert isinstance(body[1].value, FunctionCallNode)
     assert body[1].value.name == "__syncthreads_count"
     assert body[2].value.name == "__syncthreads_and"
     assert body[3].value.name == "__syncthreads_or"
-    # Each is a barrier that also reduces the predicate; it is refused instead of reading as 0.
-    for name in ("__syncthreads_count", "__syncthreads_and", "__syncthreads_or"):
-        assert f"CUDA thread block sync vote {name}(pred)" in message
-    assert "__syncthreads_count(pred);" not in crossgl
-    assert "__syncthreads_and(pred);" not in crossgl
-    assert "__syncthreads_or(pred);" not in crossgl
+    # Each is a barrier that also reduces the predicate over the block, counted in one workgroup variable.
+    assert "var<workgroup> crossgl_block_votes: u32;" in crossgl
+    assert "i32(crossgl_block_count((pred != 0), gl_LocalInvocationIndex))" in crossgl
+    assert (
+        "i32(crossgl_block_count(!((pred != 0)), gl_LocalInvocationIndex) == 0u)"
+        in crossgl
+    )
+    assert (
+        "i32(crossgl_block_count((pred != 0), gl_LocalInvocationIndex) != 0u)"
+        in crossgl
+    )
+    assert "__syncthreads_" not in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_programming_guide_one_component_vectors_codegen_reparse():
@@ -1403,12 +1410,12 @@ def test_cuda_samples_simple_vote_intrinsics_warp_vote_codegen_reparse():
 
     assert_crossgl_reparse(crossgl)
     assert "var tx: i32 = gl_LocalInvocationID.x;" in crossgl
-    assert "result[tx] = (WaveActiveAnyTrue((input[tx] != 0)) ? 1 : 0);" in crossgl
-    assert "result[tx] = (WaveActiveAllTrue((input[tx] != 0)) ? 1 : 0);" in crossgl
+    # Votes stay CUDA calls over the 32-lane warp; the mask variable holds the full-warp literal.
+    assert "result[tx] = __any_sync(0xFFFFFFFFu, input[tx]);" in crossgl
+    assert "result[tx] = __all_sync(0xFFFFFFFFu, input[tx]);" in crossgl
     assert "cuda warp intrinsic __any_sync(mask, input[tx])" not in crossgl
     assert "cuda warp intrinsic __all_sync(mask, input[tx])" not in crossgl
-    assert "__any_sync(mask, input[tx]);" not in crossgl
-    assert "__all_sync(mask, input[tx]);" not in crossgl
+    assert "Wave" not in crossgl
 
 
 def test_cuda_samples_fp16_scalar_product_high2float_codegen_reparse():
@@ -1761,9 +1768,7 @@ def test_cuda_programming_guide_scoped_atomics_codegen_reparse():
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl, message = cuda_import_partial_output(
-        CudaToCrossGLConverter().generate, ast
-    )
+    crossgl = CudaToCrossGLConverter().generate(ast)
 
     assert isinstance(body[0].value, AtomicOperationNode)
     assert body[0].value.operation == "atomicAdd_system"
@@ -1771,17 +1776,14 @@ def test_cuda_programming_guide_scoped_atomics_codegen_reparse():
     assert body[1].operation == "atomicMax_block"
     assert isinstance(body[2].value, AtomicOperationNode)
     assert body[2].value.operation == "atomicCAS_system"
-    # A device-scoped atomic is atomic for the block too, but not for the host and peer devices.
-    assert "CUDA atomicAdd_system: CrossGL atomics are device-scoped" in message
-    assert "CUDA atomicCAS_system: CrossGL atomics are device-scoped" in message
-    assert "atomicMax_block" not in message
+    # A device-scoped atomic is atomic for the block too, so a block-scoped one imports as the CrossGL atomic. A
+    # system-scoped atomic is also atomic for the host and peer devices: it keeps its CUDA name, which CUDA and HIP
+    # output write back and the other generators refuse.
     assert "/*" not in crossgl
-    assert "atomicAdd(g_odata[0], 10)" in crossgl
+    assert "atomicAdd_system(g_odata[0], 10)" in crossgl
     assert "atomicMax(g_odata[gl_LocalInvocationID.x], old)" in crossgl
-    assert "atomicCompareExchange(flags, 0u, 1u)" in crossgl
-    assert "atomicAdd_system(" not in crossgl
+    assert "atomicCAS_system(flags, 0u, 1u)" in crossgl
     assert "atomicMax_block(" not in crossgl
-    assert "atomicCAS_system(" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 
@@ -1830,12 +1832,15 @@ def test_cutlass_cute_template_array_bound_in_shared_memory_codegen_reparse():
 
     ast = parse_cuda(source)
     shared = ast.kernels[0].body[0]
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
     assert isinstance(shared, SharedMemoryNode)
     assert shared.vtype == "TA[cosize_v<ASmemLayout>]"
-    assert "array<TA, cosize_v_ASmemLayout>" in crossgl
-    assert_crossgl_reparse(crossgl)
+    assert "var<workgroup> smemA: array<TA, " in crossgl
+    # A variable template's value has no CrossGL extent spelling.
+    assert "CUDA array extent 'cosize_v<ASmemLayout>' is not an integral" in message
 
 
 def test_cutlass_cute_dependent_template_type_alias_codegen_reparse():
@@ -1938,9 +1943,7 @@ def test_cuda_samples_transpose_parenthesized_index_and_shared_tile_codegen_repa
     crossgl = CudaToCrossGLConverter().generate(ast)
 
     assert shared.vtype == "float[32][(32 + 1)]"
-    assert (
-        "var<workgroup> tile: " "array<array<f32, cuda_array_extent_32_plus_1>, 32>;"
-    ) in crossgl
+    assert ("var<workgroup> tile: " "array<array<f32, 33>, 32>;") in crossgl
     assert "var index_in: i32 = (xIndex + (yIndex * width));" in crossgl
     assert "var index_out: i32 = (xIndex + (yIndex * height));" in crossgl
     assert "yIndex((*width))" not in crossgl
@@ -2010,8 +2013,17 @@ def test_cccl_cub_local_union_aligned_dynamic_shared_codegen_reparse():
 
     ast = parse_cuda(source)
     kernel_body = ast.kernels[0].body
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
+    # cub's TempStorage has no CUDA layout CrossGL can describe, so the union's overlapping storage is refused
+    # instead of being written as a struct.
+    assert (
+        "CUDA union 'ShmemLayout': member 'reduce': its type TempStorageT has no modelled CUDA layout"
+        in message
+    )
+    assert "@union_layout" not in crossgl
     assert isinstance(kernel_body[2], StructNode)
     assert kernel_body[2].name == "ShmemLayout"
     assert isinstance(kernel_body[3], SharedMemoryNode)
@@ -2050,8 +2062,17 @@ def test_cccl_cub_shared_union_temp_storage_codegen_reparse():
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl = cuda_to_crossgl(source)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
+    # The cub TempStorage members have no CUDA layout CrossGL can describe, so the union is refused instead of
+    # being written as a struct whose members do not overlap.
+    assert (
+        "CUDA union 'TempStorage': member 'load': its type BlockLoad::TempStorage has no modelled CUDA layout"
+        in message
+    )
+    assert "@union_layout" not in crossgl
     assert isinstance(body[0], StructNode)
     assert body[0].name == "TempStorage"
     assert [member.name for member in body[0].members] == ["load", "scan", "aggregate"]
@@ -2159,10 +2180,11 @@ def test_cccl_barrier_match_any_sync_active_mask_codegen_reparse():
     assert body[0].value.name == "::__activemask"
     assert body[1].value.name == "::__match_any_sync"
     assert body[2].value.name == "__match_any_sync"
-    assert "var mask: u32 = WaveActiveBallot(true).x;" in crossgl
-    assert "var activeA: u32 = WaveMatch(update).x;" in crossgl
-    assert "var activeB: u32 = WaveMatch(barrier_key).x;" in crossgl
-    assert "__match_any_sync" not in crossgl
+    # The active mask and matches stay CUDA calls: a wave's lanes are not the warp's 32 lanes on most targets.
+    assert "var mask: u32 = __activemask();" in crossgl
+    assert "var activeA: u32 = __match_any_sync(mask, update);" in crossgl
+    assert "var activeB: u32 = __match_any_sync(mask, barrier_key);" in crossgl
+    assert "Wave" not in crossgl
     assert_crossgl_reparse(crossgl)
 
 
@@ -2464,18 +2486,18 @@ def test_cuda_samples_device_time_functions_codegen_reparse():
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl, message = cuda_import_partial_output(
-        CudaToCrossGLConverter().generate, ast
-    )
+    crossgl = CudaToCrossGLConverter().generate(ast)
 
     assert body[1].value.left.name == "::clock64"
     assert body[2].condition.left.name == "clock64"
     assert body[3].if_body[0].right.name == "clock"
-    # A clock read as 0 turns the timed wait into an endless loop; it is refused.
-    assert "CUDA time function clock64(): CrossGL has no clock counter" in message
-    assert "CUDA time function clock(): CrossGL has no clock counter" in message
-    assert "clock64() + ticks" not in crossgl
-    assert "= clock();" not in crossgl
+    # clock64() reads the 64-bit cycle counter, CrossGL clockARB(); clock() reads its low 32 bits as an int and
+    # widens them to clock_t, a long.
+    assert "timer: array<i64>" in crossgl
+    assert "var endTime: i64 = (i64(clockARB()) + ticks);" in crossgl
+    assert "while ((i64(clockARB()) < endTime))" in crossgl
+    assert "timer[gl_WorkGroupID.x] = i64(i32(clock2x32ARB().x));" in crossgl
+    assert_crossgl_reparse(crossgl)
 
 
 def test_cuda_samples_tensor_core_gemm_2d_dynamic_shared_codegen_reparse():
@@ -2488,7 +2510,9 @@ def test_cuda_samples_tensor_core_gemm_2d_dynamic_shared_codegen_reparse():
 
     ast = parse_cuda(source)
     shared = ast.kernels[0].body[0]
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
     assert isinstance(shared, SharedMemoryNode)
     assert shared.vtype == "half[][((CHUNK_K * K) + SKEW_HALF)]"
@@ -2498,10 +2522,12 @@ def test_cuda_samples_tensor_core_gemm_2d_dynamic_shared_codegen_reparse():
         "// CUDA dynamic shared memory: shmem uses launch-time shared memory size"
         in crossgl
     )
+    assert "var<workgroup> shmem: array<array<f16, " in crossgl
+    # The fixture leaves out the sample's #define lines, so no target could size the row.
     assert (
-        "var<workgroup> shmem: " "array<array<f16, CHUNK_K_mul_K_plus_SKEW_HALF>>;"
-    ) in crossgl
-    assert_crossgl_reparse(crossgl)
+        "names 'CHUNK_K', 'K', 'SKEW_HALF', which the program does not declare"
+        in message
+    )
 
 
 def test_cuda_samples_bf16_tensor_core_pointer_declarations_codegen_reparse():
@@ -2524,7 +2550,9 @@ def test_cuda_samples_bf16_tensor_core_pointer_declarations_codegen_reparse():
 
     ast = parse_cuda(source)
     body = ast.kernels[0].body
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
     assert ast.kernels[0].params[0].vtype == "const __nv_bfloat16 *"
     assert ast.kernels[0].params[1].vtype == "__nv_bfloat16 *"
@@ -2536,9 +2564,12 @@ def test_cuda_samples_bf16_tensor_core_pointer_declarations_codegen_reparse():
     assert body[2].name == "tile_ptr"
     assert body[3].vtype == "__nv_bfloat16"
     assert "array<bfloat16>" in crossgl
+    assert "var<workgroup> shmem: array<array<bfloat16, " in crossgl
+    # The fixture leaves out the sample's #define lines, so no target could size the row.
     assert (
-        "var<workgroup> shmem: " "array<array<bfloat16, CHUNK_K_mul_K_plus_SKEW_BF16>>;"
-    ) in crossgl
+        "names 'CHUNK_K', 'K', 'SKEW_BF16', which the program does not declare"
+        in message
+    )
     assert "var local: ptr<bfloat16> = D;" in crossgl
     assert (
         "var tile_ptr: ptr<bfloat16> = "
@@ -2610,8 +2641,8 @@ def test_cuda_math_api_rounding_single_precision_intrinsics_codegen_reparse():
     # Single Precision Intrinsics.
     # URL:
     # https://docs.nvidia.com/cuda/archive/13.1.0/cuda-math-api/cuda_math_api/group__CUDA__MATH__INTRINSIC__SINGLE.html
-    # The round-to-nearest intrinsics are the plain operations. The directed ones (_rd, _ru, _rz) have no CrossGL
-    # form and are refused (crosstl/backend/CUDA/directed_rounding.py).
+    # The round-to-nearest intrinsics are the plain operations. The directed ones (_rd, _ru, _rz) call CrossGL
+    # functions that compute the directed result exactly (crosstl/backend/CUDA/directed_rounding.py).
     source = """
     __device__ float rounded_intrinsics(float x, float y, float z) {
         float ops = __fadd_rn(x, y) + __fsub_rn(x, y) + __fmul_rn(x, y);
@@ -2648,16 +2679,24 @@ def test_cuda_math_api_rounding_single_precision_intrinsics_codegen_reparse():
     }:
         assert raw_name not in crossgl
 
-    for directed in (
-        "__fsub_rz(x, y)",
-        "__fmul_ru(x, y)",
-        "__fdiv_rd(x, y)",
-        "__fmaf_ieee_rz(x, y, z)",
+    for directed, call in (
+        ("__fsub_rz(x, y)", "fsub_rz(f32(x), f32(y))"),
+        ("__fmul_ru(x, y)", "fmul_ru(f32(x), f32(y))"),
+        ("__fdiv_rd(x, y)", "fdiv_rd(f32(x), f32(y))"),
+        ("__fmaf_ieee_rz(x, y, z)", "fmaf_ieee_rz(f32(x), f32(y), f32(z))"),
     ):
-        with pytest.raises(DirectedRoundingUnsupportedError):
-            cuda_to_crossgl(
-                f"__device__ float f(float x, float y, float z) {{ return {directed}; }}"
-            )
+        crossgl = cuda_to_crossgl(
+            f"__device__ float f(float x, float y, float z) {{ return {directed}; }}"
+        )
+        assert_crossgl_reparse(crossgl)
+        assert f"return {call};" in crossgl
+        assert directed.split("(")[0] not in crossgl
+
+    with pytest.raises(DirectedRoundingUnsupportedError):
+        cuda_to_crossgl(
+            "#include <cuda_fp16.h>\n"
+            "__device__ __half f(float x) { return __float2half_rz(x); }"
+        )
 
 
 def test_cuda_math_api_float_to_integer_conversion_intrinsics_codegen_reparse():
@@ -2783,7 +2822,7 @@ def test_external_raja_global_qualified_cuda_shuffle_codegen_reparse():
 
     assert_crossgl_reparse(crossgl)
     assert "i32 shfl_sync(i32 var_, i32 srcLane)" in crossgl
-    assert "return WaveReadLaneAt(var_, srcLane);" in crossgl
+    assert "return __shfl_sync(0xffffffffu, var_, srcLane);" in crossgl
     assert "::__shfl_sync" not in crossgl
 
 
@@ -2849,13 +2888,15 @@ def test_cuda_samples_cdp_quadtree_tile_collectives_codegen_reparse():
     assert loop.condition.name.member == "any"
     assert loop.body[0].value.name.member == "ballot"
     assert loop.body[2].right.name.member == "shfl"
+    # A 32-thread tile of the block is a warp, so its collectives are the full-mask warp intrinsics.
     assert (
         "for (var range_it: i32 = gl_LocalInvocationID.x; "
-        "WaveActiveAnyTrue(((range_it < limit) != 0)); range_it += 32)" in crossgl
+        "__any_sync(0xFFFFFFFFu, (range_it < limit)); range_it += 32)" in crossgl
     )
-    assert "var vote: u32 = WaveActiveBallot((pred != 0)).x;" in crossgl
+    assert "var vote: u32 = __ballot_sync(0xFFFFFFFFu, pred);" in crossgl
     assert "var dest: u32 = bitCount((vote & lane_mask_lt));" in crossgl
-    assert "out[gl_LocalInvocationID.x] = WaveReadLaneAt(dest, 0);" in crossgl
+    assert "out[gl_LocalInvocationID.x] = __shfl_sync(0xFFFFFFFFu, dest, 0);" in crossgl
+    assert "Wave" not in crossgl
     assert "tile32.any" not in crossgl
     assert "tile32.ballot" not in crossgl
     assert "tile32.shfl" not in crossgl
@@ -2900,7 +2941,7 @@ def test_cuda_samples_merge_sort_clz_codegen_reparse():
     crossgl = cuda_to_crossgl(source)
 
     assert_crossgl_reparse(crossgl)
-    assert "return (1U << (W - countLeadingZeros((x - 1))));" in crossgl
+    assert "return (1U << (W - (31 - findMSB(u32((x - 1))))));" in crossgl
     assert "__clz" not in crossgl
 
 
@@ -2922,7 +2963,10 @@ def test_cuda_math_api_long_long_integer_intrinsics_codegen_reparse():
     assert body[0].value.name == "__clzll"
     assert body[1].value.name == "__ffsll"
     assert_crossgl_reparse(crossgl)
-    assert "var leading: i32 = countLeadingZeros(x);" in crossgl
+    assert (
+        "var leading: i32 = ((u32(u64(x) >> 32u) != 0u) ? (31 - findMSB(u32(u64(x) >> 32u))) : "
+        "(63 - findMSB(u32(u64(x)))));"
+    ) in crossgl
     assert "var first: i32 = (findLSB(x) + 1);" in crossgl
     assert "__clzll" not in crossgl
     assert "__ffsll" not in crossgl
@@ -2968,7 +3012,7 @@ def test_cuda_cccl_integer_average_intrinsics_codegen_reparse():
     assert_crossgl_reparse(crossgl)
 
 
-def test_cuda_math_api_funnelshift_integer_intrinsics_emit_diagnostics():
+def test_cuda_math_api_funnelshift_integer_intrinsics_codegen_reparse():
     # Upstream source:
     # NVIDIA CUDA Math API v13.2, section 13 Integer Intrinsics.
     # URL:
@@ -2987,25 +3031,25 @@ def test_cuda_math_api_funnelshift_integer_intrinsics_emit_diagnostics():
 
     ast = parse_cuda(source)
     body = ast.functions[0].body
-    crossgl, message = cuda_import_partial_output(
-        CudaToCrossGLConverter().generate, ast
-    )
+    crossgl = CudaToCrossGLConverter().generate(ast)
 
     assert body[0].value.name == "__funnelshift_l"
     assert body[1].value.name == "__funnelshift_lc"
     assert body[2].value.name == "__funnelshift_r"
     assert body[3].value.name == "::__funnelshift_rc"
-    for name in (
-        "__funnelshift_l",
-        "__funnelshift_lc",
-        "__funnelshift_r",
-        "__funnelshift_rc",
-    ):
-        assert (
-            f"CUDA integer intrinsic {name}(lo, hi, shift) has no CrossGL form"
-            in message
-        )
-        assert f"= {name}(lo, hi, shift);" not in crossgl
+    assert_crossgl_reparse(crossgl)
+    left = "((u32(hi) << (u32(shift) & 31u)) | ((u32(lo) >> 1u) >> (31u - (u32(shift) & 31u))))"
+    right = "((u32(lo) >> (u32(shift) & 31u)) | ((u32(hi) << 1u) << (31u - (u32(shift) & 31u))))"
+    assert f"var left: u32 = {left};" in crossgl
+    assert (
+        f"var left_clamped: u32 = ((u32(shift) >= 32u) ? u32(lo) : {left});" in crossgl
+    )
+    assert f"var right: u32 = {right};" in crossgl
+    assert (
+        f"var right_clamped: u32 = ((u32(shift) >= 32u) ? u32(hi) : {right});"
+        in crossgl
+    )
+    assert "__funnelshift" not in crossgl
 
 
 def test_nvidia_hpcg_cuda_kernels_brev_hash_codegen_reparse():
@@ -3168,8 +3212,8 @@ def test_rapids_cudf_hash_byte_perm_endian_swap_codegen_reparse():
     assert body[0].value.name == "__byte_perm"
     assert_crossgl_reparse(crossgl)
     assert (
-        "return ((((x & 0x000000ffu) << 24) | ((x & 0x0000ff00u) << 8)) | "
-        "(((x & 0x00ff0000u) >> 8) | ((x & 0xff000000u) >> 24)));"
+        "return (((u32(x) >> 24u) & 0xffu) | (((u32(x) >> 16u) & 0xffu) << 8u) | "
+        "(((u32(x) >> 8u) & 0xffu) << 16u) | ((u32(x) & 0xffu) << 24u));"
     ) in crossgl
     assert "__byte_perm" not in crossgl
 
@@ -3193,11 +3237,11 @@ def test_cuda_samples_reduction_reduce_add_sync_codegen_reparse():
     crossgl = cuda_to_crossgl(source)
 
     assert_crossgl_reparse(crossgl)
-    assert "return WaveActiveSum(mySum);" in crossgl
-    # The partial-mask reduction stays a CUDA call for each target to emulate or refuse; it is never a constant.
+    # Reductions stay CUDA calls for each target to emulate per 32-lane warp or refuse; never a constant.
+    assert "return __reduce_add_sync(0xffffffffu, mySum);" in crossgl
     assert "mySum = __reduce_add_sync(mask, mySum);" in crossgl
     assert "not directly supported" not in crossgl
-    assert "__reduce_add_sync(0xffffffffu, mySum);" not in crossgl
+    assert "Wave" not in crossgl
 
 
 def test_cuda_samples_reduction_multiblock_cg_tile_reduce_codegen_reparse():
@@ -3217,14 +3261,38 @@ def test_cuda_samples_reduction_multiblock_cg_tile_reduce_codegen_reparse():
 
     ast = parse_cuda(source)
     body = ast.functions[0].body
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
 
     assert isinstance(body[2].right, FunctionCallNode)
     assert body[2].right.name == "cg::reduce"
+    # A 32-thread tile is a warp, which a wave of another size does not compute; a double sum, whose association
+    # order cg::reduce leaves open, is refused rather than given a wave's sum.
+    assert "cooperative_groups thread_block_tile.reduce" in message
+    assert "Wave" not in crossgl
+
+
+def test_cg_tile_reduce_of_32_bit_integers_is_the_warp_reduction():
+    source = """
+    namespace cg = cooperative_groups;
+
+    __device__ void reduceTile(int *idata, unsigned int *udata, const cg::thread_block &cta) {
+        const unsigned int tid = cta.thread_rank();
+        cg::thread_block_tile<32> tile32 = cg::tiled_partition<32>(cta);
+        idata[tid] = cg::reduce(tile32, idata[tid], cg::plus<int>());
+        idata[tid] = cg::reduce(tile32, idata[tid], cg::greater<int>());
+        udata[tid] = cg::reduce(tile32, udata[tid], cg::bit_xor<unsigned int>());
+    }
+    """
+
+    crossgl = CudaToCrossGLConverter().generate(parse_cuda(source))
+
     assert_crossgl_reparse(crossgl)
-    assert "sdata[tid] = WaveActiveSum(sdata[tid]);" in crossgl
-    assert "cg::reduce" not in crossgl
-    assert "cooperative_groups::reduce" not in crossgl
+    assert "idata[tid] = __reduce_add_sync(0xFFFFFFFFu, i32(idata[tid]));" in crossgl
+    assert "idata[tid] = __reduce_max_sync(0xFFFFFFFFu, i32(idata[tid]));" in crossgl
+    assert "udata[tid] = __reduce_xor_sync(0xFFFFFFFFu, u32(udata[tid]));" in crossgl
+    assert "cg::reduce" not in crossgl and "Wave" not in crossgl
 
 
 def test_cuda_samples_simple_cuda_graphs_tiled_partition_sync_codegen_reparse():
@@ -3281,7 +3349,10 @@ def test_cuda_samples_simple_cuda_graphs_tiled_partition_sync_codegen_reparse():
         "// cooperative_groups thread_block_tile<32> tile32 maps to a tiled "
         "partition of the current workgroup"
     ) in crossgl
-    assert crossgl.count("workgroupBarrier();") == 3
+    # cg::sync(cta) is __syncthreads(), fenced over all memory; cg::sync(tile32) is the warp's __syncwarp().
+    assert crossgl.count("workgroupBarrier();") == 2
+    assert crossgl.count("groupMemoryBarrier();") == 4
+    assert crossgl.count("__syncwarp();") == 1
     assert "var globaltid: u64 = gl_GlobalInvocationID.x;" in crossgl
     assert "for (var i: i32 = (32 / 2); (i > 0); i >>= 1)" in crossgl
     assert "tmp[gl_LocalInvocationIndex] = beta;" in crossgl
@@ -3386,7 +3457,18 @@ def test_cuda_samples_dxtc_bitfield_struct_members_parse_and_codegen():
 
     ast = parse_cuda(source)
     color16, block = ast.structs
-    crossgl = CudaToCrossGLConverter().generate(ast)
+    crossgl, message = cuda_import_partial_output(
+        CudaToCrossGLConverter().generate, ast
+    )
+
+    # The parser drops the bit-field widths and flattens both anonymous aggregates, so neither record keeps the
+    # storage the source gives it: Color16's b, g and r share one 16-bit word, and BlockDXT1's row and indices
+    # overlap. Both are refused instead of being written with members that do not share storage.
+    assert "CUDA union 'Color16': member 'b' belongs to an anonymous struct" in message
+    assert (
+        "CUDA struct 'BlockDXT1' has anonymous union members 'row', 'indices'"
+        in message
+    )
 
     assert [(member.vtype, member.name) for member in color16.members] == [
         ("unsigned short", "b"),

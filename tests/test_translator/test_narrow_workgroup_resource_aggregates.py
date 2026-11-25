@@ -10,7 +10,11 @@ from pathlib import Path
 import pytest
 
 from crosstl._crosstl import translate
-from crosstl.project import build_native_loader_dispatch_request
+from crosstl.project import (
+    ProjectConfig,
+    build_native_loader_dispatch_request,
+    translate_project,
+)
 from crosstl.project.runtime_value_encoding import FLOAT16_BITS, FLOAT32_BITS
 from crosstl.translator import parse
 from crosstl.translator.ast import NamedType, PrimitiveType, VariableNode
@@ -315,3 +319,246 @@ def test_aliases_of_wider_types_are_not_respelled(tmp_path):
     after = spellings()
     assert after["bfloat16_t"] == 0
     assert after["bfloat16"] == before["bfloat16"] + 5
+
+
+# Records that point at shared arrays of 16-bit floating vectors. Odd slots are
+# scaled by 0.3 in binary32 and rounded back to 16 bits; even slots are copied.
+VECTOR_LANES = 8
+# Even (copied) words include subnormals, signed zero and infinities; odd
+# (scaled) words are normal and stay normal when scaled.
+VECTOR_WORDS = {
+    "half": (
+        (0x0001, 0x3555, 0x8000, 0x4248, 0x7BFF, 0xC000, 0x7C00, 0x5000),
+        (0xFC00, 0x3C00, 0x0400, 0xB800, 0x8001, 0x7BFF, 0x03FF, 0xC5A0),
+    ),
+    "bfloat": (
+        (0x0001, 0x3EAB, 0x8000, 0x4049, 0x7F7F, 0xC000, 0x7F80, 0x4200),
+        (0xFF80, 0x3F80, 0x0080, 0xBF00, 0x8001, 0x7F7F, 0x007F, 0xC0B4),
+    ),
+}
+VECTOR_GUARD = {"half": 0xC300, "bfloat": 0xC060}  # -3.5
+VECTOR_ELEMENT = {"half": "f16vec", "bfloat": "bfloat16vec"}
+
+
+def _vector_scale(kind, word):
+    """Round ``float(word) * 0.3f`` in binary32 back to the 16-bit format."""
+    if kind == "half":
+        value = struct.unpack("<e", struct.pack("<H", word))[0]
+    else:
+        value = struct.unpack("<f", struct.pack("<I", word << 16))[0]
+    scale = struct.unpack("<f", struct.pack("<f", 0.3))[0]
+    # The binary64 product of two binary32 values is exact; packing it rounds
+    # once to binary32, as the kernel's multiplication does.
+    product = struct.unpack("<f", struct.pack("<f", value * scale))[0]
+    if kind == "half":
+        return struct.unpack("<H", struct.pack("<e", product))[0]
+    bits = struct.unpack("<I", struct.pack("<f", product))[0]
+    # Round to nearest, ties to even; no scaled input is a NaN.
+    return (bits + 0x7FFF + ((bits >> 16) & 1)) >> 16
+
+
+def _vector_source(kind, lanes):
+    vector, wide = f"{kind}{lanes}", f"float{lanes}"
+    return f"""#include <metal_stdlib>
+using namespace metal;
+
+struct Rows {{
+  const device {vector}* in;
+  threadgroup {vector}* buf;
+  device {vector}* out;
+
+  void load(uint index) const {{ buf[index] = in[index]; }}
+  void scale(uint index) const {{ buf[index] = {vector}({wide}(buf[index]) * 0.3f); }}
+  void write(uint index, uint source) const {{ out[index] = buf[source]; }}
+}};
+
+kernel void narrow_vector_shared(const device {vector}* inputs [[buffer(0)]],
+                                 device {vector}* results [[buffer(1)]],
+                                 uint lane [[thread_index_in_threadgroup]],
+                                 uint3 group [[threadgroup_position_in_grid]]) {{
+  threadgroup {vector} tile[{VECTOR_LANES}];
+  Rows rows = {{inputs + {VECTOR_LANES}u * group.x, tile,
+               results + {VECTOR_LANES}u * group.x + 1u}};
+  rows.load(lane);
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  if (lane % 2u == 1u) {{
+    rows.scale(lane);
+  }}
+  threadgroup_barrier(mem_flags::mem_threadgroup);
+  rows.write(lane, (lane + 1u) % {VECTOR_LANES}u);
+}}
+"""
+
+
+def _vector_inputs(kind, lanes):
+    # Component c of slot s takes word (s + 2c) of its group: the components
+    # of a vector differ, and words keep the parity of their slot. Subnormal
+    # words therefore only occupy copied slots, because Metal flushes
+    # subnormal binary32 operands and results.
+    words = []
+    for group in VECTOR_WORDS[kind]:
+        for slot in range(VECTOR_LANES):
+            words.extend(group[(slot + 2 * c) % VECTOR_LANES] for c in range(lanes))
+    return words
+
+
+def _vector_expected(kind, lanes):
+    inputs = _vector_inputs(kind, lanes)
+    words = [VECTOR_GUARD[kind]] * lanes
+    for group in range(GROUPS):
+        for slot in range(VECTOR_LANES):
+            source = (slot + 1) % VECTOR_LANES
+            first = (group * VECTOR_LANES + source) * lanes
+            vector = inputs[first : first + lanes]
+            if source % 2:
+                vector = [_vector_scale(kind, word) for word in vector]
+            words.extend(vector)
+    return words + [VECTOR_GUARD[kind]] * lanes
+
+
+def _vector_value(kind, target, words, lanes):
+    if kind == "bfloat":
+        value = _storage(target, words)
+    else:
+        value = _value("half", target, words)
+    value["shape"] = [len(words) // lanes, lanes]
+    return value
+
+
+def _vector_ranges(kind, lanes):
+    element = f"{VECTOR_ELEMENT[kind]}{lanes}"
+    resource_maximum = GROUPS * VECTOR_LANES + 1
+    return [
+        {
+            "source": "products.metal",
+            "function": f"crosstl_{storage}_{operation}_{element}",
+            "expression": "reference.offset + index",
+            "minimum": 0,
+            "maximum": VECTOR_LANES - 1 if storage == "workgroup" else resource_maximum,
+        }
+        for storage in ("workgroup", "resource")
+        for operation in ("load", "store")
+    ]
+
+
+def _vector_request(root, target, kind, lanes):
+    source, descriptor, package = _package(
+        root,
+        target,
+        kind,
+        (VECTOR_LANES, 1, 1),
+        source=_vector_source(kind, lanes),
+        software_subgroups=False,
+        index_range_assertions=(
+            _vector_ranges(kind, lanes) if target == "opengl" else ()
+        ),
+    )
+    expected = _vector_expected(kind, lanes)
+    initial = (
+        [VECTOR_GUARD[kind]] * lanes
+        + [0x5555] * (len(expected) - 2 * lanes)
+        + [VECTOR_GUARD[kind]] * lanes
+    )
+    inputs = _bound_values(
+        descriptor,
+        {
+            "inputs": _vector_value(kind, target, _vector_inputs(kind, lanes), lanes),
+            "results": _vector_value(kind, target, initial, lanes),
+        },
+    )
+    outputs = _bound_values(
+        descriptor, {"results": _vector_value(kind, target, expected, lanes)}
+    )
+    request = build_native_loader_dispatch_request(
+        descriptor,
+        package,
+        inputs,
+        outputs,
+        {"workgroupCount": [GROUPS, 1, 1], "workgroupSize": [VECTOR_LANES, 1, 1]},
+        expected_target=target,
+    )
+    assert not request.execution_plan.diagnostics
+    return source, request, outputs
+
+
+VECTOR_CASES = [(kind, lanes) for kind in ("half", "bfloat") for lanes in (2, 4)]
+
+
+def test_vector_expected_words_cover_rounding_copies_and_guards():
+    assert _vector_scale("half", 0x3C00) == 0x34CD  # 0.3 rounds up in binary16
+    assert _vector_scale("half", 0x7C00) == 0x7C00
+    assert _vector_scale("bfloat", 0x3F80) == 0x3E9A  # 0.3 rounds up in bfloat16
+    for kind, lanes in VECTOR_CASES:
+        expected = _vector_expected(kind, lanes)
+        assert len(expected) == (GROUPS * VECTOR_LANES + 2) * lanes
+        # Slot 0 reads scaled slot 1; slot 1 reads copied slot 2.
+        inputs = _vector_inputs(kind, lanes)
+        assert expected[lanes : 2 * lanes] == [
+            _vector_scale(kind, word) for word in inputs[lanes : 2 * lanes]
+        ]
+        assert expected[2 * lanes : 3 * lanes] == inputs[2 * lanes : 3 * lanes]
+        # Every scaled word rounds, so a missing conversion cannot pass.
+        assert any(
+            _vector_scale(kind, word) != word for word in inputs[lanes : 2 * lanes]
+        )
+
+
+# DirectX keeps bfloat16 buffers as exact 16-bit scalar payloads only; the
+# vector cases are refused below instead.
+VECTOR_TARGET_CASES = [
+    (target, kind, lanes)
+    for target in ("metal", "directx", "opengl")
+    for kind, lanes in VECTOR_CASES
+    if not (target == "directx" and kind == "bfloat")
+]
+
+
+@pytest.mark.parametrize("target,kind,lanes", VECTOR_TARGET_CASES)
+def test_narrow_vector_shared_record_compiles(tmp_path, target, kind, lanes):
+    _, request, _ = _vector_request(tmp_path, target, kind, lanes)
+    generated = request.artifact_path.read_text()
+    if target != "metal":
+        element = f"{VECTOR_ELEMENT[kind]}{lanes}"
+        assert f"crosstl_workgroup_store_{element}" in generated
+        assert f"crosstl_workgroup_load_{element}" in generated
+    _compile(generated, target, tmp_path)
+
+
+@pytest.mark.parametrize("kind,lanes", VECTOR_CASES)
+def test_narrow_vector_shared_record_executes(tmp_path, kind, lanes):
+    if os.environ.get(REQUIRE_ENV) != "1":
+        pytest.skip(f"set {REQUIRE_ENV}=1 for required narrow shared execution")
+    if (NATIVE_TARGET, kind, lanes) not in VECTOR_TARGET_CASES:
+        pytest.skip(f"{NATIVE_TARGET} refuses {kind}{lanes} storage")
+    source, request, expected = _vector_request(tmp_path, NATIVE_TARGET, kind, lanes)
+    _execute(
+        request,
+        expected,
+        tmp_path,
+        original_source=source if NATIVE_TARGET == "metal" else None,
+        original_entry="narrow_vector_shared",
+        metal_compile_flags=("-Wall", "-Wextra", "-fno-fast-math"),
+    )
+
+
+@pytest.mark.parametrize("lanes", [2, 4])
+def test_directx_refuses_bfloat16_vector_shared_records(tmp_path, lanes):
+    (tmp_path / "products.metal").write_text(_vector_source("bfloat", lanes))
+    report = translate_project(
+        ProjectConfig(
+            root=tmp_path,
+            include_patterns=("products.metal",),
+            targets=("directx",),
+            output_dir="out",
+            workgroup_size=(VECTOR_LANES, 1, 1),
+        ),
+        format_output=False,
+    ).to_json()
+    assert report["summary"]["failedCount"] == 1
+    messages = [item["message"] for item in report["diagnostics"]]
+    assert any(
+        "supports scalar payload elements" in message
+        and f"bfloat16vec{lanes}" in message
+        for message in messages
+    ), messages
+    assert not any("workgroup-allocation-layout" in message for message in messages)

@@ -1360,9 +1360,11 @@ def test_translate_project_entry_selection_prefers_exact_path_over_glob(
     assert validate_project_report(report_path)["success"] is True
 
 
-def test_translate_project_keeps_aggregate_opengl_output_without_entry_selection(
+def test_translate_project_refuses_opengl_output_of_repeated_entries_without_selection(
     tmp_path,
 ):
+    # A GLSL unit holds one compute entry, main. CrossGL sources have no entry discovery to split the file by
+    # (glsl_entry_split), so the artifact fails with a diagnostic naming the entries to select.
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "multi.cgl").write_text(
@@ -1376,16 +1378,19 @@ def test_translate_project_keeps_aggregate_opengl_output_without_entry_selection
         output_dir="out",
         format_output=False,
     ).to_json()
-    artifact = payload["artifacts"][0]
-    generated = (repo / artifact["path"]).read_text(encoding="utf-8")
+    (artifact,) = payload["artifacts"]
 
     assert artifact["path"] == "out/opengl/multi.glsl"
-    assert "entryPoint" not in artifact
-    assert artifact["provenance"]["pipeline"] == "single-file-translate"
-    assert "void main()" in generated
-    assert "void compute_main()" in generated
-    assert "selected_helper" in generated
-    assert "unrelated_helper" in generated
+    assert artifact["status"] == "failed"
+    assert not (repo / artifact["path"]).exists()
+    (diagnostic,) = (
+        diagnostic
+        for diagnostic in payload["diagnostics"]
+        if diagnostic["code"] == "project.translate.opengl-repeated-stage-entry"
+    )
+    assert diagnostic["severity"] == "error"
+    assert diagnostic["missingCapabilities"] == ["opengl.entry-points-per-stage"]
+    assert "('first', 'second')" in diagnostic["message"]
 
 
 def test_translate_project_reports_missing_selected_opengl_entry(tmp_path):
@@ -2425,7 +2430,6 @@ def test_scan_project_skips_known_unsupported_source_artifacts(
 
     expected_skipped = [
         {"path": "future.wesl", "reason": "unsupported-extension"},
-        {"path": "future.wgsl", "reason": "unsupported-extension"},
         {"path": "generated.webgl.glsl", "reason": "unsupported-extension"},
         {"path": "generated.webgl.glsl.json", "reason": "unsupported-extension"},
     ]
@@ -2438,12 +2442,12 @@ def test_scan_project_skips_known_unsupported_source_artifacts(
         ".webgl.glsl": 1,
         ".webgl.glsl.json": 1,
         ".wesl": 1,
-        ".wgsl": 1,
     }
     if explicit_include:
         expected_skipped_by_extension[".spv"] = 1
 
-    assert [unit.relative_path for unit in scan.units] == ["simple.cgl"]
+    # The WGSL front end reads .wgsl modules; WESL modules stay refused.
+    assert [unit.relative_path for unit in scan.units] == ["future.wgsl", "simple.cgl"]
     assert scan.skipped == expected_skipped
     assert payload["summary"]["skippedByReason"] == {
         "unsupported-extension": len(expected_skipped),
@@ -2460,10 +2464,11 @@ def test_scan_project_skips_known_unsupported_source_artifacts(
         assert (
             "Binary SPIR-V input files" in diagnostics_by_file["compiled.spv"].message
         )
-    assert diagnostics_by_file["future.wgsl"].code == "project.scan.unsupported-source"
-    assert "WGSL/WebGPU source files" in diagnostics_by_file["future.wgsl"].message
+    assert "future.wgsl" not in diagnostics_by_file
     assert diagnostics_by_file["future.wesl"].code == "project.scan.unsupported-source"
-    assert "WGSL/WebGPU source files" in diagnostics_by_file["future.wesl"].message
+    assert (
+        "provide the WGSL module (.wgsl)" in diagnostics_by_file["future.wesl"].message
+    )
     assert (
         diagnostics_by_file["generated.webgl.glsl"].code
         == "project.scan.unsupported-source"
@@ -2517,14 +2522,9 @@ def test_scan_project_reports_wgsl_unsupported_macro_forms_with_variant_context(
     }
 
     assert validation["success"] is True
-    assert payload["skipped"] == [
-        {"path": "shaders/native.wgsl", "reason": "unsupported-extension"}
-    ]
-    assert set(diagnostics_by_code) == {
-        "project.scan.empty",
-        "project.scan.unsupported-source",
-        "project.scan.unsupported-macro-form",
-    }
+    # The WGSL front end reads the module; its preprocessor lines are not WGSL and are reported.
+    assert payload["skipped"] == []
+    assert set(diagnostics_by_code) == {"project.scan.unsupported-macro-form"}
     macro_diagnostic = diagnostics_by_code["project.scan.unsupported-macro-form"]
     assert macro_diagnostic["sourceBackend"] == "wgsl"
     assert macro_diagnostic["variant"] == "debug"
@@ -2535,17 +2535,11 @@ def test_scan_project_reports_wgsl_unsupported_macro_forms_with_variant_context(
         macro_diagnostic["message"]
     )
     assert payload["summary"]["diagnosticsByCode"] == {
-        "project.scan.empty": 1,
         "project.scan.unsupported-macro-form": 1,
-        "project.scan.unsupported-source": 1,
     }
     assert payload["summary"]["diagnosticsBySourceBackend"] == {"wgsl": 1}
     assert payload["summary"]["diagnosticsByVariant"] == {"debug": 1}
-    assert payload["summary"]["missingCapabilityCounts"] == {
-        "macro.native": 1,
-        "repo.scan": 1,
-        "source.discovery": 1,
-    }
+    assert payload["summary"]["missingCapabilityCounts"] == {"macro.native": 1}
 
 
 def test_scan_project_reports_invalid_source_roots_without_hiding_valid_units(tmp_path):
@@ -7742,7 +7736,10 @@ def test_translate_project_lowers_hlsl_texture_sampling_pair_to_graphics_targets
     assert "layout(location = 5) out vec2 out_uv;" in opengl
     assert "layout(location = 5) in vec2 out_uv;" in opengl
     assert "layout(location = 0) out vec4 fragColor;" in opengl
-    assert "fragColor = texture(g_texture, out_uv);" in opengl
+    assert (
+        "fragColor = texture(CROSSGL_SAMPLED(sampler2D(g_texture, g_sampler), g_texture),"
+        " out_uv);"
+    ) in opengl
     assert "vec4 PSMain(PSInput input)" not in opengl
     assert "void main() {\n}" not in opengl
     assert "PSInput" not in opengl
@@ -11250,30 +11247,24 @@ def test_translate_project_rust_sampled_texture_uses_entry_resource_parameters(
     payload = report.to_json()
     output = repo / "translated" / "rust" / "shaders" / "sampled.rs"
 
+    # The texture and the sampler are spirv-std entry parameters with their explicit bindings, not
+    # default-valued statics.
     assert output.exists()
-    rust_code = output.read_text(encoding="utf-8")
     assert payload["summary"]["translatedCount"] == 1
-    assert (
-        "// CrossGL resource metadata: name=colorMap kind=texture set=1 "
-        "binding=2 binding_source=explicit" in rust_code
+    rust_code = " ".join(output.read_text(encoding="utf-8").split())
+    # rustfmt, when it is on PATH, drops the space before ':' and inside the Image! arguments.
+    assert re.search(
+        r"#\[spirv\(descriptor_set = 1, binding = 2\)\] colorMap ?: "
+        r"&Image ?!\( ?2D, type ?= ?f32, sampled\)",
+        rust_code,
     )
-    assert (
-        "// CrossGL resource metadata: name=linearSampler kind=sampler set=1 "
-        "binding=3 binding_source=explicit" in rust_code
+    assert re.search(
+        r"#\[spirv\(descriptor_set = 1, binding = 3\)\] linearSampler ?: &Sampler",
+        rust_code,
     )
-    assert (
-        '#[cfg_attr(feature = "crossgl_gpu", '
-        "spirv(descriptor_set = 1, binding = 2))] colorMap: Texture2D<f32>" in rust_code
-    )
-    assert (
-        '#[cfg_attr(feature = "crossgl_gpu", '
-        "spirv(descriptor_set = 1, binding = 3))] linearSampler: Sampler" in rust_code
-    )
-    assert "return sample_sampler(colorMap, linearSampler, uv);" in rust_code
-    assert "CrossGL Rust limitation: resource colorMap" not in rust_code
-    assert "CrossGL Rust limitation: resource linearSampler" not in rust_code
+    assert "colorMap.sample(*linearSampler, uv)" in rust_code
     assert "static COLOR_MAP" not in rust_code
-    assert "static LINEAR_SAMPLER" not in rust_code
+    assert "Default::default()" not in rust_code
     assert not [
         diagnostic
         for diagnostic in payload["diagnostics"]
@@ -11294,7 +11285,8 @@ def test_translate_project_rust_storage_buffer_is_bound_as_entry_parameter(
                 RWStructuredBuffer<int> values @binding(0);
 
                 compute {
-                    void main(uint index) {
+                    void main() {
+                        uint index = gl_GlobalInvocationID.x;
                         int value = buffer_load(values, index);
                         buffer_store(values, index, value + 1);
                     }
@@ -11331,9 +11323,10 @@ def test_translate_project_rust_storage_buffer_is_bound_as_entry_parameter(
     assert "CrossGL Rust limitation" not in rust_code
     assert "static VALUES" not in rust_code
     assert (
-        '#[cfg_attr(feature = "crossgl_gpu", spirv(storage_buffer, descriptor_set = 0, '
-        "binding = 0))] values: RWStructuredBuffer<i32>"
-    ) in rust_code
+        "#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] values: &mut [i32]"
+        in rust_code
+    )
+    assert "values[index as usize] = (value + 1);" in rust_code
     assert placeholder_diagnostics == []
     assert validate_project_report(report_path)["success"] is True
 
@@ -13239,7 +13232,7 @@ def test_translate_project_metal_defaulted_member_template_to_targets(tmp_path):
             assert_spirv_asm_validates_if_available(output, tmp_path)
 
 
-def test_translate_project_opengl_remaps_mlx_arange_materialized_entry_bindings(
+def test_translate_project_opengl_keeps_mlx_arange_instantiation_bindings_per_entry(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -13283,50 +13276,44 @@ def test_translate_project_opengl_remaps_mlx_arange_materialized_entry_bindings(
     assert payload["summary"]["failedCount"] == 0
     assert payload["diagnostics"] == []
 
-    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
-    arg_bindings = {
-        block_name: int(binding)
-        for binding, block_name in re.findall(
-            r"layout\(std140, binding = (\d+)\) uniform "
-            r"(arange(?:uint8|uint16|int8|int16|int32|int64)_(?:start|step)_Args)",
-            output,
+    # Each instantiation is its own GLSL program (glsl_entry_split), so each keeps the source's bindings.
+    outputs = {
+        artifact["entryPoint"]["source"]: (
+            (repo / artifact["path"]).read_text(encoding="utf-8")
         )
+        for artifact in payload["artifacts"]
     }
-
-    assert set(arg_bindings) == {
-        "arangeuint8_start_Args",
-        "arangeuint8_step_Args",
-        "arangeuint16_start_Args",
-        "arangeuint16_step_Args",
-        "arangeint8_start_Args",
-        "arangeint8_step_Args",
-        "arangeint16_start_Args",
-        "arangeint16_step_Args",
-        "arangeint32_start_Args",
-        "arangeint32_step_Args",
-        "arangeint64_start_Args",
-        "arangeint64_step_Args",
-    }
-    assert len(set(arg_bindings.values())) == len(arg_bindings)
-    assert "Conflicting OpenGL resource binding" not in output
-    normalized = re.sub(r"\s+", " ", output)
+    assert sorted(outputs) == sorted(
+        f"arange{name}"
+        for name in ("uint8", "uint16", "int8", "int16", "int32", "int64")
+    )
+    for name, output in outputs.items():
+        bindings = {
+            block: int(binding)
+            for binding, block in re.findall(
+                r"layout\(std(?:140|430), binding = (\d+)\) (?:uniform|buffer) (\w+)",
+                output,
+            )
+        }
+        assert bindings == {
+            f"{name}_start_Args": 0,
+            f"{name}_step_Args": 1,
+            "out_Buffer": 2,
+        }
+        assert output.count("void main()") == 1
+        (tmp_path / name).mkdir()
+        assert_compute_glsl_validates_if_available(output, tmp_path / name)
+    normalized = {name: re.sub(r"\s+", " ", output) for name, output in outputs.items()}
     assert (
-        "bitfieldExtract(int((uint(arangeint8_start_Args_start) + "
-        "(index * uint(arangeint8_step_Args_step)))), 0, 8)" in normalized
+        "bitfieldExtract(int((uint(start) + (index * uint(step)))), 0, 8)"
+        in normalized["arangeint8"]
     )
     assert (
-        "bitfieldExtract(int((uint(arangeint16_start_Args_start) + "
-        "(index * uint(arangeint16_step_Args_step)))), 0, 16)" in normalized
+        "bitfieldExtract(int((uint(start) + (index * uint(step)))), 0, 16)"
+        in normalized["arangeint16"]
     )
-    assert (
-        "int((uint(arangeint32_start_Args_start) + "
-        "(index * uint(arangeint32_step_Args_step))))" in normalized
-    )
-    assert (
-        "arangeint64_start_Args_start + "
-        "(int64_t(index) * arangeint64_step_Args_step)" in normalized
-    )
-    assert_compute_glsl_validates_if_available(output, tmp_path)
+    assert "int((uint(start) + (index * uint(step))))" in normalized["arangeint32"]
+    assert "start + (int64_t(index) * step)" in normalized["arangeint64"]
 
 
 def test_translate_project_materialized_metal_quantized_specialization_to_targets(
@@ -13874,7 +13861,7 @@ def test_metal_union_layout_diagnostic_matches_direct_and_project(tmp_path):
     repo.mkdir()
     source_path = repo / "unsupported-union.metal"
     source_path.write_text(
-        "union Unsupported { uint2 words; uint word; };\n",
+        "union Unsupported { uint4 words; uint pair[2]; };\n",
         encoding="utf-8",
     )
 
@@ -14196,7 +14183,8 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
     report = translate_project(load_project_config(repo))
     payload = report.to_json()
 
-    assert payload["summary"]["translatedCount"] == 3
+    # OpenGL gets one artifact per kernel (glsl_entry_split); each reports the specializations its kernel reaches.
+    assert payload["summary"]["translatedCount"] == 4
     assert payload["summary"]["failedCount"] == 0
     assert payload["summary"]["diagnosticsByCode"] == {}
     assert payload["diagnosticCounts"] == {"note": 0, "warning": 0, "error": 0}
@@ -14208,18 +14196,33 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
         ("vulkan", "translated"),
     }
 
+    reached = {
+        None: {"rope", "rope_freqs", "rope_impl"},
+        "rope_float32": {"rope", "rope_impl"},
+        "rope_freqs_float32": {"rope_freqs"},
+    }
+    assert sorted(
+        artifact["entryPoint"]["source"]
+        for artifact in payload["artifacts"]
+        if "entryPoint" in artifact
+    ) == ["rope_float32", "rope_freqs_float32"]
     for artifact in payload["artifacts"]:
+        entry = artifact.get("entryPoint", {}).get("source")
+        assert (entry is not None) == (artifact["target"] == "opengl")
         materialization = artifact["templateMaterialization"]
         assert materialization["status"] == "materialized"
         assert materialization["configuredParameters"] == {}
         assert materialization["configuredParameterSources"] == {}
         assert materialization["unsupported"] == []
-        assert materialization["specializationCount"] == 3
+        assert materialization["specializationCount"] == len(reached[entry])
         specializations = {
             (record["name"], record["source"]): record
             for record in materialization["specializations"]
         }
-        assert specializations[("rope", "source-instantiation")] == {
+        assert {name for name, _source in specializations} == reached[entry]
+        assert "rope" not in reached[entry] or specializations[
+            ("rope", "source-instantiation")
+        ] == {
             "name": "rope",
             "materializedName": "rope_float32",
             "parameters": {
@@ -14235,7 +14238,9 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
             "source": "source-instantiation",
             "hostName": "rope_float32",
         }
-        assert specializations[("rope_freqs", "source-instantiation")] == {
+        assert "rope_freqs" not in reached[entry] or specializations[
+            ("rope_freqs", "source-instantiation")
+        ] == {
             "name": "rope_freqs",
             "materializedName": "rope_freqs_float32",
             "parameters": {
@@ -14251,7 +14256,9 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
             "source": "source-instantiation",
             "hostName": "rope_freqs_float32",
         }
-        assert specializations[("rope_impl", "call-site")] == {
+        assert "rope_impl" not in reached[entry] or specializations[
+            ("rope_impl", "call-site")
+        ] == {
             "name": "rope_impl",
             "materializedName": "rope_impl_float_uint_WorkPerThread_float_n",
             "parameters": {
@@ -14274,8 +14281,10 @@ def test_translate_project_materializes_metal_rope_template_defaults_to_targets(
                     "float read_local(inout float values[1], int values_base)" in output
                 )
                 assert "read_local(const float values[1]" not in output
-            elif artifact["target"] == "opengl":
+            elif entry == "rope_float32":
                 assert "float read_local(float values[1], int values_base)" in output
+            elif entry == "rope_freqs_float32":
+                assert "read_local" not in output
 
     report_path = repo / "translated" / "report.json"
     report.write_json(report_path)
@@ -16705,20 +16714,28 @@ def test_translate_project_materializes_plain_helper_from_dependent_local_aliase
     ).to_json()
 
     assert payload["diagnostics"] == []
-    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
-    assert set(artifacts) == {"directx", "opengl"}
+    # OpenGL gets one artifact per kernel (glsl_entry_split), each with the one gemm_loop its kernel reaches.
+    artifacts = {
+        (artifact["target"], artifact.get("entryPoint", {}).get("source")): artifact
+        for artifact in payload["artifacts"]
+    }
+    assert set(artifacts) == {
+        ("directx", None),
+        ("opengl", "quantized_gather_float_nt"),
+        ("opengl", "quantized_gather_float_t"),
+    }
     assert all(artifact["status"] == "translated" for artifact in artifacts.values())
     outputs = {
         target: (repo / artifact["path"]).read_text(encoding="utf-8")
         for target, artifact in artifacts.items()
     }
-    for artifact in artifacts.values():
+    for key, artifact in artifacts.items():
         helpers = [
             specialization
             for specialization in artifact["templateMaterialization"]["specializations"]
             if specialization["name"] == "gemm_loop"
         ]
-        assert len(helpers) == 2
+        assert len(helpers) == (2 if key == ("directx", None) else 1)
         helper_payload = json.dumps(helpers, sort_keys=True)
         assert "BK_padded" not in helper_payload
         assert "BN_padded" not in helper_payload
@@ -16737,8 +16754,11 @@ def test_translate_project_materializes_plain_helper_from_dependent_local_aliase
         )
         assert "36" in "\n".join(helper_lines)
         assert "32" in "\n".join(helper_lines)
-    assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
-    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
+    assert_directx_compute_validates_if_available(outputs[("directx", None)], tmp_path)
+    for (target, entry), output in outputs.items():
+        if target == "opengl":
+            (tmp_path / entry).mkdir()
+            assert_compute_glsl_validates_if_available(output, tmp_path / entry)
 
 
 def test_translate_project_folds_concrete_metal_sizeof_across_targets(tmp_path):
@@ -19433,7 +19453,7 @@ def test_translate_project_opengl_missing_accumulator_template_diagnostic(
             "reason": "missing-template-arguments",
             "sourceDeclaration": {
                 "file": "shaders/reduction.metal",
-                "line": 5,
+                "line": 7,
                 "column": 1,
                 "name": "reduce_values",
             },
@@ -19715,7 +19735,7 @@ def test_translate_project_opengl_rejects_post_materialization_template_type_lea
                 "reason": "missing-template-arguments",
                 "sourceDeclaration": {
                     "file": "steel_attention_epilogue.metal",
-                    "line": 5,
+                    "line": 7,
                     "column": 1,
                     "name": "BlockMMA",
                 },
@@ -19747,7 +19767,7 @@ def test_translate_project_opengl_rejects_post_materialization_template_type_lea
                 "targetBackend": "opengl",
                 "declarationLocation": {
                     "file": "steel_attention_epilogue.metal",
-                    "line": 5,
+                    "line": 7,
                     "column": 1,
                 },
             }
@@ -23584,6 +23604,102 @@ def test_translate_project_runs_pinned_slang_external_corpus_fixture(tmp_path):
             }
         },
     }
+    assert external_corpus["entries"] == [
+        {
+            **manifest_entry,
+            "present": True,
+            "discovered": True,
+            "artifactCount": 1,
+            "translatedCount": 1,
+            "failedCount": 0,
+        }
+    ]
+
+
+def test_translate_project_runs_pinned_wgsl_external_corpus_fixture(tmp_path):
+    support_manifest = json.loads(
+        (ROOT / "tests" / "fixtures" / "external-corpus.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    manifest_entry = next(
+        entry
+        for entry in support_manifest["entries"]
+        if entry["id"] == "wgpu-standalone-hello-compute"
+    )
+    repo = tmp_path / "repo"
+    source_path = repo / manifest_entry["path"]
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text(
+        textwrap.dedent("""
+            @group(0) @binding(0)
+            var<storage, read> input: array<f32>;
+            @group(0) @binding(1)
+            var<storage, read_write> output: array<f32>;
+
+            @compute @workgroup_size(64)
+            fn doubleMe(@builtin(global_invocation_id) global_id: vec3<u32>) {
+                let index = global_id.x;
+                let array_length = arrayLength(&input);
+                if (global_id.x >= array_length) {
+                    return;
+                }
+                output[global_id.x] = input[global_id.x] * 2.0;
+            }
+            """).strip() + "\n",
+        encoding="utf-8",
+    )
+    (repo / "corpus.json").write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "name": "Pinned WGSL project fixture",
+                "entries": [manifest_entry],
+            }
+        ),
+        encoding="utf-8",
+    )
+    (repo / "crosstl.toml").write_text(
+        textwrap.dedent("""
+            [project]
+            source_roots = ["examples"]
+            targets = ["cgl"]
+            output_dir = "out"
+            external_corpus_manifest = "corpus.json"
+            """).strip(),
+        encoding="utf-8",
+    )
+
+    report = translate_project(load_project_config(repo))
+    payload = report.to_json()
+    report_path = repo / "out" / "portability-report.json"
+    report.write_json(report_path)
+    validation = validate_project_report(report_path)
+    artifact = payload["artifacts"][0]
+    translated = (repo / artifact["path"]).read_text(encoding="utf-8")
+
+    assert validation["success"] is True
+    assert payload["summary"]["unitsBySourceBackend"] == {"wgsl": 1}
+    assert payload["summary"]["artifactsBySourceBackend"] == {
+        "wgsl": {"artifactCount": 1, "translatedCount": 1, "failedCount": 0}
+    }
+    assert artifact["source"] == manifest_entry["path"]
+    assert artifact["sourceBackend"] == "wgsl"
+    assert artifact["target"] == "cgl"
+    assert artifact["status"] == "translated"
+    assert artifact["path"] == (
+        "out/cgl/examples/standalone/01_hello_compute/src/shader.cgl"
+    )
+    assert "layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;" in (
+        translated
+    )
+    assert "buffer_dimensions(input_)" in translated
+    assert "output_[global_id.x] = (input_[global_id.x] * 2.0);" in translated
+    external_corpus = payload["externalCorpus"]
+    assert external_corpus["status"] == "ok"
+    assert external_corpus["summary"]["entriesBySourceBackend"] == {"wgsl": 1}
+    assert external_corpus["summary"]["presentCount"] == 1
+    assert external_corpus["summary"]["discoveredUnitCount"] == 1
     assert external_corpus["entries"] == [
         {
             **manifest_entry,
@@ -49182,7 +49298,10 @@ def test_translate_project_metal_matmul_uint2_grid_id_normalizes_for_compute_tar
     assert "uint2 id" not in hip
 
     mojo = outputs["mojo"]
-    assert "id_globalInvocationID: SIMD[DType.uint32, 4]" in mojo
+    assert (
+        "var id_globalInvocationID = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+        "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+    ) in mojo
     assert (
         "var id: SIMD[DType.uint32, 2] = "
         "SIMD[DType.uint32, 2](id_globalInvocationID[0], "
@@ -49192,11 +49311,12 @@ def test_translate_project_metal_matmul_uint2_grid_id_normalizes_for_compute_tar
     assert "var col: UInt32 = id[0]" in mojo
 
     rust = outputs["rust"]
-    assert "id_globalInvocationID: Vec3<u32>" in rust
+    assert "#[spirv(global_invocation_id)] id_global_invocation_id: UVec3" in rust
+    assert "let id: UVec2 = id_global_invocation_id.truncate();" in rust
     assert (
-        "let id: Vec2<u32> = "
-        "Vec2::<u32>::new(id_globalInvocationID.x, id_globalInvocationID.y);"
-    ) in rust
+        "#[spirv(uniform, descriptor_set = 0, binding = 0)] params: &MatMulParams"
+        in rust
+    )
     assert "let row: u32 = id.y;" in rust
     assert "let col: u32 = id.x;" in rust
 
@@ -49405,26 +49525,34 @@ def test_translate_project_metal_opengl_disambiguates_constant_value_members(
     assert payload["summary"]["failedCount"] == 0
     assert payload["diagnostics"] == []
 
-    artifact = payload["artifacts"][0]
-    output = (repo / artifact["path"]).read_text(encoding="utf-8")
-
-    assert artifact["sourceMap"]["source"]["file"] == "kernels.metal"
-    assert artifact["sourceRemap"]["mappingCount"] >= 1
-    assert "Ambiguous cbuffer member" not in output
+    # Each kernel is its own GLSL program (glsl_entry_split), so each keeps its own name and binding for value.
+    outputs = {
+        artifact["entryPoint"]["source"]: (
+            (repo / artifact["path"]).read_text(encoding="utf-8")
+        )
+        for artifact in payload["artifacts"]
+    }
+    assert sorted(outputs) == ["first", "second"]
+    for artifact in payload["artifacts"]:
+        assert artifact["sourceMap"]["source"]["file"] == "kernels.metal"
+        assert artifact["sourceRemap"]["mappingCount"] >= 1
     assert (
         "layout(std140, binding = 1) uniform first_value_Args {\n"
-        "    float first_value_Args_value;\n"
+        "    float value;\n"
         "};"
-    ) in output
+    ) in outputs["first"]
+    assert "out_[0] = value;" in outputs["first"]
     assert (
         "layout(std140, binding = 3) uniform second_value_Args {\n"
-        "    float second_value_Args_value;\n"
+        "    float value;\n"
         "};"
-    ) in output
-    assert "float value;" not in output
-    assert "out_[0] = first_value_Args_value;" in output
-    assert "second_out_[0] = (second_value_Args_value + 1.0);" in output
-    assert_compute_glsl_validates_if_available(output, tmp_path)
+    ) in outputs["second"]
+    assert "out_[0] = (value + 1.0);" in outputs["second"]
+    for name, output in outputs.items():
+        assert "Ambiguous cbuffer member" not in output
+        assert output.count("void main()") == 1
+        (tmp_path / name).mkdir()
+        assert_compute_glsl_validates_if_available(output, tmp_path / name)
 
 
 def test_translate_project_metal_opengl_scopes_mlx_style_constant_value_members(
@@ -49466,26 +49594,32 @@ def test_translate_project_metal_opengl_scopes_mlx_style_constant_value_members(
     assert payload["summary"]["failedCount"] == 0
     assert payload["diagnostics"] == []
 
-    output = (repo / payload["artifacts"][0]["path"]).read_text(encoding="utf-8")
-
-    assert "float alpha;" not in output
-    assert "float beta;" not in output
-    assert "uint batch_ndim;" not in output
-    assert "float gemv_a_alpha_Args_alpha;" in output
-    assert "float gemv_a_beta_Args_beta;" in output
-    assert "uint gemv_a_batch_ndim_Args_batch_ndim;" in output
-    assert "float gemv_b_alpha_Args_alpha;" in output
-    assert "float gemv_b_beta_Args_beta;" in output
-    assert "uint gemv_b_batch_ndim_Args_batch_ndim;" in output
-    assert (
-        "out_[0] = ((gemv_a_alpha_Args_alpha + gemv_a_beta_Args_beta) + "
-        "float(gemv_a_batch_ndim_Args_batch_ndim));"
-    ) in output
-    assert (
-        "gemv_b_out_[0] = ((gemv_b_alpha_Args_alpha * gemv_b_beta_Args_beta) + "
-        "float(gemv_b_batch_ndim_Args_batch_ndim));"
-    ) in output
-    assert_compute_glsl_validates_if_available(output, tmp_path)
+    outputs = {
+        artifact["entryPoint"]["source"]: (
+            (repo / artifact["path"]).read_text(encoding="utf-8")
+        )
+        for artifact in payload["artifacts"]
+    }
+    assert sorted(outputs) == ["gemv_a", "gemv_b"]
+    for name, first_binding, expression in (
+        ("gemv_a", 1, "out_[0] = ((alpha + beta) + float(batch_ndim));"),
+        ("gemv_b", 5, "out_[0] = ((alpha * beta) + float(batch_ndim));"),
+    ):
+        output = outputs[name]
+        for offset, (member, declaration) in enumerate(
+            (
+                ("alpha", "float alpha;"),
+                ("beta", "float beta;"),
+                ("batch_ndim", "uint batch_ndim;"),
+            )
+        ):
+            assert (
+                f"layout(std140, binding = {first_binding + offset}) uniform "
+                f"{name}_{member}_Args {{\n    {declaration}\n}};"
+            ) in output
+        assert expression in output
+        (tmp_path / name).mkdir()
+        assert_compute_glsl_validates_if_available(output, tmp_path / name)
 
 
 def test_translate_project_reports_unresolved_metal_static_constant_cycle(tmp_path):
@@ -49627,20 +49761,31 @@ def test_translate_project_evaluates_specialized_struct_member_assertions(tmp_pa
         format_output=False,
     ).to_json()
 
-    assert payload["summary"]["translatedCount"] == 2
+    # OpenGL gets one artifact per kernel (glsl_entry_split), each with the loader its kernel instantiates.
+    assert payload["summary"]["translatedCount"] == 3
     assert payload["summary"]["failedCount"] == 0
     assert payload["diagnostics"] == []
-    artifacts = {artifact["target"]: artifact for artifact in payload["artifacts"]}
     outputs = {
-        target: (repo / artifact["path"]).read_text(encoding="utf-8")
-        for target, artifact in artifacts.items()
+        (artifact["target"], artifact.get("entryPoint", {}).get("source")): (
+            (repo / artifact["path"]).read_text(encoding="utf-8")
+        )
+        for artifact in payload["artifacts"]
     }
-    for output in outputs.values():
+    loaders = {
+        ("directx", None): {"Loader_32_32_64_16_4", "Loader_32_32_128_8_4"},
+        ("opengl", "launch_one"): {"Loader_32_32_64_16_4"},
+        ("opengl", "launch_two"): {"Loader_32_32_128_8_4"},
+    }
+    assert set(outputs) == set(loaders)
+    for key, output in outputs.items():
         assert "static_assert" not in output
-        assert "Loader_32_32_64_16_4" in output
-        assert "Loader_32_32_128_8_4" in output
-    assert_directx_compute_validates_if_available(outputs["directx"], tmp_path)
-    assert_compute_glsl_validates_if_available(outputs["opengl"], tmp_path)
+        assert set(re.findall(r"Loader_32_32_\d+_\d+_4", output)) == loaders[key]
+    assert_directx_compute_validates_if_available(outputs[("directx", None)], tmp_path)
+    for entry in ("launch_one", "launch_two"):
+        (tmp_path / entry).mkdir()
+        assert_compute_glsl_validates_if_available(
+            outputs[("opengl", entry)], tmp_path / entry
+        )
 
 
 @pytest.mark.parametrize(
@@ -50708,47 +50853,82 @@ def test_translate_project_metal_source_instantiation_propagates_plain_helper_bi
     payload = report.to_json()
 
     assert payload["diagnostics"] == []
-    artifact = payload["artifacts"][0]
-    assert artifact["status"] == "translated"
-    materialization = artifact["templateMaterialization"]
-    assert materialization["status"] == "materialized"
-    assert materialization["unsupported"] == []
-    assert [
-        (entry["name"], entry["materializedName"], entry["parameters"])
-        for entry in materialization["specializations"]
-    ] == [
-        ("unary_v", "unaryf32", {"T": "float"}),
-        ("copy_v", "copyf32", {"T": "float", "U": "float"}),
-        ("copy_v", "copyi32f32", {"T": "int", "U": "float"}),
-        ("apply_value", "apply_value_float", {"T": "float"}),
-        ("convert_value", "convert_value_float_float", {"T": "float", "U": "float"}),
-        ("convert_value", "convert_value_int_float", {"T": "int", "U": "float"}),
-    ]
-    assert {
-        source
-        for entry in materialization["specializations"]
-        for source in entry["parameterSources"].values()
-    } == {"source-instantiation"}
+    # Each kernel is its own GLSL program (glsl_entry_split): it keeps its source bindings and carries the plain
+    # helper specializations it calls, and no other kernel's.
+    expected = {
+        "unaryf32": (
+            [
+                ("unary_v", "unaryf32", {"T": "float"}),
+                ("apply_value", "apply_value_float", {"T": "float"}),
+            ],
+            (
+                "layout(std430, binding = 0) readonly buffer in_Buffer { float in_[]; };",
+                "layout(std430, binding = 1) buffer out_Buffer { float out_[]; };",
+                "float apply_value_float(float value)",
+                "out_[gid] = apply_value_float(in_[gid]);",
+            ),
+        ),
+        "copyf32": (
+            [
+                ("copy_v", "copyf32", {"T": "float", "U": "float"}),
+                (
+                    "convert_value",
+                    "convert_value_float_float",
+                    {"T": "float", "U": "float"},
+                ),
+            ],
+            (
+                "layout(std430, binding = 0) readonly buffer srcBuffer { float src[]; };",
+                "layout(std430, binding = 1) buffer dstBuffer { float dst[]; };",
+                "float convert_value_float_float(float value)",
+                "dst[gid] = convert_value_float_float(src[gid]);",
+            ),
+        ),
+        "copyi32f32": (
+            [
+                ("copy_v", "copyi32f32", {"T": "int", "U": "float"}),
+                (
+                    "convert_value",
+                    "convert_value_int_float",
+                    {"T": "int", "U": "float"},
+                ),
+            ],
+            (
+                "layout(std430, binding = 0) readonly buffer srcBuffer { int src[]; };",
+                "layout(std430, binding = 1) buffer dstBuffer { float dst[]; };",
+                "float convert_value_int_float(int value)",
+                "dst[gid] = convert_value_int_float(src[gid]);",
+            ),
+        ),
+    }
+    artifacts = {
+        artifact["entryPoint"]["source"]: artifact for artifact in payload["artifacts"]
+    }
+    assert sorted(artifacts) == sorted(expected)
+    for name, (specializations, lines) in expected.items():
+        artifact = artifacts[name]
+        assert artifact["status"] == "translated"
+        materialization = artifact["templateMaterialization"]
+        assert materialization["status"] == "materialized"
+        assert materialization["unsupported"] == []
+        assert [
+            (entry["name"], entry["materializedName"], entry["parameters"])
+            for entry in materialization["specializations"]
+        ] == specializations
+        assert {
+            source
+            for entry in materialization["specializations"]
+            for source in entry["parameterSources"].values()
+        } == {"source-instantiation"}
 
-    output = (repo / artifact["path"]).read_text(encoding="utf-8")
-    assert (
-        "layout(std430, binding = 0) readonly buffer in_Buffer { float in_[]; };"
-        in output
-    )
-    assert (
-        "layout(std430, binding = 4) readonly buffer copyi32f32_srcBuffer "
-        "{ int copyi32f32_src[]; };" in output
-    )
-    assert "float apply_value_float(float value)" in output
-    assert "float convert_value_float_float(float value)" in output
-    assert "float convert_value_int_float(int value)" in output
-    assert "out_[gid] = apply_value_float(in_[gid]);" in output
-    assert "dst[gid] = convert_value_float_float(src[gid]);" in output
-    assert "dst[gid] = convert_value_int_float(copyi32f32_src[gid]);" in output
-    assert "apply_value(in_[gid])" not in output
-    assert "convert_value(src[gid])" not in output
-    assert re.search(r"\\b(?:T|U)\\b", output) is None
-    assert_compute_glsl_validates_if_available(output, tmp_path)
+        output = (repo / artifact["path"]).read_text(encoding="utf-8")
+        for line in lines:
+            assert line in output
+        assert "apply_value(in_[gid])" not in output
+        assert "convert_value(src[gid])" not in output
+        assert re.search(r"\\b(?:T|U)\\b", output) is None
+        (tmp_path / name).mkdir()
+        assert_compute_glsl_validates_if_available(output, tmp_path / name)
 
     report_path = repo / "out" / "report.json"
     report.write_json(report_path)
@@ -51054,7 +51234,7 @@ def test_translate_project_metal_materialization_budget_tracks_reachable_graph(
     (repo / "crosstl.toml").write_text(
         textwrap.dedent("""
             [project]
-            targets = ["opengl"]
+            targets = ["directx"]
             output_dir = "out"
 
             [project.source_options.metal]
@@ -51067,8 +51247,10 @@ def test_translate_project_metal_materialization_budget_tracks_reachable_graph(
     report = translate_project(load_project_config(repo))
     payload = report.to_json()
 
+    # The budget covers the whole file, so the target is one whose artifact holds every kernel; OpenGL splits the
+    # file by kernel (glsl_entry_split).
     assert payload["diagnostics"] == []
-    artifact = payload["artifacts"][0]
+    (artifact,) = payload["artifacts"]
     assert artifact["status"] == "translated"
     materialization = artifact["templateMaterialization"]
     assert materialization["status"] == "materialized"
@@ -51176,7 +51358,7 @@ def test_validate_project_report_template_materialization_accounting_is_optional
     ) in diagnostic["message"]
 
 
-def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_materialization(
+def test_translate_project_metal_source_instantiation_work_limit_blocks_materialization(
     tmp_path,
 ):
     repo = tmp_path / "repo"
@@ -51184,7 +51366,7 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     (repo / "crosstl.toml").write_text(
         textwrap.dedent("""
             [project]
-            targets = ["opengl"]
+            targets = ["directx", "opengl"]
             output_dir = "out"
 
             [project.source_options.metal]
@@ -51220,7 +51402,9 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
     report = translate_project(load_project_config(repo))
     payload = report.to_json()
 
+    # The DirectX library holds the three instantiations, which together exceed the budget.
     artifact = payload["artifacts"][0]
+    assert artifact["target"] == "directx"
     assert artifact["status"] == "failed"
     assert "templateMaterialization" not in artifact
     assert not (repo / artifact["path"]).exists()
@@ -51231,14 +51415,27 @@ def test_translate_project_metal_source_instantiation_work_limit_blocks_opengl_m
         in artifact["error"]
     )
 
+    # GLSL holds one entry per artifact, and each one alone still exceeds the budget.
+    opengl = [item for item in payload["artifacts"] if item["target"] == "opengl"]
+    assert [item["entryPoint"]["source"] for item in opengl] == [
+        "launch_f32_a",
+        "launch_f32_b",
+        "launch_f32_c",
+    ]
+    for item in opengl:
+        assert item["status"] == "failed"
+        assert not (repo / item["path"]).exists()
+        assert "work budget exceeded" in item["error"]
+        assert "limit 2 from project.source_options.metal" in item["error"]
+
     assert payload["summary"]["translatedCount"] == 0
-    assert payload["summary"]["failedCount"] == 1
+    assert payload["summary"]["failedCount"] == 4
     assert payload["summary"]["diagnosticsByCode"] == {
-        "project.translate.metal-template-specialization": 1
+        "project.translate.metal-template-specialization": 4
     }
     diagnostic = payload["diagnostics"][0]
     assert diagnostic["code"] == "project.translate.metal-template-specialization"
-    assert diagnostic["target"] == "opengl"
+    assert diagnostic["target"] == "directx"
     assert diagnostic["sourceBackend"] == "metal"
     assert diagnostic["missingCapabilities"] == ["template.specialization"]
     assert diagnostic["location"]["file"] == "bounded_source_instantiations.metal"
@@ -51389,7 +51586,17 @@ def test_translate_project_applies_metal_target_source_pattern_materialization_w
     report_path = repo / "out" / "report.json"
     report.write_json(report_path)
     validation = validate_project_report(report_path)
-    artifacts = {artifact["source"]: artifact for artifact in payload["artifacts"]}
+    # Each kernel is its own OpenGL artifact (glsl_entry_split); each file's limit applies to each of them.
+    entries = ("launch_f32_a", "launch_f32_b", "launch_f32_c")
+    artifacts = {
+        (artifact["source"], artifact["entryPoint"]["source"]): artifact
+        for artifact in payload["artifacts"]
+    }
+    assert set(artifacts) == {
+        (source, entry)
+        for source in ("shaders/p.metal", "shaders/q.metal")
+        for entry in entries
+    }
 
     assert "project.validate.invalid-report" not in validation["diagnosticsByCode"]
     assert payload["project"]["sourceOptions"] == {
@@ -51404,10 +51611,11 @@ def test_translate_project_applies_metal_target_source_pattern_materialization_w
             },
         }
     }
-    assert artifacts["shaders/p.metal"]["status"] == "translated"
-    assert (repo / "out" / "opengl" / "shaders" / "p.glsl").exists()
-    assert artifacts["shaders/q.metal"]["status"] == "failed"
-    assert not (repo / artifacts["shaders/q.metal"]["path"]).exists()
+    for entry in entries:
+        assert artifacts[("shaders/p.metal", entry)]["status"] == "translated"
+        assert (repo / "out" / "opengl" / "shaders" / "p" / f"{entry}.glsl").exists()
+        assert artifacts[("shaders/q.metal", entry)]["status"] == "failed"
+        assert not (repo / artifacts[("shaders/q.metal", entry)]["path"]).exists()
     diagnostic = next(
         diagnostic
         for diagnostic in payload["diagnostics"]
@@ -54673,28 +54881,33 @@ def test_translate_project_metal_multi_entry_instantiations_scope_vulkan_binding
     ).to_json()
 
     assert payload["diagnostics"] == []
-    assert payload["summary"]["translatedCount"] == 3
+    # OpenGL gets one artifact per kernel (glsl_entry_split); DirectX and Vulkan keep both kernels in one.
+    assert payload["summary"]["translatedCount"] == 4
     assert payload["summary"]["failedCount"] == 0
-    assert {
-        (artifact["target"], artifact["status"]) for artifact in payload["artifacts"]
-    } == {
-        ("directx", "translated"),
-        ("opengl", "translated"),
-        ("vulkan", "translated"),
+    whole = {"rope_float32", "rope_freqs_float32", "rope_impl_float_uint_4"}
+    reached = {
+        ("directx", None): whole,
+        ("vulkan", None): whole,
+        ("opengl", "rope_float32"): {"rope_float32", "rope_impl_float_uint_4"},
+        ("opengl", "rope_freqs_float32"): {
+            "rope_freqs_float32",
+            "rope_impl_float_uint_4",
+        },
     }
-
+    keys = {
+        id(artifact): (artifact["target"], artifact.get("entryPoint", {}).get("source"))
+        for artifact in payload["artifacts"]
+    }
+    assert set(keys.values()) == set(reached)
     for artifact in payload["artifacts"]:
+        assert artifact["status"] == "translated"
         materialization = artifact["templateMaterialization"]
         assert materialization["status"] == "materialized"
         assert materialization["unsupported"] == []
         assert {
             specialization["materializedName"]
             for specialization in materialization["specializations"]
-        } == {
-            "rope_float32",
-            "rope_freqs_float32",
-            "rope_impl_float_uint_4",
-        }
+        } == reached[keys[id(artifact)]]
 
     vulkan_artifact = next(
         artifact for artifact in payload["artifacts"] if artifact["target"] == "vulkan"
@@ -56321,8 +56534,12 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
 
     assert "# CrossGL GPU builtin placeholders" not in output
     assert "struct _CrossGLGpuBuiltinU32Vec3" not in output
-    assert "fn saxpy(global_idx_uint: SIMD[DType.uint32, 4]) -> None:" in output
-    assert "var gid: Int32 = global_idx_uint[0]" in output
+    assert "def saxpy(" in output
+    assert (
+        "var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+        "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+    ) in output
+    assert "var gid: Int32 = Int32(global_idx_uint[0])" in output
     assert "gl_GlobalInvocationID" not in output
 
     assert "crossgl-gpu-builtin-placeholders" not in payload["summary"].get(
@@ -56348,8 +56565,11 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
             }
             """,
             # The grid index imports as the global invocation id.
-            ["global_idx_uint: SIMD[DType.uint32, 4]"],
-            "var i: Int32 = global_idx_uint[0]",
+            [
+                "var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+                "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+            ],
+            "var i: Int32 = Int32(global_idx_uint[0])",
         ),
         (
             "add_kernel.hip",
@@ -56366,8 +56586,11 @@ def test_translate_project_opencl_saxpy_to_mojo_lowers_compute_builtin_inputs(
                 }
             }
             """,
-            ["global_idx_uint: SIMD[DType.uint32, 4]"],
-            "var i: Int32 = global_idx_uint[0]",
+            [
+                "var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+                "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
+            ],
+            "var i: Int32 = Int32(global_idx_uint[0])",
         ),
     ],
 )
@@ -56829,18 +57052,19 @@ def test_translate_project_rust_gpu_mutable_fragment_output_lowers_for_native_ta
     }
 
     mojo = outputs["mojo"]
-    assert "fn main_fs() -> SIMD[DType.float32, 4]:" in mojo
+    assert "def main_fs() -> SIMD[DType.float32, 4]:" in mojo
     assert "var output: SIMD[DType.float32, 4]" in mojo
     assert "output = SIMD[DType.float32, 4](1.0, 0.0, 0.0, 1.0)" in mojo
     assert "return output" in mojo
-    assert "fn main_fs(output" not in mojo
+    assert "def main_fs(output" not in mojo
     assert "CrossGL parameter semantic" not in mojo
 
     rust = outputs["rust"]
-    assert "pub fn main_fs() -> Vec4<f32>" in rust
-    assert "let mut output: Vec4<f32>;" in rust
-    assert "output = Vec4::<f32>::new(1.0, 0.0, 0.0, 1.0);" in rust
-    assert "return output;" in rust
+    assert "#[spirv(fragment)]" in rust
+    assert "pub fn main_fs(#[spirv(location = 0)] out_value: &mut Vec4) -> ()" in rust
+    assert "let mut output: Vec4;" in rust
+    assert "output = Vec4::new(1.0, 0.0, 0.0, 1.0);" in rust
+    assert "*out_value = return_value;" in rust
     assert "pub fn main_fs(output" not in rust
     assert "CrossGL parameter semantic: output" not in rust
 

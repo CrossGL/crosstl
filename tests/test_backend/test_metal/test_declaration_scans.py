@@ -237,7 +237,7 @@ def reference_using_namespace_directives(
 
 
 def reference_find_static_constexpr_calls(self, expression, function_names):
-    from crosstl.backend.Metal.preprocessor import _MetalConstexprCall
+    from crosstl.backend.Metal.preprocessing.support import _MetalConstexprCall
 
     calls = []
     i = 0

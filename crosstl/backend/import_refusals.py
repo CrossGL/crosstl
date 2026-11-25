@@ -22,6 +22,7 @@ __all__ = [
     "ImportRefused",
     "MetalImportRefused",
     "MojoImportRefused",
+    "OpenCLImportRefused",
     "RustImportRefused",
     "SlangImportRefused",
 ]
@@ -88,6 +89,14 @@ class MojoImportRefused(ImportRefused):
     source_name = "mojo"
     label = "Mojo"
     code = f"{CODE_PREFIX}mojo-import-unsupported"
+
+
+class OpenCLImportRefused(ImportRefused):
+    """One or more OpenCL C constructs have no faithful CrossGL representation."""
+
+    source_name = "opencl"
+    label = "OpenCL C"
+    code = f"{CODE_PREFIX}opencl-import-unsupported"
 
 
 class RustImportRefused(ImportRefused):

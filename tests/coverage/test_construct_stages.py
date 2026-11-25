@@ -1,6 +1,8 @@
 """Probes for the geometry, tessellation, mesh, task and ray-tracing stages."""
 
-from tools.coverage import constructs, probes
+import re
+
+from tools.coverage import constructs, probes, runner
 from tools.coverage.templates import (
     meshes,
     primitives,
@@ -103,7 +105,18 @@ def test_tessellation_probes_state_each_languages_domain_spacing_and_patch_value
     crossgl = probes.build(
         construct_feature("hlsl", "tessellation-domain-quads"), "crossgl"
     ).source
-    assert "OutputPatch<ControlPoint, 4> patch) @domain(quad) {\n" in crossgl
+    # A domain probe states the tessellator modes too, so that GLSL output can write them on the evaluation shader.
+    assert (
+        "OutputPatch<ControlPoint, 4> patch) @domain(quad)\n"
+        "            @partitioning(integer) @outputtopology(triangle_ccw) {\n"
+    ) in crossgl
+    isolines = probes.build(
+        construct_feature("hlsl", "tessellation-domain-isolines"), "crossgl"
+    ).source
+    assert (
+        "@domain(isoline)\n            @partitioning(integer) @outputtopology(line) {\n"
+        in isolines
+    )
     crossgl = probes.build(
         construct_feature("hlsl", "tessellation-control-point-mode"), "crossgl"
     )
@@ -131,6 +144,46 @@ def test_tessellation_probes_state_each_languages_domain_spacing_and_patch_value
     for language, missing in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert listed & names == names - missing, language
+
+
+def test_hlsl_and_slang_domain_probes_carry_the_hull_a_pipeline_pairs_them_with():
+    """HLSL states the partitioning and the output topology only on the hull shader, so each domain probe carries a
+    hull with GLSL's defaults (integer partitioning, counter-clockwise triangles, lines for isolines) and the domain
+    shader stays the entry point ``main``."""
+    from tools.coverage.templates.hlsl import HLSL
+    from tools.coverage.templates.slang import SLANG
+
+    domains = {
+        "tessellation-domain-quads": ("quad", 4, "triangle_ccw"),
+        "tessellation-domain-isolines": ("isoline", 2, "line"),
+        "tessellation-level-input": ("tri", 3, "triangle_ccw"),
+        "tessellation-patch-input": ("tri", 3, "triangle_ccw"),
+        "tessellation-evaluation": ("tri", 3, "triangle_ccw"),
+    }
+    for language, templates in (("hlsl", HLSL), ("slang", SLANG)):
+        for name, (domain, count, topology) in domains.items():
+            template = templates[name]
+            source = template.program
+            hull, _, rest = source.partition("ControlPoint hull_main(")
+            assert rest, (language, name)
+            stage = '[shader("hull")]\n' if language == "slang" else ""
+            assert hull.endswith(
+                f'{stage}[domain("{domain}")]\n[partitioning("integer")]\n'
+                f'[outputtopology("{topology}")]\n[outputcontrolpoints({count})]\n'
+                '[patchconstantfunc("patch_constants")]\n'
+            ), (language, name)
+            assert "PatchConstants patch_constants(InputPatch<ControlPoint" in hull
+            stage = '[shader("domain")]\n' if language == "slang" else ""
+            assert f'{stage}[domain("{domain}")]\nfloat4 main(' in rest, (
+                language,
+                name,
+            )
+            assert (
+                len(re.findall(r"\bmain\(", source)) == 1 and template.entry == "main"
+            )
+    # The stage probe of the evaluation stage is the triangle domain probe.
+    assert "position * coord.z;\n}\n" in HLSL["tessellation-evaluation"].program
+    assert SLANG["tessellation-evaluation"].program.count('[shader("') == 2
 
 
 def test_mesh_probes_state_each_languages_topology_primitive_values_and_payload():
@@ -502,3 +555,29 @@ def test_geometry_probes_state_each_languages_primitives_instances_and_streams()
     for language, missing in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert listed & names == names - missing, language
+
+
+def test_metal_output_probes_translate_to_the_host_interface_of_the_native_probe():
+    """Metal reflects the arguments and stage-in members of an entry, so a CrossGL probe whose Metal translation has
+    others measures another interface than the native probe's. Metal's intersection function hands its hit back as a
+    result structure and takes no buffer, and its per-primitive colour links by location.
+    """
+    for name, line in (
+        ("intersection", "(float min_distance [[min_distance]]) {"),
+        ("mesh-per-primitive-output", "    float4 color [[user(locn0)]];"),
+    ):
+        feature = construct_feature("metal", name)
+        probe = probes.build(feature, "crossgl")
+        translated = runner.translate(probe.source, probe.suffix, "metal", "cgl")
+        assert line in probes.build(feature, "metal").source, name
+        assert line in translated, name
+        assert "[[buffer(" not in translated, name
+    # The other languages keep the probes their own native probes match.
+    assert "buffer float* outp;" in (
+        probes.build(construct_feature("hlsl", "intersection"), "crossgl").source
+    )
+    assert "vec4 color @ Color0;" in (
+        probes.build(
+            construct_feature("glsl", "mesh-per-primitive-output"), "crossgl"
+        ).source
+    )

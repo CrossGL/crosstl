@@ -111,6 +111,130 @@ def _template_parameter_values_from_arguments(
     return parameters
 
 
+class _SpecializationTypeCanonicalizer:
+    """Canonical type and template-argument spellings for one specialization selection.
+
+    An alias that cannot be resolved raises ``MetalTemplateSpecializationError``.
+    """
+
+    def __init__(
+        self,
+        *,
+        function_name,
+        preprocessor,
+        template,
+        specialization_key,
+        requested_signature,
+    ):
+        self.function_name = function_name
+        self.preprocessor = preprocessor
+        self.template = template
+        self.specialization_key = specialization_key
+        self.requested_signature = requested_signature
+
+    def source_location(self, source: str, position: int, text: str) -> Any:
+        return self.preprocessor._source_location_for_offsets(
+            source,
+            position,
+            min(len(source), position + max(len(text), 1)),
+        )
+
+    def canonical_type(
+        self,
+        type_text: str,
+        *,
+        aliases: Mapping[str, Sequence[Any]],
+        position: int,
+        source: str,
+        context: str,
+        location: Any = None,
+        excluded_aliases: set[str] | None = None,
+    ) -> str:
+        canonical = self.preprocessor._canonicalize_type_aliases_at(
+            type_text,
+            aliases,
+            position,
+            excluded_aliases=excluded_aliases,
+        )
+        if canonical is not None:
+            # ``uchar`` and ``uint8_t`` name one type (MSL table 2.1), so a
+            # deduced ``uchar`` selects the ``uint8_t`` specialization.
+            return canonical_scalar_type_spelling(_normalize_metal_type_text(canonical))
+
+        from crosstl.backend.Metal.preprocessor import (
+            MetalTemplateSpecializationError,
+        )
+
+        suggested_action = (
+            "declare every type alias before the specialization use, remove "
+            "cyclic aliases, and keep each concrete overload signature unique"
+        )
+        raise MetalTemplateSpecializationError(
+            "Metal explicit free-function specialization cannot be selected "
+            f"safely for overload '{self.requested_signature}': {context} "
+            f"'{_normalize_metal_type_text(type_text)}' has type aliases that "
+            "cannot be resolved with declaration-order and lexical-scope "
+            f"fidelity. Suggested action: {suggested_action}.",
+            requested_signature=self.requested_signature,
+            suggested_action=suggested_action,
+            source_location=(
+                location
+                if location is not None
+                else self.source_location(source, position, type_text)
+            ),
+            callee_template=self.function_name,
+            requested_arguments=tuple(self.specialization_key[1]),
+        )
+
+    def canonical_template_arguments(
+        self,
+        values: Sequence[str],
+        *,
+        alias_contexts: Sequence[tuple[Mapping[str, Sequence[Any]], int, str]],
+        context: str,
+        location: Any = None,
+    ) -> tuple[str, ...]:
+        canonical = [
+            self.preprocessor._normalize_template_argument_text(value)
+            for value in values
+        ]
+        template_parameters = list(
+            getattr(self.template, "template_parameters", ()) or ()
+        )
+        non_type_parameters = set(
+            (getattr(self.template, "template_parameter_types", {}) or {}).keys()
+        )
+        variadic_parameters = set(
+            getattr(self.template, "variadic_template_parameters", ()) or ()
+        )
+        argument_index = 0
+        for parameter_index, parameter in enumerate(template_parameters):
+            if parameter in variadic_parameters:
+                remaining_fixed = len(template_parameters) - parameter_index - 1
+                argument_count = max(
+                    0,
+                    len(canonical) - argument_index - remaining_fixed,
+                )
+            else:
+                argument_count = int(argument_index < len(canonical))
+            if parameter not in non_type_parameters:
+                for index in range(
+                    argument_index,
+                    min(argument_index + argument_count, len(canonical)),
+                ):
+                    for aliases, position, source in alias_contexts:
+                        canonical[index] = self.canonical_type(
+                            canonical[index],
+                            aliases=aliases,
+                            position=position,
+                            source=source,
+                            context=context,
+                            location=location,
+                        )
+            argument_index += argument_count
+        return tuple(canonical)
+
+
 def _explicit_template_function_specialization_for_selected_overload(
     *,
     preprocessor: Any,
@@ -161,99 +285,15 @@ def _explicit_template_function_specialization_for_selected_overload(
     if not named_candidates:
         return None
 
-    def source_location(source: str, position: int, text: str) -> Any:
-        return preprocessor._source_location_for_offsets(
-            source,
-            position,
-            min(len(source), position + max(len(text), 1)),
-        )
-
-    def canonical_type(
-        type_text: str,
-        *,
-        aliases: Mapping[str, Sequence[Any]],
-        position: int,
-        source: str,
-        context: str,
-        location: Any = None,
-        excluded_aliases: set[str] | None = None,
-    ) -> str:
-        canonical = preprocessor._canonicalize_type_aliases_at(
-            type_text,
-            aliases,
-            position,
-            excluded_aliases=excluded_aliases,
-        )
-        if canonical is not None:
-            # ``uchar`` and ``uint8_t`` name one type (MSL table 2.1), so a
-            # deduced ``uchar`` selects the ``uint8_t`` specialization.
-            return canonical_scalar_type_spelling(_normalize_metal_type_text(canonical))
-
-        suggested_action = (
-            "declare every type alias before the specialization use, remove "
-            "cyclic aliases, and keep each concrete overload signature unique"
-        )
-        raise MetalTemplateSpecializationError(
-            "Metal explicit free-function specialization cannot be selected "
-            f"safely for overload '{requested_signature}': {context} "
-            f"'{_normalize_metal_type_text(type_text)}' has type aliases that "
-            "cannot be resolved with declaration-order and lexical-scope "
-            f"fidelity. Suggested action: {suggested_action}.",
-            requested_signature=requested_signature,
-            suggested_action=suggested_action,
-            source_location=(
-                location
-                if location is not None
-                else source_location(source, position, type_text)
-            ),
-            callee_template=function_name,
-            requested_arguments=tuple(specialization_key[1]),
-        )
-
-    def canonical_template_arguments(
-        values: Sequence[str],
-        *,
-        alias_contexts: Sequence[tuple[Mapping[str, Sequence[Any]], int, str]],
-        context: str,
-        location: Any = None,
-    ) -> tuple[str, ...]:
-        canonical = [
-            preprocessor._normalize_template_argument_text(value) for value in values
-        ]
-        template_parameters = list(getattr(template, "template_parameters", ()) or ())
-        non_type_parameters = set(
-            (getattr(template, "template_parameter_types", {}) or {}).keys()
-        )
-        variadic_parameters = set(
-            getattr(template, "variadic_template_parameters", ()) or ()
-        )
-        argument_index = 0
-        for parameter_index, parameter in enumerate(template_parameters):
-            if parameter in variadic_parameters:
-                remaining_fixed = len(template_parameters) - parameter_index - 1
-                argument_count = max(
-                    0,
-                    len(canonical) - argument_index - remaining_fixed,
-                )
-            else:
-                argument_count = int(argument_index < len(canonical))
-            if parameter not in non_type_parameters:
-                for index in range(
-                    argument_index,
-                    min(argument_index + argument_count, len(canonical)),
-                ):
-                    for aliases, position, source in alias_contexts:
-                        canonical[index] = canonical_type(
-                            canonical[index],
-                            aliases=aliases,
-                            position=position,
-                            source=source,
-                            context=context,
-                            location=location,
-                        )
-            argument_index += argument_count
-        return tuple(canonical)
-
+    canonicalizer = _SpecializationTypeCanonicalizer(
+        function_name=function_name,
+        preprocessor=preprocessor,
+        template=template,
+        specialization_key=specialization_key,
+        requested_signature=requested_signature,
+    )
+    canonical_type = canonicalizer.canonical_type
+    canonical_template_arguments = canonicalizer.canonical_template_arguments
     selected_alias_contexts = tuple(argument_alias_contexts) or (
         (
             declaration_type_aliases,
@@ -415,6 +455,40 @@ def _explicit_template_function_specialization_for_selected_overload(
             callee_template=function_name,
             requested_arguments=tuple(selected_arguments),
         )
+
+    return _canonical_explicit_specialization(
+        preprocessor=preprocessor,
+        function_name=function_name,
+        declaration_source=declaration_source,
+        declaration_type_aliases=declaration_type_aliases,
+        canonical_type=canonical_type,
+        matches=matches,
+        requested_signature=requested_signature,
+        selected_arguments=selected_arguments,
+        selected_signature=selected_signature,
+    )
+
+
+def _canonical_explicit_specialization(
+    *,
+    preprocessor: Any,
+    function_name: str,
+    declaration_source: str,
+    declaration_type_aliases: Mapping[str, Sequence[Any]],
+    canonical_type,
+    matches,
+    requested_signature,
+    selected_arguments,
+    selected_signature,
+) -> Mapping[str, Any] | None:
+    """Rewrite the one matching explicit specialization with canonical alias spellings.
+
+    The header keeps its declarator names; the return and parameter types are resolved at the
+    specialization's own declaration, and anything that cannot be reconstructed fails closed.
+    """
+    from crosstl.backend.Metal.preprocessor import (
+        MetalTemplateSpecializationError,
+    )
 
     specialization = matches[0]
     specialization_position = int(specialization["span"][0])

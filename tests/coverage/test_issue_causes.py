@@ -33,6 +33,33 @@ def test_causes_keep_the_digits_of_template_arguments():
     )
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/tmp/tmpxft_{}_00000000-6_probe.ptx",
+        r"C:\Users\runneradmin\AppData\Local\Temp\tmpxft_{}_00000000-6_probe.ptx",
+        "tmpxft_{}_00000000-6_probe.ptx",
+    ],
+)
+def test_causes_drop_the_temporary_files_nvcc_names(path):
+    # nvcc names the intermediate files of each compilation after its process, and ptxas quotes the path, so one
+    # code generator bug that ptxas rejects in every probe is one cause.
+    detail = "ptxas {}, line 9; fatal : Parsing error near '_': syntax error"
+    row = backend_row(
+        "cuda",
+        "output",
+        [
+            feature_entry(name, "wrong", detail=detail.format(path.format(process)))
+            for name, process in (("for-loop", "0000cd1c"), ("while-loop", "0000d6be"))
+        ],
+    )
+    [(cause, features)] = causes.grouped(row)
+    assert cause == (
+        "ptxas probe.ptx, line N; fatal : Parsing error near '_': syntax error"
+    )
+    assert [f["name"] for f in features] == ["for-loop", "while-loop"]
+
+
 def test_titles_drop_the_glslang_location():
     detail = "ERROR: probe.frag:2: 'location' : SPIR-V requires location for user input/output"
     row = backend_row(
@@ -117,6 +144,45 @@ def test_features_whose_diagnostics_name_them_share_a_cause():
     assert causes.cause(
         {"name": "Vec3::round", "crossgl": "round", "detail": detail}
     ) == ('after the round trip: probe.cu(N): error: identifier "f64" is undefined')
+
+
+def test_constructs_that_read_a_built_in_share_a_cause_with_its_functions():
+    undefined = "error[E30015]: undefined identifier '{}'"
+    row = backend_row(
+        "slang",
+        "output",
+        [
+            feature_entry(
+                "subgroup-size", "wrong", "compute", undefined.format("gl_SubgroupSize")
+            ),
+            feature_entry(
+                "num-subgroups", "wrong", "compute", undefined.format("gl_NumSubgroups")
+            ),
+            feature_entry(
+                "WaveGetLaneEqMask",
+                "wrong",
+                detail=undefined.format("gl_SubgroupEqMask"),
+            )
+            | {"crossgl": "gl_SubgroupEqMask"},
+            feature_entry(
+                "max", "wrong", detail=undefined.format("crossgl_gl_max_value")
+            ),
+        ],
+    )
+    assert [
+        (text, [f["name"] for f in group]) for text, group in causes.grouped(row)
+    ] == [
+        (
+            undefined.format("<feature>"),
+            ["WaveGetLaneEqMask", "num-subgroups", "subgroup-size"],
+        ),
+        (undefined.format("crossgl_gl_max_value"), ["max"]),
+    ]
+    # A member or a name that only contains the prefix is not a built-in of its own.
+    detail = "ERROR: 0:4: 'gl_in' : undeclared identifier, reading v.gl_Position"
+    assert causes.cause({"name": "geometry", "detail": detail}) == (
+        "ERROR: N:N: '<feature>' : undeclared identifier, reading v.gl_Position"
+    )
 
 
 def test_a_shared_diagnostic_that_names_a_feature_stays_one_cause():

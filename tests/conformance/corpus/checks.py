@@ -1,7 +1,8 @@
 """Native checks of translated corpus artifacts, per target and stage.
 
 Each target's own checker decides validity: ``xcrun metal`` for MSL, DXC with validation (signed DXIL) for HLSL,
-glslang for desktop GLSL and GLSL ES, and spirv-as plus spirv-val for SPIR-V. Translated programs keep several
+or DXC writing validated Vulkan SPIR-V for HLSL that calls the printf intrinsic, glslang for desktop GLSL and GLSL ES,
+and spirv-as plus spirv-val for SPIR-V. Translated programs keep several
 stages in one artifact, so every entry point found in the artifact is checked and all of them must pass.
 """
 
@@ -139,11 +140,26 @@ def hlsl_entries(text, stages):
     return sorted(entries.items())
 
 
+# DXIL has no print operation: DXC rejects the printf intrinsic there ("use of unsupported identifier") and compiles it
+# only for Vulkan SPIR-V, as NonSemantic.DebugPrintf, validating the module as it writes it. An HLSL artifact that calls
+# the intrinsic is therefore checked as SPIR-V; one that declares its own printf function is still checked as DXIL.
+HLSL_SPIRV_ARGUMENTS = ("-spirv", "-fspv-target-env=vulkan1.1")
+PRINTF_CALL = re.compile(r"\bprintf\s*\(")
+PRINTF_DECLARATION = re.compile(r"\b(?!return\b|else\b|case\b)\w+[\s*&]+printf\s*\(")
+
+
+def calls_printf_intrinsic(text):
+    """Whether HLSL source calls the printf intrinsic, not a printf function it declares."""
+    text = COMMENTS.sub(" ", text)
+    return bool(PRINTF_CALL.search(text)) and not PRINTF_DECLARATION.search(text)
+
+
 def check_hlsl(path, scratch, stages):
     missing = _missing("dxc")
     if missing:
         return missing
     text = Path(path).read_text(errors="replace")
+    spirv = calls_printf_intrinsic(text)
     # Native 16-bit scalars, vectors (float16_t3) and matrices need -enable-16bit-types.
     extra = hlsl_arguments(path)
     entries = hlsl_entries(text, stages)
@@ -157,10 +173,11 @@ def check_hlsl(path, scratch, stages):
     ] or [("library", "lib_6_6", ["-default-linkage", "external"])]
     results = []
     for index, (name, profile, arguments) in enumerate(jobs):
-        output = Path(scratch) / f"entry{index}.dxil"
+        output = Path(scratch) / f"entry{index}.{'spv' if spirv else 'dxil'}"
         result = run(
             [
                 *tool("dxc").command,
+                *(HLSL_SPIRV_ARGUMENTS if spirv else ()),
                 path,
                 "-T",
                 profile,
@@ -173,8 +190,10 @@ def check_hlsl(path, scratch, stages):
             ],
             timeout=TIMEOUT,
         )
-        if result.status == "accepted" and not (
-            output.is_file() and dxil_is_signed(output)
+        if (
+            not spirv
+            and result.status == "accepted"
+            and not (output.is_file() and dxil_is_signed(output))
         ):
             result = type(result)(
                 result.command,
