@@ -2,6 +2,7 @@
 
 import re
 
+from ...CUDA.texture_elements import typed_texture_sampler
 from ..HipAst import (
     ArrayAccessNode,
     CastNode,
@@ -154,11 +155,15 @@ class HipResourceHintMixin:
         }
 
     def get_resource_object_call_hint(self, function_name, args=None):
-        base_name, _ = self.parse_cpp_template(function_name)
+        base_name, template_args = self.parse_cpp_template(function_name)
         if self.is_user_defined_function(base_name):
             return None
         if base_name in self.HIP_TEXTURE_CALL_TYPE_HINTS:
-            return 0, self.HIP_TEXTURE_CALL_TYPE_HINTS[base_name]
+            return 0, typed_texture_sampler(
+                base_name,
+                self.HIP_TEXTURE_CALL_TYPE_HINTS[base_name],
+                self.texture_element_crossgl_type(template_args),
+            )
         if base_name in self.HIP_SURFACE_CALL_TYPE_HINTS:
             if base_name.endswith("write"):
                 return 1, self.HIP_SURFACE_CALL_TYPE_HINTS[base_name]

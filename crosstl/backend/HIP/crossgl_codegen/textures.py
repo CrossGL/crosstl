@@ -1,8 +1,16 @@
 """Texture calls and coordinate ranks in the HIP to CrossGL converter."""
 
+from ...CUDA.texture_elements import TEXTURE_SAMPLE_COORDINATES, TextureElementMixin
 
-class HipTextureMixin:
+
+class HipTextureMixin(TextureElementMixin):
     """Texture members of ``HipToCrossGLConverter``."""
+
+    def texture_element_crossgl_type(self, template_args):
+        """The CrossGL type of a texture fetch's element type ``T``, or ``None`` when the fetch names none."""
+        if not template_args:
+            return None
+        return self.convert_hip_type_to_crossgl(template_args[0])
 
     def format_hip_resource_call(self, function_name, args, raw_args=None):
         base_name, template_args = self.parse_cpp_template(function_name)
@@ -11,27 +19,22 @@ class HipTextureMixin:
 
         value_type = template_args[0] if template_args else None
         if base_name == "tex1Dfetch":
-            return self.format_hip_texture_fetch_call(args)
-        if base_name in {"tex1D", "tex1DLod", "tex1DGrad"}:
-            return self.format_hip_texture_call(base_name, args, "vec1", 1, raw_args)
-        if base_name in {"tex2D", "tex2DLod", "tex2DGrad"}:
-            return self.format_hip_texture_call(base_name, args, "vec2", 2, raw_args)
+            return self.format_typed_texture_result(
+                self.format_hip_texture_fetch_call(args), value_type, raw_args
+            )
         if base_name == "tex2Dgather":
-            return self.format_hip_texture_gather_call(args)
-        if base_name in {"tex3D", "tex3DLod", "tex3DGrad"}:
-            return self.format_hip_texture_call(base_name, args, "vec3", 3, raw_args)
-        if base_name in {"texCubemap", "texCubemapLod", "texCubemapGrad"}:
-            return self.format_hip_texture_call(base_name, args, "vec3", 3, raw_args)
-        if base_name in {"tex1DLayered", "tex1DLayeredLod", "tex1DLayeredGrad"}:
-            return self.format_hip_texture_call(base_name, args, "vec2", 2, raw_args)
-        if base_name in {"tex2DLayered", "tex2DLayeredLod", "tex2DLayeredGrad"}:
-            return self.format_hip_texture_call(base_name, args, "vec3", 3, raw_args)
-        if base_name in {
-            "texCubemapLayered",
-            "texCubemapLayeredLod",
-            "texCubemapLayeredGrad",
-        }:
-            return self.format_hip_texture_call(base_name, args, "vec4", 4, raw_args)
+            return self.format_typed_texture_result(
+                self.format_hip_texture_gather_call(args), value_type, raw_args
+            )
+        if base_name in TEXTURE_SAMPLE_COORDINATES:
+            vector_name, dimensions = TEXTURE_SAMPLE_COORDINATES[base_name]
+            return self.format_typed_texture_result(
+                self.format_hip_texture_call(
+                    base_name, args, vector_name, dimensions, raw_args
+                ),
+                value_type,
+                raw_args,
+            )
 
         if base_name in {
             "surf1Dread",
@@ -306,4 +309,5 @@ class HipTextureMixin:
         if len(args) != 2:
             return None
         texture_name, coordinate = args
-        return f"texelFetch({texture_name}, {coordinate}, 0)"
+        # A texture bound to linear memory is a texel buffer, read by element (CUDA/texture_elements).
+        return f"texelFetch({texture_name}, {coordinate})"

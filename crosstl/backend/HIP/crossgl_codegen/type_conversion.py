@@ -47,8 +47,15 @@ class HipTypeConversionMixin:
 
     def convert_hip_resource_object_base_type(self, hip_type, hint):
         hip_type = self.strip_type_qualifiers(hip_type)
-        if hip_type == "hipTextureObject_t" and hint.startswith("sampler"):
+        if hip_type == "hipTextureObject_t" and hint.startswith(
+            ("sampler", "isampler", "usampler")
+        ):
             return hint
+        if hint.endswith("samplerBuffer") and hip_type.startswith("texture<"):
+            # A 1D texture reference read by tex1Dfetch is bound to linear memory: a texel buffer.
+            return self.texture_reference_sampler(
+                hip_type, self.HIP_TEXTURE_TYPE_MAPPING, texel_buffer=True
+            )
         if hip_type == "hipSurfaceObject_t" and "image" in hint:
             return hint
         return None
@@ -107,8 +114,11 @@ class HipTypeConversionMixin:
 
     def convert_hip_resource_type(self, hip_type):
         base_name, template_args = self.parse_cpp_template(hip_type)
-        if base_name == "texture" and len(template_args) >= 2:
-            return self.HIP_TEXTURE_TYPE_MAPPING.get(template_args[1])
+        if base_name == "texture" and template_args:
+            # texture<T, dim, mode>: the sampler of the value its fetches return (CUDA/texture_elements).
+            return self.texture_reference_sampler(
+                hip_type, self.HIP_TEXTURE_TYPE_MAPPING
+            )
         if base_name == "surface" and len(template_args) >= 2:
             return self.HIP_SURFACE_TYPE_MAPPING.get(template_args[1])
         return None

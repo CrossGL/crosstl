@@ -18,6 +18,7 @@ from .array_extents import IntegerConstants
 from .block_votes import BlockVoteLibrary, insert_block_vote_functions
 from .buffer_layout_import import EmittedBufferLayouts
 from .buffer_memory_qualifiers import buffer_memory_attributes
+from .callee_resource_hints import CalleeResourceHintMixin
 from .crossgl_codegen.cooperative_groups import CudaImportCooperativeGroupMixin
 from .crossgl_codegen.declarations import CudaImportDeclarationMixin
 from .crossgl_codegen.intrinsics import CudaImportIntrinsicMixin
@@ -58,6 +59,10 @@ from .surface_formats import (
     is_address_of,
     surface_value_type,
 )
+from .texture_elements import (
+    TEXTURE_SAMPLE_COORDINATES as CUDA_TEXTURE_SAMPLE_COORDINATES,
+)
+from .texture_elements import TextureElementMixin, typed_texture_sampler
 from .union_layout_import import UnionLayoutContracts
 
 # Warp intrinsics CrossGL keeps as CUDA calls; __syncwarp is a statement (visit_SyncNode).
@@ -80,6 +85,8 @@ class CudaToCrossGLConverter(
     CudaImportStatementMixin,
     CudaImportTypeMixin,
     SurfaceAccessMixin,
+    TextureElementMixin,
+    CalleeResourceHintMixin,
     ImportRefusalMixin,
 ):
     """Serialize CUDA backend AST nodes back into CrossGL source.
@@ -320,6 +327,9 @@ class CudaToCrossGLConverter(
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
         )
+        self.collect_callee_parameter_resource_hints(
+            [*getattr(ast_node, "functions", []), *getattr(ast_node, "kernels", [])]
+        )
         self.struct_resource_member_hints = self.collect_struct_resource_member_hints(
             ast_node
         )
@@ -409,6 +419,7 @@ class CudaToCrossGLConverter(
                             ),
                             resource_type,
                         )
+                self.collect_callee_resource_hints(hints, current)
                 # A global surface's element is merged over the whole program instead.
                 self.collect_surface_element_hint(
                     hints, current, variable_types, declared_names
@@ -581,11 +592,15 @@ class CudaToCrossGLConverter(
 
     def get_resource_object_call_hint(self, function_name, args=None):
         """``(index of the resource argument, its CrossGL type)`` of a texture or surface call, or ``None``."""
-        base_name, _ = self.parse_cpp_template(function_name)
+        base_name, template_args = self.parse_cpp_template(function_name)
         if self.is_user_defined_function(base_name):
             return None
         if base_name in self.CUDA_TEXTURE_CALL_TYPE_HINTS:
-            return 0, self.CUDA_TEXTURE_CALL_TYPE_HINTS[base_name]
+            return 0, typed_texture_sampler(
+                base_name,
+                self.CUDA_TEXTURE_CALL_TYPE_HINTS[base_name],
+                self.texture_element_crossgl_type(template_args),
+            )
         if base_name in self.CUDA_SURFACE_CALL_TYPE_HINTS:
             # surf*write(value, surface, ...) and the pointer form surf*read(&value, surface, ...).
             if base_name.endswith("write") or (args and is_address_of(args[0])):
@@ -1155,35 +1170,20 @@ class CudaToCrossGLConverter(
 
         value_type = template_args[0] if template_args else None
         if base_name == "tex1Dfetch":
-            return self.format_cuda_texture_fetch_call(args)
-        if base_name in {"tex1D", "tex1DLod", "tex1DGrad"}:
-            return self.format_cuda_texture_call(base_name, args, "vec1", 1)
-        if base_name in {"tex2D", "tex2DLod", "tex2DGrad"}:
-            return self.format_cuda_texture_call(base_name, args, "vec2", 2)
+            return self.format_typed_texture_result(
+                self.format_cuda_texture_fetch_call(args), value_type, raw_args
+            )
         if base_name == "tex2Dgather":
-            return self.format_cuda_texture_gather_call(args)
-        if base_name in {"tex3D", "tex3DLod", "tex3DGrad"}:
-            return self.format_cuda_texture_call(base_name, args, "vec3", 3)
-        if base_name in {"texCubemap", "texCubemapLod", "texCubemapGrad"}:
-            return self.format_cuda_texture_call(base_name, args, "vec3", 3)
-        if base_name in {
-            "tex1DLayered",
-            "tex1DLayeredLod",
-            "tex1DLayeredGrad",
-        }:
-            return self.format_cuda_texture_call(base_name, args, "vec2", 2)
-        if base_name in {
-            "tex2DLayered",
-            "tex2DLayeredLod",
-            "tex2DLayeredGrad",
-        }:
-            return self.format_cuda_texture_call(base_name, args, "vec3", 3)
-        if base_name in {
-            "texCubemapLayered",
-            "texCubemapLayeredLod",
-            "texCubemapLayeredGrad",
-        }:
-            return self.format_cuda_texture_call(base_name, args, "vec4", 4)
+            return self.format_typed_texture_result(
+                self.format_cuda_texture_gather_call(args), value_type, raw_args
+            )
+        if base_name in CUDA_TEXTURE_SAMPLE_COORDINATES:
+            vector_name, dimensions = CUDA_TEXTURE_SAMPLE_COORDINATES[base_name]
+            return self.format_typed_texture_result(
+                self.format_cuda_texture_call(base_name, args, vector_name, dimensions),
+                value_type,
+                raw_args,
+            )
 
         if base_name in {
             "surf1Dread",

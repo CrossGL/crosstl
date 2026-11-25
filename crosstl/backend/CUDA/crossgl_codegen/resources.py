@@ -97,7 +97,8 @@ class CudaImportResourceMixin:
     def format_cuda_texture_fetch_call(self, args):
         if len(args) == 2:
             texture_name, coordinate = args
-            return f"texelFetch({texture_name}, {coordinate}, 0)"
+            # A texture bound to linear memory is a texel buffer, read by element (texture_elements).
+            return f"texelFetch({texture_name}, {coordinate})"
         return self.format_unsupported_cuda_resource_expression(
             "texture",
             "tex1Dfetch sparse residency",

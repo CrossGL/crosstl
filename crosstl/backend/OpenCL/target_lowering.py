@@ -565,7 +565,15 @@ def _target_kernel_cbuffer(function_name, scalar_parameters, binding):
     )
 
 
-_OPAQUE_RESOURCE_TYPE_PREFIXES = ("texture", "image", "iimage", "uimage", "sampler")
+_OPAQUE_RESOURCE_TYPE_PREFIXES = (
+    "texture",
+    "image",
+    "iimage",
+    "uimage",
+    "sampler",
+    "isampler",
+    "usampler",
+)
 
 
 def _is_opaque_resource_parameter(parameter):
