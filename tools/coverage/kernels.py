@@ -66,7 +66,15 @@ class CUDA(Dialect):
         return "void*" if opaque == GENERIC_POINTER else ""
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        params = [f"{kind}* {name}" for kind, name in buffers]
+        read_only = parts.get("read_only", ())
+        params = [
+            (
+                f"const {kind}* __restrict__ {name}"
+                if name in read_only
+                else f"{kind}* {name}"
+            )
+            for kind, name in buffers
+        ]
         params += parts.get("params", ())
         lines = [
             *parts.get("prelude", ()),
@@ -229,8 +237,10 @@ class Mojo(Dialect):
         return [f"if i % {skipped} != 0:", *(f"    {line}" for line in body)]
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
+        read_only = parts.get("read_only", ())
         params = [
-            f"{name}: UnsafePointer[{kind}, MutAnyOrigin]" for kind, name in buffers
+            f"{name}: UnsafePointer[{kind}, {'Immut' if name in read_only else 'Mut'}AnyOrigin]"
+            for kind, name in buffers
         ]
         params += parts.get("params", ())
         lines = [

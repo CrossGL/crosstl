@@ -179,10 +179,7 @@ GLSL = {
         "outp[i] = fin[i] * scale;",
         "layout(std140, binding = 3) uniform Params {\n    float scale;\n};",
     ),
-    "read-only-buffer": Template(
-        "outp[i] = rin[i];",
-        "layout(std430, binding = 3) readonly buffer R {\n    float rin[];\n};",
-    ),
+    "read-only-buffer": Template("outp[i] = fin[i];", read_only=True),
     "sampled-texture": Template(
         "outp[i] = textureLod(tex, vec2(fin[i], 0.5), 0.0).x;",
         "layout(binding = 3) uniform sampler2D tex;",

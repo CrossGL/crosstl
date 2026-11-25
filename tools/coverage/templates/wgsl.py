@@ -223,9 +223,7 @@ WGSL = {
         "outp[i] = fin[i] * params.scale;",
         "struct Params {\n    scale: f32,\n}\n@group(0) @binding(3) var<uniform> params: Params;",
     ),
-    "read-only-buffer": Template(
-        "outp[i] = rin[i];", "@group(0) @binding(3) var<storage, read> rin: array<f32>;"
-    ),
+    "read-only-buffer": Template("outp[i] = fin[i];", read_only=True),
     "sampled-texture": Template(
         "outp[i] = textureSampleLevel(tex, smp, vec2<f32>(fin[i], 0.5), 0.0).x;",
         "@group(0) @binding(4) var tex: texture_2d<f32>;\n@group(0) @binding(5) var smp: sampler;",

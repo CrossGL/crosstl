@@ -196,7 +196,15 @@ class OpenCL(Dialect):
         declarations = list(parts.get("declarations", ()))
         shared = [line for line in declarations if line.startswith("__local ")]
         images = [line for line in declarations if self._IMAGE.match(line)]
-        params = [f"__global {kind}* {name}" for kind, name in buffers]
+        read_only = parts.get("read_only", ())
+        params = [
+            (
+                f"__global const {kind}* restrict {name}"
+                if name in read_only
+                else f"__global {kind}* {name}"
+            )
+            for kind, name in buffers
+        ]
         params += [line.rstrip(";") for line in images]
         params += parts.get("params", ())
         lines = [

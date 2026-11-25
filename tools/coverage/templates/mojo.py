@@ -234,9 +234,7 @@ MOJO = {
     ),
     # A kernel's scalar arguments are its uniform values.
     "uniform-buffer": Template("outp[i] = fin[i] * scale", params="scale: Float32"),
-    "read-only-buffer": Template(
-        "outp[i] = rin[i]", params="rin: UnsafePointer[Float32, ImmutAnyOrigin]"
-    ),
+    "read-only-buffer": Template("outp[i] = fin[i]", read_only=True),
     **dict.fromkeys(
         (
             "switch",

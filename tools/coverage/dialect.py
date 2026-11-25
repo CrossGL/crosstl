@@ -341,6 +341,7 @@ class Dialect:
         ``parts`` may add ``prelude`` lines (extensions, enable directives, or for CrossGL shader-level declarations),
         ``declarations`` that precede the entry point and, for languages that pass them as entry-point parameters,
         ``params``. ``lanes`` is the workgroup size, 1 unless given, for languages that declare it in the kernel.
+        ``read_only`` names the buffers to declare read-only, in the slots they would have otherwise.
         """
         raise NotImplementedError
 

@@ -207,9 +207,7 @@ OPENCL = {
     "num-workgroups": Template("outp[i] = (float)get_num_groups(0);"),
     # A value every invocation shares is a by-value kernel argument.
     "uniform-buffer": Template("outp[i] = fin[i] * scale;", params="const float scale"),
-    "read-only-buffer": Template(
-        "outp[i] = rin[i];", params="__global const float* restrict rin"
-    ),
+    "read-only-buffer": Template("outp[i] = fin[i];", read_only=True),
     "sampled-texture": Template(
         "outp[i] = read_imagef(tex, smp, (float2)(fin[i], 0.5f)).x;",
         "__constant sampler_t smp = CLK_NORMALIZED_COORDS_TRUE | CLK_ADDRESS_CLAMP_TO_EDGE | CLK_FILTER_LINEAR;",

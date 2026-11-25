@@ -30,8 +30,11 @@ class GLSL(Dialect):
         return [self.version, *parts.get("prelude", ()), *self.precision]
 
     def _globals(self, buffers: list[Buffer], parts: dict) -> list[str]:
+        read_only = parts.get("read_only", ())
         lines = [
-            f"layout(std430, binding = {binding}) buffer B{binding} {{ {kind} {name}[]; }};"
+            f"layout(std430, binding = {binding}) "
+            + ("readonly " if name in read_only else "")
+            + f"buffer B{binding} {{ {kind} {name}[]; }};"
             for binding, (kind, name) in enumerate(buffers)
         ]
         return lines + list(parts.get("declarations", ()))
@@ -181,9 +184,11 @@ class Metal(Dialect):
             raise ProbeError(f"Metal has no {scalar} matrices")
         return f"{scalar}{columns}x{rows}"
 
-    def _params(self, buffers: list[Buffer]) -> list[str]:
+    def _params(self, buffers: list[Buffer], parts: dict) -> list[str]:
+        read_only = parts.get("read_only", ())
         return [
-            f"device {kind}* {name} [[buffer({binding})]]"
+            ("const " if name in read_only else "")
+            + f"device {kind}* {name} [[buffer({binding})]]"
             for binding, (kind, name) in enumerate(buffers)
         ]
 
@@ -197,7 +202,7 @@ class Metal(Dialect):
         ]
 
     def kernel(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        params = self._params(buffers)
+        params = self._params(buffers, parts)
         params.append("uint3 id [[thread_position_in_grid]]")
         params += parts.get("params", ())
         lines = [
@@ -209,7 +214,7 @@ class Metal(Dialect):
         return "\n".join(lines + ["}"]) + "\n"
 
     def fragment(self, buffers: list[Buffer], body: list[str], **parts) -> str:
-        params = [*self._params(buffers), *parts.get("params", ())]
+        params = [*self._params(buffers, parts), *parts.get("params", ())]
         lines = [
             *self._head(parts),
             f"fragment float4 probe({', '.join(params)}) {{",
@@ -284,9 +289,12 @@ class WGSL(Dialect):
         return f"_ = {expression};"
 
     def _globals(self, buffers: list[Buffer], parts: dict) -> list[str]:
+        read_only = parts.get("read_only", ())
         lines = list(parts.get("prelude", ()))
         lines += [
-            f"@group(0) @binding({binding}) var<storage, read_write> {name}: array<{kind}>;"
+            f"@group(0) @binding({binding}) var<storage, "
+            + ("read" if name in read_only else "read_write")
+            + f"> {name}: array<{kind}>;"
             for binding, (kind, name) in enumerate(buffers)
         ]
         return lines + list(parts.get("declarations", ()))

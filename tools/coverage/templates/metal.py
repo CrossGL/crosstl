@@ -180,9 +180,7 @@ METAL = {
         "struct Params {\n    float scale;\n};",
         params="constant Params& params [[buffer(3)]]",
     ),
-    "read-only-buffer": Template(
-        "outp[i] = rin[i];", params="const device float* rin [[buffer(3)]]"
-    ),
+    "read-only-buffer": Template("outp[i] = fin[i];", read_only=True),
     "sampled-texture": Template(
         "outp[i] = tex.sample(smp, float2(fin[i], 0.5), level(0.0)).x;",
         params="texture2d<float> tex [[texture(0)]]\nsampler smp [[sampler(0)]]",

@@ -85,12 +85,16 @@ class CrossGL(Dialect):
         return f"{layout}uniform {spelling} {name};"
 
     @staticmethod
-    def _buffers(buffers: list[Buffer], layouts: dict[str, str]) -> list[str]:
-        """The declarations of storage buffers in a stage block; ``layouts`` maps the name of a buffer to the
-        ``@buffer_layout`` rule it is marked with, where it is not CrossGL's default."""
+    def _buffers(buffers: list[Buffer], parts: dict) -> list[str]:
+        """The declarations of storage buffers in a stage block. ``parts["layouts"]`` maps the name of a buffer to
+        the ``@buffer_layout`` rule it is marked with, where it is not CrossGL's default, and the buffers named in
+        ``parts["read_only"]`` are ``readonly``."""
+        layouts = parts.get("layouts", {})
+        read_only = parts.get("read_only", ())
         return [
             "        "
             + (f"@buffer_layout({layouts[name]}) " if name in layouts else "")
+            + ("readonly " if name in read_only else "")
             + f"buffer {kind}* {name};"
             for kind, name in buffers
         ]
@@ -102,7 +106,7 @@ class CrossGL(Dialect):
             "    compute {",
             f"        layout(local_size_x = {parts.get('lanes', 1)}, local_size_y = 1, local_size_z = 1) in;",
         ]
-        lines += self._buffers(buffers, parts.get("layouts", {}))
+        lines += self._buffers(buffers, parts)
         lines += [f"        {line}" for line in parts.get("declarations", ())]
         lines += [
             "        void main() {",
@@ -133,7 +137,7 @@ class CrossGL(Dialect):
             "    }",
             "    fragment {",
         ]
-        lines += self._buffers(buffers, parts.get("layouts", {}))
+        lines += self._buffers(buffers, parts)
         lines += [f"        {line}" for line in parts.get("declarations", ())]
         lines += [
             f"        FragmentOutput main({'FragmentInput input' if inputs else ''}) {{",

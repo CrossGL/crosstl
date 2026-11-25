@@ -289,10 +289,8 @@ RUST = {
         "outp[i] = fin[i] * *scale;",
         params="#[spirv(uniform, descriptor_set = 0, binding = 3)] scale: &f32",
     ),
-    "read-only-buffer": Template(
-        "outp[i] = rin[i];",
-        params="#[spirv(storage_buffer, descriptor_set = 0, binding = 3)] rin: &[f32]",
-    ),
+    # rust-gpu takes every input buffer as a shared slice, which SPIR-V decorates NonWritable.
+    "read-only-buffer": Template("outp[i] = fin[i];", read_only=True),
     "sampled-texture": Template(
         "let color: Vec4 = tex.sample_by_lod(*sampler, Vec2::new(fin[i], 0.5), 0.0);\noutp[i] = color.x;",
         prelude="use spirv_std::{Image, Sampler};",

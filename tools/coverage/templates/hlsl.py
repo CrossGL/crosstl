@@ -180,9 +180,7 @@ HLSL = {
         "outp[i] = fin[i] * scale;",
         "cbuffer Params : register(b3) {\n    float scale;\n};",
     ),
-    "read-only-buffer": Template(
-        "outp[i] = rin[i];", "StructuredBuffer<float> rin : register(t0);"
-    ),
+    "read-only-buffer": Template("outp[i] = fin[i];", read_only=True),
     "sampled-texture": Template(
         "outp[i] = tex.SampleLevel(smp, float2(fin[i], 0.5), 0.0).x;",
         "Texture2D<float4> tex : register(t1);\nSamplerState smp : register(s0);",

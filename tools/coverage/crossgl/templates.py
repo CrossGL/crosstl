@@ -365,7 +365,7 @@ CONSTRUCTS: dict[str, Template] = {
         "outp[i] = fin[i] * scale;",
         prelude="cbuffer Params @binding(3) {\n    float scale;\n};",
     ),
-    "read-only-buffer": Template("outp[i] = rin[i];", "readonly buffer float* rin;"),
+    "read-only-buffer": Template("outp[i] = fin[i];", read_only=True),
     "sampled-texture": Template(
         "outp[i] = textureLod(tex, vec2(fin[i], 0.5), 0.0).x;", "uniform sampler2D tex;"
     ),

@@ -1,7 +1,8 @@
 """Probes for bindings, textures, images, memory qualifiers, specialization constants and subgroups."""
 
 from tests.conformance import metal_textures
-from tools.coverage import constructs, probes, validators
+from tools.coverage import constructs, execution, probes, validators
+from tools.coverage.model import Result
 from tools.coverage.templates import (
     bindings,
     images,
@@ -390,6 +391,55 @@ def test_specialization_probes_declare_each_languages_pipeline_constants():
     for language, missing in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert listed & names == names - missing, language
+
+
+_READ_ONLY_INPUTS = {
+    "crossgl": "readonly buffer float* fin;\n        buffer float* outp;",
+    "glsl": (
+        "layout(std430, binding = 0) readonly buffer B0 { float fin[]; };\n"
+        "layout(std430, binding = 1) buffer B1 { float outp[]; };"
+    ),
+    "gles": "layout(std430, binding = 0) readonly buffer B0 { float fin[]; };",
+    "hlsl": (
+        "StructuredBuffer<float> fin : register(t0);\n"
+        "RWStructuredBuffer<float> outp : register(u1);"
+    ),
+    "slang": "StructuredBuffer<float> fin;\nRWStructuredBuffer<float> outp;",
+    "metal": "const device float* fin [[buffer(0)]], device float* outp [[buffer(1)]]",
+    "wgsl": (
+        "@group(0) @binding(0) var<storage, read> fin: array<f32>;\n"
+        "@group(0) @binding(1) var<storage, read_write> outp: array<f32>;"
+    ),
+    "rust": "binding = 0)] fin: &[f32],",
+    "cuda": "probe(const float* __restrict__ fin, float* outp)",
+    "hip": "probe(const float* __restrict__ fin, float* outp)",
+    "opencl": "probe(__global const float* restrict fin, __global float* outp)",
+    "mojo": (
+        "fin: UnsafePointer[Float32, ImmutAnyOrigin], outp: UnsafePointer[Float32, MutAnyOrigin]"
+    ),
+}
+
+
+def test_the_read_only_buffer_probe_reads_its_input_through_a_read_only_view_in_slot_0(
+    tmp_path,
+):
+    # The conformance harness binds the input at slot 0 and the output at 1, so the probe runs only if the buffer it
+    # reads read-only is that input, not one more buffer beside it.
+    from tests.conformance.interface import interface
+
+    for language, declared in _READ_ONLY_INPUTS.items():
+        origin = "glsl" if language == "crossgl" else language
+        feature = construct_feature(origin, "read-only-buffer")
+        source = probes.build(feature, language).source
+        assert declared in source, language
+        assert execution.input_buffers(source) == ("fin",), language
+        if language in execution.SUFFIXES:
+            path = tmp_path / f"probe{execution.SUFFIXES[language]}"
+            path.write_text(source)
+            assert interface(path, language, 1)["bindings"] == (0, 1), language
+            assert execution.executable(
+                Result(feature, "output", "supported", sources=(source, source))
+            )
 
 
 def test_qualifier_probes_give_their_buffers_each_languages_memory_qualifiers():

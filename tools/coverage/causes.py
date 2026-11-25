@@ -15,7 +15,7 @@ from . import spellings
 _DIGITS = re.compile(r"(\w+<[^<>'\"`]*>)|(?<!\w)\d+(?!\w)")
 # The buffers, locals and entry points of the generated probes (:mod:`.probes`), quoted in a diagnostic.
 _PLUMBING = re.compile(
-    r"""(['"`])(?:fin|iin|uin|rin|outp|i|r|a\d+|tile|probe|main|compute_main)\1"""
+    r"""(['"`])(?:fin|iin|uin|outp|i|r|a\d+|tile|probe|main|compute_main)\1"""
 )
 # nvcc names the intermediate files of each compilation tmpxft_<process>_<counter>-<n>_<input stem> in its temporary
 # directory, and ptxas quotes that path (``ptxas /tmp/tmpxft_0000cd1c_00000000-6_probe.ptx, line 9; fatal : ...``),

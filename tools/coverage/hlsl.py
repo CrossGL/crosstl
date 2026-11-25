@@ -52,7 +52,12 @@ class HLSL(Dialect):
     def cast(self, kind: Type, value: str) -> str:
         return f"({self.type(kind)}){value}"
 
-    def buffer(self, kind: str, name: str, binding: int) -> str:
+    def buffer(
+        self, kind: str, name: str, binding: int, read_only: bool = False
+    ) -> str:
+        # A read-only buffer is a shader resource view, in the t register of its slot.
+        if read_only:
+            return f"StructuredBuffer<{kind}> {name} : register(t{binding});"
         return f"RWStructuredBuffer<{kind}> {name} : register(u{binding});"
 
     def resource(self, spelling: str, name: str, register: str) -> str:
@@ -70,8 +75,9 @@ class HLSL(Dialect):
 
     def _globals(self, buffers: list[Buffer], parts: dict) -> list[str]:
         lines = list(parts.get("prelude", ()))
+        read_only = parts.get("read_only", ())
         lines += [
-            self.buffer(kind, name, binding)
+            self.buffer(kind, name, binding, name in read_only)
             for binding, (kind, name) in enumerate(buffers)
         ]
         return lines + list(parts.get("declarations", ()))
@@ -290,9 +296,11 @@ class Slang(HLSL):
     # Slang declares a ray payload as a plain struct; payload access qualifiers are an HLSL shader model 6.7 rule.
     _PAYLOAD = ("struct Payload", "{", "    float4 color;", "};")
 
-    def buffer(self, kind: str, name: str, binding: int) -> str:
+    def buffer(
+        self, kind: str, name: str, binding: int, read_only: bool = False
+    ) -> str:
         # slangc assigns bindings in declaration order; a D3D register would only draw a warning for SPIR-V.
-        return f"RWStructuredBuffer<{kind}> {name};"
+        return f"{'' if read_only else 'RW'}StructuredBuffer<{kind}> {name};"
 
     def uniform(self, spelling: str, name: str, binding: int, qualifier: str) -> str:
         # As for buffers; slangc also rejects a t register for a writable resource such as RWByteAddressBuffer. A
