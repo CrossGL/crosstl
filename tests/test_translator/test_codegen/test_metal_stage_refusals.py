@@ -2,8 +2,8 @@
 
 Metal has no geometry stage, and the compute kernel that writes Metal's tessellation factors is not lowered from a
 hull stage yet, so these stages must not come out as plain functions that no Metal pipeline can call. A domain stage
-becomes a ``[[patch]]`` post-tessellation vertex function (``test_metal_post_tessellation.py``), except in the GLSL
-form that reads ``gl_in`` and ``gl_TessCoord``.
+becomes a ``[[patch]]`` post-tessellation vertex function (``test_metal_post_tessellation.py`` and
+``test_metal_glsl_tessellation.py``).
 """
 
 import pytest
@@ -141,20 +141,11 @@ void main() {
 }
 """
 
-GLSL_TESSELLATION_EVALUATION = """#version 450
-layout(triangles, equal_spacing, cw) in;
-void main() {
-    gl_Position = gl_TessCoord.x * gl_in[0].gl_Position + gl_TessCoord.y * gl_in[1].gl_Position
-        + gl_TessCoord.z * gl_in[2].gl_Position;
-}
-"""
-
 
 @pytest.mark.parametrize(
     ("name", "source", "stage"),
     [
         ("points.geom", GLSL_GEOMETRY, "geometry"),
-        ("triangles.tese", GLSL_TESSELLATION_EVALUATION, "tessellation_evaluation"),
     ],
 )
 def test_glsl_stage_to_metal_is_a_typed_refusal(tmp_path, name, source, stage):

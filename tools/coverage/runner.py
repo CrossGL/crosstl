@@ -47,6 +47,8 @@ OUTPUT_BACKENDS = {
 CROSSGL_DIALECTS = {"webgl": "crossgl-es"}
 INPUT_BACKENDS = {
     "cuda": "cuda",
+    # GLSL ES 3.x, which the GLSL frontend reads under its #version 3x0 es line.
+    "gles": "glsl-es",
     "glsl": "opengl",
     "hip": "hip",
     "hlsl": "directx",

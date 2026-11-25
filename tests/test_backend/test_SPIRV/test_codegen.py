@@ -5375,29 +5375,33 @@ SPIRV_TOOLS_PTR_ACCESS_CHAIN_ASSEMBLY = """
 ; Source commit: 9b51d3d78717e29efd75adf1856cdbcc644eda7a
 ; Source path: test/opt/combine_access_chains_test.cpp
 ; Reduced from CombineAccessChainsTest OpPtrAccessChain fixtures and adapted
-; to store through the derived pointers so CrossGL output exposes the lowering.
-; The Element operand moves the base pointer within the array the base points into,
-; and the Indexes then index the base's pointee (SPIR-V 1.6 OpPtrAccessChain).
+; to store through the derived pointer so CrossGL output exposes the lowering.
+; The reduction keeps the fixture valid: the upstream
+; PtrAccessChainFromAccessChainExtraIndices case chains an OpAccessChain into a
+; row with an OpPtrAccessChain whose Element advances that row and whose Index
+; then selects the element, so the Element must add to the access chain's last
+; index (``workgroupValues[1][2][3]`` in the 3-D original), never become an
+; extra subscript of its own. The InBoundsPtrAccessChain half the reduction
+; used to carry is dropped: its result cannot be loaded in logical addressing
+; mode (spirv-val: OpInBoundsPtrAccessChain returns no logical pointer), so no
+; valid form of it fits this module.
 OpCapability Shader
 OpCapability VariablePointers
 OpCapability Addresses
 OpExtension "SPV_KHR_variable_pointers"
 OpMemoryModel Logical GLSL450
-OpEntryPoint Fragment %main "main" %out_a %out_b
+OpEntryPoint Fragment %main "main" %out_a %workgroup_values
 OpExecutionMode %main OriginUpperLeft
 OpName %workgroup_values "workgroupValues"
 OpName %out_a "outA"
-OpName %out_b "outB"
 OpName %ptr_access "ptrAccess"
-OpName %in_bounds_ptr "inBoundsPtr"
 OpDecorate %out_a Location 0
-OpDecorate %out_b Location 1
 %void = OpTypeVoid
 %fn = OpTypeFunction %void
 %uint = OpTypeInt 32 0
-%uint_0 = OpConstant %uint 0
 %uint_1 = OpConstant %uint 1
 %uint_2 = OpConstant %uint 2
+%uint_3 = OpConstant %uint 3
 %uint_4 = OpConstant %uint 4
 %arr_uint = OpTypeArray %uint %uint_4
 %arr_arr_uint = OpTypeArray %arr_uint %uint_4
@@ -5407,16 +5411,12 @@ OpDecorate %out_b Location 1
 %ptr_output_uint = OpTypePointer Output %uint
 %workgroup_values = OpVariable %ptr_workgroup_arr_arr_uint Workgroup
 %out_a = OpVariable %ptr_output_uint Output
-%out_b = OpVariable %ptr_output_uint Output
 %main = OpFunction %void None %fn
 %label = OpLabel
-%access = OpAccessChain %ptr_workgroup_uint %workgroup_values %uint_1 %uint_0
-%ptr_access = OpPtrAccessChain %ptr_workgroup_uint %access %uint_2
+%access = OpAccessChain %ptr_workgroup_arr_uint %workgroup_values %uint_1
+%ptr_access = OpPtrAccessChain %ptr_workgroup_uint %access %uint_2 %uint_3
 %value = OpLoad %uint %ptr_access
 OpStore %out_a %value
-%in_bounds_ptr = OpInBoundsPtrAccessChain %ptr_workgroup_uint %workgroup_values %uint_0 %uint_0 %uint_1
-%value_in_bounds = OpLoad %uint %in_bounds_ptr
-OpStore %out_b %value_in_bounds
 OpReturn
 OpFunctionEnd
 """
@@ -8586,13 +8586,9 @@ def test_spirv_tools_ptr_access_chain_codegen_reparse():
     parse_crossgl(generated_code)
     assert "groupshared uint workgroupValues[4][4];" in generated_code
     assert "uint outA @output @location(0);" in generated_code
-    assert "uint outB @output @location(1);" in generated_code
-    assert "outA = workgroupValues[1][2];" in generated_code
-    assert "outB = workgroupValues[0][1];" in generated_code
+    assert "outA = workgroupValues[(1 + 2)][3];" in generated_code
     assert "outA = ptrAccess;" not in generated_code
-    assert "outB = inBoundsPtr;" not in generated_code
     assert "OpPtrAccessChain" not in generated_code
-    assert "OpInBoundsPtrAccessChain" not in generated_code
     assert "Unhandled statement type" not in generated_code
 
 

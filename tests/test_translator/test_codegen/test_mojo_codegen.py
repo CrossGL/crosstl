@@ -19013,30 +19013,22 @@ def _vector_min_max_builtin_source():
     """
 
 
-def test_vector_min_max_builtins_emit_mojo_simd_overloads():
+def test_vector_min_max_builtins_use_mojo_std_min_max():
     generated_code = generate_code(
         parse_code(tokenize_code(_vector_min_max_builtin_source()))
     )
 
-    assert (
-        "def max(a: SIMD[DType.float32, 4], b: SIMD[DType.float32, 4]) "
-        "-> SIMD[DType.float32, 4]:" in generated_code
-    )
-    assert (
-        "def max(a: SIMD[DType.float32, 4], b: Float32) "
-        "-> SIMD[DType.float32, 4]:" in generated_code
-    )
-    assert (
-        "def min(a: Float32, b: SIMD[DType.float32, 4]) "
-        "-> SIMD[DType.float32, 4]:" in generated_code
-    )
+    # No module-level overloads: they would hide std.math.min/max for every type they do not list.
+    assert "def max(" not in generated_code
+    assert "def min(" not in generated_code
     assert "var ceiling: SIMD[DType.float32, 4] = max(" in generated_code
     assert (
-        "var bright: SIMD[DType.float32, 4] = max(albedo, Float32(0.0))"
-        in generated_code
+        "var bright: SIMD[DType.float32, 4] = "
+        "max(albedo, SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0))" in generated_code
     )
     assert (
-        "var dim: SIMD[DType.float32, 4] = min(Float32(1.0), albedo)" in generated_code
+        "var dim: SIMD[DType.float32, 4] = "
+        "min(SIMD[DType.float32, 4](1.0, 1.0, 1.0, 0.0), albedo)" in generated_code
     )
     assert "return min(max(ceiling, bright), dim)" in generated_code
 
@@ -19070,26 +19062,20 @@ def _vector_clamp_builtin_source():
     """
 
 
-def test_vector_clamp_builtin_emits_vector_bound_overloads():
+def test_vector_clamp_builtin_is_min_of_max():
     generated_code = generate_code(
         parse_code(tokenize_code(_vector_clamp_builtin_source()))
     )
 
-    assert (
-        "def clamp(value: SIMD[DType.float32, 4], "
-        "min_value: SIMD[DType.float32, 4], "
-        "max_value: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:"
-        in generated_code
-    )
-    assert (
-        "def clamp(value: SIMD[DType.float32, 4], min_value: Float32, "
-        "max_value: Float32) -> SIMD[DType.float32, 4]:" in generated_code
-    )
+    assert "def clamp(" not in generated_code
     assert (
         "var shaped: SIMD[DType.float32, 4] = "
-        "clamp(color, floorValue, ceilingValue)" in generated_code
+        "min(max(color, floorValue), ceilingValue)" in generated_code
     )
-    assert "return clamp(shaped, Float32(0.0), Float32(1.0))" in generated_code
+    assert (
+        "return min(max(shaped, SIMD[DType.float32, 4](0.0, 0.0, 0.0, 0.0)), "
+        "SIMD[DType.float32, 4](1.0, 1.0, 1.0, 0.0))" in generated_code
+    )
 
 
 def test_vector_clamp_vector_bounds_compile_with_mojo(tmp_path):

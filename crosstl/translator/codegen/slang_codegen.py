@@ -98,6 +98,7 @@ from .slang_buffer_block_types import SlangBufferBlockTypesMixin
 from .slang_builtin_input_members import lower_slang_builtin_input_members
 from .slang_byte_address_words import SlangThreeComponentAccess
 from .slang_call_expressions import SlangCallExpressionMixin
+from .slang_compute_derivative_groups import validate_slang_compute_derivative_group
 from .slang_conservative_depth import slang_conservative_depth_semantic
 from .slang_control_flow import SlangControlFlowMixin
 from .slang_cull_distance import slang_cull_distance_member_type
@@ -129,7 +130,10 @@ from .slang_push_constant_structs import (
     slang_member_offset_prefix,
     slang_push_constant_struct_names,
 )
-from .slang_rasterizer_order import slang_rasterizer_ordered_type
+from .slang_rasterizer_order import (
+    rasterizer_ordered_parameters,
+    slang_rasterizer_ordered_type,
+)
 from .slang_ray_tracing import SlangRayTracingMixin
 from .slang_refusals import SlangLoweringRefused
 from .slang_resource_bindings import SlangResourceBindingsMixin
@@ -521,6 +525,9 @@ class SlangCodeGen(
             )
             self.slang_helper_resource_arguments = helper_resource_argument_names(
                 ast, self.user_function_names
+            )
+            self.slang_rasterizer_ordered_parameters = rasterizer_ordered_parameters(
+                ast
             )
             self.generic_function_definitions = {}
             self.generic_function_definition_ordinals = {}
@@ -1239,6 +1246,9 @@ class SlangCodeGen(
                 shader_type,
                 effective_param_list,
                 stage_role=stage_role,
+            )
+            validate_slang_compute_derivative_group(
+                self, node, shader_type, execution_config
             )
         else:
             self.validate_slang_ray_query_calls(node, "function", effective_param_list)

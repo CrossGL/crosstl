@@ -7693,6 +7693,41 @@ def test_glsl_structured_buffer_get_dimensions_writes_count_and_std430_stride(
     )
 
 
+@pytest.mark.parametrize(
+    ("buffer_type", "index", "rendered_index"),
+    [("StructuredBuffer", "1", "1"), ("RWStructuredBuffer", "i", "i")],
+)
+def test_glsl_structured_buffer_array_element_get_dimensions_reads_its_block_member(
+    buffer_type, index, rendered_index, tmp_path
+):
+    # An array of structured buffers is an array of blocks whose elements sit in
+    # the data member, so the count is that member's length.
+    code = f"""
+    shader Probe {{
+        {buffer_type}<vec3> bufs[2];
+        RWStructuredBuffer<float> outp;
+        compute {{
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {{
+                uint i = 1u;
+                uint n;
+                uint s;
+                bufs[{index}].GetDimensions(n, s);
+                outp[0] = float(n) + float(s);
+            }}
+        }}
+    }}
+    """
+
+    generated = GLSLCodeGen().generate(crosstl.translator.parse(code))
+
+    assert f"n = uint(bufs[{rendered_index}].data.length()), s = 16u;" in generated
+    assert "GetDimensions" not in generated
+    assert_glsl_compute_validates_if_available(
+        generated, tmp_path, f"structured_buffer_array_get_dimensions_{buffer_type}"
+    )
+
+
 def test_glsl_structured_buffer_get_dimensions_refuses_an_unknown_stride():
     code = """
     shader Probe {

@@ -72,6 +72,9 @@ from crosstl.backend.Metal.text_scanners import (
     mask_comments_and_literals,
     strip_comments_outside_strings,
 )
+from crosstl.backend.Metal.unused_specialization_members import (
+    prune_unreferenced_specialization_members,
+)
 from crosstl.backend.Metal.variable_templates import (
     materialize_value_variable_templates,
 )
@@ -23743,6 +23746,10 @@ def _project_template_materialization_for_artifact(
         materialized = preprocessor._evaluate_static_assertions(materialized)
     # Every concrete body exists now; read value variable templates at their uses.
     materialized = materialize_value_variable_templates(preprocessor, materialized)
+    # Member lowering writes every member of a materialized struct specialization; one that no entry reaches
+    # can name a helper specialization nothing materialized (`get_twiddle<float>` in a dead `write_strided`).
+    # Drop those members, as direct preprocessing does, before the residue scanners below.
+    materialized = prune_unreferenced_specialization_members(preprocessor, materialized)
 
     # Missing-argument records gathered before late member lowering are only
     # provisional.  Drop one when every reachable call for that helper was

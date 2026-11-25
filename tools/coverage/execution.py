@@ -22,8 +22,10 @@ one the compiler wrote: slangc writes SPIR-V 1.5, which Vulkan 1.1 does not acce
 
 Where the selected runtimes include the harness's Direct3D 12 WARP, HLSL probes run there as HLSL instead, with the
 entry point :func:`validators.hlsl_entry` names, compiled by DXC for the harness's shader model
-(``tests.conformance.validators.HLSL_PROFILE``). A probe that needs a later shader model fails to compile there and keeps
-its validation result, and so does one that queries a ray query. The Windows coverage job runs them so, and
+(``tests.conformance.validators.HLSL_PROFILE``). A probe that DXC rejects there only because it calls an operation of
+Shader Model 6.7 or 6.8 is compiled again at that model (``tests.conformance.validators.later_profiles``). A probe that
+needs Shader Model 6.9, which the WARP device cannot create pipelines for, fails to compile and keeps its validation
+result, and so does one that queries a ray query. The Windows coverage job runs them so, and
 ``tools.coverage merge`` adds those verdicts to the rows the Linux job measured (:mod:`.report`).
 
 GLSL runs on llvmpipe's OpenGL, which lacks extensions such as the explicit arithmetic types. When it rejects a native

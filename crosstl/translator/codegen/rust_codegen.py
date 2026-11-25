@@ -38,6 +38,10 @@ from .rust_gpu_images import (
 )
 from .rust_gpu_interface import RUST_GPU_PRELUDE
 from .rust_gpu_math_calls import rust_gpu_math_result_type
+from .rust_gpu_ray_queries import (
+    add_rust_gpu_ray_query_imports,
+    prepare_rust_gpu_ray_queries,
+)
 from .rust_gpu_slice_length import RustGpuSliceLengthMixin
 from .rust_gpu_spec_constants import spec_constant_infos
 from .rust_gpu_spelling import glam_spelling
@@ -408,6 +412,7 @@ class RustCodeGen(
         normalize_rust_gpu_buffers(self, ast)
         ast = prepare_rust_gpu_images(self, ast)
         lower_rust_gpu_constant_blocks(self, ast)
+        prepare_rust_gpu_ray_queries(self, ast)
         explicit_specialization_refusals(self, ast, "Rust")
         self.rust_referenced_names = referenced_identifier_names(ast)
         self.struct_member_types = {}
@@ -665,6 +670,7 @@ class RustCodeGen(
         code += self.generate_required_generic_math_traits()
         refuse_host_only_rust(self, code)
         code = add_rust_gpu_image_imports(code)
+        code = add_rust_gpu_ray_query_imports(code)
         if re.search(r"\bf16\b", code):
             # f16 is a nightly primitive type, which rust-gpu's toolchain enables per crate.
             code = code.replace("#![no_std]\n", "#![no_std]\n#![feature(f16)]\n", 1)

@@ -9,6 +9,7 @@ from ..ast import (
 from ..refusals import RustRefusal
 from .rust_exact_lookups import RUST_RAY_TRACING_INTRINSICS
 from .rust_gpu_images import generate_rust_gpu_image_call
+from .rust_gpu_ray_queries import generate_rust_gpu_ray_query_op
 
 
 class RustResourceCallMixin:
@@ -61,15 +62,13 @@ class RustResourceCallMixin:
         return f"{func_name}({args})"
 
     def generate_ray_query_op_expression(self, expr):
-        operation = getattr(expr, "operation", "")
-        receiver = self.generate_expression(getattr(expr, "query_expr", None))
-        args = [receiver]
-        args.extend(
-            self.generate_expression(arg)
-            for arg in getattr(expr, "arguments", []) or []
+        """A DXR ray query method as its spirv_std::ray_tracing call (:mod:`.rust_gpu_ray_queries`)."""
+        return generate_rust_gpu_ray_query_op(
+            self,
+            getattr(expr, "operation", ""),
+            getattr(expr, "query_expr", None),
+            getattr(expr, "arguments", None),
         )
-        func_name = f"ray_query_{self.rust_snake_case_name(operation)}"
-        return f"{func_name}({', '.join(args)})"
 
     def generate_texture_node_expression(self, expr):
         args = [expr.texture_expr]

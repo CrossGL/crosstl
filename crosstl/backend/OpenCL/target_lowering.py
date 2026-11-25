@@ -29,6 +29,7 @@ from crosstl.translator.ast import (
 )
 from crosstl.translator.host_workgroup_size import function_entry_execution_config
 from crosstl.translator.renames import renamed
+from crosstl.translator.validation import IMAGE_FORMAT_METADATA_NAMES
 
 OPENCL_TARGET_UNSUPPORTED_CODE = "opencl.target.unsupported"
 OPENCL_TARGET_UNRESOLVED_HELPER_CODE = "opencl.target.unresolved-helper"
@@ -441,6 +442,19 @@ def _layout_attributes(parameter):
         attribute
         for attribute in getattr(parameter, "attributes", []) or []
         if str(getattr(attribute, "name", "")).lower() in _KEPT_STORAGE_ATTRIBUTES
+    ]
+
+
+def _resource_attributes(parameter):
+    """The image format of a texture or image parameter (``@format(r32f)``, ``@texel(float)``, ``@r32f``).
+
+    The global the parameter becomes keeps it, so a target declares the image with the texel its accesses use.
+    """
+    return [
+        attribute
+        for attribute in getattr(parameter, "attributes", []) or []
+        if str(getattr(attribute, "name", "")).lower()
+        in {"format", "texel", *IMAGE_FORMAT_METADATA_NAMES}
     ]
 
 
@@ -990,7 +1004,10 @@ def normalize_opencl_intermediate_for_target(cgl_ast):
                         VariableNode(
                             parameter.name,
                             _clone_target_type(getattr(parameter, "param_type", None)),
-                            attributes=[_binding_attribute(binding)],
+                            attributes=[
+                                _binding_attribute(binding),
+                                *_resource_attributes(parameter),
+                            ],
                         ),
                         (
                             "OpenCL target-lowered resource parameter "

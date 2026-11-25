@@ -1,4 +1,4 @@
-"""The GLSL ES 3.x output row: the GLSL ES text of the GLSL specification source, its probes and its version check."""
+"""The GLSL ES 3.x rows: the GLSL ES text of the GLSL specification source, its probes and its version check."""
 
 import pytest
 
@@ -113,11 +113,12 @@ def test_gles_lists_the_glsl_es_3_20_functions():
     }
 
 
-def test_gles_is_an_output_row_with_its_own_name_and_tools():
+def test_gles_is_a_row_in_both_directions_with_its_own_name_and_tools():
     assert "gles" in LANGUAGES
     assert runner.OUTPUT_BACKENDS["gles"] == "gles"
-    assert "gles" not in runner.INPUT_BACKENDS
-    assert ("gles", "input") in report.NOT_OFFERED
+    # The GLSL frontend reads a GLSL ES source under its #version 3x0 es line, so GLSL ES input is measured too.
+    assert runner.INPUT_BACKENDS["gles"] == "glsl-es"
+    assert ("gles", "input") not in report.NOT_OFFERED
     assert chart.name("gles") == "GLSL ES"
     assert validators.TOOLS["gles"] == "glslangValidator"
     assert issues.TOOLS["gles"] == "glslang"
@@ -179,6 +180,15 @@ def test_gles_templates_leave_out_what_glsl_es_lacks():
     )
     # GLSL ES initializes arrays with constructors, as WebGL's probes do.
     assert "float[4](" in table["array-initializer"].body
+    # No OpenGL ES extension exports a stencil reference or declares resource arrays of unknown length, while one
+    # does add fragment shader interlock, which GLSL ES spells with NV_fragment_shader_interlock.
+    assert {"stencil-export", "unsized-array-of-textures"} <= set(
+        gles_templates.MISSING
+    )
+    for name in ("rasterizer-ordered-buffer", "rasterizer-ordered-image"):
+        program = table[name].program
+        assert "#extension GL_NV_fragment_shader_interlock : require\n" in program
+        assert "beginInvocationInterlockNV();" in program and "ARB" not in program
 
 
 def test_gles_version_check():
@@ -231,5 +241,21 @@ def test_gles_output_is_measured_end_to_end():
         crossgl="abs",
     )
     result = runner.run_output(feature, "gles")
+    assert result.outcome == "supported", result.detail
+    assert result.validator == "glslangValidator"
+
+
+@pytest.mark.skipif(
+    not validators.available("gles"), reason="glslangValidator is not installed"
+)
+def test_gles_input_is_measured_end_to_end():
+    feature = Feature(
+        "gles",
+        "function",
+        "abs",
+        features.glsl.parse_prototype("genFType abs(genFType x)")[1],
+        crossgl="abs",
+    )
+    result = runner.run_input(feature, "gles")
     assert result.outcome == "supported", result.detail
     assert result.validator == "glslangValidator"

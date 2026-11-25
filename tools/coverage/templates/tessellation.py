@@ -9,7 +9,9 @@ point count, or spaces, winds or emits points other than the defaults.
 GLSL and rust-gpu state the domain, spacing, winding and point output in the evaluation stage's layout or execution
 modes. HLSL and Slang state the domain on both stages, but the partitioning and the output topology only on the hull
 shader, so their domain shader has no spelling for spacing, winding or point output, and the ``tessellation-control-``
-probes measure them on the hull shader instead, where GLSL has no spelling for them. HLSL reads the levels and the
+probes measure them on the hull shader instead, where GLSL has no spelling for them. A domain probe carries the hull
+shader a pipeline pairs it with, which partitions with integer spacing and outputs GLSL's default winding, because a
+translation to GLSL writes the hull's modes in the evaluation shader's layout. HLSL reads the levels and the
 per-patch values through the patch-constant structure, and has no system value for the control point count, which is
 the ``InputPatch`` size. Metal evaluates a triangle or a quad patch in a post-tessellation vertex function that reads
 its per-patch values as ``[[stage_in]]`` attributes; the partitioning and the winding are pipeline state, and Metal
@@ -190,7 +192,51 @@ def _hlsl_patch(domain: str, extra: bool) -> str:
     )
 
 
-def _hlsl_domain(domain: str, expression: str, extra: bool) -> str:
+def _hlsl_constants(domain: str, extra: bool, function: str) -> str:
+    """The patch-constant function ``function`` of a ``domain`` patch, which writes every level as 1."""
+    _, _, count, (edges, inside), _ = _DOMAINS[domain]
+    levels = "".join(f"    output.edges[{index}] = 1.0;\n" for index in range(edges))
+    if inside == 1:
+        levels += "    output.inside = 1.0;\n"
+    else:
+        levels += "".join(
+            f"    output.inside[{index}] = 1.0;\n" for index in range(inside)
+        )
+    write = "    output.extra = patch[0].position;\n" if extra else ""
+    return (
+        f"PatchConstants {function}(InputPatch<ControlPoint, {count}> patch) {{\n    PatchConstants output;\n"
+        f"{levels}{write}    return output;\n}}\n\n"
+    )
+
+
+def _hlsl_hull_entry(
+    domain: str,
+    partitioning: str,
+    topology: str,
+    entry: str,
+    function: str,
+    slang: bool,
+) -> str:
+    """The hull entry point ``entry`` of a ``domain`` patch, with the patch-constant function ``function``."""
+    _, name, count, _, _ = _DOMAINS[domain]
+    return (
+        f'{_stage("hull", slang)}[domain("{name}")]\n[partitioning("{partitioning}")]\n'
+        f'[outputtopology("{topology}")]\n[outputcontrolpoints({count})]\n[patchconstantfunc("{function}")]\n'
+        f"ControlPoint {entry}(InputPatch<ControlPoint, {count}> patch, uint id : SV_OutputControlPointID) {{\n"
+        "    ControlPoint output;\n    output.position = patch[id].position * 2.0;\n    return output;\n}\n"
+    )
+
+
+def _stage(stage: str, slang: bool) -> str:
+    """Slang's attribute that names the entry point's stage, ahead of its first attribute."""
+    return f'[shader("{stage}")]\n' if slang else ""
+
+
+def _hlsl_domain(domain: str, expression: str, extra: bool, slang: bool) -> str:
+    """A domain shader ``main`` with the hull shader a pipeline pairs it with. HLSL states the partitioning and the
+    output topology only on the hull, so the hull gives the domain shader the defaults of the GLSL partners (integer
+    partitioning is equal spacing; a triangle_ccw output winds counter-clockwise; an isoline patch outputs lines).
+    """
     _, name, count, _, size = _DOMAINS[domain]
     inner = "constants.inside" if domain == "triangles" else "constants.inside[0]"
     position = _spelled(
@@ -200,59 +246,62 @@ def _hlsl_domain(domain: str, expression: str, extra: bool) -> str:
         inner,
         "constants.extra",
     )
-    return _hlsl_patch(domain, extra) + (
-        f'[domain("{name}")]\n'
+    topology = "line" if domain == "isolines" else "triangle_ccw"
+    return (
+        _hlsl_patch(domain, extra)
+        + _hlsl_constants(domain, extra, "patch_constants")
+        + _hlsl_hull_entry(
+            domain, "integer", topology, "hull_main", "patch_constants", slang
+        )
+        + "\n"
+        + f'{_stage("domain", slang)}[domain("{name}")]\n'
         f"float4 main(PatchConstants constants, float{size} coord : SV_DomainLocation,\n"
         f"            const OutputPatch<ControlPoint, {count}> patch) : SV_Position {{\n"
         f"    return {position};\n}}\n"
     )
 
 
-def _hlsl_hull(partitioning: str, topology: str, extra: bool = False) -> str:
-    write = "    output.extra = patch[0].position;\n" if extra else ""
-    return _hlsl_patch("triangles", extra) + (
-        "PatchConstants constants(InputPatch<ControlPoint, 3> patch) {\n    PatchConstants output;\n"
-        "    output.edges[0] = 1.0;\n    output.edges[1] = 1.0;\n    output.edges[2] = 1.0;\n"
-        f"    output.inside = 1.0;\n{write}    return output;\n}}\n\n"
-        f'[domain("tri")]\n[partitioning("{partitioning}")]\n[outputtopology("{topology}")]\n'
-        '[outputcontrolpoints(3)]\n[patchconstantfunc("constants")]\n'
-        "ControlPoint main(InputPatch<ControlPoint, 3> patch, uint id : SV_OutputControlPointID) {\n"
-        "    ControlPoint output;\n    output.position = patch[id].position * 2.0;\n    return output;\n}\n"
+def _hlsl_hull(
+    partitioning: str, topology: str, extra: bool = False, slang: bool = False
+) -> str:
+    return (
+        _hlsl_patch("triangles", extra)
+        + _hlsl_constants("triangles", extra, "constants")
+        + _hlsl_hull_entry(
+            "triangles", partitioning, topology, "main", "constants", slang
+        )
     )
 
 
-# Each HLSL program as its stage, for Slang's stage attribute, and its text.
-_HLSL = {
-    **{
-        name: ("domain", _hlsl_domain(domain, expression, patch))
-        for name, (domain, _, patch, expression) in _EVALUATION.items()
-    },
-    **{
-        name: ("hull", _hlsl_hull(partitioning, topology))
-        for name, (partitioning, topology, _) in _HULL.items()
-    },
-    "tessellation-patch-output": ("hull", _hlsl_hull("integer", "triangle_cw", True)),
-}
-
-
 def _hlsl(slang: bool) -> dict[str, Template]:
-    """The HLSL programs; Slang's name their stage ahead of the entry point's first attribute."""
+    """The HLSL programs, or the Slang ones, which name each entry point's stage."""
     programs = {
-        name: Template(
-            program=(
-                text.replace("[domain(", f'[shader("{stage}")]\n[domain(', 1)
-                if slang
-                else text
-            ),
-            entry="main",
-        )
-        for name, (stage, text) in _HLSL.items()
+        **{
+            name: _hlsl_domain(domain, expression, patch, slang)
+            for name, (domain, _, patch, expression) in _EVALUATION.items()
+        },
+        **{
+            name: _hlsl_hull(partitioning, topology, slang=slang)
+            for name, (partitioning, topology, _) in _HULL.items()
+        },
+        "tessellation-patch-output": _hlsl_hull("integer", "triangle_cw", True, slang),
     }
     return {
-        **programs,
+        **{
+            name: Template(program=text, entry="main")
+            for name, text in programs.items()
+        },
         **dict.fromkeys(_LAYOUTS, ABSENT),
         "tessellation-patch-vertices": ABSENT,
     }
+
+
+def hlsl_domain_stage(slang: bool) -> Template:
+    """The ``tessellation-evaluation`` stage probe of HLSL, or of Slang: a triangle patch's domain shader ``main``,
+    with its hull."""
+    return Template(
+        program=_hlsl_domain("triangles", _BARYCENTRIC, False, slang), entry="main"
+    )
 
 
 HLSL = _hlsl(slang=False)

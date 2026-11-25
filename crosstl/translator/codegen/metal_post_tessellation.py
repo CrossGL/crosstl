@@ -12,14 +12,17 @@ evaluation entry, as the HLSL importer writes a domain shader::
         DSOut main(PatchOut pc, vec3 uvw @ SV_DomainLocation, OutputPatch<HSOut, 3> patch) @domain(tri) { ... }
     }
 
-becomes such a function. :func:`lower_metal_post_tessellation` takes the patch, the patch-constant structure, the
+becomes such a function; an entry in the GLSL form, which reads per-vertex input arrays, ``patch in`` variables and
+``gl_TessCoord`` and has its domain in a stage ``layout(...) in``, is first rewritten into this form by
+:mod:`.metal_glsl_tessellation`. :func:`lower_metal_post_tessellation` takes the patch, the patch-constant structure, the
 domain location (``SV_DomainLocation`` or ``gl_TessCoord``) and the patch index (``SV_PrimitiveID`` or
 ``gl_PrimitiveID``) out of the entry's parameters and records them in a :class:`PostTessellationPlan` annotation.
 The generator's vertex path writes an entry that has a plan
 (:meth:`MetalPostTessellationMixin.metal_post_tessellation_interface`):
 
-* ``[[patch(triangle, N)]]`` or ``[[patch(quad, N)]]`` before ``vertex``, N being the ``OutputPatch`` size. Metal
-  has no isoline patches, so an ``@domain(isoline)`` entry is refused;
+* ``[[patch(triangle, N)]]`` or ``[[patch(quad, N)]]`` before ``vertex``, N being the ``OutputPatch`` size, or no N
+  when the draw sets it (a GLSL-form entry without a control stage). Metal has no isoline patches, so an
+  ``@domain(isoline)`` entry is refused;
 * a ``<entry>_PatchPoint`` structure that holds the control-point members as ``[[attribute(n)]]`` and a
   ``<entry>_PatchIn`` stage-input structure that holds ``patch_control_point<<entry>_PatchPoint>`` and the
   patch-constant members other than the tessellation factors. The control-point members take attributes 0, 1, ...
@@ -56,8 +59,10 @@ from ..ast import (
 )
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
-from .metal_stage_refusals import MetalStageUnsupportedError
 from .stage_utils import collect_stage_entry_records, stage_layout_entries
+
+# An entry whose control-point count the draw sets (:mod:`.metal_glsl_tessellation`).
+OPEN_PATCH_ANNOTATION = "metal_post_tessellation_open_patch"
 
 __all__ = [
     "MetalPostTessellationError",
@@ -110,6 +115,8 @@ class PostTessellationPlan:
 
     patch_type: str
     count: int | None
+    # The [[patch]] attribute's control-point count; None when the draw sets it, and ``count`` bounds the copy.
+    declared_count: int | None
     points: str | None
     point_type: object
     point_members: tuple[PatchValue, ...]
@@ -374,9 +381,11 @@ class _EntryLowering:
             constants, constant_members = None, ()
         if points is not None and points.name not in used:
             points = None
+        open_patch = self.func.get_annotation(OPEN_PATCH_ANNOTATION, False)
         return PostTessellationPlan(
             patch_type=patch_type,
             count=count,
+            declared_count=None if open_patch else count,
             points=getattr(points, "name", None),
             point_type=point_type,
             point_members=point_members,
@@ -455,7 +464,10 @@ def lower_metal_post_tessellation(ast, codegen):
     lowered_ids, plain = set(), set()
     for stage, function in _entries(ast):
         if _glsl_form(stage, function):
-            raise MetalStageUnsupportedError(_STAGE)
+            from .metal_glsl_tessellation import rewrite_glsl_evaluation_entry
+
+            for struct in rewrite_glsl_evaluation_entry(ast, stage, function):
+                structs[struct.name] = struct
         plan = _EntryLowering(function, structs, codegen).plan()
         function.add_annotation(PLAN_ANNOTATION, plan)
         lowered_ids.add(id(function))
@@ -548,9 +560,10 @@ class MetalPostTessellationMixin:
             point_type = self.map_type(plan.point_type)
             index = self.unique_metal_generated_name("_crossglPoint", reserved)
             preamble.append(f"{point_type} {plan.points}[{plan.count}];")
-            preamble.append(
-                f"for (uint {index} = 0u; {index} < {plan.count}u; ++{index}) {{"
-            )
+            bound = f"{plan.count}u"
+            if plan.declared_count is None:
+                bound = f"min(uint({stage_in_name}.points.size()), {bound})"
+            preamble.append(f"for (uint {index} = 0u; {index} < {bound}; ++{index}) {{")
             preamble.extend(
                 f"    {plan.points}[{index}].{value.name} = "
                 f"{stage_in_name}.points[{index}].{value.name};"
@@ -571,6 +584,6 @@ class MetalPostTessellationMixin:
             self.local_variable_types[plan.constants] = self.type_name_string(
                 plan.constants_type
             )
-        count = "" if plan.count is None else f", {plan.count}"
+        count = "" if plan.declared_count is None else f", {plan.declared_count}"
         prefix = f"[[patch({plan.patch_type}{count})]]\n"
         return structures, parameters, prefix, preamble
