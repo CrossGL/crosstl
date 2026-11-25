@@ -662,7 +662,13 @@ class MetalCallLoweringMixin:
         pointer_type = self.metal_thread_pointer_return_surrogate_type(func)
         if pointer_type is not None:
             return pointer_type
-        return self.type_name_string(getattr(func, "return_type", "void"))
+        return_type = self.type_name_string(getattr(func, "return_type", "void"))
+        if "[" not in return_type:
+            # ``typedef float Triple[3]; Triple f()`` returns an array, which Metal spells ``array<float, 3>``.
+            aliased = self.type_name_string(self.resolve_metal_type_alias(return_type))
+            if "[" in aliased:
+                return aliased
+        return return_type
 
     def metal_value_array_type(self, type_name):
         """Spell a sized C-style array type as nested Metal ``array<T, N>``.
@@ -773,7 +779,13 @@ class MetalCallLoweringMixin:
 
     def metal_local_value_array_type(self, node, declared_type):
         """Return ``array<T, N>`` for a local that holds an array result."""
-        if "[" not in str(declared_type):
+        declared_type = str(declared_type)
+        if "[" not in declared_type:
+            # A local declared through ``typedef float Triple[3]`` is an array as well.
+            declared_type = self.type_name_string(
+                self.resolve_metal_type_alias(declared_type)
+            )
+        if "[" not in declared_type:
             return None
         if self.local_variable_address_space(node) == "threadgroup":
             return None
@@ -866,7 +878,8 @@ class MetalCallLoweringMixin:
         if array_size is not None:
             array_size = array_size or "1"
             return f"array<{pointer_type}, {array_size}> {name}"
-        return f"{pointer_type} {name}"
+        # A ``restrict buffer`` block's byte view keeps the promise that nothing else aliases it.
+        return f"{pointer_type}{block.get('restrict', '')} {name}"
 
     def visible_function_table_type_name(self, vtype):
         return str(self.resource_base_type(vtype)).split("<", 1)[0]

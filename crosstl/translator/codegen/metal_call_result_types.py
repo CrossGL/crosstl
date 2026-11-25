@@ -89,6 +89,17 @@ class MetalCallResultTypeMixin:
             return self.expression_result_type(args[0])
         if func_name == "lerp" and args and func_name not in self.user_function_names:
             return self.expression_result_type(args[0])
+        if (
+            func_name in {"abs", "sign"}
+            and len(args) == 1
+            and func_name not in self.user_function_names
+        ):
+            # CrossGL's abs and sign keep their argument's type, so HLSL's ``int2 r = sign(v)`` converts.
+            return self.expression_result_type(args[0])
+        if func_name == "step" and len(args) == 2:
+            if func_name not in self.user_function_names:
+                unified_type = self.metal_unified_builtin_result_type(func_name, args)
+                return unified_type or self.expression_result_type(args[1])
         componentwise_type = self.metal_componentwise_builtin_result_type(
             func_name, args
         )
