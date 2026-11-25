@@ -534,11 +534,12 @@ def test_same_name_stage_resources_keep_their_bindings_in_per_entry_tables(
     source = tmp_path / "moved_binding.cgl"
     source.write_text(_MOVED_BINDING_PROGRAM % 0)
 
-    metal = crosstl.translate(str(source), backend="metal")
+    metal = crosstl.translate(str(source), backend="metal", format_output=False)
 
+    # Unformatted output, so the pointer spelling does not depend on clang-format.
     first, second = metal.split("kernel void ")[1:]
-    assert "device float *out [[buffer(1)]]" in first
-    assert re.search(r"device float \*out\w* \[\[buffer\(0\)\]\]", second)
+    assert re.search(r"device float\s*\*\s*out \[\[buffer\(1\)\]\]", first)
+    assert re.search(r"device float\s*\*\s*out\w* \[\[buffer\(0\)\]\]", second)
 
 
 def test_same_name_stage_resources_with_one_binding_share_a_register(tmp_path):
