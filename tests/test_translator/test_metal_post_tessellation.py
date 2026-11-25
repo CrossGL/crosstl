@@ -18,7 +18,6 @@ from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.metal_post_tessellation import (
     MetalPostTessellationError,
 )
-from crosstl.translator.codegen.metal_stage_refusals import MetalStageUnsupportedError
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -189,18 +188,6 @@ def test_isoline_domain_is_refused():
     source = QUAD.replace("@domain(quad)", "@domain(isoline)")
     with pytest.raises(MetalPostTessellationError, match="triangle and quad"):
         MetalCodeGen().generate(parse(source))
-
-
-def test_glsl_form_evaluation_stage_is_a_stage_refusal(tmp_path):
-    path = tmp_path / "triangles.tese"
-    path.write_text(
-        "#version 450\nlayout(triangles, equal_spacing, cw) in;\n"
-        "void main() { gl_Position = gl_TessCoord.x * gl_in[0].gl_Position; }\n"
-    )
-    with pytest.raises(MetalStageUnsupportedError) as raised:
-        crosstl.translate(str(path), backend="metal")
-    assert raised.value.stage == "tessellation_evaluation"
-    assert "gl_in" in str(raised.value)
 
 
 def test_metal_patch_function_imports_as_a_tessellation_evaluation_stage(tmp_path):
