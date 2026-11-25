@@ -8,8 +8,10 @@ object and mesh pipeline, so the generator refuses the stage instead of writing 
 Metal tessellation is structured differently from HLSL's and GLSL's (MSL section 5.1.5, "Post-tessellation vertex
 functions"): tessellation factors and per-patch data are written to buffers by a compute kernel, and the
 post-tessellation ``[[patch(...)]] vertex`` function reads them with the control points through ``[[stage_in]]``.
-A tessellation evaluation (domain) stage becomes that function (:mod:`.metal_post_tessellation`); until the hull
-stage is lowered to the compute kernel it is refused too.
+A tessellation evaluation (domain) stage becomes that function (:mod:`.metal_post_tessellation`) and a hull stage in
+the HLSL form, with a patch-constant function, becomes that kernel (:mod:`.metal_tessellation_control`). A control
+stage in the GLSL form, whose invocations each write their element of ``gl_out`` and synchronise with ``barrier()``,
+is refused: running its invocations in one kernel thread needs its body split at every barrier.
 """
 
 from __future__ import annotations
@@ -24,8 +26,8 @@ _REASONS = {
     ),
     "tessellation_control": (
         "Metal computes tessellation factors in a compute kernel that writes them to a buffer (Metal Shading "
-        "Language Specification 5.1.5); lowering a tessellation control (hull) stage to that kernel is not "
-        "implemented"
+        "Language Specification 5.1.5); lowering a GLSL-form tessellation control stage, whose invocations "
+        "write gl_out and synchronise with barrier(), to that kernel is not implemented"
     ),
 }
 
