@@ -33,6 +33,7 @@ from ..ast import (
     WhileNode,
 )
 from .array_utils import prepend_array_dimension
+from .rust_gpu_images import rust_gpu_image_parameter_type
 from .rust_gpu_interface import (
     STORAGE_SLICE_KIND,
     UNIFORM_VALUE_KIND,
@@ -357,7 +358,9 @@ class RustProgramAnalysisMixin:
         ):
             return True
         type_name = self.rust_variable_source_type(node)
-        if self.rust_gpu_interface_info(node, type_name) is None:
+        if self.rust_gpu_interface_info(node, type_name) is None and (
+            rust_gpu_image_parameter_type(self, type_name) is None
+        ):
             return False
         if not self.is_promoted_rust_entry_resource(node) and (
             node.name in self.rust_referenced_names

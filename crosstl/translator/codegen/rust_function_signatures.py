@@ -30,6 +30,7 @@ from ..refusals import RustRefusal
 from .host_workgroup_size_ids import is_host_sized_workgroup
 from .rust_exact_lookups import call_names_resolving_to
 from .rust_gpu_math_calls import rust_gpu_math_mutated_roots
+from .rust_gpu_images import rust_gpu_image_parameter_type
 from .rust_memory_atomics import rust_memory_atomic_location_roots
 from .specialized_workgroup_size import require_fixed_workgroup_size
 from .stage_utils import compute_local_size
@@ -884,6 +885,9 @@ class RustFunctionSignatureMixin:
         )
 
     def map_function_parameter_type(self, param_type):
+        image_type = rust_gpu_image_parameter_type(self, param_type)
+        if image_type is not None:
+            return image_type
         rust_type = self.map_type(param_type)
         if self.callable_signature_parts(rust_type) is None:
             return rust_type
