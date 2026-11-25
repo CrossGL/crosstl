@@ -384,7 +384,9 @@ def _key_source(key):
         if len(key) == 3:
             return _signed_zero_source(*key[1:])
         return _lift_source(
-            *key[1:], scalar=signed_zero_name(*key[1:3]), lift=signed_zero_name(*key[1:])
+            *key[1:],
+            scalar=signed_zero_name(*key[1:3]),
+            lift=signed_zero_name(*key[1:]),
         )
     return _lift_source(*key[1:])
 
