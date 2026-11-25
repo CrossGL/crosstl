@@ -119,6 +119,23 @@ shader BaseVertex {
 }
 """
 
+PER_VERTEX = """
+shader PerVertex {
+    @glsl_interface_block(out)
+    @glsl_interface_block_name(gl_PerVertex)
+    struct gl_PerVertex {
+        float4 gl_Position;
+    }
+    vertex {
+        float4 gl_Position @output @gl_Position;
+        int gl_VertexID @input @gl_VertexID;
+        void main() {
+            gl_Position = vec4(float(gl_VertexID & 1), float(gl_VertexID & 2), 0.0, 1.0);
+        }
+    }
+}
+"""
+
 COMPUTE = """
 shader Doubler {
     buffer float* data;
@@ -144,6 +161,8 @@ shader Doubler {
         (EARLY_FRAGMENT_TESTS, "frag", 420),
         # The binding CrossTL gives each resource: GLSL 4.20 (section 4.4.5).
         (SAMPLER, "frag", 420),
+        # A gl_PerVertex redeclaration: GLSL 4.10 (section 7.1).
+        (PER_VERTEX, "vert", 410),
         # The compute stage: GLSL 4.30.
         (COMPUTE, "comp", 430),
         # gl_BaseVertexARB: GL_ARB_shader_draw_parameters, which glslang declares from GLSL 4.40.
@@ -197,3 +216,43 @@ def test_gles_target_starts_from_glsl_es_300(tmp_path):
     assert code.startswith("#version 300 es\n")
     accepted, log = glslang_accepts(tmp_path, code, "frag")
     assert accepted, log
+
+
+@pytest.mark.parametrize(
+    "line,stage",
+    [
+        ("out gl_PerVertex { vec4 gl_Position; };", "vertex"),
+        ("out gl_PerVertex {", "vertex"),
+        ("in gl_PerVertex { vec4 gl_Position; } gl_in[];", "geometry"),
+        ("out gl_PerVertex { vec4 gl_Position; } gl_out[];", "tessellation_control"),
+    ],
+)
+def test_per_vertex_redeclaration_requires_glsl_410(line, stage):
+    from crosstl.translator.codegen.glsl_interface_versions import (
+        PER_VERTEX_REDECLARATION,
+        interface_line_requirements,
+    )
+
+    assert PER_VERTEX_REDECLARATION in interface_line_requirements(line, stage)
+    assert PER_VERTEX_REDECLARATION.minimum(False) == 410
+    assert PER_VERTEX_REDECLARATION.satisfied_by(
+        330, False, {"GL_ARB_separate_shader_objects"}
+    )
+    assert PER_VERTEX_REDECLARATION.minimum(True) == 320
+    assert PER_VERTEX_REDECLARATION.satisfied_by(310, True, {"GL_EXT_shader_io_blocks"})
+
+
+def test_per_vertex_requirement_ignores_member_uses():
+    from crosstl.translator.codegen.glsl_interface_versions import (
+        PER_VERTEX_REDECLARATION,
+        interface_line_requirements,
+    )
+
+    for line in (
+        "gl_Position = gl_in[0].gl_Position;",
+        "out vec4 gl_PerVertexColor;",
+        "vec4 p = gl_out[gl_InvocationID].gl_Position;",
+    ):
+        assert PER_VERTEX_REDECLARATION not in interface_line_requirements(
+            line, "geometry"
+        )

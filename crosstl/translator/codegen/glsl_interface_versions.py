@@ -11,7 +11,9 @@ lowest version of its profile (:mod:`.glsl_version_floor`):
   (GLSL 4.20, section 4.4.2.3), ``early_fragment_tests`` (GLSL 4.20), geometry ``invocations`` and ``stream``
   (GLSL 4.00), the transform-feedback, ``offset`` and ``align`` layouts (GLSL 4.40, section 4.4.2.1 and 4.4.5);
 - initializer lists (GLSL 4.20, section 4.1.11) and a sampler array indexed by a non-constant expression (GLSL
-  4.00 made it dynamically uniform, section 4.1.7.1).
+  4.00 made it dynamically uniform, section 4.1.7.1);
+- a redeclared ``gl_PerVertex`` block (GLSL 4.10 section 7.1, with separate shader objects; GLSL ES 3.20 or
+  GL_EXT_shader_io_blocks).
 
 A built-in variable that an extension declares below its core version lists that extension, so a program that
 enables it keeps its version. glslang declares a few of them only from a version of its own, which is the minimum
@@ -27,6 +29,7 @@ from .glsl_version_requirements import GLSLRequirement
 
 __all__ = [
     "INITIALIZER_LIST",
+    "PER_VERTEX_REDECLARATION",
     "interface_line_requirements",
     "sampler_array_names",
 ]
@@ -169,6 +172,19 @@ _SAMPLER_ARRAY_DECLARATION = re.compile(
     r"\buniform\s+(?:(?:highp|mediump|lowp)\s+)?[iu]?sampler\w*\s+([A-Za-z_]\w*)\s*\["
 )
 _LITERAL_INDEX = re.compile(r"\s*\d+[uU]?\s*")
+# Redeclaring the built-in ``gl_PerVertex`` input or output block came with separate shader objects (GLSL 4.10
+# section 7.1); glslang refuses it below GLSL 4.10 without GL_ARB_separate_shader_objects. GLSL ES has stage
+# interface blocks, and so the redeclaration, from GLSL ES 3.20 or GL_EXT_shader_io_blocks (on GLSL ES 3.10).
+PER_VERTEX_REDECLARATION = GLSLRequirement(
+    "a gl_PerVertex block redeclaration",
+    410,
+    320,
+    ("GL_ARB_separate_shader_objects",),
+    ("GL_EXT_shader_io_blocks", "GL_OES_shader_io_blocks"),
+)
+_PER_VERTEX_REDECLARATION = re.compile(
+    r"^(?:layout\s*\([^()]*(?:\([^()]*\)[^()]*)*\)\s*)?(?:[a-z]+\s+)*(?:in|out)\s+gl_PerVertex\b"
+)
 
 
 def sampler_array_names(body):
@@ -217,4 +233,6 @@ def interface_line_requirements(stripped, stage, layout_ids=None, sampler_arrays
         requirements.append(INITIALIZER_LIST)
     if _indexes_sampler_array_dynamically(stripped, sampler_arrays):
         requirements.append(DYNAMIC_SAMPLER_INDEX)
+    if _PER_VERTEX_REDECLARATION.match(stripped):
+        requirements.append(PER_VERTEX_REDECLARATION)
     return requirements
