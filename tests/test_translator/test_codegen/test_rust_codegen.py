@@ -11020,7 +11020,7 @@ def test_advanced_generic_pattern_matching_example_emits_referenced_enums():
 
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'main_texture' \(sampler2D\) is not lowered",
+        match=r"resource: uniform 'normal_matrix': 'mat3 column 1' is at std140 offset 16, rust\-gpu lays i",
     ):
         generate_code(parse_code(tokenize_code(source)))
 
@@ -11031,7 +11031,7 @@ def test_advanced_generic_pattern_matching_example_smoke_compiles(tmp_path):
 
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'main_texture' \(sampler2D\) is not lowered",
+        match=r"resource: uniform 'normal_matrix': 'mat3 column 1' is at std140 offset 16, rust\-gpu lays i",
     ):
         generate_code(parse_code(tokenize_code(source)))
 
@@ -11232,7 +11232,7 @@ def test_lazy_lock_static_name_shadowed_by_local_is_not_dereferenced(tmp_path):
         generate_code(ast)
 
 
-def test_generated_rust_lazy_lock_statics_are_refused():
+def test_generated_rust_lazy_lock_statics_are_refused(tmp_path):
     # Host Rust declared these globals as LazyLock statics; the rust-gpu output refuses each program by name.
     shaders = [
         (
@@ -11262,12 +11262,16 @@ def test_generated_rust_lazy_lock_statics_are_refused():
             }
         }
 """,
-            r"resource: 'volumeMap' \(sampler3D\) is not lowered",
+            None,
         ),
     ]
-    for shader, refusal in shaders:
-        with pytest.raises(RustLoweringRefused, match=refusal):
-            generate_code(parse_code(tokenize_code(shader)))
+    returning, sampled = shaders
+    with pytest.raises(RustLoweringRefused, match=returning[1]):
+        generate_code(parse_code(tokenize_code(returning[0])))
+    # A sampled texture is a spirv-std Image! entry parameter (rust_gpu_images), not a static.
+    generated_code = generate_code(parse_code(tokenize_code(sampled[0])))
+    assert "static" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_vertex_uniform_matrix_binds_as_a_uniform_reference(tmp_path):
@@ -11632,11 +11636,8 @@ def test_if_statement(tmp_path):
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        with pytest.raises(
-            RustLoweringRefused,
-            match=r"resource: 'iChannel0' \(sampler2D\) is not lowered",
-        ):
-            generate_code(ast)
+        generated_code = generate_code(ast)
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
     except SyntaxError:
         pytest.fail("If statement codegen not implemented.")
 
@@ -11655,10 +11656,8 @@ def test_sampler3d_maps_to_texture3d_in_rust(tmp_path):
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused, match=r"resource: 'volumeMap' \(sampler3D\) is not lowered"
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_sampler_array_and_cube_families_map_to_rust_textures_and_compile(tmp_path):
@@ -11683,10 +11682,8 @@ def test_sampler_array_and_cube_families_map_to_rust_textures_and_compile(tmp_pa
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused, match=r"resource: 'rampMap' \(sampler1D\) is not lowered"
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_basic_sampled_texture_calls_map_to_rust_helpers_and_compile(tmp_path):
@@ -11735,7 +11732,7 @@ def test_shadow_sampler_texture_calls_return_float_and_compile(tmp_path):
 
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'shadowMap' \(sampler2DShadow\) is not lowered",
+        match=r"cannot lower 1 construct: texture operation: 'texture_compare_sampler' has no spirv-std lowering",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -11814,7 +11811,8 @@ def test_rust_texture_helper_diagnostics_reject_invalid_resources():
     }
     """
     with pytest.raises(
-        RustLoweringRefused, match="function: 'textureCompare' has no rust-gpu lowering"
+        RustLoweringRefused,
+        match=r"texture operation: 'textureCompare' has no spirv\-std method for these operands on a Image!",
     ):
         generate_code(parse_code(tokenize_code(non_shadow_compare)))
 
@@ -11830,7 +11828,8 @@ def test_rust_texture_helper_diagnostics_reject_invalid_resources():
     }
     """
     with pytest.raises(
-        RustLoweringRefused, match="function: 'textureGather' has no rust-gpu lowering"
+        RustLoweringRefused,
+        match="texture operation: 'textureGather' samples an image that is not a sampled texture",
     ):
         generate_code(parse_code(tokenize_code(image_gather)))
 
@@ -11871,7 +11870,7 @@ def test_texture_lod_grad_offset_calls_map_to_rust_helpers_and_compile(tmp_path)
 
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'mainTexture' \(sampler2D\) is not lowered",
+        match=r"texture operation: 'textureOffset' reads with a texel offset, and spirv\-std's image operan",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -11921,11 +11920,8 @@ def test_integer_texture_lod_sampler_helpers_preserve_integer_samples_and_compil
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused,
-        match=r"resource: 'signedTex' \(isampler2D\) is not lowered",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_texel_fetch_sampler_family_helpers_compile(tmp_path):
@@ -11966,7 +11962,8 @@ def test_texel_fetch_sampler_family_helpers_compile(tmp_path):
     """
 
     with pytest.raises(
-        RustLoweringRefused, match=r"resource: 'rampMap' \(sampler1D\) is not lowered"
+        RustLoweringRefused,
+        match=r"texture operation: 'texelFetchOffset' reads with a texel offset, and spirv\-std's image ope",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -11996,7 +11993,7 @@ def test_texel_fetch_and_texture_query_calls_map_to_rust_helpers_and_compile(
 
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'mainTexture' \(sampler2D\) is not lowered",
+        match=r"texture operation: 'texelFetchOffset' reads with a texel offset, and spirv\-std's image ope",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -12021,11 +12018,8 @@ def test_wgsl_texture_dimensions_alias_maps_to_unsigned_rust_helpers_and_compile
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused,
-        match=r"resource: 'mainTexture' \(sampler2D\) is not lowered",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_multisample_texture_fetch_and_query_helpers_compile(tmp_path):
@@ -12047,11 +12041,8 @@ def test_multisample_texture_fetch_and_query_helpers_compile(tmp_path):
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused,
-        match=r"resource: 'msTexture' \(sampler2DMS\) is not lowered",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_projected_sampling_and_gather_calls_map_to_rust_helpers_and_compile(
@@ -12087,7 +12078,7 @@ def test_projected_sampling_and_gather_calls_map_to_rust_helpers_and_compile(
 
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'mainTexture' \(sampler2D\) is not lowered",
+        match=r"texture operation: 'textureProjOffset' reads with a texel offset, and spirv\-std's image op",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -12144,7 +12135,7 @@ def test_explicit_sampler_texture_helpers_map_to_rust_helpers_and_compile(tmp_pa
 
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'mainTexture' \(sampler2D\) is not lowered",
+        match=r"texture operation: 'textureLodOffset' reads with a texel offset, and spirv\-std's image ope",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -12222,7 +12213,7 @@ def test_shadow_compare_helpers_map_to_rust_helpers_and_compile(tmp_path):
 
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'shadowMap' \(sampler2DShadow\) is not lowered",
+        match=r"texture operation: 'textureCompareOffset' reads with a texel offset, and spirv\-std's image",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -12289,12 +12280,12 @@ def test_resource_arrays_map_to_rust_arrays_and_compile(tmp_path):
 
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'fixedTextures' \(sampler2D\[2\]\) is not lowered",
+        match=r"resource: storage image 'fixedImages' \(image2D\) has no format layout qualifier, and rust\-g",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
 
-def test_resource_array_member_sample_maps_to_rust_helper_and_compile(tmp_path):
+def test_resource_array_member_sample_is_refused_for_rust(tmp_path):
     code = """
     shader ResourceArrayAccessShader {
         const int MAP_COUNT = 2;
@@ -12318,9 +12309,10 @@ def test_resource_array_member_sample_maps_to_rust_helper_and_compile(tmp_path):
     }
     """
 
+    # The member-call spelling (``.sample(sampler, uv)``) is not lowered to spirv-std yet; each call is refused.
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'shadowMaps' \(sampler2D\[\]\) is not lowered",
+        match=r"texture operation: 'sample_sampler' has no spirv-std lowering.*'sample_lod_sampler'",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -12422,7 +12414,8 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
     """
 
     with pytest.raises(
-        RustLoweringRefused, match=r"resource: 'colorImage' \(image2D\) is not lowered"
+        RustLoweringRefused,
+        match=r"resource: storage image 'colorImage' \(image2D\) has no format layout qualifier, and rust\-gp",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -12645,7 +12638,8 @@ def test_resource_binding_metadata_comments_compile_with_rust(tmp_path):
     """
 
     with pytest.raises(
-        RustLoweringRefused, match=r"resource: 'colorMap' \(sampler2D\) is not lowered"
+        RustLoweringRefused,
+        match=r"resource: 'counters' \(RWStructuredBuffer<int>\[2\]\) is not lowered to a rust\-gpu resource bi",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -12662,16 +12656,15 @@ def test_sampler_descriptor_array_source_bindings_do_not_expand_rust_ranges(tmp_
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused,
-        match=r"resource: 'linearSamplers' \(sampler\[2\]\) is not lowered",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_texture_and_sampler_binding_namespaces_are_independent_for_rust_codegen(
+def test_texture_and_sampler_on_one_binding_are_refused_for_rust_codegen(
     tmp_path,
 ):
+    # Vulkan numbers every descriptor of a set in one binding range (Vulkan 1.3 section 14.2.2), so a sampled image
+    # and a sampler cannot share set 0 binding 2.
     code = """
     shader RustTextureSamplerBindings {
         sampler2D colorMap @binding(2);
@@ -12686,7 +12679,8 @@ def test_texture_and_sampler_binding_namespaces_are_independent_for_rust_codegen
     """
 
     with pytest.raises(
-        RustLoweringRefused, match=r"resource: 'colorMap' \(sampler2D\) is not lowered"
+        RustRefusal,
+        match=r"Conflicting Rust resource binding for 'linearSampler': buffer set 0 binding 2-2 overlaps 'colorMap'",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -12705,10 +12699,8 @@ def test_rust_resource_parameters_lower_explicit_sampler_sampling(tmp_path):
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused, match=r"resource: 'colorMap' \(sampler2D\) is not lowered"
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_storage_image_atomic_binds_the_image_as_an_entry_parameter(tmp_path):
@@ -12726,7 +12718,7 @@ def test_rust_storage_image_atomic_binds_the_image_as_an_entry_parameter(tmp_pat
 
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'counterImage' \(Image2D<u32>\) is not lowered",
+        match=r"stage: compute entry parameter 'pixel' is not a compute built\-in input",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -12824,7 +12816,7 @@ def test_explicit_storage_image_formats_map_to_rust_value_types_and_compile(tmp_
 
     with pytest.raises(
         RustLoweringRefused,
-        match=r"resource: 'scalarFloat' \(Image2D<f32>\) is not lowered",
+        match=r"resource: 'signedVolume' \(image3D<r32i>\) has no spirv\-std Image! type",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -12868,7 +12860,8 @@ def test_multisample_storage_image_helpers_map_to_rust_and_compile(tmp_path):
     """
 
     with pytest.raises(
-        RustLoweringRefused, match=r"resource: 'msImage' \(image2DMS\) is not lowered"
+        RustLoweringRefused,
+        match=r"resource: storage image 'msImage' \(image2DMS\) has no format layout qualifier, and rust\-gpu",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -12898,11 +12891,8 @@ def test_for_statement(tmp_path):
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        with pytest.raises(
-            RustLoweringRefused,
-            match=r"resource: 'iChannel0' \(sampler2D\) is not lowered",
-        ):
-            generate_code(ast)
+        generated_code = generate_code(ast)
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
     except SyntaxError:
         pytest.fail("For statement codegen not implemented.")
 
@@ -13368,11 +13358,8 @@ def test_else_if_statement(tmp_path):
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        with pytest.raises(
-            RustLoweringRefused,
-            match=r"resource: 'iChannel0' \(sampler2D\) is not lowered",
-        ):
-            generate_code(ast)
+        generated_code = generate_code(ast)
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
     except SyntaxError:
         pytest.fail("Else if codegen not implemented.")
 
@@ -13492,10 +13479,8 @@ def test_texture_builtin_alias_targets_qualify_shadowed_runtime_helpers_and_comp
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused, match=r"resource: 'colorMap' \(sampler2D\) is not lowered"
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_builtin_function_calls_infer_rust_value_types_and_smoke_compile(tmp_path):
@@ -13520,11 +13505,8 @@ def test_builtin_function_calls_infer_rust_value_types_and_smoke_compile(tmp_pat
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused,
-        match=r"resource: 'main_texture' \(sampler2D\) is not lowered",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_common_math_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
@@ -14659,10 +14641,8 @@ def test_rust_texture_size_vector_temp_and_float_increment_compile(tmp_path):
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused, match=r"resource: 'shadowMap' \(sampler2D\) is not lowered"
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_vec2_intrinsics_and_matrix_multiply_use_glam(tmp_path):
@@ -15052,7 +15032,7 @@ def test_bitwise_operators(shader, expected_outputs):
         assert expected in generated_code
 
 
-def test_bitwise_and_operator():
+def test_bitwise_and_operator(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -15081,11 +15061,8 @@ def test_bitwise_and_operator():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        with pytest.raises(
-            RustLoweringRefused,
-            match=r"resource: 'iChannel0' \(sampler2D\) is not lowered",
-        ):
-            generate_code(ast)
+        generated_code = generate_code(ast)
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
     except SyntaxError:
         pytest.fail("Bitwise AND codegen not implemented")
 
@@ -15149,7 +15126,7 @@ def test_shift_operators(shader, expected_outputs):
         assert expected in generated_code
 
 
-def test_bitwise_or_operator():
+def test_bitwise_or_operator(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -15178,11 +15155,8 @@ def test_bitwise_or_operator():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        with pytest.raises(
-            RustLoweringRefused,
-            match=r"resource: 'iChannel0' \(sampler2D\) is not lowered",
-        ):
-            generate_code(ast)
+        generated_code = generate_code(ast)
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
     except SyntaxError:
         pytest.fail("Bitwise OR codegen not implemented")
 
@@ -15216,11 +15190,8 @@ def test_ternary_operator(tmp_path):
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        with pytest.raises(
-            RustLoweringRefused,
-            match=r"resource: 'iChannel0' \(sampler2D\) is not lowered",
-        ):
-            generate_code(ast)
+        generated_code = generate_code(ast)
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
     except SyntaxError:
         pytest.fail("Ternary operator codegen not implemented")
 
@@ -16966,11 +16937,8 @@ def test_stage_local_uniform_statics_are_emitted_once(tmp_path):
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused,
-        match=r"resource: 'main_texture' \(sampler2D\) is not lowered",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_method_calls_and_shorthand_path_constructors_emit_rust_syntax():
@@ -18607,11 +18575,8 @@ def test_rust_fragment_stage_with_texture_sampling(tmp_path):
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match=r"resource: 'diffuseTex' \(sampler2D\) is not lowered",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 # Invalid shader shape validation and stage parameter semantics

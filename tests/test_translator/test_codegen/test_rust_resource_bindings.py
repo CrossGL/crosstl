@@ -3,14 +3,15 @@
 The generator wrote every resource except a directly used, explicitly bound texture or sampler as a module-level
 ``static`` with ``Default::default()`` (or an empty ``Vec``) under a "compile-only placeholder" comment, so every
 read returned a default value instead of the bound data. The rust-gpu output binds storage buffers as entry-point
-slices, structured buffers included; textures, images, samplers and byte-address buffers are not lowered yet, so
-each is refused by name.
+slices, structured buffers included, and textures, storage images and samplers as spirv-std ``Image!`` and
+``Sampler`` parameters; what rust-gpu cannot bind is refused by name.
 """
 
 import pytest
 
 from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from tests.test_translator.test_codegen.test_rust_codegen import (
+    assert_generated_rust_smoke_compiles,
     generate_code,
     parse_code,
     tokenize_code,
@@ -21,9 +22,8 @@ def rust(code):
     return generate_code(parse_code(tokenize_code(code)))
 
 
-def test_textures_used_by_helpers_are_refused_by_name():
-    with pytest.raises(RustLoweringRefused) as refused:
-        rust("""
+def test_textures_used_by_helpers_are_passed_to_them(tmp_path):
+    code = rust("""
     shader Threaded {
         sampler2D colorMap @binding(2);
         sampler2D detailMap;
@@ -36,10 +36,18 @@ def test_textures_used_by_helpers_are_refused_by_name():
         }
     }
     """)
-    assert refused.value.reasons[:2] == (
-        "resource: 'colorMap' (sampler2D) is not lowered to a rust-gpu resource binding",
-        "resource: 'detailMap' (sampler2D) is not lowered to a rust-gpu resource binding",
+    # Each texture is an entry parameter with its sampler, and reaches the helpers that read it as arguments.
+    assert (
+        "#[spirv(descriptor_set = 0, binding = 2)] colorMap: &Image!(2D, type=f32, sampled), "
+        "#[spirv(descriptor_set = 0, binding = 3)] colorMap_sampler: &Sampler" in code
     )
+    assert (
+        "pub fn detail(uv: Vec2, detailMap: &Image!(2D, type=f32, sampled), detailMap_sampler: &Sampler)"
+        in code
+    )
+    assert "shade(uv, colorMap, colorMap_sampler, detailMap, detailMap_sampler)" in code
+    assert "Default::default()" not in code
+    assert_generated_rust_smoke_compiles(code, tmp_path)
 
 
 def test_stage_local_buffer_object_and_image_are_refused_by_name():
@@ -57,12 +65,13 @@ def test_stage_local_buffer_object_and_image_are_refused_by_name():
         }
     }
     """)
-    # The structured buffer binds as a storage slice; the image and the plain-value parameters are refused.
+    # The structured buffer binds as a storage slice; the formatless image and the plain-value parameters are
+    # refused.
     assert refused.value.reasons == (
-        "resource: 'target' (image2D) is not lowered to a rust-gpu resource binding",
+        "resource: storage image 'target' (image2D) has no format layout qualifier, and rust-gpu storage images "
+        "without a format need the StorageImage*WithoutFormat capabilities",
         "stage: compute entry parameter 'index' is not a compute built-in input",
         "stage: compute entry parameter 'pixel' is not a compute built-in input",
-        "function: 'imageStore' has no rust-gpu lowering for these operands",
     )
 
 
@@ -87,9 +96,8 @@ def test_stage_local_structured_buffer_binds_as_a_storage_slice():
     assert "values[index as usize] = (value + 1);" in code
 
 
-def test_texture_arrays_are_refused_by_name():
-    with pytest.raises(RustLoweringRefused) as refused:
-        rust("""
+def test_texture_arrays_bind_as_image_arrays(tmp_path):
+    code = rust("""
     shader Arrays {
         sampler2D fixedTextures[2];
         sampler2D bindlessTextures[];
@@ -100,10 +108,12 @@ def test_texture_arrays_are_refused_by_name():
         }
     }
     """)
-    assert refused.value.reasons[:2] == (
-        "resource: 'fixedTextures' (sampler2D[2]) is not lowered to a rust-gpu resource binding",
-        "resource: 'bindlessTextures' (sampler2D[]) is not lowered to a rust-gpu resource binding",
-    )
+    # A sized array is a fixed-size array of images, an unsized one a RuntimeArray; each has one sampler.
+    assert "fixedTextures: &[Image!(2D, type=f32, sampled); 2]" in code
+    assert "bindlessTextures: &RuntimeArray<Image!(2D, type=f32, sampled)>" in code
+    assert "fixedTextures_sampler: &Sampler" in code
+    assert "bindlessTextures_sampler: &Sampler" in code
+    assert_generated_rust_smoke_compiles(code, tmp_path)
 
 
 def test_resource_referenced_outside_functions_is_refused():
@@ -122,26 +132,29 @@ def test_resource_referenced_outside_functions_is_refused():
     with pytest.raises(RustLoweringRefused) as refused:
         rust(code)
 
-    message = str(refused.value)
-    assert "resource: 'colorMap' (sampler2D) would be a module-level static" in message
-    assert "referenced outside the program's functions" in message
-    assert "resource: 'aliasMap' (sampler2D)" in message
-    assert "a resource with an initializer cannot be bound" in message
+    assert refused.value.reasons == (
+        "resource: 'aliasMap' has an initializer, and a rust-gpu resource binding has none",
+        "resource: 'colorMap' is referenced where no rust-gpu entry-point parameter reaches",
+        "resource: 'aliasMap' is referenced where no rust-gpu entry-point parameter reaches",
+    )
 
 
-def test_unreferenced_texture_is_refused_instead_of_a_placeholder():
-    with pytest.raises(RustLoweringRefused) as refused:
-        rust("""
+def test_unreferenced_texture_is_left_out_instead_of_a_placeholder(tmp_path):
+    code = rust("""
     shader Unused {
         sampler2D unusedMap @binding(7);
         compute {
+            layout(local_size_x = 1) in;
             void main() {}
         }
     }
     """)
-    assert refused.value.reasons[:1] == (
-        "resource: 'unusedMap' (sampler2D) is not lowered to a rust-gpu resource binding",
-    )
+    # rust-gpu binds a resource only as an entry parameter; one no function reads needs none, and is not written
+    # as a defaulted static either.
+    assert "unusedMap" not in code
+    assert "UNUSED_MAP" not in code
+    assert "Default::default()" not in code
+    assert_generated_rust_smoke_compiles(code, tmp_path)
 
 
 def test_store_to_a_glsl_buffer_block_parameter_is_refused():
