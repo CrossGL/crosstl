@@ -1,4 +1,4 @@
-"""Check that a CrossTL wheel works as the README says, straight after ``pip install``.
+"""Check that a CrossTL wheel works as the README and the quickstart guide say, straight after ``pip install``.
 
 CI runs this on Linux, macOS and Windows for every supported Python. It installs the wheel into a new virtual
 environment, then works in an empty directory outside the checkout, as a new user would:
@@ -6,8 +6,11 @@ environment, then works in an empty directory outside the checkout, as a new use
 - the README quickstart: it saves the ``saxpy.cgl`` kernel the README shows, runs the README's Python block and
   every command in its command-line block, and checks that each output file holds the language its extension
   names;
-- ``crosstl shader.metal -o shader.hlsl`` writes HLSL, and an output file name that names no language CrossTL
-  writes is refused without writing a file;
+- the documentation's quickstart (``docs/source/quickstart.rst``), in a directory of its own: every file its
+  sections in :data:`GUIDE_SECTIONS` ask the reader to save, every Python block and every command, with the same
+  check of each output, and of each file a Python block saves with ``save_shader``;
+- ``crosstl shader.metal -o shader.hlsl`` writes HLSL, and an input or output file name that names no language
+  CrossTL reads or writes is refused without writing a file;
 - ``crosstl --help``, ``python -m crosstl --help`` and ``crosstl doctor`` run, and ``import crosstl`` loads the
   installed package rather than the checkout.
 
@@ -15,6 +18,7 @@ No native validator is installed: CrossTL must work without one. Usage::
 
     python tools/install_smoke.py dist/crosstl-3.8.0-py3-none-any.whl
     python tools/install_smoke.py dist/
+    python tools/install_smoke.py dist/ --readme README.md --guide docs/source/quickstart.rst
 """
 
 from __future__ import annotations
@@ -73,6 +77,24 @@ kernel void add(device float* a [[buffer(0)]], device const float* b [[buffer(1)
 """
 
 
+# The sections of docs/source/quickstart.rst whose steps run. The others need a checkout or a repository to port.
+GUIDE_SECTIONS = ("Install", "Translate a native shader", "Write CrossGL")
+# The installation the check has already done with the wheel it tests.
+INSTALL = ["pip", "install", "crosstl"]
+# A ``crosstl.translate(..., backend="B", save_shader="F")`` call in a Python block: F must hold language B.
+SAVED = re.compile(r'backend="(\w+)",\s*save_shader="([^"]+)"')
+UNDERLINE = re.compile(r"([=\-~^])\1+")
+
+
+@dataclass
+class Step:
+    """One thing a guide asks its reader to do: save a file, run a Python block, or run a command."""
+
+    kind: str  # "save", "python" or "command"
+    text: str
+    name: str = ""
+
+
 @dataclass
 class Quickstart:
     """The README quickstart: the kernel it saves, its Python block and its command lines."""
@@ -121,6 +143,112 @@ def quickstart(readme: str) -> Quickstart:
         if line.strip() and not line.lstrip().startswith("#")
     ]
     return Quickstart(name[1], blocks[0][1], python, commands)
+
+
+def rst_sections(text: str) -> dict[str, str]:
+    """The body of each titled section of a reStructuredText document, by title."""
+    lines = text.splitlines()
+    sections: dict[str, list[str]] = {}
+    body: list[str] | None = None
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        following = lines[index + 1] if index + 1 < len(lines) else ""
+        if (
+            line.strip()
+            and not line.startswith(" ")
+            and UNDERLINE.fullmatch(following)
+            and len(following) >= len(line.rstrip())
+        ):
+            body = sections.setdefault(line.strip(), [])
+            index += 2
+            continue
+        if body is not None:
+            body.append(line)
+        index += 1
+    return {title: "\n".join(body) for title, body in sections.items()}
+
+
+def _code_block(lines: list[str], start: int) -> tuple[str, int]:
+    """The code of the directive body that starts at ``lines[start]``, dedented, and the index after it."""
+    index = start
+    while index < len(lines) and lines[index].strip().startswith(":"):
+        index += 1  # directive options such as :caption:
+    code: list[str] = []
+    while index < len(lines) and (
+        not lines[index].strip() or lines[index].startswith("   ")
+    ):
+        code.append(lines[index][3:])
+        index += 1
+    while code and not code[-1].strip():
+        code.pop()
+    while code and not code[0].strip():
+        code.pop(0)
+    return "\n".join(code) + "\n", index
+
+
+def _commands(code: str) -> list[str]:
+    joined = re.sub(r"\\\n\s*", " ", code)
+    return [
+        line.strip()
+        for line in joined.splitlines()
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+
+
+def rst_steps(body: str) -> list[Step]:
+    """The steps of one section: a code block after "Save this ... as ``NAME``:" is saved as ``NAME``."""
+    lines = body.splitlines()
+    steps: list[Step] = []
+    # The paragraph before the current line; a blank line ends it, the next text line starts another.
+    paragraph: list[str] = []
+    ended = False
+    index = 0
+    while index < len(lines):
+        directive = re.match(r"\.\. code-block:: (\S+)\s*$", lines[index])
+        if not directive:
+            text = lines[index].strip()
+            if text and ended:
+                paragraph, ended = [], False
+            if text:
+                paragraph.append(text)
+            else:
+                ended = True
+            index += 1
+            continue
+        code, index = _code_block(lines, index + 1)
+        save = re.search(r"Save this .*? as ``([^`]+)``:$", " ".join(paragraph))
+        paragraph, ended = [], False
+        if save:
+            steps.append(Step("save", code, save[1]))
+        elif directive[1] == "python":
+            steps.append(Step("python", code))
+        elif directive[1] in ("bash", "console", "shell"):
+            for command in _commands(code):
+                if shlex.split(command) == INSTALL:
+                    continue
+                if shlex.split(command)[0] not in ("crosstl", "python"):
+                    raise ValueError(
+                        f"quickstart command {command!r} runs neither crosstl nor python"
+                    )
+                steps.append(Step("command", command))
+    return steps
+
+
+def guide(text: str) -> list[Step]:
+    """The steps of the :data:`GUIDE_SECTIONS` of the quickstart guide. Raises ``ValueError`` when its shape changed."""
+    sections = rst_sections(text)
+    missing = [title for title in GUIDE_SECTIONS if title not in sections]
+    if missing:
+        raise ValueError(f"the quickstart guide has no section {missing}")
+    steps = [step for title in GUIDE_SECTIONS for step in rst_steps(sections[title])]
+    kinds = {step.kind for step in steps}
+    if not {"save", "python", "command"} <= kinds:
+        raise ValueError(
+            "the quickstart guide must save a source, then run a Python block and a command on it; "
+            f"found {sorted(kinds)}"
+        )
+    return steps
 
 
 def output_of(argv: list[str]) -> tuple[str | None, str | None]:
@@ -208,6 +336,31 @@ class Smoke:
         if reason:
             self.fail(f"{shlex.join(argv)}: {reason}")
 
+    def check_saved(self, code: str, script: str) -> None:
+        """Check each file ``code`` saves through ``save_shader`` for the language of its backend."""
+        for backend, name in SAVED.findall(code):
+            path = self.work / name
+            if not path.is_file():
+                self.fail(f"{script}: wrote no {name}")
+                continue
+            reason = wrong_language(path.read_text(encoding="utf-8"), backend)
+            if reason:
+                self.fail(f"{script}: {name}: {reason}")
+
+    def follow(self, steps: list[Step]) -> None:
+        """Do what a guide's steps say, in order, in this check's directory."""
+        for number, step in enumerate(steps, 1):
+            if step.kind == "save":
+                (self.work / step.name).write_text(step.text, encoding="utf-8")
+            elif step.kind == "python":
+                script = f"guide-{number}.py"
+                (self.work / script).write_text(step.text, encoding="utf-8")
+                if self.run(["python", script]).returncode == 0:
+                    self.check_saved(step.text, script)
+            else:
+                argv = shlex.split(step.text)
+                self.check_output(argv, self.run(argv))
+
 
 def install(wheel: Path, env: Path) -> None:
     venv.EnvBuilder(with_pip=True, clear=True).create(env)
@@ -226,9 +379,12 @@ def install(wheel: Path, env: Path) -> None:
     )
 
 
-def smoke(wheel: Path, readme: Path, root: Path) -> list[str]:
+def smoke(
+    wheel: Path, readme: Path, root: Path, guide_path: Path | None = None
+) -> list[str]:
     """Install ``wheel`` under ``root`` and run every check; return the failures."""
     env, work = root / "env", root / "work"
+    steps = guide(guide_path.read_text(encoding="utf-8")) if guide_path else []
     work.mkdir(parents=True)
     install(wheel, env)
     check = Smoke(env, work)
@@ -241,12 +397,13 @@ def smoke(wheel: Path, readme: Path, root: Path) -> list[str]:
             f"import crosstl loaded {where.stdout.strip()}, not the installed package"
         )
 
-    guide = quickstart(readme.read_text(encoding="utf-8"))
-    (work / guide.kernel_name).write_text(guide.kernel, encoding="utf-8")
+    readme_guide = quickstart(readme.read_text(encoding="utf-8"))
+    (work / readme_guide.kernel_name).write_text(readme_guide.kernel, encoding="utf-8")
     (work / "blur.hlsl").write_text(BLUR_HLSL, encoding="utf-8")
-    (work / "quickstart.py").write_text(guide.python, encoding="utf-8")
-    check.run(["python", "quickstart.py"])
-    for line in guide.commands:
+    (work / "quickstart.py").write_text(readme_guide.python, encoding="utf-8")
+    if check.run(["python", "quickstart.py"]).returncode == 0:
+        check.check_saved(readme_guide.python, "quickstart.py")
+    for line in readme_guide.commands:
         argv = shlex.split(line)
         check.check_output(argv, check.run(argv))
 
@@ -262,6 +419,14 @@ def smoke(wheel: Path, readme: Path, root: Path) -> list[str]:
         )
     if (work / "shader.spv").exists():
         check.fail("crosstl shader.metal -o shader.spv: wrote shader.spv")
+    (work / "notes.txt").write_text(SHADER_METAL, encoding="utf-8")
+    refused = check.run(["crosstl", "notes.txt", "-o", "notes.hlsl"], expect_ok=False)
+    if refused.returncode and ".metal" not in refused.stdout + refused.stderr:
+        check.fail(
+            "crosstl notes.txt -o notes.hlsl: the refusal does not list the accepted extensions"
+        )
+    if (work / "notes.hlsl").exists():
+        check.fail("crosstl notes.txt -o notes.hlsl: wrote notes.hlsl")
 
     for argv in (
         ["crosstl", "--help"],
@@ -269,6 +434,12 @@ def smoke(wheel: Path, readme: Path, root: Path) -> list[str]:
         ["crosstl", "doctor"],
     ):
         check.run(argv)
+
+    if steps:
+        guided = Smoke(env, root / "guide")
+        guided.work.mkdir()
+        guided.follow(steps)
+        check.failures += guided.failures
     return check.failures
 
 
@@ -285,6 +456,12 @@ def main(argv: list[str] | None = None) -> int:
         default=ROOT / "README.md",
         help="the README whose quickstart runs",
     )
+    parser.add_argument(
+        "--guide",
+        type=Path,
+        default=ROOT / "docs" / "source" / "quickstart.rst",
+        help="the quickstart guide whose steps run",
+    )
     args = parser.parse_args(argv)
     wheel = args.wheel.resolve()
     if wheel.is_dir():
@@ -293,7 +470,7 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(f"{wheel} holds {len(wheels)} CrossTL wheels, not one")
         wheel = wheels[0]
     with tempfile.TemporaryDirectory(prefix="crosstl-smoke-") as root:
-        failures = smoke(wheel, args.readme.resolve(), Path(root))
+        failures = smoke(wheel, args.readme.resolve(), Path(root), args.guide.resolve())
     print(
         f"{len(failures)} failure(s)"
         if failures
