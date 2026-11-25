@@ -1,0 +1,1 @@
+Rust output gives resources without an explicit binding the lowest free slots, as the GLSL, HLSL and Metal outputs do. A constant block bound at ``@binding(3)`` no longer moves a kernel's storage buffers to bindings 4 and 5.

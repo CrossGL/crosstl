@@ -36,10 +36,13 @@ def test_textures_used_by_helpers_are_passed_to_them(tmp_path):
         }
     }
     """)
-    # Each texture is an entry parameter with its sampler, and reaches the helpers that read it as arguments.
+    # Each texture is an entry parameter with its sampler, and reaches the helpers that read it as arguments. The
+    # explicit binding stays; the split samplers and the other texture take the lowest free slots, in order.
     assert (
         "#[spirv(descriptor_set = 0, binding = 2)] colorMap: &Image!(2D, type=f32, sampled), "
-        "#[spirv(descriptor_set = 0, binding = 3)] colorMap_sampler: &Sampler" in code
+        "#[spirv(descriptor_set = 0, binding = 0)] colorMap_sampler: &Sampler, "
+        "#[spirv(descriptor_set = 0, binding = 1)] detailMap: &Image!(2D, type=f32, sampled), "
+        "#[spirv(descriptor_set = 0, binding = 3)] detailMap_sampler: &Sampler" in code
     )
     assert (
         "pub fn detail(uv: Vec2, detailMap: &Image!(2D, type=f32, sampled), detailMap_sampler: &Sampler)"
