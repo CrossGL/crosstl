@@ -24,6 +24,7 @@ from .metal_post_tessellation import (
     post_tessellation_plan,
 )
 from .metal_raster_order_groups import metal_raster_order_group_attribute
+from .metal_restrict import metal_restrict_suffix
 from .metal_stage_input_merge import (
     merge_metal_stage_inputs,
     metal_stage_input_struct_parameter,
@@ -60,6 +61,9 @@ class MetalFunctionPartsMixin:
             if block is not None:
                 block["memory"] = self.metal_parameter_memory_qualifier_prefix(
                     param, getattr(param, "param_type", None), "device"
+                )
+                block["restrict"] = metal_restrict_suffix(
+                    param, getattr(param, "param_type", None)
                 )
         if shader_type in {"vertex", "fragment", "compute", "ray_generation"}:
             self.validate_stage_parameter_resource_bindings(
