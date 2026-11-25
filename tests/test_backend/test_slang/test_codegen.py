@@ -496,7 +496,7 @@ def test_explicit_vertex_stage_drops_result_semantic_from_helper():
 
     assert "vec4 place(vec3 p) {" in generated_code
     assert (
-        "VOut vsMain(vec3 p @ in_Position, vec4 c @ Color0) @ stage_entry"
+        "VOut vsMain(vec3 p @ Position, vec4 c @ Color0) @ stage_entry"
         in generated_code
     )
     parsed = cgl_translator.parse(generated_code)
