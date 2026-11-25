@@ -381,6 +381,10 @@ _LAYOUT_REQUIREMENTS = {
     "interlock": GLSLRequirement("a fragment shader interlock layout", 450, None),
     # GL_KHR_compute_shader_derivatives and GL_NV_compute_shader_derivatives apply to GLSL 4.50 and later.
     "derivative_group": GLSLRequirement("a compute derivative group layout", 450, None),
+    # Early fragment depth/stencil testing (GLSL 4.20 and GLSL ES 3.10 section 4.4.1.3).
+    "early_fragment_tests": GLSLRequirement(
+        "layout(early_fragment_tests)", 420, 310, _IMAGE_LOAD_STORE
+    ),
 }
 _STAGE_REQUIREMENTS = {
     "geometry": GLSLRequirement(
@@ -599,6 +603,8 @@ def _layout_line_requirements(ids, declaration, stage):
         requirements.append(_LAYOUT_REQUIREMENTS["interlock"])
     if ids & DERIVATIVE_GROUP_EXTENSIONS.keys():
         requirements.append(_LAYOUT_REQUIREMENTS["derivative_group"])
+    if "early_fragment_tests" in ids:
+        requirements.append(_LAYOUT_REQUIREMENTS["early_fragment_tests"])
     return requirements
 
 
