@@ -39,6 +39,10 @@ FEATURE_FILE = re.compile(r"features/[a-z0-9]+-[a-z]+\.json")
 CELL_FILE = re.compile(r"features/pairs/[a-z0-9]+-to-[a-z0-9]+\.json")
 # Directions CrossTL does not offer at all; the report lists them so a reader can tell "not offered" from 0 %.
 NOT_OFFERED = {
+    (
+        "gles",
+        "input",
+    ): "GLSL ES sources are read as GLSL, which the GLSL and WebGL input rows measure",
     ("opencl", "output"): "CrossTL has no OpenCL C generator",
     ("wgsl", "input"): "CrossTL has no WGSL source frontend",
 }

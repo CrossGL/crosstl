@@ -321,7 +321,10 @@ class IdentifierAttributeMixin:
         return f"{' '.join(qualifiers)} " if qualifiers else ""
 
     def should_emit_const_qualifier(self, node):
-        return getattr(node, "value", None) is not None
+        # A $Globals member is read-only already and has no initializer for ``const`` to protect.
+        return getattr(node, "value", None) is not None and id(node) not in getattr(
+            self, "hlsl_program_constant_global_ids", ()
+        )
 
     def format_global_storage_qualifier_prefix(self, node):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}

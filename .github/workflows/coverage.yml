@@ -2,9 +2,9 @@ name: Coverage
 
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
 # feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The Linux
-# job measures GLSL, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc
-# (and nvcc for the Slang functions only CUDA has, and DXC's Shader Model 6.10 preview for the HLSL intrinsics that
-# need shader model 6.10), and OpenCL C input with the runner image's clang-18 and DXC, and
+# job measures GLSL, GLSL ES 3.x, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga
+# and slangc (and nvcc for the Slang functions only CUDA has, and DXC's Shader Model 6.10 preview for the HLSL
+# intrinsics that need shader model 6.10), and OpenCL C input with the runner image's clang-18 and DXC, and
 # runs the GLSL and SPIR-V compute probes on Mesa's llvmpipe and lavapipe, and the HLSL, Slang and WGSL ones on lavapipe
 # as the SPIR-V DXC, slangc and naga write for them. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc
 # and the Mojo compiler, one measures Rust with rust-gpu and runs the Rust compute probes on lavapipe as the SPIR-V
@@ -198,8 +198,8 @@ jobs:
           CROSSTL_CONFORMANCE_MESA: host
         run: |
           python -m tools.coverage run --strict --execute --jobs 4 \
-            --backend glsl --backend webgl --backend hlsl --backend spirv --backend wgsl --backend slang \
-            --backend opencl --output coverage-linux.json
+            --backend glsl --backend gles --backend webgl --backend hlsl --backend spirv --backend wgsl \
+            --backend slang --backend opencl --output coverage-linux.json
 
       # The nightly run also measures the translation matrix into this leg's languages (tools/coverage/pairs.py). The
       # rows of the published report define its cells, and the report job reconciles them with this run's rows.
@@ -220,8 +220,8 @@ jobs:
             exit 0
           fi
           python -m tools.coverage run --pairs "$published/coverage.json" --strict --execute --jobs 4 \
-            --backend glsl --backend webgl --backend hlsl --backend spirv --backend wgsl --backend slang \
-            --output coverage-pairs-linux.json
+            --backend glsl --backend gles --backend webgl --backend hlsl --backend spirv --backend wgsl \
+            --backend slang --output coverage-pairs-linux.json
 
       - name: Keep verdicts
         if: github.ref == 'refs/heads/main'
