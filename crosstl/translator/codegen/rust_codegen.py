@@ -37,6 +37,12 @@ from .rust_gpu_geometry import (
     refuse_rust_geometry_entry,
     rust_geometry_stage_attribute,
 )
+from .rust_gpu_images import (
+    add_rust_gpu_image_imports,
+    formatless_image_type,
+    prepare_rust_gpu_images,
+    rust_gpu_image_result_type,
+)
 from .rust_gpu_interface import RUST_GPU_PRELUDE
 from .rust_gpu_math_calls import rust_gpu_math_result_type
 from .rust_gpu_mesh import (
@@ -421,6 +427,7 @@ class RustCodeGen(
         """Render the Rust program; refusals recorded on the way are raised by :meth:`generate`."""
         self.validate_supported_stage_types(ast)
         normalize_rust_gpu_buffers(self, ast)
+        ast = prepare_rust_gpu_images(self, ast)
         lower_rust_gpu_constant_blocks(self, ast)
         explicit_specialization_refusals(self, ast, "Rust")
         self.rust_referenced_names = referenced_identifier_names(ast)
@@ -677,6 +684,7 @@ class RustCodeGen(
 
         code += self.generate_required_generic_math_traits()
         refuse_host_only_rust(self, code)
+        code = add_rust_gpu_image_imports(code)
         if re.search(r"\bf16\b", code):
             # f16 is a nightly primitive type, which rust-gpu's toolchain enables per crate.
             code = code.replace("#![no_std]\n", "#![no_std]\n#![feature(f16)]\n", 1)
@@ -1020,6 +1028,9 @@ class RustCodeGen(
             math_type = rust_gpu_math_result_type(self, func_name, arguments)
             if math_type is not None:
                 return math_type
+            image_type = rust_gpu_image_result_type(self, func_name, arguments)
+            if image_type is not None:
+                return image_type
 
         mapped_name = self.mapped_function_name(func_name, len(arguments), arguments)
         arg_types = [self.expression_result_type(arg) for arg in arguments]
@@ -1124,6 +1135,11 @@ class RustCodeGen(
         mapped_type = self.type_mapping.get(vtype_str)
         if mapped_type is not None:
             return self.qualify_colliding_runtime_type(mapped_type)
+
+        image_type = formatless_image_type(vtype_str)
+        if image_type is not None:
+            # rust_gpu_images spells a storage image's format into its type.
+            return self.map_type(image_type)
 
         generic_type = self.map_generic_type_string(vtype_str)
         if generic_type is not None:

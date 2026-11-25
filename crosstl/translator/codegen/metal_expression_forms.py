@@ -31,6 +31,7 @@ from .metal_comparison_signs import (
 from .metal_feature_errors import (
     UnsupportedMetalFeatureError,
 )
+from .metal_texture_subscripts import metal_texture_subscript_refusal
 from .relational_builtins import (
     metal_logical_not_operand,
 )
@@ -306,6 +307,9 @@ class MetalExpressionFormMixin:
         block_load = self.generate_glsl_buffer_block_array_load(expr)
         if block_load is not None:
             return block_load
+        texture_subscript = metal_texture_subscript_refusal(self, expr)
+        if texture_subscript is not None:
+            return texture_subscript
         layout_element = self.metal_hlsl_layout_element_access(expr)
         if layout_element is not None:
             access, conversion = layout_element

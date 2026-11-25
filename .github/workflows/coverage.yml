@@ -208,7 +208,8 @@ jobs:
           restore-keys: coverage-upstream-linux-
 
       # The verdicts of the last run on main, so that only sources CrossTL now writes differently are checked again
-      # (tools/coverage/runner.py). The key changes with the pinned tools and the code that runs them.
+      # (tools/coverage/runner.py) and run again (tools/coverage/executed.py). The key changes with the pinned tools and
+      # the code that runs them.
       - name: Restore verdicts
         id: verdicts
         uses: actions/cache/restore@v6
@@ -216,6 +217,8 @@ jobs:
           path: |
             ${{ runner.temp }}/coverage-verdicts
             ${{ runner.temp }}/pairs-verdicts
+            ${{ runner.temp }}/coverage-executions
+            ${{ runner.temp }}/pairs-executions
           key: coverage-verdicts-linux-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-${{ github.sha }}-${{ github.run_id }}
           restore-keys: coverage-verdicts-linux-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-
 
@@ -224,6 +227,7 @@ jobs:
         env:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
           CROSSTL_COVERAGE_VERDICTS: ${{ runner.temp }}/coverage-verdicts
+          CROSSTL_COVERAGE_EXECUTIONS: ${{ runner.temp }}/coverage-executions
           # The clang whose opencl-c.h tools/coverage/upstream.py pins.
           CROSSTL_COVERAGE_CLANG: clang-18
           CROSSTL_CONFORMANCE_MESA: host
@@ -240,6 +244,7 @@ jobs:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
           # Apart from the rows' verdicts, which a run keeps only when it used them.
           CROSSTL_COVERAGE_VERDICTS: ${{ runner.temp }}/pairs-verdicts
+          CROSSTL_COVERAGE_EXECUTIONS: ${{ runner.temp }}/pairs-executions
           CROSSTL_COVERAGE_CLANG: clang-18
           CROSSTL_CONFORMANCE_MESA: host
         run: |
@@ -261,6 +266,8 @@ jobs:
           path: |
             ${{ runner.temp }}/coverage-verdicts
             ${{ runner.temp }}/pairs-verdicts
+            ${{ runner.temp }}/coverage-executions
+            ${{ runner.temp }}/pairs-executions
           key: ${{ steps.verdicts.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v7

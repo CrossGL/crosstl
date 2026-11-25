@@ -2,10 +2,11 @@
 
 The generator writes ``#![no_std]`` crates for rust-gpu 0.11: compute entry points whose storage buffers, uniform
 values, workgroup memory and built-in inputs are entry-point parameters (:mod:`.rust_gpu_interface`), glam vectors
-and matrices, structs, and the built-in functions :mod:`.rust_gpu_builtins` names. Other stages and resources
-(images, samplers, HLSL buffer objects, GLSL buffer blocks, constant buffers), and globals a program writes, which
-rust-gpu cannot declare as statics, are refused here by name before any code is written, so a program either
-compiles with rust-gpu or is refused with every reason listed.
+and matrices, structs, and the built-in functions :mod:`.rust_gpu_builtins` names. Images and samplers are
+spirv-std ``Image!`` and ``Sampler`` bindings (:mod:`.rust_gpu_images`). Other stages and resources (HLSL buffer
+objects, GLSL buffer blocks, constant buffers), and globals a program writes, which rust-gpu cannot declare as
+statics, are refused here by name before any code is written, so a program either compiles with rust-gpu or is
+refused with every reason listed.
 """
 
 from __future__ import annotations
@@ -28,6 +29,7 @@ from ..ast import (
     VariableNode,
 )
 from .ast_walk import walk_ast_values
+from .rust_gpu_images import rust_gpu_image_declaration_refusal
 from .rust_gpu_interface import COMPUTE_BUILTIN_INPUTS
 from .stage_utils import normalize_stage_name
 
@@ -231,6 +233,12 @@ def _refuse_declaration(generator, node, written):
     if generator.rust_gpu_interface_info(node, type_name) is not None:
         return
     qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", None) or []}
+    image_refusal = rust_gpu_image_declaration_refusal(generator, node, type_name)
+    if image_refusal is not None:
+        # Images and samplers are spirv-std Image!/Sampler bindings (rust_gpu_images).
+        if image_refusal:
+            generator.refuse_lowering(image_refusal)
+        return
     if generator.rust_resource_kind(type_name, node=node) is not None:
         generator.refuse_lowering(
             f"resource: '{name}' ({type_name}) is not lowered to a rust-gpu resource binding"

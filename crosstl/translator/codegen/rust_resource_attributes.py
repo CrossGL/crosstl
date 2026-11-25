@@ -16,6 +16,11 @@ from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .push_constant_blocks import is_push_constant
 from .rust_exact_lookups import rust_resource_kind_of_spelling
 from .rust_gpu_geometry import STAGE_INPUT_KIND, STAGE_OUTPUT_KIND
+from .rust_gpu_images import (
+    input_attachment_attributes,
+    rust_gpu_image_kind,
+    rust_gpu_image_parameter_type,
+)
 from .rust_gpu_interface import (
     BUILTIN_INPUT_KIND,
     STORAGE_SLICE_KIND,
@@ -450,6 +455,9 @@ class RustResourceAttributeMixin:
         }:
             return "buffer"
 
+        image_kind = rust_gpu_image_kind(base_name)
+        if image_kind is not None:
+            return image_kind
         mapped_type = self.type_mapping.get(base_name)
         if mapped_type is None:
             # Already a Rust runtime spelling, or a type that is not a resource.
@@ -458,14 +466,9 @@ class RustResourceAttributeMixin:
         return rust_resource_kind_of_spelling(mapped_base)
 
     def rust_resource_binding_namespace(self, kind):
-        if kind in {
-            "cbuffer",
-            "glsl_buffer_block",
-            STORAGE_SLICE_KIND,
-            UNIFORM_VALUE_KIND,
-        }:
-            return "buffer"
-        return kind
+        # Vulkan numbers the descriptors of a set in one range whatever their type (Vulkan 1.3 section 14.2.2), so
+        # an image, a sampler and a buffer of one set never share a binding.
+        return "buffer"
 
     def rust_resource_binding_validation_count(self, node, resource_kind, count):
         if resource_kind in {STORAGE_SLICE_KIND, UNIFORM_VALUE_KIND}:
@@ -691,6 +694,9 @@ class RustResourceAttributeMixin:
         return info
 
     def rust_resource_metadata_comment(self, node, type_name, kind=None):
+        if kind is None and rust_gpu_image_parameter_type(self, type_name) is not None:
+            # An image's or sampler's entry-point parameter carries its binding, assigned in declaration order.
+            return ""
         info = self.rust_resource_binding_info(node, type_name, kind=kind)
         if info is None:
             return ""
@@ -731,6 +737,7 @@ class RustResourceAttributeMixin:
             spirv_args.append("storage_buffer")
         elif info["kind"] == UNIFORM_VALUE_KIND:
             spirv_args.append("uniform")
+        spirv_args.extend(input_attachment_attributes(node))
         spirv_args.extend(
             [
                 f"descriptor_set = {info['set_index']}",
