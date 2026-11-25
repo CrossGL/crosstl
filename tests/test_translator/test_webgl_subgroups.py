@@ -178,10 +178,12 @@ fragment float4 colour(float4 pos [[position]]) {
         ("WaveGetLaneCount", "float(WaveGetLaneCount())", "gl_SubgroupSize"),
         ("WaveIsFirstLane", "WaveIsFirstLane() ? 1.0 : 0.0", "subgroupElect("),
         ("WaveActiveSum", "WaveActiveSum(pos.x)", "subgroupAdd("),
+        # A stage whose only subgroup operations are boolean votes uses
+        # GL_ARB_shader_group_vote in desktop GLSL.
         (
             "WaveActiveAllTrue",
             "WaveActiveAllTrue(pos.x > 0.0) ? 1.0 : 0.0",
-            "subgroupAll(",
+            "allInvocationsARB(",
         ),
         (
             "WaveActiveBallot",
