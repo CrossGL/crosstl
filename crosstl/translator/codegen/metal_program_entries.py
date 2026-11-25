@@ -72,6 +72,7 @@ from .metal_stage_input_builtins import (
     split_metal_stage_input_builtins,
 )
 from .metal_typed_buffers import lower_metal_typed_buffers
+from .metal_union_abi import NATIVE_UNION_ABIS, verify_foreign_union_layout
 from .metal_vertex_input_builtins import refuse_unbound_metal_vertex_inputs
 from .pointer_reinterpret import (
     crossgl_literal_positive_integer,
@@ -886,11 +887,11 @@ class MetalProgramEntryMixin:
                 "byte-order-unsupported",
                 f"byte order '{byte_order or '<missing>'}' is not a Metal ABI contract",
             )
-        if source_abi not in {"metal", "msl"}:
+        if not source_abi:
             raise self.metal_union_layout_error(
                 node,
                 "source-abi-unsupported",
-                f"source ABI '{source_abi or '<missing>'}' cannot be reconstructed natively",
+                "source ABI '<missing>' cannot be reconstructed natively",
             )
 
         member_layouts = {}
@@ -951,13 +952,17 @@ class MetalProgramEntryMixin:
                 "empty-union-unsupported",
                 "at least one instance member is required",
             )
-        return {
+        contract = {
             "size": size,
             "alignment": alignment,
             "byte_order": byte_order,
             "source_abi": source_abi,
             "members": member_layouts,
         }
+        if source_abi not in NATIVE_UNION_ABIS:
+            # Another language's C++ union is the same union when Metal lays it out the same (metal_union_abi).
+            verify_foreign_union_layout(self, node, contract)
+        return contract
 
     def is_metal_argument_buffer_global(self, node):
         attributes = getattr(node, "attributes", []) or []

@@ -20,7 +20,6 @@ import pytest
 import crosstl
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipRecordSemanticError
 from crosstl.backend.import_refusals import HipImportRefused
-from crosstl.translator.codegen.metal_codegen import UnsupportedMetalFeatureError
 
 HEADER = "#include <hip/hip_runtime.h>\n"
 
@@ -211,9 +210,11 @@ def test_directx_and_opengl_read_the_bits_that_were_written(tmp_path):
     assert "b.u" not in glsl
 
 
-def test_metal_refuses_to_rebuild_a_hip_union(tmp_path):
-    with pytest.raises(UnsupportedMetalFeatureError, match="source ABI 'hip'"):
-        _translate(tmp_path, BITS, "metal")
+def test_metal_rebuilds_the_hip_union(tmp_path):
+    # MSL lays a union out by C++ rules, as hipcc does: float and uint are 4 bytes aligned to 4 in both.
+    code = _flat(_translate(tmp_path, BITS, "metal"))
+    assert "union Bits {" in code
+    assert "struct Bits" not in code
 
 
 @pytest.mark.parametrize("backend", ["hip", "cuda"])
