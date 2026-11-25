@@ -243,9 +243,7 @@ def distinct_struct_homonyms(code: str) -> str:
 
         return nominated_by
 
-    def lookup(
-        name: str, position: int, qualifier: str, qualified: bool
-    ) -> str | None:
+    def lookup(name: str, position: int, qualifier: str, qualified: bool) -> str | None:
         origin = scopes.namespace_at(position)
         if qualified:
             namespace = scopes.resolve(qualifier, origin) if qualifier != "::" else ""

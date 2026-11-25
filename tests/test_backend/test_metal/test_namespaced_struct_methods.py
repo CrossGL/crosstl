@@ -22,9 +22,7 @@ from crosstl.backend.Metal.struct_homonyms import (
 
 PREFIX = "#include <metal_stdlib>\nusing namespace metal;\n"
 
-QUALIFIED_RECEIVER = (
-    PREFIX
-    + """
+QUALIFIED_RECEIVER = PREFIX + """
 namespace ops {
 struct ReduceOp {
     static constexpr constant int value = 7;
@@ -40,11 +38,8 @@ kernel void k(device int* out [[buffer(0)]], uint i [[thread_position_in_grid]])
     out[3 * i + 2] = b.twice(1);
 }
 """
-)
 
-USING_DIRECTIVE_RECEIVER = (
-    PREFIX
-    + """
+USING_DIRECTIVE_RECEIVER = PREFIX + """
 namespace ops {
 struct ReduceOp {
     static constexpr constant int value = 7;
@@ -60,11 +55,8 @@ kernel void k(device int* out [[buffer(0)]], uint i [[thread_position_in_grid]])
     out[3 * i + 2] = 0;
 }
 """
-)
 
-HOMONYM_METHODS = (
-    PREFIX
-    + """
+HOMONYM_METHODS = PREFIX + """
 namespace ops {
 struct ReduceOp {
     static constexpr constant int value = 7;
@@ -90,11 +82,8 @@ kernel void k(device int* out [[buffer(0)]], uint i [[thread_position_in_grid]])
     out[4 * i + 3] = alt::run(c);
 }
 """
-)
 
-HOMONYM_OVERLOADS = (
-    PREFIX
-    + """
+HOMONYM_OVERLOADS = PREFIX + """
 struct P { uint base; };
 namespace ops {
 struct P { int base; };
@@ -122,11 +111,8 @@ kernel void k(device int* out [[buffer(0)]], uint i [[thread_position_in_grid]])
     out[5 * i + 4] = get(e);
 }
 """
-)
 
-AMBIGUOUS = (
-    PREFIX
-    + """
+AMBIGUOUS = PREFIX + """
 namespace ops { struct P { int base; }; }
 namespace alt { struct P { int base; }; }
 using namespace ops;
@@ -136,7 +122,6 @@ kernel void k(device int* out [[buffer(0)]], uint i [[thread_position_in_grid]])
     out[i] = a.base;
 }
 """
-)
 
 THREADS = 4
 
@@ -206,7 +191,12 @@ def _entry(metal):
         (HOMONYM_METHODS, 4),
         (HOMONYM_OVERLOADS, 5),
     ],
-    ids=["qualified-receiver", "using-directive", "homonym-methods", "homonym-overloads"],
+    ids=[
+        "qualified-receiver",
+        "using-directive",
+        "homonym-methods",
+        "homonym-overloads",
+    ],
 )
 def test_namespaced_structs_compute_the_source_results_on_metal(
     tmp_path, source, words
@@ -244,7 +234,9 @@ def test_ambiguous_unqualified_homonym_fails_closed(tmp_path):
     # C++ rejects the reference too ([namespace.udir]/6): both directives nominate a P.
     native = _xcrun_metal(tmp_path, AMBIGUOUS, "native")
     assert native.returncode != 0
-    with pytest.raises(AmbiguousStructNameError, match=r"ambiguous: lookup finds alt::P and ops::P"):
+    with pytest.raises(
+        AmbiguousStructNameError, match=r"ambiguous: lookup finds alt::P and ops::P"
+    ):
         _translate(tmp_path, AMBIGUOUS)
 
 
