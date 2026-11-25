@@ -27,6 +27,7 @@ from copy import deepcopy
 
 from ..ast import (
     ArrayType,
+    ASTNode,
     AttributeNode,
     BlockNode,
     ExpressionStatementNode,
@@ -93,6 +94,11 @@ def _interlock_call_name(statement):
         return None
     name = _call_name(getattr(statement, "expression", None))
     return name if name in _INTERLOCK_FUNCTIONS else None
+
+
+def _is_crossgl_tree(root):
+    """Whether ``root`` is a CrossGL AST; a source-language AST handed to the generator has no such nodes."""
+    return isinstance(root, ASTNode)
 
 
 def _calls_interlock(root):
@@ -206,7 +212,7 @@ def lower_metal_fragment_interlocks(ast):
 
     Returns ``ast`` itself when no fragment stage calls the interlock functions; the input AST is not modified.
     """
-    if not _calls_interlock(ast):
+    if not _is_crossgl_tree(ast) or not _calls_interlock(ast):
         return ast
     ast = deepcopy(ast)
     functions = _functions_by_name(ast)
@@ -297,7 +303,7 @@ def canonicalize_rasterizer_ordered_types(ast):
     Metal generator binds the storage views and writes the ordering as ``[[raster_order_group(0)]]``. Returns ``ast``
     itself when it declares no such view; the input is not modified.
     """
-    if not any(
+    if not _is_crossgl_tree(ast) or not any(
         isinstance(node, (VariableNode, ParameterNode)) and _ordered_type(node)
         for node in ast.walk()
     ):
