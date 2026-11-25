@@ -8943,11 +8943,12 @@ class TestCudaCodeGen:
         result = CudaToCrossGLConverter().generate(ast)
 
         assert "var texRef: sampler2D;" in result
-        assert "var surfaceRef: image2D;" in result
+        # Each surface takes the format of the float4 texels it reads and writes.
+        assert "@format(rgba32f) var surfaceRef: image2D;" in result
         assert (
             "void resourcePointerOps("
             "ptr<sampler2D> textureObjects, ptr<image2D> surfaceObjects, "
-            "sampler2D legacyTex, image2D legacySurface, i32 index"
+            "sampler2D legacyTex, @format(rgba32f) image2D legacySurface, i32 index"
         ) in result
         assert (
             "var fromPointer: vec4<f32> = texture("

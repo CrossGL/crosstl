@@ -129,6 +129,15 @@ class HipDeclarationMixin:
                 )
             return
 
+        surface = (
+            self.surface_global_declaration(var_type, raw_name, output_name)
+            if self.namespace_scope_variable and not getattr(node, "value", None)
+            else None
+        )
+        if surface is not None:
+            self.emit(surface)
+            return
+
         if (
             self.namespace_scope_variable
             and is_device_memory(node)
@@ -138,14 +147,13 @@ class HipDeclarationMixin:
                 self,
                 node,
                 output_name,
-                self.surface_image_type(var_type, raw_name),
+                var_type,
                 lambda: self.global_resource_binding_for(node),
             )
             if declaration is not None:
                 if "__managed__" in qualifiers:
                     self.emit(f"// HIP managed memory: {output_name}")
-                # A __device__ surface handle keeps the format of the texels its accesses read and write.
-                self.emit(self.surface_format_attribute(raw_name) + declaration)
+                self.emit(declaration)
             return
 
         dim3_default_value = self.format_hip_dim3_default_initializer(node)

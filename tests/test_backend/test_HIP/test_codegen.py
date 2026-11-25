@@ -2740,8 +2740,12 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert "var globalTex: sampler2D;" in result
-        assert "var globalSurf: image2D;" in result
-        assert "void launch(sampler2D paramTex, image3D paramVolume)" in result
+        # Surfaces with float4 accesses take the rgba32f format.
+        assert "@format(rgba32f) var globalSurf: image2D;" in result
+        assert (
+            "void launch(sampler2D paramTex, @format(rgba32f) image3D paramVolume)"
+            in result
+        )
         assert "var grid: vec3<u32> = vec3<u32>(16, 8, 1);" in result
         assert "var block: vec3<u32> = vec3<u32>(32, 1, 1);" in result
         assert "var v: vec3<f32> = vec3<f32>(1.0f, 2.0f, 3.0f);" in result

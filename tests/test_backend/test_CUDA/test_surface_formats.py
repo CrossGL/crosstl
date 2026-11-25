@@ -166,12 +166,52 @@ extern "C" __global__ void probe(float* outp, int x) {{
 
 
 @pytest.mark.parametrize("suffix", sorted(LANGUAGES))
-def test_device_surface_handle_carries_the_format(tmp_path, suffix):
+def test_device_surface_handle_is_a_bound_image(tmp_path, suffix):
+    # A __device__ surface handle is set by the host, as a bound image is: not a storage buffer of an image.
     code = _import(tmp_path, suffix, GLOBAL)
 
-    assert "@format(rg16i)" in code
-    assert "gimg: iimage2D;" in code
+    assert "@format(rg16i) var gimg: iimage2D;" in code
+    assert "var<storage" not in code.split("fn probe")[0]
     assert "var b: vec2<i16> = vec2<i16>(imageLoad(gimg, vec2<i32>(x, 1)).xy);" in code
+
+
+REFERENCE = """{include}surface<void, {kind}> sref;
+extern "C" __global__ void probe(float* outp, int x) {{
+    float c = surf2Dread<float>(sref, x * 4, 2);
+    surf2Dwrite(c + 1.0f, sref, x * 4, 2);
+    outp[0] = c;
+}}
+"""
+
+KINDS = {"cu": "cudaSurfaceType2D", "hip": "hipSurfaceType2D"}
+
+
+@pytest.mark.parametrize("suffix", sorted(LANGUAGES))
+def test_surface_reference_keeps_the_format(tmp_path, suffix):
+    code = _import(tmp_path, suffix, REFERENCE, kind=KINDS[suffix])
+
+    assert "@format(r32f) var sref: image2D;" in code
+    assert "var c: f32 = imageLoad(sref, vec2<i32>(x, 2)).x;" in code
+    # Both byte offsets divide by sizeof(float).
+    assert "imageStore(sref, vec2<i32>(x, 2), (c + 1.0f));" in code
+
+
+@pytest.mark.parametrize("suffix", sorted(LANGUAGES))
+@pytest.mark.parametrize(
+    ("backend", "declaration"),
+    [
+        ("opengl", "uniform iimage2D gimg;"),
+        ("metal", "texture2d<int, access::read_write> gimg"),
+        ("directx", "RWTexture2D<int2> gimg"),
+        ("vulkan", 'OpName %gimg "gimg"'),
+    ],
+)
+def test_device_surface_handle_reaches_every_target(
+    tmp_path, suffix, backend, declaration
+):
+    code = crosstl.translate(_source(tmp_path, suffix, GLOBAL), backend=backend)
+
+    assert declaration in code
 
 
 SHADOW = """{include}__device__ {surface} img;

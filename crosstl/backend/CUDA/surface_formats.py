@@ -874,3 +874,15 @@ class SurfaceAccessMixin(SurfaceByteOffsetMixin):
         ):
             return element.image_type(text)
         return crossgl_type
+
+    def surface_global_declaration(self, crossgl_type, name, output_name):
+        """The declaration of a namespace-scope surface, or ``None`` when ``crossgl_type`` is not an image.
+
+        A ``__device__ cudaSurfaceObject_t`` is a handle the host sets through the symbol API, and a surface
+        reference (``surface<void, 2> s;``) one it binds; both become the image resource the host binds, with the
+        format of the texels the program accesses, instead of a storage buffer holding an image.
+        """
+        if not str(crossgl_type).startswith(("image", "iimage", "uimage")):
+            return None
+        image_type = self.surface_image_type(crossgl_type, name)
+        return f"{self.surface_format_attribute(name)}var {output_name}: {image_type};"
