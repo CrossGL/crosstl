@@ -25,6 +25,7 @@ from ..integral_casts import (
     integral_cast_target,
     rewrite_integral_casts,
 )
+from .pointer_member_writes import pointer_member_is_written
 from .support import (
     IDENTIFIER_RE,
     _MetalStructDefinition,
@@ -724,7 +725,15 @@ class MetalPointerPromotionMixin:
             names.update(self._local_variable_names(method.body))
             if names & pointer_member_names:
                 return None
-
+        # A member promoted directly reaches each method as a by-value copy of the constructor argument, so a
+        # method that advances or reassigns it would change only that copy. The offset-carrying plan below keeps
+        # such advances; without it the struct stays on the ordinary lowering path.
+        if not has_derived_initializer and any(
+            pointer_member_is_written(method.body, pointer_member_names)
+            for method in [*struct.methods, *struct.template_methods]
+            if not method.is_static
+        ):
+            return None
         offset_initializers: Optional[List[str]] = None
         if has_derived_initializer:
             if struct.template_methods and (
