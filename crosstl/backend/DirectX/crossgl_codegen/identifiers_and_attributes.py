@@ -16,6 +16,7 @@ from ..DirectxAst import (
     TypeAliasNode,
     VariableNode,
 )
+from ..vk_constant_ids import has_vk_constant_id
 from ..vk_locations import vk_location_suffix
 from ..work_graph_import import crossgl_work_graph_parameter_attributes
 
@@ -335,7 +336,10 @@ class IdentifierAttributeMixin:
             ordered.append("groupshared")
         if "static" in qualifiers:
             ordered.append("static")
-        if "const" in qualifiers and self.should_emit_const_qualifier(node):
+        # A specialization constant is ``const`` in CrossGL; DXC also accepts one declared without it.
+        if (
+            "const" in qualifiers or has_vk_constant_id(node)
+        ) and self.should_emit_const_qualifier(node):
             ordered.append("const")
         return f"{' '.join(ordered)} " if ordered else ""
 
