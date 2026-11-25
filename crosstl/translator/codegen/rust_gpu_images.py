@@ -119,7 +119,10 @@ _COMPARE_METHODS = {
     "textureCompareLod": ("sample_depth_reference_by_lod", 3),
     "textureCompareGrad": ("sample_depth_reference_by_gradient", 4),
     "textureCompareProj": ("sample_depth_reference_with_project_coordinate", 2),
-    "textureCompareProjLod": ("sample_depth_reference_with_project_coordinate_by_lod", 3),
+    "textureCompareProjLod": (
+        "sample_depth_reference_with_project_coordinate_by_lod",
+        3,
+    ),
     "textureCompareProjGrad": (
         "sample_depth_reference_with_project_coordinate_by_gradient",
         4,
@@ -449,7 +452,8 @@ class _SamplerSplit:
         for call in _calls(function):
             arguments = list(getattr(call, "arguments", None) or [])
             if (
-                _callee_name(call) not in _SAMPLER_CALLS | _OFFSET_CALLS | _UNLOWERED_CALLS
+                _callee_name(call)
+                not in _SAMPLER_CALLS | _OFFSET_CALLS | _UNLOWERED_CALLS
                 or not arguments
             ):
                 continue
@@ -657,10 +661,14 @@ def _propagate_parameter_formats(generator, ast):
     functions = list(_functions(ast))
     while True:
         received = _received_formats(ast, functions)
-        settled = [(key, formats) for key, formats in received.items() if len(formats) == 1]
+        settled = [
+            (key, formats) for key, formats in received.items() if len(formats) == 1
+        ]
         for (function, index), formats in settled:
             param = _parameters(function)[index]
-            _set_parameter_type(param, _with_format(param.param_type, next(iter(formats))))
+            _set_parameter_type(
+                param, _with_format(param.param_type, next(iter(formats)))
+            )
         if not settled:
             break
     for function in functions:
@@ -701,9 +709,14 @@ def _encode_storage_formats(generator, ast):
 def _has_storage_images(ast):
     declarations = [node.var_type for _owner, node in _module_declarations(ast)]
     parameters = [
-        param.param_type for function in _functions(ast) for param in _parameters(function)
+        param.param_type
+        for function in _functions(ast)
+        for param in _parameters(function)
     ]
-    return any(_storage_format(type_node) is not None for type_node in declarations + parameters)
+    return any(
+        _storage_format(type_node) is not None
+        for type_node in declarations + parameters
+    )
 
 
 def prepare_rust_gpu_images(generator, ast):
@@ -719,7 +732,9 @@ def prepare_rust_gpu_images(generator, ast):
 
 def _operand_shape(generator, expr):
     """The image shape of the CrossGL expression ``expr``, or ``None`` when it is not an image."""
-    return image_shape(_array_parts(generator, generator.expression_result_type(expr))[0])
+    return image_shape(
+        _array_parts(generator, generator.expression_result_type(expr))[0]
+    )
 
 
 def _image_operand(generator, expr):
@@ -828,7 +843,9 @@ def _sample_call(generator, name, image, shape, sampler, arguments):
     if name == "textureLod" and len(rest) == 1:
         return f"{image}.sample_by_lod({sampler}, {coordinate}, {rest[0]})"
     if name == "textureGrad" and len(rest) == 2:
-        return f"{image}.sample_by_gradient({sampler}, {coordinate}, {rest[0]}, {rest[1]})"
+        return (
+            f"{image}.sample_by_gradient({sampler}, {coordinate}, {rest[0]}, {rest[1]})"
+        )
     return None
 
 
@@ -900,7 +917,9 @@ def _sampled_call(generator, name, arguments):
     if image is None:
         return None
     if not shape.needs_sampler:
-        return _refuse(generator, name, "samples an image that is not a sampled texture")
+        return _refuse(
+            generator, name, "samples an image that is not a sampled texture"
+        )
     if len(arguments) < 3 or not _is_sampler(generator, arguments[1]):
         return _refuse(generator, name, "reads a texture without its sampler")
     sampler = _sampler_operand(generator, arguments[1])
@@ -986,7 +1005,9 @@ def _image_only_call(generator, name, arguments):
     elif name in {"textureSize", "imageSize"}:
         if name == "imageSize" and shape.sampled:
             call = None
-        elif rest and shape.sampled and shape.dim != "buffer" and not shape.multisampled:
+        elif (
+            rest and shape.sampled and shape.dim != "buffer" and not shape.multisampled
+        ):
             call = _size_call(
                 image, shape, "query_size_lod", _integer(generator, rest[0])
             )
@@ -994,7 +1015,11 @@ def _image_only_call(generator, name, arguments):
             shape.multisampled or shape.dim == "buffer" or not shape.sampled
         ):
             call = _size_call(image, shape, "query_size", "")
-    elif name == "textureDimensions" and not shape.arrayed and len(rest) <= int(_has_levels(shape)):
+    elif (
+        name == "textureDimensions"
+        and not shape.arrayed
+        and len(rest) <= int(_has_levels(shape))
+    ):
         # WGSL's textureDimensions: the unsigned size, of the given level (0 by default) when the image has levels.
         # WGSL leaves an array's layer count out of it, and CrossGL's textureSize includes it, so an arrayed image
         # is refused rather than given either meaning.
@@ -1113,14 +1138,25 @@ def _instruction_call(generator, name, arguments):
         registers.append("sampler = in(reg) &__sampler,")
         source = "%sampled"
     tail = " ".join(f"%{n}" for n in names[1 : 2 if dref is not None else 1])
-    image_operands = f"{operand} " + " ".join(f"%{n}" for n in names[1 + (dref is not None) :])
+    image_operands = f"{operand} " + " ".join(
+        f"%{n}" for n in names[1 + (dref is not None) :]
+    )
     instruction_text = f"%result = {instruction} typeof*{{result}} {source} %coordinate"
     if tail:
         instruction_text += f" {tail}"
     if operand:
         instruction_text += f" {image_operands}"
-    lines = ['"%image = OpLoad _ {image}",', *loads, f'"{instruction_text}",', '"OpStore {result} %result",']
-    registers = [f"image = in(reg) {reference},", *registers, "result = in(reg) &mut __result,"]
+    lines = [
+        '"%image = OpLoad _ {image}",',
+        *loads,
+        f'"{instruction_text}",',
+        '"OpStore {result} %result",',
+    ]
+    registers = [
+        f"image = in(reg) {reference},",
+        *registers,
+        "result = in(reg) &mut __result,",
+    ]
     return (
         f"{{ {' '.join(lets)} let mut __result = {zero}; unsafe {{ asm!({' '.join(lines)} "
         f"{' '.join(registers)}) }}; __result }}"
@@ -1184,8 +1220,14 @@ def rust_gpu_image_result_type(generator, name, arguments):
     if name in {"textureSize", "imageSize", "textureDimensions"}:
         count = _SIZE_COMPONENTS.get(shape.dim, 2) + int(shape.arrayed)
         prefix = "u" if name == "textureDimensions" else "i"
-        return ("uint" if prefix == "u" else "int") if count == 1 else f"{prefix}vec{count}"
-    if name in _COMPARE_METHODS or (shape.depth and name in {"texture", "textureLod", "textureGrad"}):
+        return (
+            ("uint" if prefix == "u" else "int")
+            if count == 1
+            else f"{prefix}vec{count}"
+        )
+    if name in _COMPARE_METHODS or (
+        shape.depth and name in {"texture", "textureLod", "textureGrad"}
+    ):
         return "float"
     return f"{_CROSSGL_VECTORS[shape.scalar]}4"
 
@@ -1195,7 +1237,9 @@ _IMPORTS = (
     (re.compile(r"&(?:\[)?Sampler\b"), "use spirv_std::Sampler;\n"),
     (re.compile(r"\bRuntimeArray<"), "use spirv_std::RuntimeArray;\n"),
     (
-        re.compile(r"\.(?:sample_depth_reference_with|sample_with_project_coordinate_with|fetch_with)\("),
+        re.compile(
+            r"\.(?:sample_depth_reference_with|sample_with_project_coordinate_with|fetch_with)\("
+        ),
         "use spirv_std::image::ImageWithMethods;\n",
     ),
     (re.compile(r"\basm!\("), "use core::arch::asm;\n"),
@@ -1210,5 +1254,7 @@ def add_rust_gpu_image_imports(code):
         return code
     if "use core::arch::asm;" in imports:
         # rust-gpu's SPIR-V inline assembly is an experimental asm! architecture.
-        code = code.replace("#![no_std]\n", "#![no_std]\n#![feature(asm_experimental_arch)]\n", 1)
+        code = code.replace(
+            "#![no_std]\n", "#![no_std]\n#![feature(asm_experimental_arch)]\n", 1
+        )
     return code.replace(anchor, anchor + imports, 1)

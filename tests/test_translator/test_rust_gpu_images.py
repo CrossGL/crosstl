@@ -93,14 +93,20 @@ LOWERINGS = [
         "uniform texture2D tex; uniform sampler smps[2];",
         "outp[i] = look(tex, smps[1]);",
         "float look(texture2D t, sampler s) { return textureLod(t, s, vec2(0.5, 0.5), 0.0).x; }",
-        ["smps: &[Sampler; 2]", "pub fn look(t: &Image!(2D, type=f32, sampled), s: &Sampler) -> f32"],
+        [
+            "smps: &[Sampler; 2]",
+            "pub fn look(t: &Image!(2D, type=f32, sampled), s: &Sampler) -> f32",
+        ],
         id="sampler-array-element-argument",
     ),
     pytest.param(
         "uniform samplerCube tex;",
         "outp[i] = textureLod(tex, vec3(0.5, 0.5, 1.0), 0.0).x;",
         "",
-        ["tex: &Image!(cube, type=f32, sampled)", "tex.sample_by_lod(*tex_sampler, Vec3::new(0.5, 0.5, 1.0), 0.0)"],
+        [
+            "tex: &Image!(cube, type=f32, sampled)",
+            "tex.sample_by_lod(*tex_sampler, Vec3::new(0.5, 0.5, 1.0), 0.0)",
+        ],
         id="cube",
     ),
     pytest.param(
@@ -155,14 +161,18 @@ LOWERINGS = [
         "layout(r32f) uniform image2D img;",
         "outp[i] = imageLoad(img, ivec2(0, 0)).w;",
         "",
-        ["{ let __t: f32 = img.read(IVec2::new(0, 0)); Vec4::new(__t, 0.0, 0.0, 1.0) }.w"],
+        [
+            "{ let __t: f32 = img.read(IVec2::new(0, 0)); Vec4::new(__t, 0.0, 0.0, 1.0) }.w"
+        ],
         id="one-component-load-widens",
     ),
     pytest.param(
         "layout(rg32f) uniform image2D img;",
         "imageStore(img, ivec2(0, 0), vec4(1.0, 2.0, 3.0, 4.0)); outp[i] = 0.0;",
         "",
-        ["unsafe { img.write(IVec2::new(0, 0), (Vec4::new(1.0, 2.0, 3.0, 4.0)).xy()) }"],
+        [
+            "unsafe { img.write(IVec2::new(0, 0), (Vec4::new(1.0, 2.0, 3.0, 4.0)).xy()) }"
+        ],
         id="two-component-store-narrows",
     ),
     pytest.param(
@@ -179,7 +189,10 @@ LOWERINGS = [
         "layout(rgba32f) uniform image2DArray img;",
         "imageStore(img, ivec3(0, 0, 1), vec4(1.0)); outp[i] = 0.0;",
         "",
-        ["img: &Image!(2D, format=rgba32f, sampled=false, arrayed)", "img.write(IVec3::new(0, 0, 1),"],
+        [
+            "img: &Image!(2D, format=rgba32f, sampled=false, arrayed)",
+            "img.write(IVec3::new(0, 0, 1),",
+        ],
         id="arrayed-storage-image",
     ),
     pytest.param(
@@ -247,7 +260,10 @@ shader Probe {
 """
     flat = _flat(_translate(source, tmp_path))
     assert "tex.sample(*tex_sampler, Vec2::new(0.5, 0.5))" in flat
-    assert "depth.sample_depth_reference(*depth_sampler, Vec2::new(0.5, 0.5), 0.25)" in flat
+    assert (
+        "depth.sample_depth_reference(*depth_sampler, Vec2::new(0.5, 0.5), 0.25)"
+        in flat
+    )
     assert_generated_rust_smoke_compiles(
         _translate(source, tmp_path, format_output=True), tmp_path
     )
