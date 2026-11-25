@@ -28,6 +28,7 @@ class MojoFunctionMixin:
         code = ""
         "    " * indent
         previous_variable_types = self.variable_types.copy()
+        previous_buffer_objects = dict(getattr(self, "mojo_buffer_objects", {}))
         previous_resource_access_qualifiers = self.resource_access_qualifiers.copy()
         previous_resource_access_qualifier_aliases = {
             name: list(candidates)
@@ -51,6 +52,11 @@ class MojoFunctionMixin:
         param_infos = []
         for p in param_list:
             param_type = self.function_parameter_type_name(p)
+            if shader_type is not None:
+                # An entry point's structured or byte-address buffer parameter is a kernel pointer argument.
+                param_type = self.mojo_entry_buffer_object_parameter_type(
+                    p, param_type
+                )
             param_infos.append((p, param_type))
             self.register_variable_type(getattr(p, "name", None), param_type)
 
@@ -300,6 +306,7 @@ class MojoFunctionMixin:
 
         code += "\n"
         self.variable_types = previous_variable_types
+        self.mojo_buffer_objects = previous_buffer_objects
         self.resource_access_qualifiers = previous_resource_access_qualifiers
         self.resource_access_qualifier_aliases = (
             previous_resource_access_qualifier_aliases

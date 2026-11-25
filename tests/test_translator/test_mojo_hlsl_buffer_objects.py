@@ -211,3 +211,58 @@ def test_hlsl_typed_buffer_is_refused(tmp_path):
         MojoLoweringRefused, match="samplerBuffer' has no Mojo spelling"
     ):
         _translate(tmp_path, source)
+
+
+METAL_BUFFER_PARAMETERS = """
+#include <metal_stdlib>
+using namespace metal;
+struct Params { uint n; };
+kernel void scale(constant Params& params [[buffer(0)]], device const float* src [[buffer(1)]],
+                  device float* dst [[buffer(2)]], uint2 id [[thread_position_in_grid]]) {
+    if (id.x < params.n) {
+        dst[id.x] = src[id.x] * 2.0;
+    }
+}
+"""
+
+
+def test_entry_buffer_parameters_become_pointer_arguments(tmp_path):
+    # The Metal front end writes the device pointers of a kernel as structured-buffer entry parameters.
+    path = tmp_path / "kernel.metal"
+    path.write_text(METAL_BUFFER_PARAMETERS)
+    code = crosstl.translate(str(path), backend="mojo", format_output=False)
+
+    assert (
+        "def scale(params: Params, src: UnsafePointer[Float32, MutAnyOrigin], "
+        "dst: UnsafePointer[Float32, MutAnyOrigin]) -> None:"
+    ) in code
+    assert "dst[Int(id[0])] = (src[Int(id[0])] * 2.0)" in code
+    assert "StructuredBuffer" not in code
+
+
+def test_entry_buffer_parameter_kernel_compiles_with_mojo(tmp_path):
+    path = tmp_path / "kernel.metal"
+    path.write_text(METAL_BUFFER_PARAMETERS)
+    code = crosstl.translate(str(path), backend="mojo", format_output=False)
+
+    result = _build(tmp_path, code)
+
+    assert result.returncode == 0, result.stderr
+
+
+def test_entry_buffer_parameter_size_query_is_refused(tmp_path):
+    path = tmp_path / "kernel.cgl"
+    path.write_text("""
+shader main {
+    compute {
+        @ stage_entry
+        void main(RWStructuredBuffer<uint> b @buffer(0), uvec3 tid @gl_GlobalInvocationID) {
+            uint n;
+            buffer_dimensions(b, n);
+            b[tid.x] = n;
+        }
+    }
+}
+""")
+    with pytest.raises(MojoRefusal, match="queries the size of this"):
+        crosstl.translate(str(path), backend="mojo", format_output=False)

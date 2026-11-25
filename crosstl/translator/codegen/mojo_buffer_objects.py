@@ -217,6 +217,23 @@ class MojoBufferObjectMixin:
         self.mojo_buffer_objects[name] = (buffer_type, element_type)
         return f"{pointee}*"
 
+    def mojo_entry_buffer_object_parameter_type(self, parameter, param_type):
+        """The pointer type a structured or byte-address buffer parameter of an entry point is passed as.
+
+        An entry point is the Mojo kernel, so its buffer object parameters are kernel arguments like the buffer
+        objects declared outside a function. Any other parameter type is returned unchanged.
+        """
+        pointer = self.mojo_buffer_object_argument_type(parameter, param_type)
+        if pointer is None:
+            return param_type
+        name = getattr(parameter, "name", None)
+        if self.mojo_buffer_length_argument(name) is not None:
+            raise MojoRefusal(
+                f"Mojo kernel parameter {name}: the program queries the size of this {param_type} parameter, "
+                "and only a buffer declared outside a function receives a size argument"
+            )
+        return pointer
+
     def check_mojo_buffer_element_layout(self, node, buffer_type, element_type):
         """Refuse a buffer whose declared element layout Mojo's natural layout does not reproduce."""
         layout = _declared_layout(node)
