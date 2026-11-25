@@ -208,8 +208,16 @@ class MetalArrayArguments:
         """
         codegen = self.codegen
         raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
-        if raw_type is None or not codegen.is_array_type_node(raw_type):
+        if raw_type is None:
             return None
+        type_text = codegen.type_name_string(raw_type)
+        if not codegen.is_array_type_node(raw_type):
+            # ``typedef float Triple[3]; float f(Triple t)`` takes a C array too.
+            type_text = codegen.type_name_string(
+                codegen.resolve_metal_type_alias(type_text)
+            )
+            if "[" not in type_text:
+                return None
         if bool(codegen.parameter_qualifier_names(parameter) & _WRITING_QUALIFIERS) != (
             writing
         ):
@@ -223,7 +231,7 @@ class MetalArrayArguments:
         ):
             return None
         folded = fold_array_type_counts(
-            codegen.type_name_string(raw_type),
+            type_text,
             getattr(codegen, "literal_int_constants", None) or {},
         )
         type_name = folded
