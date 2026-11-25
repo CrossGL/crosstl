@@ -112,6 +112,11 @@ _GLSL_460 = re.compile(r"^#version 460\b.*$", re.M)
 _GROUP_VOTE = re.compile(
     r"\b(anyInvocation|allInvocations|allInvocationsEqual)(?=\s*\()"
 )
+# Its atomic counter operations beyond increment and decrement came from ARB_shader_atomic_counter_ops, which llvmpipe
+# implements and which also names them with an ARB suffix.
+_COUNTER_OPS = re.compile(
+    r"\b(atomicCounter(?:Add|Subtract|Min|Max|And|Or|Xor|Exchange|CompSwap))(?=\s*\()"
+)
 # lavapipe drops a conversion of a 32-bit float to 16 bits that is converted straight back, so a native probe that
 # rounds through a 16-bit float writes its unrounded input there. Probes whose SPIR-V declares a 16-bit float keep
 # their validation result on every Vulkan runtime, so a verdict does not depend on the runtime that ran it.
@@ -214,14 +219,37 @@ def _spirv_inputs(assembly: str) -> tuple[str, ...]:
 
 
 def executable(result: Result) -> bool:
-    """Whether ``result`` is a supported compute probe whose native probe and translation declare the same ordered
-    inputs, each one :func:`inputs` fills."""
+    """Whether ``result`` is a supported compute probe whose native probe declares inputs that :func:`inputs` fills,
+    and whose translation declares the same ordered inputs.
+
+    A translation matrix cell runs both modules as SPIR-V (:func:`runs_pair`), so :func:`_execute` compares the
+    inputs the two modules bind there (:func:`bound_inputs`) instead of the names in the sources. A translation need
+    not keep the probe's names: SPIR-V names a storage buffer after its variable, which glslang leaves unnamed.
+    """
     if result.outcome != "supported" or len(result.sources) != 2:
         return False
-    buffers = [input_buffers(source) for source in result.sources]
-    known = set(_SCALAR_INPUTS.values())
+    native = input_buffers(result.sources[0])
+    if not native or not set(_SCALAR_INPUTS.values()).issuperset(native):
+        return False
+    return _cell(result) or native == input_buffers(result.sources[1])
+
+
+def _cell(result: Result) -> bool:
+    """Whether ``result`` is a translation matrix result that runs as SPIR-V."""
+    native, translated = languages(result)
+    return native != translated and runs_pair(native, translated)
+
+
+def bound_inputs(texts: list[str]) -> str:
+    """Why the native module and the translation in ``texts``, as SPIR-V assembly, cannot take the same inputs: an
+    empty string when they bind the same storage inputs, in binding order with the same element types.
+    """
+    native, translated = (_spirv_inputs(text) for text in texts)
+    if native == translated:
+        return ""
     return (
-        bool(buffers[0]) and buffers[0] == buffers[1] and known.issuperset(buffers[0])
+        f"its translation binds the inputs ({', '.join(translated) or 'none'}) where its native probe binds "
+        f"({', '.join(native)})"
     )
 
 
@@ -230,9 +258,13 @@ def runnable(language: str, source: str) -> str:
     if language != "glsl" or not _GLSL_460.search(source):
         return source
     version = "#version 450 core"
-    if _GROUP_VOTE.search(source):
-        version += "\n#extension GL_ARB_shader_group_vote : require"
-        source = _GROUP_VOTE.sub(r"\1ARB", source)
+    for functions, extension in (
+        (_GROUP_VOTE, "GL_ARB_shader_group_vote"),
+        (_COUNTER_OPS, "GL_ARB_shader_atomic_counter_ops"),
+    ):
+        if functions.search(source):
+            version += f"\n#extension {extension} : require"
+            source = functions.sub(r"\1ARB", source)
     return _GLSL_460.sub(version, source, count=1)
 
 
@@ -500,6 +532,10 @@ def _execute(
                 )
                 verb = "writes" if len(failed) == 1 else "write"
                 skipped[index] = f"{' and '.join(failed)} {verb} no SPIR-V for it"
+                continue
+            mismatch = bound_inputs(texts) if _cell(result) else ""
+            if mismatch:
+                skipped[index] = mismatch
                 continue
         else:
             texts = [runnable(language, source) for source in result.sources]

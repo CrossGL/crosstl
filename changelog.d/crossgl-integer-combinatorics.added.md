@@ -1,0 +1,1 @@
+CrossGL has `gcd`, `lcm`, `factorial`, `comb` and `perm` for 8- to 64-bit integer scalars and vectors, with Mojo's and Python's meaning, and every target computes them exactly wherever the result fits the type.

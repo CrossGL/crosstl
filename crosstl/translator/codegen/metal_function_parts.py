@@ -14,6 +14,7 @@ from .array_utils import (
 from .image_access_contracts import (
     record_explicit_image_metadata,
 )
+from .metal_buffer_handle_values import metal_buffer_handle_pointer_type
 from .metal_entry_return import (
     metal_entry_return_semantic_key,
     refuse_unreturnable_metal_entry_semantic,
@@ -95,6 +96,7 @@ class MetalFunctionPartsMixin:
         self.current_metal_value_array_locals = self.metal_value_array_returned_locals(
             func
         )
+        self.current_metal_value_array_names = set()
         self.current_address_space_variables = {}
         self.current_metal_native_width_local_array_declaration_ids = (
             self.metal_native_width_local_array_declaration_ids(func)
@@ -615,7 +617,9 @@ class MetalFunctionPartsMixin:
                     effective_return_type
                 )
             else:
-                return_type = self.map_type(raw_return_type)
+                return_type = metal_buffer_handle_pointer_type(
+                    self, raw_return_type, f"result of '{func.name}'"
+                ) or self.map_type(raw_return_type)
         else:
             effective_return_type = "void"
             raw_return_type = "void"

@@ -23,7 +23,13 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-__all__ = ["Interface", "differences", "interfaces", "round_trip_difference"]
+__all__ = [
+    "Interface",
+    "differences",
+    "interfaces",
+    "output_difference",
+    "round_trip_difference",
+]
 
 # The named metadata that lists a library's entry points of each kind; ``!air.vertex`` also lists post-tessellation
 # vertex functions, and ``!air.object`` the object (task) functions of a mesh pipeline.
@@ -342,3 +348,28 @@ def round_trip_difference(native: str, translated: str) -> str:
         return ""
     changed = differences(expected, found)
     return f"the host interface changes: {'; '.join(changed)}" if changed else ""
+
+
+def output_difference(feature, translated: str) -> str:
+    """How the interfaces of ``translated``, the Metal that CrossTL writes from ``feature``'s CrossGL probe, differ
+    from those of ``feature``'s native Metal probe, for a probe of a graphics stage.
+
+    A graphics probe is compiled but never run, so only its interface shows that a translation drives the pipeline
+    as the native probe does. A compute probe runs, and the harness binds each probe's own resources, so its result
+    words, not its interface, are compared (``tools/coverage/execution.py``). Empty for a compute probe, when the
+    feature has no native Metal probe, and where :func:`round_trip_difference` is.
+    """
+    from . import probes
+
+    if feature.stage == "compute":
+        return ""
+    try:
+        native = probes.build(feature, "metal").source
+    except probes.ProbeError:
+        return ""
+    changed = round_trip_difference(native, translated)
+    return changed.replace(
+        "the host interface changes:",
+        "the host interface differs from the native Metal probe's:",
+        1,
+    )

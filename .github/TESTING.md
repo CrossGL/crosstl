@@ -76,7 +76,7 @@ Push a commit without the marker instead. When the branch is behind `main`,
 |---|---|
 | `translator-tests.yml` | Parser, type checker and code generators; the general tests on Linux and every test on Windows run in three shards each, and every test on macOS in two |
 | `backend-tests.yml` | Importers for each source language |
-| `full-tests.yml` | The whole suite, split by test id into eight shards (`tools/pytest_shard.py`); shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
+| `full-tests.yml` | The whole suite, split by test id into twelve shards (`tools/pytest_shard.py`); shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
 | `examples-test.yml` | Every example translated to each backend its category supports (`examples/test.py`); a backend may refuse only the pairs listed in its `EXPECTED_REJECTIONS` |
 | `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md); `coverage-comment.yml` then comments a pull request's change against `main`. Its Windows job runs the HLSL compute probes on Direct3D 12 WARP, on pushes to `main`, nightly, and on pull requests that change the coverage engine, HLSL's front end or generator modules, or the files the D3D12 runtime executes with, but never in the merge queue (`tools/coverage/legs.py`) |
 | `lint.yml` | The pinned hooks in `.pre-commit-config.yaml`, except the local test hooks, on the files a change touches, and on every file when it changes the hooks |
@@ -91,7 +91,7 @@ Push a commit without the marker instead. When the branch is behind `main`,
 | `labels.yml` | Syncs the labels in `.github/labels.yml` |
 | `pull-request-labels.yml` | When a pull request's Coverage run starts, and hourly: labels each open pull request that has none from the paths it changes |
 | `stale-prs.yml` | Daily: marks pull requests stale after 14 days without activity and closes them 7 days later; issues are left alone |
-| `orphaned-runs.yml` | On every merge group, then every 5 minutes while the queue has groups: cancels the runs of merge groups the queue has discarded, the runs of pull requests that merged or closed, and merge-group runs that already have a failed job, so the queue drops a failing entry without waiting for its slowest leg (`tools/orphaned_runs.py`) |
+| `orphaned-runs.yml` | On every merge group, then every 5 minutes while the queue has groups: cancels the runs of merge groups the queue has discarded, the runs of pull requests that merged or closed, merge-group runs that already have a failed job, so the queue drops a failing entry without waiting for its slowest leg, and the runs of groups that cannot land because they are, or are built on, a group whose required check failed (`tools/orphaned_runs.py`) |
 
 The workflow files and their header comments describe each job's steps,
 toolchain pins and timeouts.

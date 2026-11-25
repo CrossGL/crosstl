@@ -2140,9 +2140,10 @@ def test_global_static_const_array_initializer_generates_crossgl():
     ] == [0.25, 0.75]
 
 
-def test_codegen_global_const_initializer_preserves_const_from_hlsl_variable_syntax():
-    # Source: Microsoft Learn HLSL variable syntax documents const type modifiers.
-    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-variable-syntax
+def test_codegen_global_const_without_static_is_a_host_bound_constant():
+    # A const global without static is a $Globals member: DXC loads it from the
+    # constant buffer (cbufferLoadLegacy) and ignores its initializer, so CrossGL
+    # declares it as a program constant without the initializer.
     output = generate_crossgl("""
         const float ExposureScale = 1.25f;
 
@@ -2152,8 +2153,9 @@ def test_codegen_global_const_initializer_preserves_const_from_hlsl_variable_syn
     """)
 
     lines = {line.strip() for line in output.splitlines()}
-    assert "const float ExposureScale = 1.25;" in lines
-    assert "float ExposureScale = 1.25;" not in lines
+    assert "float ExposureScale;" in lines
+    assert "@ hlsl_program_constant" in lines
+    assert not any("1.25" in line for line in lines)
     parse_crossgl(output)
 
 
@@ -2946,20 +2948,18 @@ def test_codegen_node_shader_attribute_reparses_from_dxc_callgraph():
 
     crossgl = generate_crossgl(code)
 
-    assert '@shader("node")' in crossgl
-    assert '@ shader("node")' not in crossgl
+    # [shader("node")] makes main the entry of a CrossGL node stage, and its attributes the node's.
+    assert "node {" in crossgl
+    assert "shader(" not in crossgl
 
     shader_ast = parse_crossgl(crossgl)
-    main = next(
-        function for function in shader_ast.functions if function.name == "main"
-    )
+    main = shader_ast.stages[ShaderStage.NODE].entry_point
 
+    assert main.name == "main"
     assert [
         (attr.name, [arg.value for arg in attr.arguments]) for attr in main.attributes
-    ] == [
-        ("shader", ["node"]),
-        ("NodeLaunch", ["thread"]),
-    ]
+    ] == [("node_launch", ["thread"])]
+    assert [function.name for function in shader_ast.functions] == ["intermediate"]
 
 
 def test_codegen_pascal_case_mesh_attributes_infer_stage():
@@ -4612,32 +4612,25 @@ def test_codegen_texture_method_descriptors():
     sample_cmp_bias = converter.texture_method_descriptor(
         "SampleCmpBias", 4, "Texture2D<float>"
     )
+    # CrossGL's compare forms carry the bias as their last operand (hlsl_texture_operands.py).
     assert sample_cmp_bias["function"] == "textureCompare"
     assert sample_cmp_bias["usage"] == "comparison"
-    assert sample_cmp_bias["dropped_parameters"] == ["LOD bias"]
+    assert "dropped_parameters" not in sample_cmp_bias
     sample_cmp_bias_offset = converter.texture_method_descriptor(
         "SampleCmpBias", 5, "Texture2DArray<float>"
     )
     assert sample_cmp_bias_offset["function"] == "textureCompareOffset"
-    assert sample_cmp_bias_offset["dropped_parameters"] == ["LOD bias"]
+    assert "dropped_parameters" not in sample_cmp_bias_offset
     sample_cmp_bias_status = converter.texture_method_descriptor(
         "SampleCmpBias", 7, "Texture2D<float>"
     )
-    assert sample_cmp_bias_status["function"] == "textureCompareOffset"
-    assert sample_cmp_bias_status["dropped_parameters"] == [
-        "LOD bias",
-        "LOD clamp",
-        "status output",
-    ]
+    assert sample_cmp_bias_status["function"] == "textureCompareOffsetClamp"
+    assert sample_cmp_bias_status["dropped_parameters"] == ["status output"]
     sample_cmp_bias_cube = converter.texture_method_descriptor(
         "SampleCmpBias", 6, "TextureCube<float>"
     )
-    assert sample_cmp_bias_cube["function"] == "textureCompare"
-    assert sample_cmp_bias_cube["dropped_parameters"] == [
-        "LOD bias",
-        "LOD clamp",
-        "status output",
-    ]
+    assert sample_cmp_bias_cube["function"] == "textureCompareClamp"
+    assert sample_cmp_bias_cube["dropped_parameters"] == ["status output"]
     assert (
         converter.texture_method_descriptor("SampleCmpLevelZero", 4)["function"]
         == "textureCompareLodOffset"
@@ -4673,9 +4666,11 @@ def test_codegen_texture_method_descriptors():
     gather_cmp_red_offsets = converter.texture_method_descriptor("GatherCmpRed", 7)
     assert gather_cmp_red_offsets["fallback_expression"] == "vec4(0.0)"
     assert "four-offset overload" in gather_cmp_red_offsets["diagnostic_reason"]
+    # GatherCmpGreen is CrossGL's compare gather of component 1, its last operand.
     gather_cmp_green = converter.texture_method_descriptor("GatherCmpGreen", 4)
-    assert gather_cmp_green["fallback_expression"] == "vec4(0.0)"
-    assert "component selector" in gather_cmp_green["diagnostic_reason"]
+    assert gather_cmp_green["function"] == "textureGatherCompareOffset"
+    assert gather_cmp_green["component"] == "1"
+    assert "diagnostic_reason" not in gather_cmp_green
     assert converter.texture_method_descriptor("GatherBlue", 2) == {
         "member": "GatherBlue",
         "function": "textureGather",
@@ -4853,9 +4848,7 @@ def test_codegen_texture_method_descriptors():
         "GetSamplePosition", 1, "Texture2D<float4>"
     )
     assert invalid_sample_position["fallback_expression"] == "vec2(0.0, 0.0)"
-    assert (
-        "sampled multisample textures" in invalid_sample_position["diagnostic_reason"]
-    )
+    assert "multisample textures" in invalid_sample_position["diagnostic_reason"]
     assert converter.resource_method_descriptor("Store", 2) == {
         "member": "Store",
         "function": "buffer_store",
@@ -5116,10 +5109,12 @@ def test_codegen_texture_gather_compare_red_imports_to_helpers():
         "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
         "offset3).w"
     ) in crossgl
+    # GatherCmpGreen gathers component 1, CrossGL's last operand of the compare gather.
     assert (
-        "DirectX texture gather-compare component for Texture2DArray: GatherCmpGreen requires a compare-gather component selector"
-        in message
-    )
+        "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
+        "offset0, 1)"
+    ) in crossgl
+    assert "GatherCmpGreen" not in message
     assert "GatherCmpRed four-offset overload" not in crossgl
     assert ".GatherCmpRed(" not in crossgl
     assert ".GatherCmpGreen(" not in crossgl
@@ -5132,7 +5127,7 @@ def test_codegen_texture_gather_compare_red_imports_to_helpers():
     assert "shadowArray.GatherCmp(compareSampler, uvLayer, depth, offset2).z" in hlsl
     assert "shadowArray.GatherCmp(compareSampler, uvLayer, depth, offset3).w" in hlsl
     assert "GatherCmpRed" not in hlsl
-    assert "GatherCmpGreen" not in hlsl
+    assert "shadowArray.GatherCmpGreen(compareSampler, uvLayer, depth, offset0)" in hlsl
 
 
 def test_codegen_texture_compare_lod_grad_member_imports_to_helpers():
@@ -5275,22 +5270,22 @@ def test_codegen_texture_compare_bias_member_imports_as_compare_with_diagnostics
     assert "texture2DShadow shadowMap;" in crossgl
     assert "texture2DArrayShadow shadowArray;" in crossgl
     assert "textureCubeShadow cubeShadow;" in crossgl
+    # CrossGL's compare forms take the bias last; only the status output has no CrossGL operand.
     assert (
-        "DirectX texture overload extras for SampleCmpBias: CrossGL has no operand for LOD bias"
+        "DirectX texture overload extras for SampleCmpBias: CrossGL has no operand for status output"
         in message
     )
+    assert "LOD bias" not in message
+    assert "textureCompare(shadowMap, compareSampler, uv, depth, bias)" in crossgl
     assert (
-        "DirectX texture overload extras for SampleCmpBias: CrossGL has no operand for LOD bias, LOD clamp, status output"
-        in message
-    )
-    assert "textureCompare(shadowMap, compareSampler, uv, depth)" in crossgl
+        "textureCompareOffsetClamp(shadowArray, compareSampler, uvLayer, depth, "
+        "offset, 0.0, bias)"
+    ) in crossgl
     assert (
-        "textureCompareOffset(shadowArray, compareSampler, uvLayer, depth, offset)"
+        "textureCompareClamp(cubeShadow, compareSampler, direction, depth, 0.0, bias)"
         in crossgl
     )
-    assert "textureCompare(cubeShadow, compareSampler, direction, depth)" in crossgl
     assert ".SampleCmpBias(" not in crossgl
-    assert "textureCompare(shadowMap, compareSampler, uv, depth, bias)" not in crossgl
 
     parse_crossgl(crossgl)
 
@@ -7526,15 +7521,13 @@ def test_codegen_texture_sample_position_invalid_imports_diagnostic():
         in message
     )
     assert (
-        "DirectX texture sample-position query for Texture2D: GetSamplePosition is only available on sampled multisample textures"
-        in message
-    )
-    assert (
-        "DirectX texture sample-position query for RWTexture2DMS: GetSamplePosition is only available on sampled multisample textures"
+        "DirectX texture sample-position query for Texture2D: GetSamplePosition is only available on multisample textures"
         in message
     )
     assert "textureSamplePosition(colorMap" not in crossgl
-    assert "textureSamplePosition(msImage" not in crossgl
+    # RWTexture2DMS (Shader Model 6.7) has sample positions too; CrossGL's textureSamplePosition takes its image.
+    assert "RWTexture2DMS" not in message
+    assert "textureSamplePosition(msImage, sampleIndex)" in crossgl
 
 
 def test_codegen_preserves_parentheses():

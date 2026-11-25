@@ -7,7 +7,7 @@ import pytest
 
 from tests.conformance import runner as harness
 from tests.conformance import runtimes
-from tools.coverage import execution, lowering, probes, validators
+from tools.coverage import execution, lanes, lowering, probes, validators
 from tools.coverage.model import Feature, Result, Signature, Type
 
 from .execution_cases import CALLS, NATIVE, SIN, fake_harness, hlsl_result
@@ -30,6 +30,26 @@ def test_glsl_460_group_votes_run_through_arb_shader_group_vote():
     # GLSL 4.50 has no unsuffixed vote functions, so a source that declares 4.50 runs as written.
     written = "#version 450 core\nvoid main() { bool r = allInvocations(b); }\n"
     assert execution.runnable("glsl", written) == written
+
+
+def test_glsl_460_counter_ops_run_through_arb_shader_atomic_counter_ops():
+    source = (
+        "#version 460\nlayout(binding = 0) uniform atomic_uint c;\n"
+        "void main() { uint r = atomicCounterAdd(c, 2u) + atomicCounterCompSwap (c, 1u, 3u);"
+        " r += atomicCounterIncrement(c); }\n"
+    )
+    assert execution.runnable("glsl", source) == (
+        "#version 450 core\n#extension GL_ARB_shader_atomic_counter_ops : require\n"
+        "layout(binding = 0) uniform atomic_uint c;\n"
+        "void main() { uint r = atomicCounterAddARB(c, 2u) + atomicCounterCompSwapARB (c, 1u, 3u);"
+        " r += atomicCounterIncrement(c); }\n"
+    )
+    both = "#version 460\nvoid main() { bool r = anyInvocation(atomicCounterMax(c, 1u) > 0u); }\n"
+    assert execution.runnable("glsl", both) == (
+        "#version 450 core\n#extension GL_ARB_shader_group_vote : require\n"
+        "#extension GL_ARB_shader_atomic_counter_ops : require\n"
+        "void main() { bool r = anyInvocationARB(atomicCounterMaxARB(c, 1u) > 0u); }\n"
+    )
 
 
 def _glsl(declared="#version 460"):
@@ -304,7 +324,9 @@ def test_the_reference_compiler_keeps_the_harness_interface(tmp_path, language):
                 interface.interface(path, "spirv", 1)
             continue
         found = interface.interface(path, "spirv", 1)
-        assert found["bindings"] == (0, 1) and found["group"] == (1, 1, 1)
+        # A probe whose lanes cooperate, such as WaveGetLaneIndex, runs one workgroup of execution.THREADS lanes.
+        width = execution.THREADS if lanes.cooperative(probe) else 1
+        assert found["bindings"] == (0, 1) and found["group"] == (width, 1, 1)
     source = probes.build(feature, language).source
     if language == "hlsl":
         renamed = source.replace("void main", "void CSMain")

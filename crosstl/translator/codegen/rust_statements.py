@@ -33,6 +33,7 @@ from ..ast import (
 from .array_utils import get_array_size_from_node
 from .assignment_values import is_reevaluable_place
 from .rust_gpu_builtins import BARRIERS
+from .rust_gpu_subgroups import generate_rust_gpu_wave_op, rust_gpu_wave_result_type
 
 
 class RustStatementMixin:
@@ -255,24 +256,24 @@ class RustStatementMixin:
         return None
 
     def generate_wave_op_expression(self, expr):
-        """Render a WaveOpNode as a Rust subgroup intrinsic call."""
+        """Render a WaveOpNode as a spirv_std::arch subgroup call (:mod:`.rust_gpu_subgroups`), or refuse it."""
         operation = getattr(expr, "operation", "")
-        rust_name = self.wave_op_map.get(operation)
-        if rust_name is None:
-            return self.refuse_lowering(
-                f"subgroup operation {operation or '<unnamed>'}", "0"
+        call = generate_rust_gpu_wave_op(self, operation, expr.arguments)
+        if call is None:
+            operand_types = ", ".join(
+                str(self.expression_result_type(arg) or "?")
+                for arg in expr.arguments or []
             )
-        args = ", ".join(self.generate_expression(arg) for arg in expr.arguments or [])
-        return f"{rust_name}({args})"
+            return self.refuse_lowering(
+                f"subgroup operation {operation or '<unnamed>'}({operand_types}) has no spirv_std "
+                "lowering for these operands",
+                "0",
+            )
+        return call
 
     def wave_op_result_type(self, operation, arguments):
-        """Infer the CrossGL result type for a Rust subgroup helper."""
-        helper_name = self.wave_op_map.get(operation)
-        if helper_name is None:
-            # generate_wave_op_expression refuses the operation; it has no result type.
-            return None
-        arg_types = [self.expression_result_type(arg) for arg in arguments or []]
-        return self.wave_helper_result_type(helper_name, arg_types)
+        """The CrossGL result type of a wave operation the generator lowers, else None."""
+        return rust_gpu_wave_result_type(self, operation, arguments)
 
     def wave_helper_result_type(self, helper_name, arg_types):
         helper_name = str(helper_name or "")
@@ -347,12 +348,11 @@ class RustStatementMixin:
         if op not in {"++", "--"}:
             return None
 
-        operand = self.generate_expression(getattr(initial_value, "operand", ""))
-        assignment_op = "+=" if op == "++" else "-="
-        increment = self.rust_increment_literal(
-            self.expression_result_type(getattr(initial_value, "operand", None))
+        operand_expr = getattr(initial_value, "operand", "")
+        operand = self.generate_expression(operand_expr)
+        update = (
+            f"{'    ' * indent}{self.generate_increment_update(operand_expr, op)};\n"
         )
-        update = f"{'    ' * indent}{operand} {assignment_op} {increment};\n"
         declaration = (
             f"{'    ' * indent}{self.local_let_keyword(stmt)} "
             f"{self.rust_identifier(stmt.name)}: "

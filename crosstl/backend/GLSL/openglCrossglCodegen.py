@@ -8,12 +8,16 @@ from crosstl.translator.codegen.texture_lod_clamp import (
     TextureLodClampUnsupportedError,
 )
 from crosstl.translator.integer_literals import crossgl_legacy_octal
+from crosstl.translator.parsing.vocabulary import WAVE_INTRINSICS
 from crosstl.translator.refusals import OpenGLSourceRefusal
+from crosstl.translator.wave_operations import GLSL_SUBGROUP_FUNCTIONS
 
 from ..switch_clauses import ordered_switch_clauses
+from . import atomic_counter_offsets
 from .aggregate_equality import lower_aggregate_equality
 from .block_member_names import (
     function_variable_names,
+    instance_block_member_names,
 )
 from .import_exact_lookups import crossgl_operator, declared_name, folded_operator
 from .import_tables import (
@@ -904,19 +908,26 @@ class GLSLToCrossGLConverter(GLSLShaderSectionMixin):
             return f"{name}_"
         return name
 
-    def collect_function_name_renames(self, functions):
+    def collect_function_name_renames(self, shader):
         renames = {}
-        used_names = {getattr(function, "name", "") for function in functions}
-        for function in functions:
+        used_names = None
+        for function in getattr(shader, "functions", []) or []:
             name = getattr(function, "name", None)
-            if not name or name == "main":
+            if not name or name == "main" or name in renames:
                 continue
             safe_name = self.sanitize_crossgl_identifier(name)
-            while safe_name in used_names and safe_name != name:
+            # The CrossGL parser treats these names as intrinsics in calls.
+            if name in WAVE_INTRINSICS or name in GLSL_SUBGROUP_FUNCTIONS:
+                safe_name = f"{name}_"
+            if safe_name == name:
+                continue
+            if used_names is None:
+                used_names = self.declared_crossgl_names(shader)
+                used_names.update(instance_block_member_names(shader))
+            while safe_name in used_names:
                 safe_name += "_"
-            if safe_name != name:
-                renames[name] = safe_name
-                used_names.add(safe_name)
+            renames[name] = safe_name
+            used_names.add(safe_name)
         return renames
 
     def format_function_name(self, name):
@@ -1308,8 +1319,13 @@ class GLSLToCrossGLConverter(GLSLShaderSectionMixin):
                 f"{self.layout_value_to_string(input_attachment_index)})"
             )
         offset = layout.get("offset")
-        if var_type == "atomic_uint" and offset is not None:
-            attributes.append(f"@offset({self.layout_value_to_string(offset)})")
+        if var_type == "atomic_uint":
+            # :mod:`.atomic_counter_offsets` resolved the implicit offsets and type-only defaults.
+            resolved = getattr(var, atomic_counter_offsets.OFFSET, None)
+            if resolved is not None and (resolved or offset is not None):
+                attributes.append(f"@offset({resolved})")
+            elif offset is not None:
+                attributes.append(f"@offset({self.layout_value_to_string(offset)})")
 
         if self.supports_image_format_metadata(resource_type):
             supported_formats = self.supported_image_formats()

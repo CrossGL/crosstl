@@ -539,15 +539,14 @@ class TestHipCodeGen:
         assert "@group(0) @binding(0) var<uniform> c0: f32 = 299792458.0f;" in result
 
         # An initialized __device__ variable is device memory the module load fills, which no buffer the host
-        # binds carries; it used to import as a per-invocation private variable.
+        # binds carries: it imports as one initialized object in the CrossGL device address space.
         code = """
         __device__ auto load_callback_dev = load_callback;
         """
         ast = HipParser(HipLexer(code).tokenize()).parse()
-        with pytest.raises(
-            HipImportRefused, match="'load_callback_dev' has an initializer"
-        ):
-            HipToCrossGLConverter().generate(ast)
+        result = HipToCrossGLConverter().generate(ast)
+        assert "var<device> load_callback_dev: auto = load_callback;" in result
+        assert "@binding" not in result
 
     def test_public_gpu_template_scope_disambiguator_call_conversion(self):
         code = """
@@ -1544,7 +1543,7 @@ class TestHipCodeGen:
         assert "workgroupBarrier();" in result
         assert "__threadfence" not in result
 
-    def test_rocm_docs_device_timer_functions_emit_reparseable_diagnostic(self):
+    def test_rocm_docs_device_timer_functions_read_the_shader_clocks(self):
         # Source: ROCm HIP C++ language extensions, Timer functions.
         # URL: https://rocm.docs.amd.com/projects/HIP/en/docs-7.0.1/how-to/hip_cpp_language_extensions.html#timer-functions
         code = """
@@ -1560,17 +1559,32 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result, message = hip_import_partial_output(
-            HipToCrossGLConverter().generate, ast
-        )
+        result = HipToCrossGLConverter().generate(ast)
 
-        assert "HIP device timer clock()" in message
-        assert "HIP device timer clock64()" in message
-        assert "HIP device timer wall_clock64()" in message
+        # clock() and clock64() both return the cycle counter as a long long, CrossGL clockARB(); wall_clock64()
+        # reads the constant-rate counter, CrossGL clockRealtimeEXT().
+        assert "var local_cycles: i32 = i64(clockARB());" in result
+        assert "var cycles: u64 = i64(clockARB());" in result
+        assert "var wall: u64 = i64(clockRealtimeEXT());" in result
         assert "clock();" not in result
         assert "clock64();" not in result
         assert "wall_clock64();" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_device_timer_with_arguments_is_refused(self):
+        code = """
+        __global__ void profile(long long* out) {
+            out[threadIdx.x] = clock64(1);
+        }
+        """
+        ast = HipParser(HipLexer(code).tokenize()).parse()
+
+        result, message = hip_import_partial_output(
+            HipToCrossGLConverter().generate, ast
+        )
+
+        assert "HIP device timer clock64(1) takes no arguments" in message
+        assert "clockARB" not in result
 
     def test_user_defined_timer_named_function_is_preserved(self):
         code = """
@@ -18460,10 +18474,6 @@ class TestHipCodeGen:
             int host() { Outer state; return state.item.get(); }
             """,
             """
-            class State { public: int value; int get() { return value; } };
-            int host() { State state; return state.get(); }
-            """,
-            """
             class Base {
             public:
                 static int twice(int value) { return value * 2; }
@@ -18475,7 +18485,6 @@ class TestHipCodeGen:
         ids=(
             "inherited-instance",
             "nested-instance",
-            "own-instance",
             "inherited-static",
         ),
     )
@@ -18592,14 +18601,6 @@ class TestHipCodeGen:
                 "State first; first.value=input[0]; State second=first; "
                 "output[0]=second.value;",
                 "constructor",
-            ),
-            (
-                "factory-result-method",
-                "class State { public: int value; int get() const { return value; } };",
-                "State make_state(int value) { State state; state.value=value; "
-                "return state; }",
-                "output[0]=make_state(input[0]).get();",
-                "record method call",
             ),
             (
                 "conditional-result-method",

@@ -694,10 +694,14 @@ class RustCallableMixin:
     def generate_captured_function_call_args(self, func_name):
         captured_params = self.rust_function_capture_params.get(func_name, [])
         return [
-            self.generate_expression_with_type(
-                IdentifierNode(param.name), param.param_type
-            )
-            for param in captured_params
+            (
+                # The helper takes the workgroup reference itself (rust_workgroup_references).
+                self.rust_identifier(param.name)
+                if self.is_rust_workgroup_reference(param.name)
+                else self.generate_expression_with_type(
+                    IdentifierNode(param.name), param.param_type
+                )
+            ) for param in captured_params
         ]
 
     def user_function_argument_target_type(self, func_name, arg, param_type):

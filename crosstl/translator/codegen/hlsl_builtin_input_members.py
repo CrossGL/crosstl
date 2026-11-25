@@ -56,16 +56,16 @@ INTRINSIC_INPUT_BUILTINS = frozenset(_BUILTIN_TYPES)
 _WRITING_QUALIFIERS = frozenset({"out", "inout"})
 
 
-def _member_builtin(member):
+def _member_builtin(member, builtin_types):
     """The intrinsic-read built-in ``member`` is bound to, when that is its only attribute, else ``None``."""
     attributes = list(getattr(member, "attributes", None) or [])
     if len(attributes) != 1:
         return None
     attribute = attributes[0]
     name = getattr(attribute, "name", None)
-    if name not in INTRINSIC_INPUT_BUILTINS or getattr(attribute, "arguments", None):
+    if name not in builtin_types or getattr(attribute, "arguments", None):
         return None
-    if _type_key(getattr(member, "member_type", None)) != _BUILTIN_TYPES[name]:
+    if _type_key(getattr(member, "member_type", None)) != builtin_types[name]:
         return None
     return name
 
@@ -80,11 +80,11 @@ def _type_key(type_node):
     return None
 
 
-def _builtin_members(struct):
-    """``{member name: built-in}`` for the members of ``struct`` HLSL reads through an intrinsic."""
+def _builtin_members(struct, builtin_types):
+    """``{member name: built-in}`` for the members of ``struct`` the target reads through an intrinsic."""
     found = {}
     for member in getattr(struct, "members", None) or []:
-        builtin = _member_builtin(member)
+        builtin = _member_builtin(member, builtin_types)
         if builtin is not None:
             found[member.name] = builtin
     return found
@@ -120,7 +120,7 @@ def _find_struct(ast, stage, name):
     return None
 
 
-def _candidates(ast):
+def _candidates(ast, builtin_types):
     """``{id(struct): struct}`` for the structures whose entry uses all allow the rewrite."""
     candidates, blocked = {}, set()
     for stage_name, stage, entry in _stage_entries(ast):
@@ -129,7 +129,7 @@ def _candidates(ast):
             blocked.add(id(returned))
         for parameter in entry.parameters or []:
             struct = _find_struct(ast, stage, _named_struct(parameter.param_type))
-            if struct is None or not _builtin_members(struct):
+            if struct is None or not _builtin_members(struct, builtin_types):
                 continue
             writes = _WRITING_QUALIFIERS & set(parameter.qualifiers or [])
             if stage_name in (None, "compute") or writes or struct.generic_params:
@@ -204,12 +204,19 @@ def _rewrite_entry(ast, stage, entry, rewritten, taken):
         entry.body.statements[:0] = prologue
 
 
-def lower_hlsl_builtin_input_members(ast):
-    """``ast``, or a copy whose entry structures read their intrinsic-only built-in members in the entry body."""
-    if not _candidates(ast):
+def lower_hlsl_builtin_input_members(ast, builtin_types=None):
+    """``ast``, or a copy whose entry structures read their intrinsic-only built-in members in the entry body.
+
+    ``builtin_types`` maps each built-in the target reads through an intrinsic to its CrossGL type as ``(scalar,
+    vector size)``; it defaults to HLSL's. Slang, which reads the same built-ins through the same intrinsics, passes
+    its own (:mod:`.slang_builtin_input_members`).
+    """
+    if builtin_types is None:
+        builtin_types = _BUILTIN_TYPES
+    if not _candidates(ast, builtin_types):
         return ast
     ast = deepcopy(ast)
-    candidates = _candidates(ast)
+    candidates = _candidates(ast, builtin_types)
     taken = _taken_names(ast)
     rewritten = {}
     for _stage_name, stage, _entry in _stage_entries(ast):
@@ -217,7 +224,7 @@ def lower_hlsl_builtin_input_members(ast):
             for struct in list(structs):
                 if id(struct) not in candidates or id(struct) in rewritten:
                     continue
-                builtins = _builtin_members(struct)
+                builtins = _builtin_members(struct, builtin_types)
                 signature = None
                 if len(builtins) < len(struct.members):
                     signature = _signature_struct(struct, builtins, taken)

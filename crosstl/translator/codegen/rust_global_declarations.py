@@ -7,7 +7,10 @@ from ..ast import (
     StructNode,
 )
 from .rust_gpu_constants import rust_const_initializer_reason
-from .rust_resource_bindings import refuse_unbound_rust_resource
+from .rust_resource_bindings import (
+    refuse_module_stage_interface,
+    refuse_unbound_rust_resource,
+)
 
 
 class RustGlobalDeclarationMixin:
@@ -127,6 +130,7 @@ class RustGlobalDeclarationMixin:
         return (
             self.rust_resource_metadata_comment(node, var_type)
             + refuse_unbound_rust_resource(self, node, var_type)
+            + refuse_module_stage_interface(self, node)
             + self.generate_static_declaration(
                 node.name,
                 rust_type,
@@ -177,6 +181,7 @@ class RustGlobalDeclarationMixin:
         return (
             self.rust_resource_metadata_comment(node, source_type)
             + refuse_unbound_rust_resource(self, node, source_type)
+            + refuse_module_stage_interface(self, node)
             + self.generate_static_declaration(
                 node.name, rust_type, initializer, lazy_lock=lazy_lock
             )
@@ -267,7 +272,8 @@ class RustGlobalDeclarationMixin:
         return f"static {symbol}: {rust_type} = {initializer};\n"
 
     def static_initializer_requires_lazy_lock(self, rust_type, initializer):
-        return str(initializer) == "Default::default()"
+        # Default::default() is not a const fn, so a static cannot call it, not even inside an array repeat.
+        return "Default::default()" in str(initializer)
 
     def rust_static_pointer_storage_initializer(self, initializer):
         initializer = str(initializer).strip()

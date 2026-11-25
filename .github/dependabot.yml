@@ -21,6 +21,14 @@ updates:
       interval: weekly
     open-pull-requests-limit: 0
     labels: [dependencies]
+  # Likewise for the npm package that runs Tint in the coverage workflow; its
+  # version is pinned so a coverage run validates WGSL with a known Tint.
+  - package-ecosystem: npm
+    directory: /tools/coverage/webgpu
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    labels: [dependencies]
   # Likewise for the NuGet packages of the ComputeSharp demo. Its portable runtime
   # must resolve the ImageSharp version pinned by the upstream ComputeSharp commit;
   # see demos/integrations/computesharp/README.md, "Pinned Dependency Exceptions".

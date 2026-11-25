@@ -9,7 +9,6 @@ import pytest
 import crosstl
 from crosstl.translator import ast as A
 from crosstl.translator import parse
-from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from crosstl.translator.semantics import WaveRotationUnsupportedError
 from crosstl.translator.semantics.hub_types import call_name
 from crosstl.translator.semantics.scoped_walk import program_stages
@@ -276,10 +275,14 @@ def test_targets_read_the_rotated_lane(tmp_path, backend):
     )
 
 
-def test_rust_output_refuses_the_rotations(tmp_path):
-    # Rust output writes rust-gpu kernels, which do not lower subgroup operations yet: a typed refusal.
-    with pytest.raises(RustLoweringRefused, match="subgroup operations"):
-        translate(tmp_path, ALL_ROTATIONS, "rust")
+def test_rust_output_reads_the_rotated_lane_with_spirv_std(tmp_path):
+    # spirv-std has no rotation, so Rust output reads the rotated lane with subgroup_shuffle.
+    output = translate(tmp_path, ALL_ROTATIONS, "rust")
+    assert "crossgl_WaveRotate_vec4" in output
+    assert "spirv_std::arch::subgroup_shuffle(" in output
+    assert not re.search(
+        r"\b(WaveRotate|WaveClusteredRotate|WaveGetLane\w*)\s*\(", output
+    )
 
 
 def test_crossgl_output_keeps_the_rotations(tmp_path):

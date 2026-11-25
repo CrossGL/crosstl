@@ -63,6 +63,9 @@ class WGSLResourceArrayMixin:
     def stage_interface_array_member_info(self, struct_name, member_name):
         if struct_name not in self._stage_interface_struct_names:
             return None
+        if (struct_name, member_name) in self._clip_distance_members:
+            # The clip_distances built-in is one array<f32, N> member (wgsl_clip_distances).
+            return None
         member_type = self._struct_member_types.get((struct_name, member_name))
         return self.stage_interface_array_member_info_for_type(member_type)
 

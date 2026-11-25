@@ -11090,12 +11090,12 @@ def test_unsized_cbuffer_arrays_do_not_derive_copy():
     ast = parse_code(tokens)
     with pytest.raises(
         RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
+        match="constant block 'DynamicBlock': unsized arrays in uniform blocks are not supported",
     ):
         generate_code(ast)
 
 
-def test_cbuffer_scalar_statics_use_const_default_literals():
+def test_cbuffer_scalar_statics_use_const_default_literals(tmp_path):
     code = """
     cbuffer Material {
         float exposure;
@@ -11110,14 +11110,16 @@ def test_cbuffer_scalar_statics_use_const_default_literals():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert "pub exposure: f32," in generated_code
+    assert "pub enabled: u32," in generated_code
+    assert "pub values: [Vec4; 4]," in generated_code
+    assert "pub indices: [IVec4; 2]," in generated_code
+    assert "pub flags: [UVec4; 3]," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_vector_matrix_array_statics_use_zeroed_static_fallback():
+def test_vector_matrix_array_statics_use_zeroed_static_fallback(tmp_path):
     code = """
     vec3 globalDirs[2];
     dvec2 globalPrecise[3];
@@ -11132,14 +11134,18 @@ def test_vector_matrix_array_statics_use_zeroed_static_fallback():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert "pub directions: [Vec4; 2]," in generated_code
+    assert "pub transforms: [Mat4; 2]," in generated_code
+    assert "pub precise: [DVec2; 3]," in generated_code
+    assert (
+        "fn GLOBAL_DIRS() -> [Vec3; 2] {\n    [Default::default(); 2]\n}"
+        in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_default_composite_statics_use_lazy_lock():
+def test_default_composite_statics_use_lazy_lock(tmp_path):
     code = """
     vec3 direction;
     mat4 transform;
@@ -11152,11 +11158,12 @@ def test_default_composite_statics_use_lazy_lock():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert "pub tint: Vec3," in generated_code
+    assert "pub model: Mat4," in generated_code
+    assert "fn DIRECTION() -> Vec3 {" in generated_code
+    assert "fn TRANSFORM() -> Mat4 {" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_lazy_lock_static_use_sites_are_dereferenced(tmp_path):
@@ -12562,7 +12569,7 @@ def test_rust_refuses_synchronization_and_subgroup_operations_without_a_lowering
         assert codegen.generate_wave_op_expression(wave) == "0"
     assert codegen.refusals.reasons == [
         "synchronization deviceScopeFence has no rust-gpu barrier",
-        "subgroup operation WaveUnknownOperation",
+        "subgroup operation WaveUnknownOperation(?) has no spirv_std lowering for these operands",
     ]
     with pytest.raises(RustLoweringRefused, match="2 constructs"):
         codegen.refusals.raise_pending()
@@ -13898,7 +13905,6 @@ def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
             vec4 main(
                 mat3 normal_matrix,
                 mat4 world_matrix,
-                mat3x4 affine,
                 vec3 normal,
                 vec4 position
             ) {
@@ -13908,7 +13914,6 @@ def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
                 let world_inverse = inverse(world_matrix);
                 let world_basis = transpose(world_inverse);
                 let world_weight = determinant(world_basis);
-                let rectangular = transpose(affine);
                 let transformed_normal = normal_inverse * normal;
                 let transformed_position = world_basis * position;
                 return vec4(
@@ -13920,9 +13925,26 @@ def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused, match="function: 'inverse' has no rust-gpu lowering"
-    ):
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let normal_inverse: Mat3 = (normal_basis).inverse();" in generated_code
+    assert "let world_weight: f32 = (world_basis).determinant();" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_refuses_rectangular_matrix_parameters():
+    code = """
+    shader RectangularMatrix {
+        fragment {
+            vec4 main(mat3x4 affine) {
+                let rectangular = transpose(affine);
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(RustRefusal, match="glam has no 3x4 matrix of f32"):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -14433,32 +14455,55 @@ def test_pack_unpack_intrinsics_infer_result_types_and_smoke_compile(tmp_path):
     code = """
     shader PackUnpackIntrinsicInference {
         fragment {
-            vec4 main(vec2 pair, vec4 color, uint packed2, uint packed4, uvec2 doubleBits, double packedDoubleInput) {
+            vec4 main(vec2 pair, vec4 color, uint packed2, uint packed4) {
                 let packedUnorm2 = packUnorm2x16(pair);
                 let packedSnorm2 = packSnorm2x16(pair);
                 let packedUnorm4 = packUnorm4x8(color);
                 let packedSnorm4 = packSnorm4x8(color);
                 let packedHalf = packHalf2x16(pair);
-                let packedDouble = packDouble2x32(doubleBits);
                 let unpackedUnorm2 = unpackUnorm2x16(packed2);
                 let unpackedSnorm2 = unpackSnorm2x16(packed2);
                 let unpackedUnorm4 = unpackUnorm4x8(packed4);
                 let unpackedSnorm4 = unpackSnorm4x8(packed4);
                 let unpackedHalf = unpackHalf2x16(packed2);
-                let unpackedDouble = unpackDouble2x32(packedDoubleInput);
                 uint packedMix = packedUnorm2 + packedSnorm2 + packedUnorm4
                     + packedSnorm4 + packedHalf;
                 return unpackedUnorm4 + unpackedSnorm4
                     + vec4(unpackedUnorm2, unpackedSnorm2)
-                    + vec4(unpackedHalf, vec2(float(unpackedDouble.x), float(unpackedDouble.y)))
-                    + vec4(vec3(float(packedMix)), float(packedDouble));
+                    + vec4(unpackedHalf, unpackedHalf)
+                    + vec4(float(packedMix));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let packedUnorm2: u32 = spirv_std::float::vec2_to_u16x2_unorm(pair);" in (
+        generated_code
+    )
+    assert (
+        "let unpackedSnorm4: Vec4 = spirv_std::float::u8x4_to_vec4_snorm(packed4);" in (
+            generated_code
+        )
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_double_packing_is_refused():
+    code = """
+    shader DoublePacking {
+        fragment {
+            vec4 main(uvec2 doubleBits) {
+                let packedDouble = packDouble2x32(doubleBits);
+                return vec4(float(packedDouble));
             }
         }
     }
     """
 
     with pytest.raises(
-        RustLoweringRefused, match="function: 'packUnorm2x16' has no rust-gpu lowering"
+        RustLoweringRefused, match="function: 'packDouble2x32' has no rust-gpu lowering"
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -17187,7 +17232,7 @@ def test_generic_vector_composite_types_emit_rust_names(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_array_access():
+def test_array_access(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -17216,11 +17261,14 @@ def test_array_access():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        with pytest.raises(
-            RustLoweringRefused,
-            match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-        ):
-            generate_code(ast)
+        generated_code = generate_code(ast)
+        # std140 places each float of the array in its own 16-byte register.
+        assert "pub values: [Vec4; 4]," in generated_code
+        assert (
+            "material.values[0].x, material.values[1].x, material.values[2].x"
+            in generated_code
+        )
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
     except SyntaxError:
         pytest.fail("Array access codegen not implemented")
 
@@ -17587,7 +17635,7 @@ def test_rust_invalid_shader_missing_return_type(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_cbuffer_basic_uniform_buffer():
+def test_rust_cbuffer_basic_uniform_buffer(tmp_path):
     code = """
     cbuffer SceneData {
         mat4 viewProjection;
@@ -17597,14 +17645,18 @@ def test_rust_cbuffer_basic_uniform_buffer():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert (
+        "#[repr(C)]\n#[derive(Debug, Clone, Copy, Default)]\npub struct SceneData {"
+        in generated_code
+    )
+    assert "pub viewProjection: Mat4," in generated_code
+    assert "pub cameraPosition: Vec3," in generated_code
+    assert "pub time: f32," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_cbuffer_with_arrays():
+def test_rust_cbuffer_with_arrays(tmp_path):
     code = """
     cbuffer LightBuffer {
         vec4 lightPositions[8];
@@ -17614,14 +17666,14 @@ def test_rust_cbuffer_with_arrays():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert "pub lightPositions: [Vec4; 8]," in generated_code
+    assert "pub intensities: [Vec4; 8]," in generated_code
+    assert "pub lightCount: i32," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_cbuffer_multiple_buffers():
+def test_rust_cbuffer_multiple_buffers(tmp_path):
     code = """
     cbuffer PerFrame {
         float time;
@@ -17634,14 +17686,15 @@ def test_rust_cbuffer_multiple_buffers():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert "pub struct PerFrame {" in generated_code
+    assert "pub deltaTime: f32," in generated_code
+    assert "pub struct PerObject {" in generated_code
+    assert "pub normalMatrix: Mat4," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_cbuffer_used_in_vertex_stage():
+def test_rust_cbuffer_used_in_vertex_stage(tmp_path):
     code = """
     shader CbufferUsage {
         cbuffer Transform {
@@ -17665,11 +17718,14 @@ def test_rust_cbuffer_used_in_vertex_stage():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert (
+        "#[spirv(uniform, descriptor_set = 0, binding = 0)] transform: &Transform"
+        in generated_code
+    )
+    assert "(input.position + transform.offset)" in generated_code
+    assert "(transform.mvp * " in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_struct_member_semantic_position():
@@ -17956,7 +18012,7 @@ def test_rust_vertex_stage_basic():
     )
 
 
-def test_rust_vertex_stage_with_transform():
+def test_rust_vertex_stage_with_transform(tmp_path):
     code = """
     shader TransformVert {
         cbuffer Transforms {
@@ -17982,11 +18038,13 @@ def test_rust_vertex_stage_with_transform():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert (
+        "#[spirv(uniform, descriptor_set = 0, binding = 0)] transforms: &Transforms"
+        in generated_code
+    )
+    assert "transforms.modelViewProjection * " in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_vertex_stage_passthrough():
@@ -18025,7 +18083,7 @@ def test_rust_vertex_stage_passthrough():
     assert "// texcoord(0)" in generated_code
 
 
-def test_rust_vertex_and_fragment_pipeline():
+def test_rust_vertex_and_fragment_pipeline(tmp_path):
     code = """
     shader FullPipeline {
         cbuffer Material {
@@ -18061,14 +18119,16 @@ def test_rust_vertex_and_fragment_pipeline():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert (
+        "#[spirv(uniform, descriptor_set = 0, binding = 0)] material: &Material"
+        in generated_code
+    )
+    assert "material.baseColor.x * lighting" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_cbuffer_repr_c_and_derive():
+def test_rust_cbuffer_repr_c_and_derive(tmp_path):
     code = """
     cbuffer CameraData {
         mat4 view;
@@ -18080,11 +18140,15 @@ def test_rust_cbuffer_repr_c_and_derive():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert (
+        "#[repr(C)]\n#[derive(Debug, Clone, Copy, Default)]\npub struct CameraData {"
+        in generated_code
+    )
+    assert "pub eyePosition: Vec3," in generated_code
+    assert "pub nearPlane: f32," in generated_code
+    assert "pub farPlane: f32," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_struct_member_semantics_tangent_binormal():
@@ -18118,7 +18182,7 @@ def test_rust_struct_member_semantics_tangent_binormal():
     assert "// texcoord(0)" in generated_code
 
 
-def test_rust_multiple_cbuffers_in_shader():
+def test_rust_multiple_cbuffers_in_shader(tmp_path):
     code = """
     shader MultiBuffer {
         cbuffer PerFrame {
@@ -18146,11 +18210,11 @@ def test_rust_multiple_cbuffers_in_shader():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert "pub struct PerFrame {" in generated_code
+    assert "pub struct PerMaterial {" in generated_code
+    assert "pub struct PerObject {" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_structured_buffer_type_mapping():
@@ -19581,10 +19645,10 @@ def test_rust_matrix_scalar_and_resize_constructors_compile(tmp_path):
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused, match="function: 'inverse' has no rust-gpu lowering"
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "(model).inverse()" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_hlsl_matrix_alias_constructors_compile(tmp_path):
@@ -19839,11 +19903,10 @@ def test_wave_active_sum_emits_rust_subgroup_intrinsic():
         }
     }
     """
-    with pytest.raises(
-        RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "spirv_std::arch::subgroup_i_add(lane)" in generated
+    assert "#[spirv(subgroup_local_invocation_id)]" in generated
+    assert "WaveActiveSum" not in generated
 
 
 def test_wave_ballot_emits_rust_subgroup_ballot():
@@ -19857,14 +19920,11 @@ def test_wave_ballot_emits_rust_subgroup_ballot():
         }
     }
     """
-    with pytest.raises(
-        RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "spirv_std::arch::subgroup_ballot(active)" in generated
 
 
-def test_wave_match_count_and_quad_forms_emit_rust_subgroup_intrinsics():
+def test_wave_count_and_quad_forms_emit_rust_subgroup_intrinsics():
     code = """
     shader ComputeWave {
         compute {
@@ -19875,7 +19935,6 @@ def test_wave_match_count_and_quad_forms_emit_rust_subgroup_intrinsics():
                 bool equal = WaveActiveAllEqual(lane);
                 uint bitCount = WaveActiveCountBits(equal);
                 uint prefixCount = WavePrefixCountBits(equal);
-                uvec4 mask = WaveMatch(lane);
                 uint quadLane = QuadReadLaneAt(lane, 1u);
                 uint quadX = QuadReadAcrossX(lane);
                 uint quadY = QuadReadAcrossY(lane);
@@ -19885,14 +19944,38 @@ def test_wave_match_count_and_quad_forms_emit_rust_subgroup_intrinsics():
     }
     """
 
+    generated = generate_code(parse_code(tokenize_code(code)))
+    for spelling in (
+        "subgroup_elect()",
+        "subgroup_all_equal(lane)",
+        "subgroup_ballot_bit_count(spirv_std::arch::subgroup_ballot(equal))",
+        "subgroup_ballot_exclusive_bit_count(spirv_std::arch::subgroup_ballot(equal))",
+        "subgroup_quad_broadcast(lane, 1)",
+        "subgroup_quad_swap::<0, _>(lane)",
+        "subgroup_quad_swap::<1, _>(lane)",
+        "subgroup_quad_swap::<2, _>(lane)",
+    ):
+        assert f"spirv_std::arch::{spelling}" in generated, spelling
+
+
+def test_wave_match_is_refused_without_a_spirv_std_lowering():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uvec4 mask = WaveMatch(lane);
+            }
+        }
+    }
+    """
     with pytest.raises(
-        RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
+        RustLoweringRefused, match=r"WaveMatch\(uint\) has no spirv_std lowering"
     ):
         generate_code(parse_code(tokenize_code(code)))
 
 
-def test_wave_multi_prefix_forms_emit_rust_partitioned_subgroup_intrinsics():
+def test_wave_multi_prefix_forms_without_a_spirv_std_lowering_are_refused(tmp_path):
     code = """
     shader ComputeWave {
         compute {
@@ -19911,18 +19994,26 @@ def test_wave_multi_prefix_forms_emit_rust_partitioned_subgroup_intrinsics():
     }
     """
 
+    # spirv-std has no partitioned operation, and the translation pipeline's partitioned-wave pass lowers only the
+    # operations of WAVE_PARTITIONED_OPERATIONS; HLSL's exclusive WaveMultiPrefix* forms stay a typed refusal.
+    source = tmp_path / "multi_prefix.cgl"
+    source.write_text(code, encoding="utf-8")
     with pytest.raises(
         RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
+        match=r"WaveMultiPrefixSum\(uint, uvec4\) has no spirv_std lowering",
     ):
-        generate_code(parse_code(tokenize_code(code)))
+        crosstl.translate(str(source), backend="rust", format_output=False)
 
 
 def test_rust_wave_intrinsic_helper_contract_compiles(tmp_path):
     code = """
     shader RustWaveContract {
         compute {
-            void main(uint lane, bool active) {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* values;
+            void main() {
+                uint lane = values[gl_GlobalInvocationID.x];
+                bool active = lane > 3u;
                 uint sumValue = WaveActiveSum(lane);
                 uint productValue = WaveActiveProduct(lane + 1u);
                 uint minValue = WaveActiveMin(sumValue);
@@ -19943,31 +20034,31 @@ def test_rust_wave_intrinsic_helper_contract_compiles(tmp_path):
                 uint prefixSum = WavePrefixSum(laneValue);
                 uint prefixProduct = WavePrefixProduct(prefixSum + 1u);
                 uint prefixCount = WavePrefixCountBits(allLane);
-                uvec4 matchMask = WaveMatch(prefixProduct);
+                uvec4 matchMask = WaveActiveBallot(prefixProduct > 1u);
                 uint quadLane = QuadReadLaneAt(prefixProduct, 1u);
                 uint quadX = QuadReadAcrossX(quadLane);
                 uint quadY = QuadReadAcrossY(quadX);
                 uint quadDiagonal = QuadReadAcrossDiagonal(quadY);
-                bool quadAny = QuadAny(active);
-                bool quadAll = QuadAll(quadAny);
-                uint shuffled = WaveShuffle(quadDiagonal, 0u);
+                bool quadAll = WaveActiveAllTrue(active);
+                uint shuffled = WaveReadLaneAt(quadDiagonal, 0u);
                 uint shuffledXor = WaveShuffleXor(shuffled, 1u);
-                uint partitionedSum = WaveMultiPrefixSum(shuffledXor, ballot);
-                uint partitionedProduct = WaveMultiPrefixProduct(partitionedSum, ballot);
-                uint partitionedCount = WaveMultiPrefixCountBits(quadAll, matchMask);
-                uint partitionedAnd = WaveMultiPrefixBitAnd(partitionedProduct, matchMask);
-                uint partitionedOr = WaveMultiPrefixBitOr(partitionedAnd, matchMask);
-                uint partitionedXor = WaveMultiPrefixBitXor(partitionedOr, matchMask);
+                uint partitionedSum = WaveMultiPrefixInclusiveSum(shuffledXor, ballot);
+                uint partitionedProduct = WaveMultiProduct(partitionedSum, ballot);
+                uint partitionedCount = quadAll ? 1u : 0u;
+                uint partitionedAnd = WaveMultiPrefixInclusiveBitAnd(partitionedProduct, matchMask);
+                uint partitionedOr = WaveMultiBitOr(partitionedAnd, matchMask);
+                uint partitionedXor = WaveMultiPrefixInclusiveBitXor(partitionedOr, matchMask);
+                values[gl_GlobalInvocationID.x] = partitionedXor + laneCount;
             }
         }
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    source = tmp_path / "wave_contract.cgl"
+    source.write_text(code, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="rust", format_output=False)
+    assert not re.search(r"\b(Wave|Quad)[A-Z]\w*\s*\(", generated)
+    assert_generated_rust_smoke_compiles(generated, tmp_path)
 
 
 def test_rust_backend_import_preserves_spirv_std_parameter_metadata():
@@ -20182,11 +20273,11 @@ def test_multiple_wave_ops_in_one_function():
         }
     }
     """
-    with pytest.raises(
-        RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "spirv_std::arch::subgroup_i_add(lane)" in generated
+    assert "spirv_std::arch::subgroup_any((sumVal > 0))" in generated
+    assert "spirv_std::arch::subgroup_ballot(anyTrue)" in generated
+    assert "spirv_std::arch::subgroup_shuffle(sumVal, 0)" in generated
 
 
 def test_mixed_sync_and_wave_ops():
@@ -20203,11 +20294,11 @@ def test_mixed_sync_and_wave_ops():
         }
     }
     """
-    with pytest.raises(
-        RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert generated.index(
+        "workgroup_memory_barrier_with_group_sync()"
+    ) < generated.index("subgroup_i_add(lane)")
+    assert "spirv_std::arch::all_memory_barrier()" in generated
 
 
 def test_rust_generic_call_keeps_turbofish():
@@ -20327,3 +20418,103 @@ def test_user_function_named_like_a_shader_clock_is_kept_for_rust():
     }
     """
     assert "clockARB()" in generate_code(parse_code(tokenize_code(source_code)))
+
+
+def test_rust_generic_operator_function_emits_copy_bound_and_compiles(tmp_path):
+    """Generic functions that use a value-consuming operator need a Copy bound (#4748)."""
+    code = """
+    shader G8 {
+        generic<T> T twice(T x) {
+            return x + x;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = twice(v);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert (
+        "pub fn twice<T: Copy + core::ops::Add<Output = T>>(x: T) -> T"
+        in generated_code
+    )
+    assert "return (x + x);" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_generic_multi_use_by_value_emits_copy_bound_and_compiles(tmp_path):
+    """Generic values used by value more than once need Copy even without operators (#4748)."""
+    code = """
+    shader MultiUse {
+        generic<T> T f(T x) {
+            T y = x;
+            T z = x;
+            return z;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = f(v);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "pub fn f<T: Copy>(x: T) -> T" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_generic_repeated_call_argument_emits_copy_bound_and_compiles(tmp_path):
+    """Passing the same generic value twice by value needs a Copy bound (#4748)."""
+    code = """
+    shader RepeatedArg {
+        generic<T> T g(T a, T b) {
+            return a;
+        }
+        generic<T> T f(T x) {
+            return g(x, x);
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = f(v);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "pub fn g<T: Copy>(a: T, b: T) -> T" in generated_code
+    assert "pub fn f<T: Copy>(x: T) -> T" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_generic_function_calling_concrete_function_is_refused():
+    """Generic functions whose bodies only type-check per call site are refused (#4748)."""
+    code = """
+    shader G7 {
+        float combine(float a, float b) {
+            return a + b;
+        }
+        generic<T> T twice(T x) {
+            return combine(x, x);
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = twice(v);
+            }
+        }
+    }
+    """
+    with pytest.raises(RustLoweringRefused, match="combine"):
+        generate_code(parse_code(tokenize_code(code)))

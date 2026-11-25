@@ -37,7 +37,7 @@ WGSL_SIGNATURES = [
 ]
 
 
-@pytest.mark.skipif(not validators.available("wgsl"), reason="naga is not installed")
+@pytest.mark.skipif(not validators.command("naga"), reason="naga is not installed")
 @pytest.mark.parametrize("probe_feature", WGSL_SIGNATURES, ids=lambda f: f.name)
 @pytest.mark.parametrize("baseline", [False, True], ids=["probe", "baseline"])
 def test_wgsl_probes_are_valid_wgsl(probe_feature, baseline):
@@ -101,7 +101,7 @@ def test_workgroup_parameter_takes_a_shared_variable_the_probe_fills():
     assert "            float r = workgroupUniformLoad(a0);" in crossgl
 
 
-@pytest.mark.skipif(not validators.available("wgsl"), reason="naga is not installed")
+@pytest.mark.skipif(not validators.command("naga"), reason="naga is not installed")
 def test_workgroup_parameter_probe_is_valid_wgsl():
     probe = probes.build(WORKGROUP_LOAD, "wgsl")
     verdict = validators.validate("wgsl", probe.source, entry=probe.entry)

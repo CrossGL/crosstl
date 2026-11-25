@@ -40,10 +40,28 @@ OpDecorate %iin Binding 1
 OpDecorate %outp DescriptorSet 0
 OpDecorate %outp Binding 2
 """
+HLSL = """RWStructuredBuffer<float> fin : register(u0);
+StructuredBuffer<int> iin : register(t1);
+RWStructuredBuffer<float> outp : register(u2);
+[numthreads(1, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    uint i = id.x;
+    // ldexp, with the power of two built from its exponent bits so that no exp2 approximation enters.
+    outp[i] = fin[i] * asfloat((iin[i] + 127) << 23);
+}
+"""
 SOURCES = {
     "glsl": (".comp", GLSL),
     "metal": (".metal", METAL),
     "spirv": (".spvasm", SPIRV_INTERFACE),
+    "hlsl": (".hlsl", HLSL),
+}
+# The text of each source that declares the storage slot 1.
+SLOT_ONE = {
+    "glsl": "binding = 1",
+    "metal": "buffer(1)",
+    "spirv": "Binding 1",
+    "hlsl": "register(t1)",
 }
 
 
@@ -63,6 +81,14 @@ def make_case(tmp_path, language="glsl", input_count=2):
             text = text.replace(
                 "layout(std430, binding = 2) buffer B2 { float outp[]; };",
                 "layout(std430, binding = 2) buffer B2 { uint uin[]; };\nlayout(std430, binding = 3) buffer B3 { float outp[]; };",
+            )
+        elif language == "hlsl":
+            text = text.replace(
+                "outp[i] = fin[i] * asfloat((iin[i] + 127) << 23);",
+                "outp[i] = fin[i] * asfloat((iin[i] + 127) << 23) + float(uin[i]);",
+            ).replace(
+                "RWStructuredBuffer<float> outp : register(u2);",
+                "RWStructuredBuffer<uint> uin : register(u2);\nRWStructuredBuffer<float> outp : register(u3);",
             )
     path = tmp_path / ("probe" + suffix)
     path.write_text(text)
@@ -119,14 +145,37 @@ def test_interfaces_require_the_exact_number_of_storage_slots(tmp_path, language
     case = make_case(tmp_path, language)
     assert interface(case.src, language, 1, input_count=2)["bindings"] == (0, 1, 2)
     for count in (1, 3):
-        with pytest.raises(InterfaceChanged, match="slots"):
+        # HLSL reads a buffer past the contract's registers as another resource of the kernel
+        # (:mod:`.directx_resources`), so with one input its second input stands where the output belongs.
+        expected = "UAV u1" if language == "hlsl" and count == 1 else "slots"
+        with pytest.raises(InterfaceChanged, match=expected):
             interface(case.src, language, 1, input_count=count)
     suffix, text = SOURCES[language]
-    old = {"glsl": "binding = 1", "metal": "buffer(1)", "spirv": "Binding 1"}[language]
+    old = SLOT_ONE[language]
     for slot in (0, 3):
         case.src.write_text(text.replace(old, old.replace("1", str(slot))))
         with pytest.raises(InterfaceChanged, match="slots"):
             interface(case.src, language, 1, input_count=2)
+
+
+@pytest.mark.parametrize("count", [2, 3])
+def test_hlsl_inputs_keep_their_registers_and_the_output_is_the_last_uav(
+    tmp_path, count
+):
+    case = make_case(tmp_path, "hlsl", count)
+    found = interface(case.src, "hlsl", 1, input_count=count)
+    names = ["fin", "iin", "uin"][:count] + ["outp"]
+    registers = ["u0", "t1", "u2"][:count] + [f"u{count}"]
+    assert [resource["name"] for resource in found["resources"]] == names
+    assert [resource["register"] for resource in found["resources"]] == registers
+    # The output is written, so it must be a UAV; an SRV at its slot is a different interface.
+    read_only = case.src.read_text().replace(
+        f"RWStructuredBuffer<float> outp : register(u{count})",
+        f"StructuredBuffer<float> outp : register(t{count})",
+    )
+    case.src.write_text(read_only)
+    with pytest.raises(InterfaceChanged, match=f"UAV u{count}"):
+        interface(case.src, "hlsl", 1, input_count=count)
 
 
 @pytest.mark.parametrize("count", [0, -1, True, 1.5])

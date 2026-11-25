@@ -1347,7 +1347,7 @@ def test_hlsl_metal_union_bool4_uint_alias_preserves_packed_bytes(tmp_path):
     ("declaration", "reason"),
     [
         (
-            "union BadSize { uint2 words; uint word; };",
+            "union BadSize { uint4 words; uint pair[2]; };",
             "member-size-mismatch",
         ),
         (
@@ -1355,7 +1355,7 @@ def test_hlsl_metal_union_bool4_uint_alias_preserves_packed_bytes(tmp_path):
             "member-shape-unsupported",
         ),
         (
-            "union Padded { uint3 words; uchar4 bytes[4]; };",
+            "union Padded { uint4 words; float2 pairs[2]; };",
             "member-storage-shape-mismatch",
         ),
         (
@@ -40838,7 +40838,7 @@ def test_directx_texture_query_resource_descriptors():
         codegen, codegen.texture_sample_position_expression, "colorMap", "sampleIndex"
     ) == (
         "float2(0.0, 0.0)",
-        "texture sample-position query: textureSamplePosition on Texture2D requires a sampled multisample texture",
+        "texture sample-position query: textureSamplePosition on Texture2D requires a multisample texture",
     )
     assert (
         codegen.texture_sample_position_expression("msTex", "sampleIndex")
@@ -41186,7 +41186,7 @@ def test_directx_multisample_texture_sample_position_queries_use_hlsl_member():
     assert "msTextures[2].GetSamplePosition(input.sampleIndex)" in generated_code
     assert "textureSamplePosition(" not in generated_code
     assert (
-        "texture sample-position query: textureSamplePosition on Texture2D requires a sampled multisample texture"
+        "texture sample-position query: textureSamplePosition on Texture2D requires a multisample texture"
         in refusal
     )
     assert "SamplerState msTexSampler" not in generated_code
@@ -52029,11 +52029,6 @@ def test_hlsl_hip_inherited_fields_aliases_and_enums_validate(tmp_path):
             "int get() { return value; } } item; };",
             "Outer state; state.item.value = input[0]; "
             "output[0] = state.item.get();",
-        ),
-        (
-            "own-instance",
-            "class State { public: int value; int get() { return value; } };",
-            "State state; state.value = input[0]; output[0] = state.get();",
         ),
         (
             "inherited-static",

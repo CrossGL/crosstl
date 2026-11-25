@@ -13,8 +13,11 @@ shared CrossGL AST to WGSL syntax, including ``fn`` signatures, WGSL scalar and
 vector types, entry point attributes, struct member attributes, and compute
 ``@workgroup_size`` metadata.
 
-WGSL is a target-only backend. ``.wgsl`` and ``.wesl`` files remain rejected as
-source inputs until the project has a dedicated WGSL frontend.
+WGSL is also a source language. The frontend in ``crosstl/backend/WGSL`` reads
+a ``.wgsl`` module and imports it to CrossGL, so a WGSL shader translates to
+every other target, and the WGSL input row of the coverage report measures it.
+WESL sources (``.wesl``) and WGSL JSON artifacts (``.wgsl.json``) are refused
+with a diagnostic that asks for the WGSL module itself.
 
 Supported Surface
 -----------------

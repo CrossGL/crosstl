@@ -10,8 +10,13 @@ the arguments, so ``uint[2](1, 2)`` would become an ``array<i32, 2>``. An unsize
 has as many elements as arguments (GLSL 4.60 section 4.1.9). A sized constructor whose size is an integer literal
 may give fewer arguments than that size: the elements it leaves out are the zero value ``T()`` (WGSL, "Zero Value
 Expressions"), as GLSL output writes them and as a short declared initializer is filled. One with more arguments than
-its size and an empty one are refused with :class:`WGSLAggregateInitializerError`, and a constructor of an array of
-arrays, which the CrossGL call spelling does not describe, is refused rather than written verbatim.
+its size and an empty one are refused with :class:`WGSLAggregateInitializerError`.
+
+A constructor of an array of arrays, ``float[2][3](float[3](...), float[3](...))``, takes one argument per element of
+its first dimension, each an array of the remaining dimensions (GLSL 4.60 section 4.1.9, "Arrays"), so it is written
+as ``array<array<f32, 3>, 2>(...)``. The CrossGL parser reads its callee as the first dimension's spelling
+subscripted by the others (``ArrayAccessNode(ArrayAccessNode(float, 2), 3)``). Only the first dimension may be left
+unsized: WGSL has no runtime-sized array element of an array value.
 """
 
 from __future__ import annotations
@@ -19,8 +24,10 @@ from __future__ import annotations
 import re
 
 from ..ast import (
+    ArrayAccessNode,
     ArrayType,
     IdentifierNode,
+    LiteralNode,
     MatrixType,
     NamedType,
     PrimitiveType,
@@ -34,7 +41,8 @@ __all__ = [
     "wgsl_array_element",
 ]
 
-_ARRAY_CONSTRUCTOR = re.compile(r"\s*([A-Za-z_]\w*)\s*\[\s*(\w*)\s*\]\s*")
+_ARRAY_CONSTRUCTOR = re.compile(r"\s*([A-Za-z_]\w*)\s*((?:\[\s*\w*\s*\]\s*)+)")
+_DIMENSION = re.compile(r"\[\s*(\w*)\s*\]")
 
 
 def _element_type(codegen, spelling):
@@ -59,16 +67,67 @@ def _element_type(codegen, spelling):
     return None
 
 
+def _subscript_spelling(index):
+    """The size spelling of one subscript of an array constructor callee, or ``None`` when it is not a size."""
+    if isinstance(index, LiteralNode) and isinstance(index.value, int):
+        return str(index.value)
+    if isinstance(index, IdentifierNode) and re.fullmatch(
+        r"[A-Za-z_]\w*", str(index.name)
+    ):
+        return str(index.name)
+    return None
+
+
+def _callee_spelling(callee):
+    """The constructor spelling, such as ``float[2][3]``, of an array constructor callee, or ``None``."""
+    subscripts = []
+    while isinstance(callee, ArrayAccessNode):
+        size = _subscript_spelling(callee.index)
+        if size is None:
+            return None
+        subscripts.append(f"[{size}]")
+        callee = callee.array
+    if not isinstance(callee, IdentifierNode):
+        return None
+    spelling = str(callee.name).strip() + "".join(reversed(subscripts))
+    return spelling if "[" in spelling else None
+
+
 def _array_constructor_callee(codegen, node):
     """``(spelling, element type)`` of a CrossGL array constructor call, or ``None`` for any other call."""
-    callee = node.function
-    if not isinstance(callee, IdentifierNode) or "[" not in str(callee.name):
+    function_name = _callee_spelling(node.function)
+    if function_name is None:
         return None
-    function_name = str(callee.name).strip()
     element_type = _element_type(codegen, function_name.split("[", 1)[0])
     if element_type is None:
         return None
     return function_name, element_type
+
+
+def _dimensions(function_name):
+    """The size spellings of ``function_name``'s dimensions, first dimension first, or ``None``."""
+    match = _ARRAY_CONSTRUCTOR.fullmatch(function_name)
+    if match is None:
+        return None
+    return [size.strip() for size in _DIMENSION.findall(match.group(2))]
+
+
+def _sized_type(element_type, size):
+    if size.isdigit():
+        return ArrayType(element_type, int(size))
+    return ArrayType(element_type, IdentifierNode(size))
+
+
+def _element_array_type(function_name, element_type, sizes):
+    """The type of one argument of a constructor of ``sizes``: ``element_type`` or an array of the later sizes."""
+    if any(not size for size in sizes[1:]):
+        raise WGSLRefusal(
+            f"WGSL target does not support array constructor {function_name}: only its first dimension may "
+            "be unsized"
+        )
+    for size in reversed(sizes[1:]):
+        element_type = _sized_type(element_type, size)
+    return element_type
 
 
 def wgsl_array_constructor_type(codegen, node):
@@ -77,15 +136,13 @@ def wgsl_array_constructor_type(codegen, node):
     if callee is None:
         return None
     function_name, element_type = callee
-    match = _ARRAY_CONSTRUCTOR.fullmatch(function_name)
-    if match is None:
+    sizes = _dimensions(function_name)
+    if sizes is None or any(not size for size in sizes[1:]):
         return None
-    size = match.group(2)
-    if not size:
+    element_type = _element_array_type(function_name, element_type, sizes)
+    if not sizes[0]:
         return ArrayType(element_type, len(node.arguments or []))
-    if size.isdigit():
-        return ArrayType(element_type, int(size))
-    return ArrayType(element_type, IdentifierNode(size))
+    return _sized_type(element_type, sizes[0])
 
 
 def _aggregate_error(message, **details):
@@ -102,12 +159,13 @@ def wgsl_array_constructor(codegen, node):
     if callee is None:
         return None
     function_name, element_type = callee
-    match = _ARRAY_CONSTRUCTOR.fullmatch(function_name)
-    if match is None:
+    sizes = _dimensions(function_name)
+    if sizes is None:
         raise WGSLRefusal(
             f"WGSL target does not support array constructor {function_name}"
         )
-    size = match.group(2)
+    size = sizes[0]
+    element_type = _element_array_type(function_name, element_type, sizes)
     arguments = list(node.arguments or [])
     if not arguments:
         raise _aggregate_error(

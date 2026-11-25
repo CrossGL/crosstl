@@ -1,5 +1,6 @@
 """Steps of ``GLSLToCrossGLConverter.generate_shader``: resetting the per-shader state, recording the built-in stage outputs the entry writes, rendering the structs, stage interfaces, uniforms, constants and globals, and rendering the stage block with its functions."""
 
+from .atomic_counter_offsets import is_applied_default
 from .block_member_names import (
     instance_block_member_names,
     rename_shadowing_locals,
@@ -27,9 +28,7 @@ class GLSLShaderSectionMixin:
         self.flattened_uniform_block_member_renames = {}
         rename_shadowing_locals(node, instance_block_member_names(node))
         self.emitted_cbuffer_member_names = set()
-        self.function_name_renames = self.collect_function_name_renames(
-            getattr(node, "functions", []) or []
-        )
+        self.function_name_renames = self.collect_function_name_renames(node)
         self.user_function_arities = {
             (
                 getattr(function, "name", None),
@@ -399,7 +398,12 @@ class GLSLShaderSectionMixin:
         """Render the stage block: layouts, helper functions and the entry point."""
         result += self.indent_str + f"{self.shader_type} {{\n"
 
-        layouts = getattr(node, "layouts", []) or []
+        # The counters carry the offsets of the atomic counter defaults (:mod:`.atomic_counter_offsets`).
+        layouts = [
+            layout
+            for layout in getattr(node, "layouts", []) or []
+            if not is_applied_default(layout)
+        ]
         if layouts:
             self.increase_indent()
             for layout in layouts:

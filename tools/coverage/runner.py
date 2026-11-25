@@ -20,6 +20,7 @@ from . import (
     probes,
     rustgpu,
     spirv_input,
+    tint,
     validators,
 )
 from .features.spirv import is_core
@@ -28,6 +29,8 @@ from .semantic import identify, instructions, lower
 
 OUTPUT_BACKENDS = {
     "cuda": "cuda",
+    # GLSL ES 3.x, the opengl backend's gles target.
+    "gles": "gles",
     "glsl": "opengl",
     "hip": "hip",
     "hlsl": "directx",
@@ -54,6 +57,7 @@ INPUT_BACKENDS = {
     "slang": "slang",
     "spirv": "vulkan",
     "webgl": "webgl",
+    "wgsl": "wgsl",
 }
 # The target a language's probes fall back to when the reference compiler rejects a native probe for its usual target.
 # slangc writes invalid SPIR-V for some operations its HLSL target compiles, such as an OpAtomicCompareExchange on
@@ -141,7 +145,10 @@ def _checker(language: str, target: str) -> str:
     versions = [
         validators.version(tool) for tool in validators.toolchain(language, target)
     ]
-    code = [Path(module.__file__).read_bytes() for module in (validators, rustgpu)]
+    code = [
+        Path(module.__file__).read_bytes() for module in (validators, rustgpu, tint)
+    ]
+    code.append(tint.SCRIPT.read_bytes())
     return "\n".join(versions + [hashlib.sha256(b"\0".join(code)).hexdigest()])
 
 
@@ -314,17 +321,26 @@ def run_output(feature: Feature, language: str) -> Result:
     )
     if ignored:
         return result("wrong", ignored)
-    # The CrossGL probe reads its inputs like the native probe unless it calls a counterpart overload.
-    if _runs(feature, language) and not feature.counterpart:
+    # A graphics probe never runs; its Metal must keep the native probe's interface (tools/coverage/metal_reflection.py).
+    moved = (
+        metal_reflection.output_difference(feature, translated)
+        if language == "metal"
+        else ""
+    )
+    if moved:
+        return result("wrong", moved)
+    if _runs(feature, language):
         try:
             native = (
                 spirv_input.build(feature)
                 if language == "spirv"
                 else probes.build(feature, language)
-            ).source
+            )
         except probes.ProbeError:
             return result("supported")
-        return replace(result("supported"), sources=(native, translated))
+        # A CrossGL probe that calls a counterpart overload runs only if it reads its inputs like the native probe.
+        if not feature.counterpart or native.reads == probe.reads:
+            return replace(result("supported"), sources=(native.source, translated))
     return result("supported")
 
 

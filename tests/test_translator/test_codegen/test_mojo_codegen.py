@@ -60,6 +60,13 @@ from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from crosstl.translator.refusals import MojoRefusal
 
+# A Mojo kernel receives an HLSL structured or byte-address buffer only as a pointer argument
+# (mojo_buffer_objects): every other place of a buffer object, and an append or consume buffer, is refused.
+MOJO_BUFFER_OBJECT_PLACES = (
+    r"Mojo receives an HLSL \w+ only as a kernel argument declared outside a function"
+)
+MOJO_APPEND_CONSUME_BUFFER = r"Mojo has no append or consume buffer"
+
 
 def tokenize_code(code: str) -> List:
     lexer = Lexer(code)
@@ -1726,27 +1733,6 @@ def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders(tmp_
             vec4 position @ gl_Position;
         };
 
-        task {
-            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-            void main() @numthreads(1, 1, 1) {
-                MeshPayload payload;
-                payload.meshlet = 7u;
-                DispatchMesh(1, 1, 1, payload);
-            }
-        }
-
-        object {
-            void main() @numthreads(2, 1, 1) {
-                DispatchMesh(2, 3, 4);
-            }
-        }
-
-        amplification {
-            void main() @numthreads(3, 1, 1) {
-                DispatchMesh(1, 1, 1);
-            }
-        }
-
         mesh {
             void main(
                 @mesh_payload in MeshPayload payload,
@@ -1769,14 +1755,10 @@ def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders(tmp_
 
     assert "# CrossGL mesh/task placeholders" in generated_code
     assert "def _crossgl_set_mesh_output_counts" in generated_code
-    assert "def _crossgl_dispatch_mesh" in generated_code
-    assert "# CrossGL shader stage: task" in generated_code
-    assert "# CrossGL mesh/task stage: stage=task" in generated_code
-    assert "# CrossGL mesh/task numthreads: 1, 1, 1" in generated_code
-    assert "# CrossGL mesh/task local size: 1, 1, 1" in generated_code
-    assert "# CrossGL shader stage: object" in generated_code
-    assert "# CrossGL shader stage: amplification" in generated_code
+    assert "_crossgl_dispatch_mesh" not in generated_code
     assert "# CrossGL shader stage: mesh" in generated_code
+    assert "# CrossGL mesh/task stage: stage=mesh" in generated_code
+    assert "# CrossGL mesh/task numthreads: 32, 1, 1" in generated_code
     assert "# CrossGL mesh output topology: triangle" in generated_code
     assert "# CrossGL mesh max vertices: 64" in generated_code
     assert "# CrossGL mesh max primitives: 32" in generated_code
@@ -1784,12 +1766,7 @@ def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders(tmp_
         "# CrossGL mesh parameter role: mesh_payload:payload->MeshPayload, "
         "vertices:verts->MeshVertex[3], indices:tris->uvec3[1]" in generated_code
     )
-    assert "def task_main() -> None:" in generated_code
-    assert "def object_main() -> None:" in generated_code
-    assert "def amplification_main() -> None:" in generated_code
     assert "def mesh_main(" in generated_code
-    assert "_crossgl_dispatch_mesh(1, 1, 1, payload)" in generated_code
-    assert "_crossgl_dispatch_mesh(2, 3, 4)" in generated_code
     assert "_crossgl_set_mesh_output_counts(3, 1)" in generated_code
     assert "MeshOpNode" not in generated_code
 
@@ -1806,6 +1783,40 @@ def test_mesh_task_stages_lower_to_mojo_metadata_and_intrinsic_placeholders(tmp_
 
     assert result.returncode == 0, result.stderr + "\n\n" + generated_code
     assert output_path.exists()
+
+
+@pytest.mark.parametrize(
+    ("stage", "dispatch"),
+    [
+        ("task", "DispatchMesh(1u, 1u, 1u, payload);"),
+        ("task", "DispatchMesh(1u, 1u, 1u);"),
+        ("object", "DispatchMesh(2u, 3u, 4u);"),
+        ("amplification", "DispatchMesh(1u, 1u, 1u, payload);"),
+    ],
+)
+def test_mojo_refuses_dispatch_mesh(stage, dispatch):
+    # #4392: DispatchMesh used to call a generated Mojo helper whose body was `pass`, so no mesh workgroups ran.
+    # The payload is a function local: Mojo refuses a program-scope payload before it reaches DispatchMesh.
+    code = f"""
+    shader Task {{
+        struct Payload {{
+            uint value;
+        }}
+        {stage} {{
+            void main() @numthreads(1, 1, 1) {{
+                Payload payload;
+                payload.value = 1u;
+                {dispatch}
+            }}
+        }}
+    }}
+    """
+
+    with pytest.raises(MojoLoweringRefused) as refused:
+        generate_code(parse_code(tokenize_code(code)))
+
+    assert refused.value.code == "project.translate.mojo-lowering-unsupported"
+    assert "DispatchMesh: Mojo's gpu package has no task stage" in str(refused.value)
 
 
 def test_mesh_task_stages_validate_mojo_metadata_and_intrinsics():
@@ -2594,73 +2605,68 @@ def test_direct_texture_op_nodes_emit_mojo_image_atomic_alias_helpers_without_as
         codegen.generate_expression(TextureOpNode("Add", tex, [pixel, value]))
 
 
-def test_direct_buffer_op_nodes_emit_mojo_helpers_without_ast_repr():
+def _mojo_buffer_object_codegen(**objects):
+    """A MojoCodeGen holding each ``name=(buffer type, element type)`` as a kernel pointer argument."""
     codegen = MojoCodeGen()
-    values = VariableNode("values", PrimitiveType("StructuredBuffer<int>"))
-    output = VariableNode("output", PrimitiveType("RWStructuredBuffer<int>"))
-    appended = VariableNode("appended", PrimitiveType("AppendStructuredBuffer<int>"))
-    consumed = VariableNode("consumed", PrimitiveType("ConsumeStructuredBuffer<int>"))
-    raw = VariableNode("raw", PrimitiveType("RWByteAddressBuffer"))
+    codegen.reset_mojo_buffer_objects()
+    for name, (buffer_type, element_type) in objects.items():
+        codegen.mojo_buffer_objects[name] = (buffer_type, element_type)
+        codegen.register_variable_type(name, f"{element_type or 'uint'}*")
+    return codegen
+
+
+def test_direct_buffer_op_nodes_emit_mojo_pointer_code_without_ast_repr():
+    codegen = _mojo_buffer_object_codegen(
+        values=("StructuredBuffer", "int"),
+        output=("RWStructuredBuffer", "int"),
+        raw=("RWByteAddressBuffer", None),
+    )
+    codegen.mojo_buffer_length_names = {"values"}
+    codegen.declare_mojo_buffer_length_argument("values", {})
+    values = IdentifierNode("values")
+    output = IdentifierNode("output")
+    raw = IdentifierNode("raw")
     index = VariableNode("index", PrimitiveType("uint"))
     value = VariableNode("value", PrimitiveType("int"))
     count = VariableNode("count", PrimitiveType("uint"))
     raw_vec = VariableNode("rawVec", PrimitiveType("uvec4"))
+    for name, type_name in (
+        ("index", "uint"),
+        ("value", "int"),
+        ("count", "uint"),
+        ("rawVec", "uvec4"),
+    ):
+        codegen.register_variable_type(name, type_name)
 
-    codegen.register_variable_type("values", "StructuredBuffer<int>")
-    codegen.register_variable_type("output", "RWStructuredBuffer<int>")
-    codegen.register_variable_type("appended", "AppendStructuredBuffer<int>")
-    codegen.register_variable_type("consumed", "ConsumeStructuredBuffer<int>")
-    codegen.register_variable_type("raw", "RWByteAddressBuffer")
-    codegen.register_variable_type("index", "uint")
-    codegen.register_variable_type("value", "int")
-    codegen.register_variable_type("count", "uint")
-    codegen.register_variable_type("rawVec", "uvec4")
+    calls = {
+        "load": codegen.generate_expression(BufferOpNode("Load", values, [index])),
+        "store": codegen.generate_expression(
+            BufferOpNode("Store", output, [index, value])
+        ),
+        "dimensions": codegen.generate_expression(
+            BufferOpNode("GetDimensions", values, [count])
+        ),
+        "vector_load": codegen.generate_expression(BufferOpNode("Load3", raw, [index])),
+        "vector_store": codegen.generate_expression(
+            BufferOpNode("Store4", raw, [index, raw_vec])
+        ),
+    }
 
-    load_call = codegen.generate_expression(BufferOpNode("Load", values, [index]))
-    store_call = codegen.generate_expression(
-        BufferOpNode("Store", output, [index, value])
-    )
-    append_call = codegen.generate_expression(BufferOpNode("Append", appended, [value]))
-    consume_call = codegen.generate_expression(BufferOpNode("Consume", consumed, []))
-    dimensions_call = codegen.generate_expression(
-        BufferOpNode("GetDimensions", values, [count])
-    )
-    vector_load_call = codegen.generate_expression(BufferOpNode("Load3", raw, [index]))
-    vector_store_call = codegen.generate_expression(
-        BufferOpNode("Store4", raw, [index, raw_vec])
-    )
-
-    assert load_call == "buffer_load(values, index)"
-    assert store_call == "buffer_store(output, index, value)"
-    assert append_call == "buffer_append(appended, value)"
-    assert consume_call == "buffer_consume(consumed)"
-    assert dimensions_call == "buffer_dimensions(values, count)"
-    assert vector_load_call == "buffer_load3(raw, index)"
-    assert vector_store_call == "buffer_store4(raw, index, rawVec)"
-    assert "BufferOpNode(" not in "".join(
-        [
-            load_call,
-            store_call,
-            append_call,
-            consume_call,
-            dimensions_call,
-            vector_load_call,
-            vector_store_call,
-        ]
-    )
-    assert ("StructuredBuffer", "int") in codegen.required_buffer_load_helpers
-    assert ("RWStructuredBuffer", "int") in codegen.required_buffer_store_helpers
-    assert ("AppendStructuredBuffer", "int") in codegen.required_buffer_append_helpers
-    assert ("ConsumeStructuredBuffer", "int") in codegen.required_buffer_consume_helpers
-    assert ("StructuredBuffer", "int") in codegen.required_buffer_dimensions_helpers
+    assert calls == {
+        "load": "values[Int(index)]",
+        "store": "output[Int(index)] = value",
+        "dimensions": "count = UInt32(values_length)",
+        "vector_load": "crosstl_buffer_load3(raw, Int(index) >> 2)",
+        "vector_store": "crosstl_buffer_store4(raw, Int(index) >> 2, rawVec)",
+    }
+    assert "BufferOpNode(" not in "".join(calls.values())
+    assert codegen.required_mojo_buffer_word_helpers == {("load", 3), ("store", 4)}
+    helpers = codegen.mojo_buffer_object_helper_source()
     assert (
-        "RWByteAddressBuffer",
-        3,
-    ) in codegen.required_byte_address_vector_load_helpers
-    assert (
-        "RWByteAddressBuffer",
-        4,
-    ) in codegen.required_byte_address_vector_store_helpers
+        "def crosstl_buffer_load3(buffer: UnsafePointer[UInt32, MutAnyOrigin], "
+        "word: Int) -> SIMD[DType.uint32, 4]:"
+    ) in helpers
+    assert "    buffer[word + 3] = value[3]\n" in helpers
     assert (
         codegen.expression_result_type(BufferOpNode("Load", values, [index])) == "int"
     )
@@ -2668,14 +2674,7 @@ def test_direct_buffer_op_nodes_emit_mojo_helpers_without_ast_repr():
         codegen.expression_result_type(BufferOpNode("Load3", raw, [index])) == "uvec3"
     )
     assert (
-        codegen.expression_result_type(BufferOpNode("Consume", consumed, [])) == "int"
-    )
-    assert (
         codegen.expression_result_type(BufferOpNode("Store", output, [index, value]))
-        == "void"
-    )
-    assert (
-        codegen.expression_result_type(BufferOpNode("Append", appended, [value]))
         == "void"
     )
     assert (
@@ -2684,69 +2683,66 @@ def test_direct_buffer_op_nodes_emit_mojo_helpers_without_ast_repr():
     )
 
 
-def test_direct_buffer_op_constructor_contexts_use_single_evaluation_helpers():
+def test_direct_buffer_op_nodes_refuse_placeholder_buffer_objects_for_mojo():
+    # Only a buffer object a kernel receives as a pointer argument has a Mojo spelling.
     codegen = MojoCodeGen()
-    pairs = VariableNode("pairs", PrimitiveType("StructuredBuffer<float2>"))
-    consumed = VariableNode(
-        "consumed", PrimitiveType("ConsumeStructuredBuffer<float2>")
+    appended = VariableNode("appended", PrimitiveType("AppendStructuredBuffer<int>"))
+    values = VariableNode("values", PrimitiveType("StructuredBuffer<int>"))
+    index = VariableNode("index", PrimitiveType("uint"))
+    value = VariableNode("value", PrimitiveType("int"))
+    codegen.register_variable_type("appended", "AppendStructuredBuffer<int>")
+    codegen.register_variable_type("values", "StructuredBuffer<int>")
+    codegen.register_variable_type("index", "uint")
+    codegen.register_variable_type("value", "int")
+
+    with pytest.raises(MojoRefusal, match=MOJO_BUFFER_OBJECT_PLACES):
+        codegen.generate_expression(BufferOpNode("Append", appended, [value]))
+    with pytest.raises(MojoRefusal, match=MOJO_BUFFER_OBJECT_PLACES):
+        codegen.generate_expression(BufferOpNode("Load", values, [index]))
+
+
+def test_direct_buffer_op_constructor_contexts_use_single_evaluation_helpers():
+    codegen = _mojo_buffer_object_codegen(
+        pairs=("StructuredBuffer", "float2"),
+        scalars=("StructuredBuffer", "int"),
+        raw=("RWByteAddressBuffer", None),
     )
-    scalar_consumed = VariableNode(
-        "scalarConsumed", PrimitiveType("ConsumeStructuredBuffer<int>")
-    )
-    raw = VariableNode("raw", PrimitiveType("RWByteAddressBuffer"))
+    pairs = IdentifierNode("pairs")
+    scalars = IdentifierNode("scalars")
+    raw = IdentifierNode("raw")
     index = VariableNode("index", PrimitiveType("uint"))
     uv = VariableNode("uv", PrimitiveType("float2"))
-
-    codegen.register_variable_type("pairs", "StructuredBuffer<float2>")
-    codegen.register_variable_type("consumed", "ConsumeStructuredBuffer<float2>")
-    codegen.register_variable_type("scalarConsumed", "ConsumeStructuredBuffer<int>")
-    codegen.register_variable_type("raw", "RWByteAddressBuffer")
     codegen.register_variable_type("index", "uint")
     codegen.register_variable_type("uv", "float2")
 
     load = BufferOpNode("Load", pairs, [index])
-    consume = BufferOpNode("Consume", consumed, [])
-    scalar_consume = BufferOpNode("Consume", scalar_consumed, [])
+    scalar_load = BufferOpNode("Load", scalars, [index])
     reinterpret = FunctionCallNode("asfloat", [BufferOpNode("Load2", raw, [index])])
 
     load_vector = codegen.generate_expression(FunctionCallNode("float4", [load, uv]))
-    consume_vector = codegen.generate_expression(
-        FunctionCallNode("float4", [consume, uv])
-    )
     reinterpret_vector = codegen.generate_expression(
         FunctionCallNode("float4", [reinterpret, uv])
     )
     load_matrix = codegen.generate_expression(FunctionCallNode("float2x2", [load, uv]))
-    consume_diagonal = codegen.generate_expression(
-        FunctionCallNode("float2x2", [scalar_consume])
+    scalar_diagonal = codegen.generate_expression(
+        FunctionCallNode("float2x2", [scalar_load])
     )
 
     vector_helper = "_crossgl_construct_f32_4_vf322_01_vf322_01"
     matrix_helper = "_crossgl_construct_matrix_f32_c2_r2_2_vf322_01_vf322_01"
     diagonal_helper = "_crossgl_matrix_diagonal_f32_c2_r2"
+    raw_pair = "asfloat(crosstl_buffer_load2(raw, Int(index) >> 2))"
 
-    assert load_vector == f"{vector_helper}(buffer_load(pairs, index), uv)"
-    assert consume_vector == f"{vector_helper}(buffer_consume(consumed), uv)"
-    assert (
-        reinterpret_vector == f"{vector_helper}(asfloat(buffer_load2(raw, index)), uv)"
-    )
-    assert load_matrix == f"{matrix_helper}(buffer_load(pairs, index), uv)"
-    assert consume_diagonal.startswith(f"{diagonal_helper}(")
-    assert consume_diagonal.count("buffer_consume(scalarConsumed)") == 1
+    assert load_vector == f"{vector_helper}(pairs[Int(index)], uv)"
+    assert reinterpret_vector == f"{vector_helper}({raw_pair}, uv)"
+    assert load_matrix == f"{matrix_helper}(pairs[Int(index)], uv)"
+    assert scalar_diagonal.startswith(f"{diagonal_helper}(")
+    assert scalar_diagonal.count("scalars[Int(index)]") == 1
 
-    combined = "\n".join([load_vector, consume_vector, reinterpret_vector, load_matrix])
-    assert "buffer_load(pairs, index)[0]" not in combined
-    assert "buffer_consume(consumed)[0]" not in combined
-    assert "asfloat(buffer_load2(raw, index))[0]" not in combined
-    assert ("StructuredBuffer", "float2") in codegen.required_buffer_load_helpers
-    assert (
-        "ConsumeStructuredBuffer",
-        "float2",
-    ) in codegen.required_buffer_consume_helpers
-    assert (
-        "RWByteAddressBuffer",
-        2,
-    ) in codegen.required_byte_address_vector_load_helpers
+    combined = "\n".join([load_vector, reinterpret_vector, load_matrix])
+    assert "pairs[Int(index)][0]" not in combined
+    assert f"{raw_pair}[0]" not in combined
+    assert ("load", 2) in codegen.required_mojo_buffer_word_helpers
     assert any(
         key[0] == "asfloat" and key[2] == "SIMD[DType.float32, 2]"
         for key in codegen.required_reinterpret_helpers
@@ -4635,19 +4631,11 @@ def test_hlsl_rasterizer_ordered_texture_aliases_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-def test_hlsl_rasterizer_ordered_buffer_aliases_emit_mojo_buffer_helpers():
+def test_hlsl_rasterizer_ordered_buffers_become_mojo_pointer_arguments():
     code = """
-    RasterizerOrderedBuffer<uint> bins : register(u2, space1);
     RasterizerOrderedStructuredBuffer<int> values;
     RasterizerOrderedByteAddressBuffer rawBytes;
-    RasterizerOrderedByteAddressBuffer rawArray[2];
 
-    uint readBin(uint index) {
-        return bins.Load(index);
-    }
-    void writeBin(uint index, uint value) {
-        bins.Store(index, value);
-    }
     int readValue(uint index) {
         return values.Load(index);
     }
@@ -4666,89 +4654,28 @@ def test_hlsl_rasterizer_ordered_buffer_aliases_emit_mojo_buffer_helpers():
     void writeRaw4(uint offset, uint4 value) {
         rawBytes.Store4(offset, value);
     }
-    void queryBins(uint count) {
-        bins.GetDimensions(count);
-    }
-    uint updateRawArray(int slot, uint offset) {
-        uint previous = rawArray[slot].Load(offset);
-        rawArray[slot].Store(offset, previous + uint(1));
-        return previous;
-    }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
 
-    assert "struct RWBuffer[T: AnyType]:" in generated_code
-    assert "struct RWStructuredBuffer[T: AnyType]:" in generated_code
-    assert "struct RWByteAddressBuffer:" in generated_code
-    assert "var bins: RWBuffer[UInt32] = RWBuffer[UInt32]()" in generated_code
-    assert (
-        "var values: RWStructuredBuffer[Int32] = RWStructuredBuffer[Int32]()"
-        in generated_code
-    )
-    assert "var rawBytes: RWByteAddressBuffer = RWByteAddressBuffer()" in (
-        generated_code
-    )
-    assert "StaticTuple[RWByteAddressBuffer, 2]" in generated_code
-    assert (
-        "# CrossGL resource metadata: name=bins kind=buffer set=1 "
-        "binding=2 binding_source=explicit register=u2" in generated_code
-    )
-    assert (
-        "def buffer_load(buffer: RWBuffer[UInt32], index: UInt32) -> UInt32:"
-        in generated_code
-    )
-    assert (
-        "def buffer_store(buffer: RWBuffer[UInt32], index: UInt32, value: UInt32):"
-        in generated_code
-    )
-    assert (
-        "def buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
-        in generated_code
-    )
-    assert (
-        "def buffer_store(buffer: RWStructuredBuffer[Int32], "
-        "index: UInt32, value: Int32):"
-    ) in generated_code
-    assert (
-        "def buffer_load(buffer: RWByteAddressBuffer, index: UInt32) -> UInt32:"
-        in generated_code
-    )
-    assert (
-        "def buffer_store(buffer: RWByteAddressBuffer, index: UInt32, value: UInt32):"
-        in generated_code
-    )
-    assert (
-        "def buffer_load3(buffer: RWByteAddressBuffer, "
-        "index: UInt32) -> SIMD[DType.uint32, 4]:"
-    ) in generated_code
-    assert (
-        "def buffer_store4(buffer: RWByteAddressBuffer, "
-        "index: UInt32, value: SIMD[DType.uint32, 4]):"
-    ) in generated_code
-    assert (
-        "def buffer_dimensions(buffer: RWBuffer[UInt32], dimensions: UInt32):"
-        in generated_code
-    )
-    assert "return buffer_load(bins, index)" in generated_code
-    assert "buffer_store(bins, index, value)" in generated_code
-    assert "return buffer_load(values, index)" in generated_code
-    assert "buffer_store(values, index, value)" in generated_code
-    assert "return buffer_load(rawBytes, offset)" in generated_code
-    assert "buffer_store(rawBytes, offset, value)" in generated_code
-    assert "return buffer_load3(rawBytes, offset)" in generated_code
-    assert "buffer_store4(rawBytes, offset, value)" in generated_code
-    assert "var __cgl_dimensions_0 = buffer_dimensions(bins)" in generated_code
-    assert "count = UInt32(__cgl_dimensions_0[0])" in generated_code
-    assert "var previous: UInt32 = buffer_load(rawArray[Int(slot)], offset)" in (
-        generated_code
-    )
-    assert "buffer_store(rawArray[Int(slot)], offset, (previous + UInt32(1)))" in (
-        generated_code
-    )
+    values = "values: UnsafePointer[Int32, MutAnyOrigin]"
+    words = "rawBytes: UnsafePointer[UInt32, MutAnyOrigin]"
+    assert f"def readValue(index: UInt32, {values}) -> Int32:" in generated_code
+    assert "return values[Int(index)]" in generated_code
+    assert "values[Int(index)] = value" in generated_code
+    assert f"def readRaw(offset: UInt32, {words}) -> UInt32:" in generated_code
+    assert "return rawBytes[Int(offset) >> 2]" in generated_code
+    assert "crosstl_buffer_store1(rawBytes, Int(offset) >> 2, value)" in generated_code
+    assert "return crosstl_buffer_load3(rawBytes, Int(offset) >> 2)" in generated_code
+    assert "crosstl_buffer_store4(rawBytes, Int(offset) >> 2, value)" in generated_code
     assert "RasterizerOrdered" not in generated_code
-    assert ".Load(" not in generated_code
-    assert ".Store(" not in generated_code
-    assert ".GetDimensions(" not in generated_code
+    assert "struct RWStructuredBuffer" not in generated_code
+
+    for declaration in (
+        "RasterizerOrderedBuffer<uint> bins : register(u2, space1);",
+        "RasterizerOrderedByteAddressBuffer rawArray[2];",
+    ):
+        with pytest.raises(MojoRefusal, match=MOJO_BUFFER_OBJECT_PLACES):
+            generate_code(parse_code(tokenize_code(declaration)))
 
 
 def test_hlsl_rasterizer_ordered_buffer_aliases_compile_with_mojo(tmp_path):
@@ -4808,7 +4735,8 @@ def test_hlsl_rasterizer_ordered_buffer_aliases_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-def test_hlsl_typed_buffer_aliases_emit_mojo_buffer_helpers():
+def test_hlsl_typed_buffers_are_refused_for_mojo():
+    # A typed buffer reads texels through the format of its view, which a Mojo pointer argument does not carry.
     code = """
     Buffer<float> inputValues;
     RWBuffer<float> outputValues : register(u1, space2);
@@ -4820,30 +4748,8 @@ def test_hlsl_typed_buffer_aliases_emit_mojo_buffer_helpers():
         outputValues.Store(index, value);
     }
     """
-    generated_code = generate_code(parse_code(tokenize_code(code)))
-
-    assert "struct Buffer[T: AnyType]:" in generated_code
-    assert "struct RWBuffer[T: AnyType]:" in generated_code
-    assert "var inputValues: Buffer[Float32] = Buffer[Float32]()" in generated_code
-    assert "var outputValues: RWBuffer[Float32] = RWBuffer[Float32]()" in generated_code
-    assert (
-        "# CrossGL resource metadata: name=outputValues kind=buffer set=2 "
-        "binding=1 binding_source=explicit register=u1" in generated_code
-    )
-    assert (
-        "def buffer_load(buffer: Buffer[Float32], index: UInt32) -> Float32:"
-        in generated_code
-    )
-    assert (
-        "def buffer_store(buffer: RWBuffer[Float32], index: UInt32, value: Float32):"
-        in generated_code
-    )
-    assert "return buffer_load(inputValues, index)" in generated_code
-    assert "buffer_store(outputValues, index, value)" in generated_code
-    assert "Buffer<" not in generated_code
-    assert "RWBuffer<" not in generated_code
-    assert ".Load(" not in generated_code
-    assert ".Store(" not in generated_code
+    with pytest.raises(MojoRefusal, match=MOJO_BUFFER_OBJECT_PLACES):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_hlsl_typed_buffer_aliases_compile_with_mojo(tmp_path):
@@ -6377,86 +6283,15 @@ def _generic_payload_enum_resource_struct_payload_source():
     """
 
 
-def test_generic_payload_enum_resource_struct_payloads_for_mojo_codegen():
-    generated_code = generate_code(
-        parse_code(
-            tokenize_code(_generic_payload_enum_resource_struct_payload_source())
+def test_generic_payload_enum_resource_struct_payloads_refuse_buffer_members_for_mojo():
+    # The payload structure holds structured and byte-address buffers, which a Mojo kernel receives only as
+    # pointer arguments, never as structure members.
+    with pytest.raises(MojoRefusal, match=MOJO_BUFFER_OBJECT_PLACES):
+        generate_code(
+            parse_code(
+                tokenize_code(_generic_payload_enum_resource_struct_payload_source())
+            )
         )
-    )
-
-    assert "struct Result_ResourceSet_int(TrivialRegisterPassable):" in generated_code
-    assert "var Ok_0: ResourceSet" in generated_code
-    assert "struct Result_ResourceSet_2_int(TrivialRegisterPassable):" in generated_code
-    assert "var Ok_0: StaticTuple[ResourceSet, 2]" in generated_code
-    assert (
-        "Ok_0=ResourceSet(StaticTuple[Texture2D, 2](fill=Texture2D()), "
-        "Sampler(), StaticTuple[Image2D, 2](fill=Image2D())" in generated_code
-    )
-    assert "Ok_0=ResourceSet()" not in generated_code
-    assert (
-        "sample_sampler(value.Ok_0.textures[Int(slot)], value.Ok_0.state, uv)"
-        in generated_code
-    )
-    assert (
-        "sample_sampler(value.Ok_0.singleTexture, value.Ok_0.state, uv)"
-        in generated_code
-    )
-    assert "image_load(value.Ok_0.inputs[Int(slot)], pixel)" in generated_code
-    assert "image_load(value.Ok_0.singleInput, pixel)" in generated_code
-    assert "buffer_load(value.Ok_0.values[Int(slot)], index)" in generated_code
-    assert "buffer_load(value.Ok_0.singleValues, index)" in generated_code
-    assert "image_store(value.Ok_0.outputs[Int(slot)], pixel, color)" in generated_code
-    assert "image_store(value.Ok_0.singleOutput, pixel, color)" in generated_code
-    assert "buffer_store(value.Ok_0.values[Int(slot)], index, scalar)" in generated_code
-    assert "buffer_store(value.Ok_0.singleValues, index, scalar)" in generated_code
-    assert (
-        "buffer_store4(value.Ok_0.rawBuffers[Int(slot)], offset, data)"
-        in generated_code
-    )
-    assert "buffer_store4(value.Ok_0.singleRaw, offset, data)" in generated_code
-    assert (
-        "sample_sampler(value.Ok_0[Int(index)].textures[Int(slot)], "
-        "value.Ok_0[Int(index)].state, uv)" in generated_code
-    )
-    assert (
-        "buffer_load(value.Ok_0[Int(index)].values[Int(slot)], bufferIndex)"
-        in generated_code
-    )
-    assert (
-        "def sample_sampler(tex: Texture2D, sampler: Sampler, "
-        "coord: SIMD[DType.float32, 2])" in generated_code
-    )
-    assert "def image_load(image: Image2D, coord: SIMD[DType.int32, 2])" in (
-        generated_code
-    )
-    assert "def buffer_load(buffer: RWStructuredBuffer[Int32], " in generated_code
-    assert "def buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
-    assert "Result<" not in generated_code
-    assert ".Load(" not in generated_code
-    assert ".Store(" not in generated_code
-    assert ".Store4(" not in generated_code
-
-
-def test_generic_payload_enum_resource_struct_payloads_compile_with_mojo(tmp_path):
-    mojo = find_mojo_compiler()
-
-    generated_code = generate_code(
-        parse_code(
-            tokenize_code(_generic_payload_enum_resource_struct_payload_source())
-        )
-    )
-    generated_code += "\ndef main():\n    pass\n"
-
-    source_path = tmp_path / "generic_payload_resource_struct_payloads.mojo"
-    source_path.write_text(generated_code)
-    result = subprocess.run(
-        [mojo, "run", str(source_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(
@@ -7015,165 +6850,14 @@ def _generic_payload_enum_direct_resource_payload_source():
     """
 
 
-def test_generic_payload_enum_direct_resource_payloads_for_mojo_codegen():
-    generated_code = generate_code(
-        parse_code(
-            tokenize_code(_generic_payload_enum_direct_resource_payload_source())
+def test_generic_payload_enum_direct_resource_payloads_refuse_buffer_payloads_for_mojo():
+    # Enum payloads and helper parameters of buffer object type have no Mojo spelling.
+    with pytest.raises(MojoRefusal, match=MOJO_BUFFER_OBJECT_PLACES):
+        generate_code(
+            parse_code(
+                tokenize_code(_generic_payload_enum_direct_resource_payload_source())
+            )
         )
-    )
-
-    assert "struct Result_sampler2D_int(TrivialRegisterPassable):" in generated_code
-    assert "var Ok_0: Texture2D" in generated_code
-    assert "struct Result_sampler2D_2_int(TrivialRegisterPassable):" in generated_code
-    assert "var Ok_0: StaticTuple[Texture2D, 2]" in generated_code
-    assert "struct Result_image2D_int(TrivialRegisterPassable):" in generated_code
-    assert "var Ok_0: Image2D" in generated_code
-    assert "struct Result_image2D_2_int(TrivialRegisterPassable):" in generated_code
-    assert "var Ok_0: StaticTuple[Image2D, 2]" in generated_code
-    assert "struct Result_sampler2DMS_int(TrivialRegisterPassable):" in generated_code
-    assert "var Ok_0: Texture2DMS" in generated_code
-    assert "struct Result_sampler2DMS_2_int(TrivialRegisterPassable):" in generated_code
-    assert "var Ok_0: StaticTuple[Texture2DMS, 2]" in generated_code
-    assert "struct Result_image2DMS_int(TrivialRegisterPassable):" in generated_code
-    assert "var Ok_0: Image2DMS" in generated_code
-    assert "struct Result_image2DMS_2_int(TrivialRegisterPassable):" in generated_code
-    assert "var Ok_0: StaticTuple[Image2DMS, 2]" in generated_code
-    assert (
-        "struct Result_sampler2DMSArray_int(TrivialRegisterPassable):" in generated_code
-    )
-    assert "var Ok_0: Texture2DMSArray" in generated_code
-    assert (
-        "struct Result_image2DMSArray_int(TrivialRegisterPassable):" in generated_code
-    )
-    assert "var Ok_0: Image2DMSArray" in generated_code
-    assert "struct Result_MSArrayBox_int(TrivialRegisterPassable):" in generated_code
-    assert "var Ok_0: MSArrayBox" in generated_code
-    assert (
-        "struct Result_RWStructuredBuffer_int_int(TrivialRegisterPassable):"
-        in generated_code
-    )
-    assert "var Ok_0: RWStructuredBuffer[Int32]" in generated_code
-    assert (
-        "struct Result_ByteAddressBuffer_int(TrivialRegisterPassable):"
-        in generated_code
-    )
-    assert "var Ok_0: ByteAddressBuffer" in generated_code
-    assert (
-        "struct Result_RWByteAddressBuffer_int(TrivialRegisterPassable):"
-        in generated_code
-    )
-    assert "var Ok_0: RWByteAddressBuffer" in generated_code
-    assert (
-        "struct Result_RWStructuredBuffer_int_2_int(TrivialRegisterPassable):"
-        in generated_code
-    )
-    assert "var Ok_0: StaticTuple[RWStructuredBuffer[Int32], 2]" in generated_code
-    assert (
-        "struct Result_RWByteAddressBuffer_2_int(TrivialRegisterPassable):"
-        in generated_code
-    )
-    assert "var Ok_0: StaticTuple[RWByteAddressBuffer, 2]" in generated_code
-    assert "texture_size(value.Ok_0, 0)" in generated_code
-    assert "image_size(value.Ok_0)" in generated_code
-    assert "sample_sampler(value.Ok_0, state, uv)" in generated_code
-    assert "image_load(value.Ok_0, pixel)" in generated_code
-    assert "image_store(value.Ok_0, pixel, color)" in generated_code
-    assert "texture_samples(value.Ok_0)" in generated_code
-    assert "texel_fetch(value.Ok_0, pixel, sampleIndex)" in generated_code
-    assert "image_samples(value.Ok_0)" in generated_code
-    assert "image_load(value.Ok_0, pixel, sampleIndex)" in generated_code
-    assert "image_store(value.Ok_0, pixel, sampleIndex, color)" in generated_code
-    assert "texel_fetch(value.Ok_0, pixelLayer, sampleIndex)" in generated_code
-    assert "image_load(value.Ok_0, pixelLayer, sampleIndex)" in generated_code
-    assert "image_store(value.Ok_0, pixelLayer, sampleIndex, color)" in generated_code
-    assert "buffer_load(value.Ok_0, index)" in generated_code
-    assert "buffer_store(value.Ok_0, index, scalar)" in generated_code
-    assert "buffer_load4(value.Ok_0, offset)" in generated_code
-    assert "buffer_store4(value.Ok_0, offset, data)" in generated_code
-    assert "sample_sampler(value.Ok_0[Int(slot)], state, uv)" in generated_code
-    assert "image_load(value.Ok_0[Int(slot)], pixel)" in generated_code
-    assert "image_store(value.Ok_0[Int(slot)], pixel, color)" in generated_code
-    assert "texel_fetch(value.Ok_0[Int(slot)], pixel, sampleIndex)" in generated_code
-    assert "image_load(value.Ok_0[Int(slot)], pixel, sampleIndex)" in generated_code
-    assert (
-        "image_store(value.Ok_0[Int(slot)], pixel, sampleIndex, color)"
-        in generated_code
-    )
-    assert "buffer_load(value.Ok_0[Int(slot)], index)" in generated_code
-    assert "buffer_store(value.Ok_0[Int(slot)], index, scalar)" in generated_code
-    assert "buffer_load4(value.Ok_0[Int(slot)], offset)" in generated_code
-    assert "buffer_store4(value.Ok_0[Int(slot)], offset, data)" in generated_code
-    assert "buffer_load(value.Ok_0.values, index) + value.Ok_0.tag" in generated_code
-    assert "image_load(value.Ok_0.image, pixel)" in generated_code
-    assert "texture_samples(value.Ok_0.tex)" in generated_code
-    assert "image_samples(value.Ok_0.image)" in generated_code
-    assert "texel_fetch(value.Ok_0.tex, pixelLayer, sampleIndex)" in generated_code
-    assert "image_load(value.Ok_0.image, pixelLayer, sampleIndex)" in generated_code
-    assert (
-        "image_store(value.Ok_0.image, pixelLayer, sampleIndex, color)"
-        in generated_code
-    )
-    assert "def reassignDirectPayloadWrapper() -> None:" in generated_code
-    assert "value = Result_image2D_int_Err_make(0)" in generated_code
-    assert "def texture_size(tex: Texture2D, lod: Int32)" in generated_code
-    assert "def image_size(image: Image2D)" in generated_code
-    assert "def image_store(image: Image2D, " in generated_code
-    assert "def texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
-    assert (
-        "def texel_fetch(tex: Texture2DMS, coord: SIMD[DType.int32, 2], "
-        "lod: Int32)" in generated_code
-    )
-    assert "def texture_samples(tex: Texture2DMSArray) -> Int32:" in generated_code
-    assert (
-        "def texel_fetch(tex: Texture2DMSArray, coord: SIMD[DType.int32, 4], "
-        "lod: Int32)" in generated_code
-    )
-    assert "def image_samples(image: Image2DMS) -> Int32:" in generated_code
-    assert (
-        "def image_load(image: Image2DMS, coord: SIMD[DType.int32, 2], "
-        "sample: Int32)" in generated_code
-    )
-    assert (
-        "def image_store(image: Image2DMS, coord: SIMD[DType.int32, 2], "
-        "sample: Int32, value: SIMD[DType.float32, 4])" in generated_code
-    )
-    assert "def image_samples(image: Image2DMSArray) -> Int32:" in generated_code
-    assert (
-        "def image_load(image: Image2DMSArray, coord: SIMD[DType.int32, 4], "
-        "sample: Int32)" in generated_code
-    )
-    assert (
-        "def image_store(image: Image2DMSArray, coord: SIMD[DType.int32, 4], "
-        "sample: Int32, value: SIMD[DType.float32, 4])" in generated_code
-    )
-    assert "def buffer_store(buffer: RWStructuredBuffer[Int32], " in generated_code
-    assert "def buffer_load4(buffer: ByteAddressBuffer, " in generated_code
-    assert "def buffer_store4(buffer: RWByteAddressBuffer, " in generated_code
-    assert "Result<" not in generated_code
-    assert ".Load(" not in generated_code
-    assert ".Store(" not in generated_code
-
-
-def test_generic_payload_enum_direct_resource_payloads_compile_with_mojo(tmp_path):
-    mojo = find_mojo_compiler()
-
-    generated_code = generate_code(
-        parse_code(
-            tokenize_code(_generic_payload_enum_direct_resource_payload_source())
-        )
-    )
-    generated_code += "\ndef main():\n    pass\n"
-
-    source_path = tmp_path / "generic_payload_direct_resource_payloads.mojo"
-    source_path.write_text(generated_code)
-    result = subprocess.run(
-        [mojo, "run", str(source_path)],
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-
-    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize(
@@ -7235,7 +6919,7 @@ def test_generic_payload_enum_direct_resource_payloads_compile_with_mojo(tmp_pat
                 }
             }
             """,
-            r"Store.*values.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
     ],
 )
@@ -7330,7 +7014,7 @@ def test_generic_payload_enum_local_direct_resource_payload_access_diagnostics(
                 }
             }
             """,
-            r"Store.*buffers.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
     ],
 )
@@ -7681,7 +7365,7 @@ def test_generic_payload_enum_nested_helper_struct_payload_access_diagnostics(
                 }
             }
             """,
-            r"Store4.*readRaw.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -7705,7 +7389,7 @@ def test_generic_payload_enum_nested_helper_struct_payload_access_diagnostics(
                 };
             }
             """,
-            r"Load4.*writeRaw.*writeonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
     ],
 )
@@ -8219,7 +7903,7 @@ def test_generic_payload_enum_resource_query_bindings_compile_with_mojo(tmp_path
                 }
             }
             """,
-            r"Store4.*resources\.rawBuffers.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
     ],
 )
@@ -9966,16 +9650,24 @@ def test_duplicate_resource_bindings_are_rejected_for_mojo_codegen():
     with pytest.raises(ValueError, match="Conflicting Mojo resource binding"):
         generate_code(parse_code(tokenize_code(duplicate_sampler_binding)))
 
-    overlapping_buffer_range = """
-    @binding(3) RWStructuredBuffer<int> counters[2];
-    @binding(4)
+    overlapping_buffer_binding = """
+    @binding(3) RWStructuredBuffer<int> counters;
+    @binding(3)
     cbuffer Camera {
         float exposure;
     }
     """
 
     with pytest.raises(ValueError, match="Conflicting Mojo resource binding"):
-        generate_code(parse_code(tokenize_code(overlapping_buffer_range)))
+        generate_code(parse_code(tokenize_code(overlapping_buffer_binding)))
+
+    # A Mojo kernel receives each buffer object as one pointer, so an array of them is refused.
+    buffer_array = """
+    @binding(3) RWStructuredBuffer<int> counters[2];
+    """
+
+    with pytest.raises(MojoRefusal, match=MOJO_BUFFER_OBJECT_PLACES):
+        generate_code(parse_code(tokenize_code(buffer_array)))
 
 
 def test_resource_memory_qualifier_metadata_and_access_validation_for_mojo_codegen():
@@ -10017,7 +9709,7 @@ def test_resource_memory_qualifier_metadata_and_access_validation_for_mojo_codeg
         "binding_source=automatic memory=globallycoherent,restrict"
         in metadata_only_code
     )
-    assert "return buffer_load(values, index)" in metadata_only_code
+    assert "return values[Int(index)]" in metadata_only_code
 
     invalid_read = """
     writeonly uniform image2D outImage;
@@ -10068,7 +9760,7 @@ def test_resource_array_access_qualifiers_apply_to_indexed_mojo_resources():
         return buffer_load(buffers[slot], index);
     }
     """
-    with pytest.raises(ValueError, match="buffer_load.*buffers.*writeonly"):
+    with pytest.raises(ValueError, match=MOJO_BUFFER_OBJECT_PLACES):
         generate_code(parse_code(tokenize_code(invalid_buffer_read)))
 
     invalid_buffer_write = """
@@ -10078,7 +9770,7 @@ def test_resource_array_access_qualifiers_apply_to_indexed_mojo_resources():
         buffer_store(buffers[slot], index, value);
     }
     """
-    with pytest.raises(ValueError, match="buffer_store.*buffers.*readonly"):
+    with pytest.raises(ValueError, match=MOJO_BUFFER_OBJECT_PLACES):
         generate_code(parse_code(tokenize_code(invalid_buffer_write)))
 
     invalid_raw_method_write = """
@@ -10088,8 +9780,54 @@ def test_resource_array_access_qualifiers_apply_to_indexed_mojo_resources():
         rawBuffers[slot].Store(offset, value);
     }
     """
-    with pytest.raises(ValueError, match="Store.*rawBuffers.*readonly"):
+    with pytest.raises(ValueError, match=MOJO_BUFFER_OBJECT_PLACES):
         generate_code(parse_code(tokenize_code(invalid_raw_method_write)))
+
+
+@pytest.mark.parametrize(
+    ("source", "pattern"),
+    [
+        (
+            """
+            writeonly RWStructuredBuffer<int> values;
+            int invalidRead(uint index) {
+                return buffer_load(values, index);
+            }
+            """,
+            "buffer_load.*values.*writeonly",
+        ),
+        (
+            """
+            readonly RWStructuredBuffer<int> values;
+            void invalidWrite(uint index, int value) {
+                buffer_store(values, index, value);
+            }
+            """,
+            "buffer_store.*values.*readonly",
+        ),
+        (
+            """
+            readonly RWByteAddressBuffer raw;
+            void invalidMethodWrite(uint offset, uint4 value) {
+                raw.Store4(offset, value);
+            }
+            """,
+            "buffer_store.*raw.*readonly",
+        ),
+        (
+            """
+            writeonly RWByteAddressBuffer raw;
+            uint2 invalidMethodRead(uint offset) {
+                return raw.Load2(offset);
+            }
+            """,
+            "buffer_load.*raw.*writeonly",
+        ),
+    ],
+)
+def test_buffer_object_access_qualifiers_apply_for_mojo_codegen(source, pattern):
+    with pytest.raises(MojoRefusal, match=pattern):
+        generate_code(parse_code(tokenize_code(source)))
 
 
 def test_struct_resource_field_access_qualifiers_are_enforced_for_mojo_codegen():
@@ -10104,7 +9842,7 @@ def test_struct_resource_field_access_qualifiers_are_enforced_for_mojo_codegen()
         return resources.values[slot].Load(index);
     }
     """
-    with pytest.raises(ValueError, match=r"Load.*resources\.values.*writeonly"):
+    with pytest.raises(ValueError, match=MOJO_BUFFER_OBJECT_PLACES):
         generate_code(parse_code(tokenize_code(invalid_structured_member_read)))
 
     invalid_structured_free_store = """
@@ -10118,7 +9856,7 @@ def test_struct_resource_field_access_qualifiers_are_enforced_for_mojo_codegen()
         buffer_store(resources.values[slot], index, value);
     }
     """
-    with pytest.raises(ValueError, match=r"buffer_store.*resources\.values.*readonly"):
+    with pytest.raises(ValueError, match=MOJO_BUFFER_OBJECT_PLACES):
         generate_code(parse_code(tokenize_code(invalid_structured_free_store)))
 
     invalid_raw_member_store = """
@@ -10132,7 +9870,7 @@ def test_struct_resource_field_access_qualifiers_are_enforced_for_mojo_codegen()
         resources.rawBuffers[slot].Store4(offset, value);
     }
     """
-    with pytest.raises(ValueError, match=r"Store4.*resources\.rawBuffers.*readonly"):
+    with pytest.raises(ValueError, match=MOJO_BUFFER_OBJECT_PLACES):
         generate_code(parse_code(tokenize_code(invalid_raw_member_store)))
 
     invalid_raw_free_read = """
@@ -10146,9 +9884,7 @@ def test_struct_resource_field_access_qualifiers_are_enforced_for_mojo_codegen()
         return buffer_load(resources.rawBuffers[slot], offset);
     }
     """
-    with pytest.raises(
-        ValueError, match=r"buffer_load.*resources\.rawBuffers.*writeonly"
-    ):
+    with pytest.raises(ValueError, match=MOJO_BUFFER_OBJECT_PLACES):
         generate_code(parse_code(tokenize_code(invalid_raw_free_read)))
 
 
@@ -10193,7 +9929,7 @@ def test_struct_resource_field_access_qualifiers_are_enforced_for_mojo_codegen()
                 return (useWrite ? writeBuffers : values)[slot].Load(index);
             }
             """,
-            r"Load.*writeBuffers.*writeonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -10207,7 +9943,7 @@ def test_struct_resource_field_access_qualifiers_are_enforced_for_mojo_codegen()
                 );
             }
             """,
-            r"Store.*readBuffers.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -10221,7 +9957,7 @@ def test_struct_resource_field_access_qualifiers_are_enforced_for_mojo_codegen()
                 );
             }
             """,
-            r"Store4.*readRaw.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -10302,7 +10038,7 @@ def test_branch_selected_resource_access_qualifiers_apply_for_mojo_codegen(
                 alias.Store(index, value);
             }
             """,
-            r"Store.*readValues.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -10315,7 +10051,7 @@ def test_branch_selected_resource_access_qualifiers_apply_for_mojo_codegen(
                 alias.Store(index, value);
             }
             """,
-            r"Store.*readValues.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -10335,7 +10071,7 @@ def test_branch_selected_resource_access_qualifiers_apply_for_mojo_codegen(
                 alias.InterlockedAdd(offset, value, original);
             }
             """,
-            r"InterlockedAdd.*readRaw.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -10691,7 +10427,7 @@ def test_loop_carried_struct_resource_aliases_remain_field_specific():
                 payload.values.Store(index, value);
             }
             """,
-            r"Store.*readValues.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -10721,7 +10457,7 @@ def test_loop_carried_struct_resource_aliases_remain_field_specific():
                 payload.values.Store(index, value);
             }
             """,
-            r"Store.*readValues.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -10744,7 +10480,7 @@ def test_loop_carried_struct_resource_aliases_remain_field_specific():
                 return payload.values.Load(index);
             }
             """,
-            r"Load.*writeValues.*writeonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -10762,7 +10498,7 @@ def test_loop_carried_struct_resource_aliases_remain_field_specific():
                 payload.raw.Store4(offset, value);
             }
             """,
-            r"Store4.*readRaw.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -10781,7 +10517,7 @@ def test_loop_carried_struct_resource_aliases_remain_field_specific():
                 return payload.raw.Load(offset);
             }
             """,
-            r"Load.*writeRaw.*writeonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
     ],
 )
@@ -10984,7 +10720,7 @@ def test_loop_carried_buffer_resource_alias_access_qualifiers_for_mojo_codegen(
                 }
             }
             """,
-            r"Store.*readValues.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
     ],
 )
@@ -11246,7 +10982,7 @@ def test_loop_carried_helper_generic_resource_aliases_remain_field_specific():
                 };
             }
             """,
-            r"Load.*writeRaw.*writeonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
     ],
 )
@@ -11530,7 +11266,7 @@ def test_match_selected_resource_array_aliases_remain_field_specific():
                 };
             }
             """,
-            r"Load.*writeRaw.*writeonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
     ],
 )
@@ -13250,19 +12986,10 @@ def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_me
         SamplerState samplerState;
         int tag;
     };
-    struct BufferBundle {
-        RWStructuredBuffer<int> values;
-        int tag;
-    };
     Texture2D<float4> sourceTexture;
     SamplerState linearSampler;
-    RWStructuredBuffer<int> outputValues;
 
     Result<TextureBundle, int> wrapTextureBundle(TextureBundle payload) {
-        return Result::Ok(payload);
-    }
-
-    Result<BufferBundle, int> wrapBufferBundle(BufferBundle payload) {
         return Result::Ok(payload);
     }
 
@@ -13273,35 +13000,18 @@ def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_me
             Result::Err(_) => float4(0.0)
         };
     }
-
-    void storeBundle(uint index, int value) {
-        BufferBundle bundle = BufferBundle(outputValues, 4);
-        match wrapBufferBundle(bundle) {
-            Result::Ok(payload) => {
-                payload.values.Store(index, value);
-            }
-            Result::Err(_) => {
-            }
-        }
-    }
     """
 
     generated_code = generate_code(parse_code(tokenize_code(source)))
 
     assert "struct TextureBundle(TrivialRegisterPassable):" in generated_code
-    assert "struct BufferBundle(TrivialRegisterPassable):" in generated_code
     assert "struct Result_TextureBundle_int(TrivialRegisterPassable):" in generated_code
-    assert "struct Result_BufferBundle_int(TrivialRegisterPassable):" in generated_code
     assert "var Ok_0: TextureBundle" in generated_code
-    assert "var Ok_0: BufferBundle" in generated_code
     assert (
         "# CrossGL resource metadata: name=sourceTexture kind=texture" in generated_code
     )
     assert (
         "# CrossGL resource metadata: name=linearSampler kind=sampler" in generated_code
-    )
-    assert (
-        "# CrossGL resource metadata: name=outputValues kind=buffer" in generated_code
     )
     assert "# CrossGL resource metadata: name=TextureBundle" not in generated_code
     assert "# CrossGL resource metadata: name=BufferBundle" not in generated_code
@@ -13311,11 +13021,24 @@ def test_resource_prefixed_user_structs_preserve_resource_fields_without_self_me
         "sample_sampler(__cgl_match_subject_0.Ok_0.texture, "
         "__cgl_match_subject_0.Ok_0.samplerState, uv)" in generated_code
     )
-    assert "buffer_store(__cgl_match_subject_1.Ok_0.values, index, value)" in (
-        generated_code
-    )
     assert ".Sample(" not in generated_code
     assert ".Store(" not in generated_code
+
+    # A structure holding a buffer object has no Mojo spelling: the kernel receives the buffer as a pointer.
+    buffer_bundle = """
+    struct BufferBundle {
+        RWStructuredBuffer<int> values;
+        int tag;
+    };
+    RWStructuredBuffer<int> outputValues;
+
+    void storeBundle(uint index, int value) {
+        BufferBundle bundle = BufferBundle(outputValues, 4);
+        bundle.values.Store(index, value);
+    }
+    """
+    with pytest.raises(MojoRefusal, match=MOJO_BUFFER_OBJECT_PLACES):
+        generate_code(parse_code(tokenize_code(buffer_bundle)))
 
 
 def test_unsupported_buffer_counter_and_byte_address_atomic_methods_are_diagnostic():
@@ -13415,7 +13138,7 @@ def test_struct_resource_field_buffer_access_compile_with_mojo(tmp_path):
     assert result.returncode == 0, result.stderr
 
 
-def test_nested_struct_resource_array_containers_preserve_mojo_placeholders():
+def test_nested_struct_resource_array_containers_are_refused_for_mojo():
     code = """
     struct ResourceSet {
         readonly RWStructuredBuffer<int> inputValues[2];
@@ -13439,48 +13162,9 @@ def test_nested_struct_resource_array_containers_preserve_mojo_placeholders():
         bundle.resources.rawBuffers[slot].Store4(offset, data);
     }
     """
-    generated_code = generate_code(parse_code(tokenize_code(code)))
-
-    assert "struct ResourceSet(TrivialRegisterPassable):" in generated_code
-    assert "var inputValues: StaticTuple[RWStructuredBuffer[Int32], 2]" in (
-        generated_code
-    )
-    assert "var outputValues: StaticTuple[RWStructuredBuffer[Int32], 2]" in (
-        generated_code
-    )
-    assert "var rawBuffers: StaticTuple[RWByteAddressBuffer, 2]" in generated_code
-    assert "struct ResourceBundle(TrivialRegisterPassable):" in generated_code
-    assert "var resources: ResourceSet" in generated_code
-    assert "var bundle = ResourceBundle(ResourceSet(" in generated_code
-    assert "var bundles = StaticTuple[ResourceBundle, 2]" in generated_code
-    assert (
-        "buffer_load(bundles[Int(outer)].resources.inputValues[Int(slot)], index)"
-        in generated_code
-    )
-    assert (
-        "buffer_store(bundle.resources.outputValues[Int(slot)], index, value)"
-        in generated_code
-    )
-    assert (
-        "buffer_store4(bundle.resources.rawBuffers[Int(slot)], offset, data)"
-        in generated_code
-    )
-    assert (
-        "def buffer_load(buffer: RWStructuredBuffer[Int32], index: UInt32) -> Int32:"
-        in generated_code
-    )
-    assert (
-        "def buffer_store(buffer: RWStructuredBuffer[Int32], "
-        "index: UInt32, value: Int32):" in generated_code
-    )
-    assert (
-        "def buffer_store4(buffer: RWByteAddressBuffer, "
-        "index: UInt32, value: SIMD[DType.uint32, 4]):" in generated_code
-    )
-    assert ".Load(" not in generated_code
-    assert ".Store(" not in generated_code
-    assert ".Store4(" not in generated_code
-    assert "RWStructuredBuffer<" not in generated_code
+    # The placeholder buffer structures this used to declare never compiled.
+    with pytest.raises(MojoRefusal, match=MOJO_BUFFER_OBJECT_PLACES):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 @pytest.mark.parametrize(
@@ -13498,7 +13182,7 @@ def test_nested_struct_resource_array_containers_preserve_mojo_placeholders():
                 return bundle.resources.values[slot].Load(index);
             }
             """,
-            r"Load.*bundle\.resources\.values.*writeonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -13512,7 +13196,7 @@ def test_nested_struct_resource_array_containers_preserve_mojo_placeholders():
                 bundle.resources.values[slot].Store(index, value);
             }
             """,
-            r"Store.*bundle\.resources\.values.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -13532,7 +13216,7 @@ def test_nested_struct_resource_array_containers_preserve_mojo_placeholders():
                 bundles[outer].resources.rawBuffers[slot].Store4(offset, value);
             }
             """,
-            r"Store4.*bundles\.resources\.rawBuffers.*readonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
         (
             """
@@ -13546,7 +13230,7 @@ def test_nested_struct_resource_array_containers_preserve_mojo_placeholders():
                 return buffer_load(bundle.resources.rawBuffers[slot], offset);
             }
             """,
-            r"buffer_load.*bundle\.resources\.rawBuffers.*writeonly",
+            MOJO_BUFFER_OBJECT_PLACES,
         ),
     ],
 )
@@ -15016,7 +14700,6 @@ def test_hlsl_get_dimensions_out_parameter_statements_for_mojo_codegen():
     struct DimensionSet {
         Texture2DArray<float4> textures[2];
         RWTexture3D<float4> volumes[2];
-        StructuredBuffer<float4> buffers[2];
     };
 
     Texture2D<float4> colorMap;
@@ -15044,7 +14727,6 @@ def test_hlsl_get_dimensions_out_parameter_statements_for_mojo_codegen():
         multisampled.GetDimensions(width, height, samples);
         counters.GetDimensions(width, height);
         resources.volumes[slot].GetDimensions(width, height, depth);
-        resources.buffers[slot].GetDimensions(elements, stride);
     }
     """
     generated_code = generate_code(parse_code(tokenize_code(code)))
@@ -15066,11 +14748,6 @@ def test_hlsl_get_dimensions_out_parameter_statements_for_mojo_codegen():
     assert "def texture_query_levels(tex: Texture2D) -> Int32:" in generated_code
     assert "def texture_query_levels(tex: Texture2DArray) -> Int32:" in generated_code
     assert "def texture_samples(tex: Texture2DMS) -> Int32:" in generated_code
-    assert (
-        "def buffer_dimensions("
-        "buffer: StructuredBuffer[SIMD[DType.float32, 4]], "
-        "dimensions: UInt32, stride: UInt32):"
-    ) in generated_code
     assert "var __cgl_dimensions_0 = texture_size(colorMap)" in generated_code
     assert "width = UInt32(__cgl_dimensions_0[0])" in generated_code
     assert "height = UInt32(__cgl_dimensions_0[1])" in generated_code
@@ -15090,12 +14767,6 @@ def test_hlsl_get_dimensions_out_parameter_statements_for_mojo_codegen():
         generated_code
     )
     assert "depth = UInt32(__cgl_dimensions_4[2])" in generated_code
-    assert (
-        "var __cgl_dimensions_5 = buffer_dimensions(resources.buffers[Int(slot)])"
-        in generated_code
-    )
-    assert "elements = UInt32(__cgl_dimensions_5[0])" in generated_code
-    assert "stride = UInt32(__cgl_dimensions_5[1])" in generated_code
     assert ".GetDimensions(" not in generated_code
 
 
@@ -15997,8 +15668,22 @@ def test_invalid_buffer_operations_are_rejected_for_mojo_codegen():
     }
     """
 
-    with pytest.raises(ValueError, match="Unsupported buffer_store"):
+    with pytest.raises(ValueError, match=MOJO_BUFFER_OBJECT_PLACES):
         generate_code(parse_code(tokenize_code(code)))
+
+    for buffer, value in (("rawBytes", "uint"), ("readonlyValues", "int")):
+        code = f"""
+        ByteAddressBuffer rawBytes;
+        StructuredBuffer<int> readonlyValues;
+
+        void invalidStore(uint offset, {value} value) {{
+            buffer_store({buffer}, offset, value);
+        }}
+        """
+        with pytest.raises(
+            ValueError, match=f"Unsupported buffer_store of read-only .* {buffer}"
+        ):
+            generate_code(parse_code(tokenize_code(code)))
 
 
 @pytest.mark.parametrize(
@@ -16167,9 +15852,9 @@ def test_direct_pipeline_ir_nodes_lower_ray_and_mesh_without_ast_repr():
     assert "set_mesh_output_counts" in codegen.required_mesh_helpers
 
     codegen.current_shader_type = "task"
-    dispatch_expr = codegen.generate_expression(MeshOpNode("DispatchMesh", [1, 1, 1]))
-    assert dispatch_expr == "_crossgl_dispatch_mesh(1, 1, 1)"
-    assert "dispatch_mesh" in codegen.required_mesh_helpers
+    with pytest.raises(MojoLoweringRefused, match="DispatchMesh"):
+        codegen.generate_expression(MeshOpNode("DispatchMesh", [1, 1, 1]))
+    assert "dispatch_mesh" not in codegen.required_mesh_helpers
 
 
 def test_direct_wave_ir_node_lowers_to_a_mojo_warp_helper():
@@ -16191,7 +15876,7 @@ def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen(
         return values.Load(index);
     }
     """
-    with pytest.raises(ValueError, match="Unsupported Load.*AppendStructuredBuffer"):
+    with pytest.raises(ValueError, match=MOJO_APPEND_CONSUME_BUFFER):
         generate_code(parse_code(tokenize_code(invalid_member_load)))
 
     invalid_free_load = """
@@ -16201,9 +15886,7 @@ def test_invalid_structured_buffer_member_methods_are_rejected_for_mojo_codegen(
         return buffer_load(values, index);
     }
     """
-    with pytest.raises(
-        ValueError, match="Unsupported buffer_load.*ConsumeStructuredBuffer"
-    ):
+    with pytest.raises(ValueError, match=MOJO_APPEND_CONSUME_BUFFER):
         generate_code(parse_code(tokenize_code(invalid_free_load)))
 
     invalid_append = """
@@ -16245,7 +15928,7 @@ def test_unsupported_buffer_counter_methods_are_rejected_for_mojo_codegen():
         return values.DecrementCounter();
     }
     """
-    with pytest.raises(ValueError, match="buffer counter method DecrementCounter"):
+    with pytest.raises(ValueError, match=MOJO_APPEND_CONSUME_BUFFER):
         generate_code(parse_code(tokenize_code(invalid_decrement)))
 
     readonly_increment = """
@@ -16290,10 +15973,7 @@ def test_unsupported_byte_address_atomic_methods_are_rejected_for_mojo_codegen()
         );
     }
     """
-    with pytest.raises(
-        ValueError,
-        match="byte-address buffer atomic method InterlockedCompareExchange",
-    ):
+    with pytest.raises(ValueError, match=MOJO_BUFFER_OBJECT_PLACES):
         generate_code(parse_code(tokenize_code(invalid_interlocked_compare_exchange)))
 
     readonly_interlocked_add = """
@@ -22501,8 +22181,8 @@ def test_image_atomic_constructor_scalar_targets_require_explicit_casts(
 def _duplicate_sensitive_buffer_constructor_source():
     return """
     StructuredBuffer<float2> pairs;
-    ConsumeStructuredBuffer<float2> consumed;
-    ConsumeStructuredBuffer<int> scalarConsumed;
+    StructuredBuffer<float2> consumed;
+    StructuredBuffer<int> scalarConsumed;
     RWByteAddressBuffer raw;
 
     uint index() {
@@ -22518,7 +22198,7 @@ def _duplicate_sensitive_buffer_constructor_source():
     }
 
     float4 packConsume() {
-        return float4(consumed.Consume(), uv());
+        return float4(consumed.Load(1u), uv());
     }
 
     float4 packReinterpret() {
@@ -22530,7 +22210,7 @@ def _duplicate_sensitive_buffer_constructor_source():
     }
 
     float2x2 diagonalConsume() {
-        return float2x2(float(scalarConsumed.Consume()));
+        return float2x2(float(scalarConsumed.Load(1u)));
     }
     """
 
@@ -22544,25 +22224,22 @@ def test_duplicate_sensitive_buffer_constructors_emit_single_evaluation_helpers(
     matrix_helper = "_crossgl_construct_matrix_f32_c2_r2_2_vf322_01_vf322_01"
     diagonal_helper = "_crossgl_matrix_diagonal_f32_c2_r2"
 
+    assert f"return {vector_helper}(pairs[Int(index())], uv())" in generated_code
+    assert f"return {vector_helper}(consumed[Int(1)], uv())" in generated_code
     assert (
-        f"return {vector_helper}(buffer_load(pairs, index()), uv())" in generated_code
-    )
-    assert f"return {vector_helper}(buffer_consume(consumed), uv())" in generated_code
-    assert (
-        f"return {vector_helper}(asfloat(buffer_load2(raw, index())), uv())"
+        f"return {vector_helper}(asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2)), uv())"
         in generated_code
     )
+    assert f"return {matrix_helper}(pairs[Int(index())], uv())" in generated_code
     assert (
-        f"return {matrix_helper}(buffer_load(pairs, index()), uv())" in generated_code
+        f"return {diagonal_helper}(Float32(scalarConsumed[Int(1)]))" in generated_code
     )
+    assert "pairs[Int(index())][0]" not in generated_code
+    assert "consumed[Int(1)][0]" not in generated_code
     assert (
-        f"return {diagonal_helper}(Float32(buffer_consume(scalarConsumed)))"
-        in generated_code
+        "asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2))[0]" not in generated_code
     )
-    assert "buffer_load(pairs, index())[0]" not in generated_code
-    assert "buffer_consume(consumed)[0]" not in generated_code
-    assert "asfloat(buffer_load2(raw, index()))[0]" not in generated_code
-    assert generated_code.count("buffer_consume(scalarConsumed)") == 1
+    assert generated_code.count("scalarConsumed[Int(1)]") == 1
 
 
 def test_duplicate_sensitive_buffer_constructors_compile_with_mojo(tmp_path):
@@ -22573,11 +22250,14 @@ def test_duplicate_sensitive_buffer_constructors_compile_with_mojo(tmp_path):
     )
     generated_code += """
 def main():
-    print(packLoad())
-    print(packConsume())
-    print(packReinterpret())
-    print(packMatrix().c0)
-    print(diagonalConsume().c0)
+    var pairs = alloc[SIMD[DType.float32, 2]](2).unsafe_origin_cast[MutAnyOrigin]()
+    var scalars = alloc[Int32](2).unsafe_origin_cast[MutAnyOrigin]()
+    var raw = alloc[UInt32](4).unsafe_origin_cast[MutAnyOrigin]()
+    print(packLoad(pairs))
+    print(packConsume(pairs))
+    print(packReinterpret(raw))
+    print(packMatrix(pairs).c0)
+    print(diagonalConsume(scalars).c0)
 """
 
     source_path = tmp_path / "duplicate_sensitive_buffer_constructors.mojo"
@@ -22613,8 +22293,7 @@ def main():
                 return float(consumed.Consume());
             }
             """,
-            r"buffer_consume target.*scalar constructor float argument 1"
-            r".*expects float2.*got float",
+            MOJO_APPEND_CONSUME_BUFFER,
         ),
         (
             """
@@ -22644,7 +22323,7 @@ def _aggregate_buffer_reinterpret_target_source():
     };
 
     StructuredBuffer<float2> pairs;
-    ConsumeStructuredBuffer<float2> consumed;
+    StructuredBuffer<float2> consumed;
     RWByteAddressBuffer raw;
 
     uint index() {
@@ -22665,7 +22344,7 @@ def _aggregate_buffer_reinterpret_target_source():
         return {
             useRaw ? asfloat(raw.Load2(index())) : pairs.Load(index()),
             match mode {
-                0 => consumed.Consume(),
+                0 => consumed.Load(1u),
                 _ => asfloat(raw.Load2(index()))
             }
         };
@@ -22675,7 +22354,7 @@ def _aggregate_buffer_reinterpret_target_source():
         return PairBox{
             value: useRaw ? asfloat(raw.Load2(index())) : pairs.Load(index()),
             alt: match mode {
-                0 => consumed.Consume(),
+                0 => consumed.Load(1u),
                 _ => asfloat(raw.Load2(index()))
             }
         };
@@ -22685,7 +22364,7 @@ def _aggregate_buffer_reinterpret_target_source():
         return PairBox(
             useRaw ? asfloat(raw.Load2(index())) : pairs.Load(index()),
             match mode {
-                0 => consumed.Consume(),
+                0 => consumed.Load(1u),
                 _ => asfloat(raw.Load2(index()))
             }
         );
@@ -22696,7 +22375,7 @@ def _aggregate_buffer_reinterpret_target_source():
             useRaw ? pairs.Load(index()) : asfloat(raw.Load2(index())),
             match mode {
                 0 => asfloat(raw.Load2(index())),
-                _ => consumed.Consume()
+                _ => consumed.Load(1u)
             }
         });
     }
@@ -22706,7 +22385,7 @@ def _aggregate_buffer_reinterpret_target_source():
             value: useRaw ? pairs.Load(index()) : asfloat(raw.Load2(index())),
             alt: match mode {
                 0 => asfloat(raw.Load2(index())),
-                _ => consumed.Consume()
+                _ => consumed.Load(1u)
             }
         });
     }
@@ -22719,39 +22398,45 @@ def test_aggregate_buffer_reinterpret_targets_preserve_contexts_for_mojo_codegen
     )
 
     array_type = "StaticTuple[SIMD[DType.float32, 2], 2]"
-    assert "def chooseBuffer(useRaw: Bool) -> SIMD[DType.float32, 2]:" in (
-        generated_code
-    )
+    pair_pointer = "UnsafePointer[SIMD[DType.float32, 2], MutAnyOrigin]"
+    word_pointer = "UnsafePointer[UInt32, MutAnyOrigin]"
     assert (
-        "return (asfloat(buffer_load2(raw, index())) if useRaw else "
-        "buffer_load(pairs, index()))"
+        f"def chooseBuffer(useRaw: Bool, pairs: {pair_pointer}, raw: {word_pointer}) "
+        "-> SIMD[DType.float32, 2]:"
     ) in generated_code
-    assert f"def collectBufferValues(mode: Int32, useRaw: Bool) -> {array_type}:" in (
-        generated_code
-    )
+    assert (
+        "return (asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2)) if useRaw else "
+        "pairs[Int(index())])"
+    ) in generated_code
+    assert (
+        f"def collectBufferValues(mode: Int32, useRaw: Bool, pairs: {pair_pointer}, "
+        f"consumed: {pair_pointer}, raw: {word_pointer}) -> {array_type}:"
+    ) in generated_code
     assert "var __cgl_match_value_0: SIMD[DType.float32, 2]" in generated_code
-    assert "__cgl_match_value_0 = buffer_consume(consumed)" in generated_code
-    assert "__cgl_match_value_0 = asfloat(buffer_load2(raw, index()))" in (
-        generated_code
+    assert "__cgl_match_value_0 = consumed[Int(1)]" in generated_code
+    assert (
+        "__cgl_match_value_0 = asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2))"
+        in (generated_code)
     )
     assert (
-        f"return {array_type}((asfloat(buffer_load2(raw, index())) if useRaw "
-        "else buffer_load(pairs, index())), __cgl_match_value_0)"
+        f"return {array_type}((asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2)) if useRaw "
+        "else pairs[Int(index())]), __cgl_match_value_0)"
     ) in generated_code
     assert (
-        "return PairBox(value=(asfloat(buffer_load2(raw, index())) if useRaw else"
+        "return PairBox(value=(asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2)) if useRaw else"
         in generated_code
     )
-    assert "return PairBox((asfloat(buffer_load2(raw, index())) if useRaw else" in (
-        generated_code
+    assert (
+        "return PairBox((asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2)) if useRaw else"
+        in (generated_code)
     )
     assert f"acceptPairs({array_type}(" in generated_code
-    assert "acceptBox(PairBox(value=(buffer_load(pairs, index()) if useRaw else" in (
+    assert "acceptBox(PairBox(value=(pairs[Int(index())] if useRaw else" in (
         generated_code
     )
     assert "pairs.Load(" not in generated_code
     assert "raw.Load2(" not in generated_code
-    assert "consumed.Consume(" not in generated_code
+    assert "consumed.Load(" not in generated_code
 
 
 def test_aggregate_buffer_reinterpret_targets_compile_with_mojo(tmp_path):
@@ -22762,12 +22447,14 @@ def test_aggregate_buffer_reinterpret_targets_compile_with_mojo(tmp_path):
     )
     generated_code += """
 def main():
-    print(chooseBuffer(True))
-    print(collectBufferValues(0, False)[0])
-    print(makeBufferBox(0, True).value)
-    print(makePositionalBufferBox(1, False).alt)
-    passBufferArray(0, True)
-    passBufferBox(1, False)
+    var pairs = alloc[SIMD[DType.float32, 2]](2).unsafe_origin_cast[MutAnyOrigin]()
+    var raw = alloc[UInt32](4).unsafe_origin_cast[MutAnyOrigin]()
+    print(chooseBuffer(True, pairs, raw))
+    print(collectBufferValues(0, False, pairs, pairs, raw)[0])
+    print(makeBufferBox(0, True, pairs, pairs, raw).value)
+    print(makePositionalBufferBox(1, False, pairs, pairs, raw).alt)
+    passBufferArray(0, True, pairs, pairs, raw)
+    passBufferBox(1, False, pairs, pairs, raw)
 """
 
     source_path = tmp_path / "aggregate_buffer_reinterpret_targets.mojo"
@@ -22849,8 +22536,7 @@ def main():
                 };
             }
             """,
-            r"buffer_consume target.*return value match arm 1"
-            r".*expects float2.*got float",
+            MOJO_APPEND_CONSUME_BUFFER,
         ),
     ],
 )
@@ -22868,7 +22554,7 @@ def _function_style_struct_assignment_target_source():
     };
 
     StructuredBuffer<float2> pairs;
-    ConsumeStructuredBuffer<float2> consumed;
+    StructuredBuffer<float2> consumed;
     RWByteAddressBuffer raw;
     RWTexture2D<float2> image;
 
@@ -22885,7 +22571,7 @@ def _function_style_struct_assignment_target_source():
 
     void useBoxes(int mode, bool choose) {
         let inferred = MixedBox(
-            choose ? pairs.Load(index()) : consumed.Consume(),
+            choose ? pairs.Load(index()) : consumed.Load(1u),
             image.Load(pixel()),
             match mode {
                 0 => asfloat(raw.Load2(index())),
@@ -22893,7 +22579,7 @@ def _function_style_struct_assignment_target_source():
             }
         );
         MixedBox explicitValue = MixedBox(
-            consumed.Consume(),
+            consumed.Load(1u),
             choose ? image.Load(pixel()) : pairs.Load(index()),
             asfloat(raw.Load2(index()))
         );
@@ -22901,13 +22587,13 @@ def _function_style_struct_assignment_target_source():
         assigned = MixedBox(
             match mode {
                 0 => pairs.Load(index()),
-                _ => consumed.Consume()
+                _ => consumed.Load(1u)
             },
             image.Load(pixel()),
             choose ? asfloat(raw.Load2(index())) : pairs.Load(index())
         );
         inferred = MixedBox(
-            consumed.Consume(),
+            consumed.Load(1u),
             image.Load(pixel()),
             asfloat(raw.Load2(index()))
         );
@@ -22925,37 +22611,42 @@ def test_function_style_struct_constructors_preserve_assignment_target_contexts(
         parse_code(tokenize_code(_function_style_struct_assignment_target_source()))
     )
 
-    assert "def useBoxes(mode: Int32, choose: Bool) -> None:" in generated_code
-    assert "var __cgl_match_value_0: SIMD[DType.float32, 2]" in generated_code
-    assert "__cgl_match_value_0 = asfloat(buffer_load2(raw, index()))" in (
-        generated_code
-    )
-    assert "__cgl_match_value_0 = buffer_load(pairs, index())" in generated_code
+    pair_pointer = "UnsafePointer[SIMD[DType.float32, 2], MutAnyOrigin]"
     assert (
-        "var inferred = MixedBox((buffer_load(pairs, index()) if choose else "
-        "buffer_consume(consumed)), image_load(image, pixel()), __cgl_match_value_0)"
+        f"def useBoxes(mode: Int32, choose: Bool, pairs: {pair_pointer}, "
+        f"consumed: {pair_pointer}, raw: UnsafePointer[UInt32, MutAnyOrigin]) -> None:"
+    ) in generated_code
+    assert "var __cgl_match_value_0: SIMD[DType.float32, 2]" in generated_code
+    assert (
+        "__cgl_match_value_0 = asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2))"
+        in (generated_code)
+    )
+    assert "__cgl_match_value_0 = pairs[Int(index())]" in generated_code
+    assert (
+        "var inferred = MixedBox((pairs[Int(index())] if choose else "
+        "consumed[Int(1)]), image_load(image, pixel()), __cgl_match_value_0)"
     ) in generated_code
     assert (
-        "var explicitValue: MixedBox = MixedBox(buffer_consume(consumed), "
-        "(image_load(image, pixel()) if choose else buffer_load(pairs, index())), "
-        "asfloat(buffer_load2(raw, index())))"
+        "var explicitValue: MixedBox = MixedBox(consumed[Int(1)], "
+        "(image_load(image, pixel()) if choose else pairs[Int(index())]), "
+        "asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2)))"
     ) in generated_code
     assert "var assigned = MixedBox(" in generated_code
     assert "var __cgl_match_value_1: SIMD[DType.float32, 2]" in generated_code
-    assert "__cgl_match_value_1 = buffer_load(pairs, index())" in generated_code
-    assert "__cgl_match_value_1 = buffer_consume(consumed)" in generated_code
+    assert "__cgl_match_value_1 = pairs[Int(index())]" in generated_code
+    assert "__cgl_match_value_1 = consumed[Int(1)]" in generated_code
     assert (
         "assigned = MixedBox(__cgl_match_value_1, image_load(image, pixel()), "
-        "(asfloat(buffer_load2(raw, index())) if choose else "
-        "buffer_load(pairs, index())))"
+        "(asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2)) if choose else "
+        "pairs[Int(index())]))"
     ) in generated_code
     assert (
-        "inferred = MixedBox(buffer_consume(consumed), image_load(image, pixel()), "
-        "asfloat(buffer_load2(raw, index())))"
+        "inferred = MixedBox(consumed[Int(1)], image_load(image, pixel()), "
+        "asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2)))"
     ) in generated_code
     assert (
-        "acceptMixed(MixedBox(buffer_load(pairs, index()), image_load(image, "
-        "pixel()), asfloat(buffer_load2(raw, index()))))"
+        "acceptMixed(MixedBox(pairs[Int(index())], image_load(image, "
+        "pixel()), asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2))))"
     ) in generated_code
 
 
@@ -22967,7 +22658,9 @@ def test_function_style_struct_assignment_contexts_compile_with_mojo(tmp_path):
     )
     generated_code += """
 def main():
-    useBoxes(0, True)
+    var pairs = alloc[SIMD[DType.float32, 2]](2).unsafe_origin_cast[MutAnyOrigin]()
+    var raw = alloc[UInt32](4).unsafe_origin_cast[MutAnyOrigin]()
+    useBoxes(0, True, pairs, pairs, raw)
 """
 
     source_path = tmp_path / "function_style_struct_assignment_contexts.mojo"
@@ -23039,8 +22732,7 @@ def main():
                 assigned = ScalarBox(consumed.Consume());
             }
             """,
-            r"buffer_consume target.*assignment target field ScalarBox\.value"
-            r".*expects float2.*got float",
+            MOJO_APPEND_CONSUME_BUFFER,
         ),
     ],
 )
@@ -23099,7 +22791,7 @@ def _braced_struct_assignment_target_source():
     };
 
     StructuredBuffer<float2> pairs;
-    ConsumeStructuredBuffer<float2> consumed;
+    StructuredBuffer<float2> consumed;
     RWByteAddressBuffer raw;
     RWTexture2D<float2> image;
 
@@ -23116,7 +22808,7 @@ def _braced_struct_assignment_target_source():
 
     void useBracedBoxes(int mode, bool choose) {
         let inferred = MixedBox {
-            loaded: choose ? pairs.Load(index()) : consumed.Consume(),
+            loaded: choose ? pairs.Load(index()) : consumed.Load(1u),
             imageValue: image.Load(pixel()),
             rawValue: match mode {
                 0 => asfloat(raw.Load2(index())),
@@ -23124,7 +22816,7 @@ def _braced_struct_assignment_target_source():
             }
         };
         MixedBox explicitValue = MixedBox {
-            loaded: consumed.Consume(),
+            loaded: consumed.Load(1u),
             imageValue: choose ? image.Load(pixel()) : pairs.Load(index()),
             rawValue: asfloat(raw.Load2(index()))
         };
@@ -23132,13 +22824,13 @@ def _braced_struct_assignment_target_source():
         assigned = MixedBox {
             loaded: match mode {
                 0 => pairs.Load(index()),
-                _ => consumed.Consume()
+                _ => consumed.Load(1u)
             },
             imageValue: image.Load(pixel()),
             rawValue: choose ? asfloat(raw.Load2(index())) : pairs.Load(index())
         };
         inferred = MixedBox {
-            loaded: consumed.Consume(),
+            loaded: consumed.Load(1u),
             imageValue: image.Load(pixel()),
             rawValue: asfloat(raw.Load2(index()))
         };
@@ -23156,40 +22848,45 @@ def test_braced_struct_constructors_preserve_assignment_target_contexts():
         parse_code(tokenize_code(_braced_struct_assignment_target_source()))
     )
 
-    assert "def useBracedBoxes(mode: Int32, choose: Bool) -> None:" in generated_code
-    assert "var __cgl_match_value_0: SIMD[DType.float32, 2]" in generated_code
-    assert "__cgl_match_value_0 = asfloat(buffer_load2(raw, index()))" in (
-        generated_code
-    )
-    assert "__cgl_match_value_0 = buffer_load(pairs, index())" in generated_code
+    pair_pointer = "UnsafePointer[SIMD[DType.float32, 2], MutAnyOrigin]"
     assert (
-        "var inferred = MixedBox(loaded=(buffer_load(pairs, index()) if choose "
-        "else buffer_consume(consumed)), imageValue=image_load(image, pixel()), "
+        f"def useBracedBoxes(mode: Int32, choose: Bool, pairs: {pair_pointer}, "
+        f"consumed: {pair_pointer}, raw: UnsafePointer[UInt32, MutAnyOrigin]) -> None:"
+    ) in generated_code
+    assert "var __cgl_match_value_0: SIMD[DType.float32, 2]" in generated_code
+    assert (
+        "__cgl_match_value_0 = asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2))"
+        in (generated_code)
+    )
+    assert "__cgl_match_value_0 = pairs[Int(index())]" in generated_code
+    assert (
+        "var inferred = MixedBox(loaded=(pairs[Int(index())] if choose "
+        "else consumed[Int(1)]), imageValue=image_load(image, pixel()), "
         "rawValue=__cgl_match_value_0)"
     ) in generated_code
     assert (
-        "var explicitValue: MixedBox = MixedBox(loaded=buffer_consume(consumed), "
+        "var explicitValue: MixedBox = MixedBox(loaded=consumed[Int(1)], "
         "imageValue=(image_load(image, pixel()) if choose else "
-        "buffer_load(pairs, index())), rawValue=asfloat(buffer_load2(raw, index())))"
+        "pairs[Int(index())]), rawValue=asfloat(crosstl_buffer_load2(raw, Int(index()) >> 2)))"
     ) in generated_code
     assert "var assigned = MixedBox(" in generated_code
     assert "var __cgl_match_value_1: SIMD[DType.float32, 2]" in generated_code
-    assert "__cgl_match_value_1 = buffer_load(pairs, index())" in generated_code
-    assert "__cgl_match_value_1 = buffer_consume(consumed)" in generated_code
+    assert "__cgl_match_value_1 = pairs[Int(index())]" in generated_code
+    assert "__cgl_match_value_1 = consumed[Int(1)]" in generated_code
     assert (
         "assigned = MixedBox(loaded=__cgl_match_value_1, "
-        "imageValue=image_load(image, pixel()), rawValue=(asfloat(buffer_load2(raw, "
-        "index())) if choose else buffer_load(pairs, index())))"
+        "imageValue=image_load(image, pixel()), rawValue=(asfloat(crosstl_buffer_load2(raw, "
+        "Int(index()) >> 2)) if choose else pairs[Int(index())]))"
     ) in generated_code
     assert (
-        "inferred = MixedBox(loaded=buffer_consume(consumed), "
-        "imageValue=image_load(image, pixel()), rawValue=asfloat(buffer_load2(raw, "
-        "index())))"
+        "inferred = MixedBox(loaded=consumed[Int(1)], "
+        "imageValue=image_load(image, pixel()), rawValue=asfloat(crosstl_buffer_load2(raw, "
+        "Int(index()) >> 2)))"
     ) in generated_code
     assert (
-        "acceptMixed(MixedBox(loaded=buffer_load(pairs, index()), "
-        "imageValue=image_load(image, pixel()), rawValue=asfloat(buffer_load2(raw, "
-        "index()))))"
+        "acceptMixed(MixedBox(loaded=pairs[Int(index())], "
+        "imageValue=image_load(image, pixel()), rawValue=asfloat(crosstl_buffer_load2(raw, "
+        "Int(index()) >> 2))))"
     ) in generated_code
     assert "MatchNode" not in generated_code
 
@@ -23202,7 +22899,9 @@ def test_braced_struct_assignment_contexts_compile_with_mojo(tmp_path):
     )
     generated_code += """
 def main():
-    useBracedBoxes(0, True)
+    var pairs = alloc[SIMD[DType.float32, 2]](2).unsafe_origin_cast[MutAnyOrigin]()
+    var raw = alloc[UInt32](4).unsafe_origin_cast[MutAnyOrigin]()
+    useBracedBoxes(0, True, pairs, pairs, raw)
 """
 
     source_path = tmp_path / "braced_struct_assignment_contexts.mojo"
@@ -23277,8 +22976,7 @@ def main():
                 };
             }
             """,
-            r"buffer_consume target.*declaration badValue field ScalarBox\.value "
-            r"match arm 1.*expects float2.*got float",
+            MOJO_APPEND_CONSUME_BUFFER,
         ),
     ],
 )
@@ -27383,22 +27081,23 @@ def test_separate_texture_and_sampler_objects_for_mojo():
 
 
 def test_buffer_block_with_structured_buffer_resource():
-    codegen = MojoCodeGen()
-    buf = VariableNode("particles", PrimitiveType("StructuredBuffer<float>"))
+    codegen = _mojo_buffer_object_codegen(particles=("StructuredBuffer", "float"))
+    codegen.mojo_buffer_length_names = {"particles"}
+    codegen.declare_mojo_buffer_length_argument("particles", {})
+    buf = IdentifierNode("particles")
     idx = VariableNode("idx", PrimitiveType("uint"))
     count = VariableNode("count", PrimitiveType("uint"))
-
-    codegen.register_variable_type("particles", "StructuredBuffer<float>")
     codegen.register_variable_type("idx", "uint")
     codegen.register_variable_type("count", "uint")
 
     load_expr = codegen.generate_expression(BufferOpNode("Load", buf, [idx]))
     dims_expr = codegen.generate_expression(BufferOpNode("GetDimensions", buf, [count]))
 
-    assert load_expr == "buffer_load(particles, idx)"
-    assert dims_expr == "buffer_dimensions(particles, count)"
-    assert ("StructuredBuffer", "float") in codegen.required_buffer_load_helpers
-    assert ("StructuredBuffer", "float") in codegen.required_buffer_dimensions_helpers
+    assert load_expr == "particles[Int(idx)]"
+    assert dims_expr == "count = UInt32(particles_length)"
+    assert codegen.mojo_kernel_argument_companions == {
+        "particles": ("particles_length",)
+    }
     assert codegen.expression_result_type(BufferOpNode("Load", buf, [idx])) == "float"
 
 

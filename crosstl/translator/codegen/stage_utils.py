@@ -289,8 +289,41 @@ def deduplicate_named_declarations(nodes, kind):
     return declarations
 
 
+_SIGNATURE_SKIPPED_FIELDS = frozenset({"parent", "source_location", "annotations"})
+
+
+def structural_signature(value):
+    """A hashable key of an AST value built from every field, not from ``repr``.
+
+    Several AST ``__repr__`` methods print only a node's name (``AttributeNode`` omits its arguments), so two
+    declarations that differ in ``binding = 0`` and ``binding = 1`` had the same ``repr`` and one was dropped as a
+    duplicate. Metadata (parent links, source locations, annotations) and private caches are not part of the key.
+    """
+    if isinstance(value, (list, tuple)):
+        return (type(value).__name__,) + tuple(
+            structural_signature(item) for item in value
+        )
+    if isinstance(value, dict):
+        return ("dict",) + tuple(
+            (repr(key), structural_signature(item))
+            for key, item in sorted(value.items(), key=lambda entry: repr(entry[0]))
+        )
+    fields = getattr(value, "__dict__", None)
+    if fields is None or not hasattr(value, "accept"):
+        return repr(value)
+    return (type(value).__name__,) + tuple(
+        (key, structural_signature(child))
+        for key, child in sorted(fields.items())
+        if key not in _SIGNATURE_SKIPPED_FIELDS and not key.startswith("_")
+    )
+
+
 def declaration_signature(node):
-    """Build a small structural signature for named declaration deduplication."""
+    """Build a structural signature for named declaration deduplication.
+
+    Types and attributes are compared field by field, so same-name declarations that differ in an attribute
+    argument (a binding, a location, a set) conflict instead of collapsing into one.
+    """
     node_type = node.__class__.__name__
     declared_type = getattr(
         node,
@@ -304,7 +337,7 @@ def declaration_signature(node):
         member_signature = tuple(
             (
                 getattr(member, "name", None),
-                repr(
+                structural_signature(
                     getattr(
                         member,
                         "member_type",
@@ -315,8 +348,8 @@ def declaration_signature(node):
                         ),
                     )
                 ),
-                repr(getattr(member, "attributes", None)),
-                repr(getattr(member, "semantic", None)),
+                structural_signature(getattr(member, "attributes", None)),
+                structural_signature(getattr(member, "semantic", None)),
             )
             for member in members
         )
@@ -325,8 +358,8 @@ def declaration_signature(node):
 
     return (
         node_type,
-        repr(declared_type),
-        repr(attributes),
+        structural_signature(declared_type),
+        structural_signature(attributes),
         member_signature,
     )
 

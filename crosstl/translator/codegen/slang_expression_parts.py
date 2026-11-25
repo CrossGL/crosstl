@@ -8,6 +8,7 @@ from ..ast import (
 )
 from ..refusals import SlangRefusal
 from .array_utils import split_array_type_suffix
+from .slang_core_functions import SLANG_CORE_FUNCTION_RENAMES
 from .slang_cull_distance import slang_cull_distance_argument
 from .slang_exact_lookups import (
     SLANG_BITCAST_INTRINSICS,
@@ -78,6 +79,8 @@ class SlangExpressionPartsMixin:
         """The Slang name of a call to ``callee``, which the program does not declare; refuses a foreign built-in."""
         if callee in self.function_map:
             return self.function_map[callee]
+        if callee in SLANG_CORE_FUNCTION_RENAMES:
+            return SLANG_CORE_FUNCTION_RENAMES[callee]
         reason = slang_foreign_call_reason(callee, self.function_map)
         if reason is not None:
             return self.refuse_lowering(reason, callee)

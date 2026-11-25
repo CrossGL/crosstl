@@ -20,18 +20,8 @@ from tools.coverage import docs
 LOGGER = logging.getLogger(__name__)
 # The pages go here, under the documentation sources; git ignores the directory.
 DIRECTORY = "languages"
-# The backend guide of each language whose guide is not named after it.
-GUIDE_NAMES = {"hlsl": "directx"}
-
-
-def guides(srcdir: Path, languages: list[str]) -> dict[str, str]:
-    """The document name of each language's backend guide under ``backends/``, for the languages that have one."""
-    found = {}
-    for language in languages:
-        name = f"backends/{GUIDE_NAMES.get(language, language)}"
-        if (srcdir / f"{name}.rst").is_file():
-            found[language] = name
-    return found
+# The document name of each language's backend guide under ``backends/``, for the languages that have one.
+guides = docs.guides
 
 
 def generate(srcdir: Path, source: str, required: bool) -> list[Path]:

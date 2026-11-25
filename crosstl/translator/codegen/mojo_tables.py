@@ -641,6 +641,8 @@ MOJO_ATOMIC_OP_ALIASES = {
     "InterlockedCompareExchange": "image_atomic_comp_swap",
 }
 MOJO_SCALAR_ATOMIC_OPS = {
+    "atomicLoad": "load",
+    "atomicStore": "store",
     "atomicAdd": "add",
     "atomicMin": "min",
     "atomicMax": "max",

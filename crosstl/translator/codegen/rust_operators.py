@@ -803,6 +803,12 @@ class RustOperatorMixin:
             value_expr = node.right
             op = getattr(node, "operator", "=")
 
+        component_store = self.expand_dynamic_component_write(
+            target_expr, lambda: self.generate_assignment(node)
+        )
+        if component_store is not None:
+            return component_store
+
         padded_store = self.generate_rust_gpu_padded_slice_assignment(
             target_expr, value_expr, op
         )
