@@ -16,7 +16,6 @@ from pathlib import Path
 from . import metal_textures
 from .process import run
 
-FILES = ("input.bin", "output.bin")
 CONSTANTS = "constants.bin"
 VULKAN_TIMEOUT = 15
 
@@ -360,13 +359,16 @@ D3D12_TIMEOUT = 45
 def d3d12_request(job, shader):
     """Encode one dispatch for the buffer-view worker: an allocation per buffer, each view at its own register.
 
+    The inputs are ``input.bin`` and ``input<k>.bin`` at their registers in slot order, and ``output.bin`` is last.
+
     A ``ByteAddressBuffer`` gets a raw view (``R32_TYPELESS`` with the raw flag) and a ``StructuredBuffer`` a
     structured view of its reflected stride, as HLSL requires; the constants block becomes a constant-buffer view
     padded to 256 bytes. Returns the request bytes and the buffer files in allocation order.
     """
     directory = Path(job["directory"])
     allocations, views, files = [], [], []
-    for resource, filename in zip(job["resources"], FILES):
+    filenames = buffer_files(len(job["resources"]) - 1)
+    for resource, filename in zip(job["resources"], filenames, strict=True):
         data = (directory / filename).read_bytes()
         register = resource["register"]
         kind = {"t": D3D12_SRV, "u": D3D12_UAV}[register[0]]

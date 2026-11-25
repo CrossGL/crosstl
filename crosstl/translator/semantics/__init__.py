@@ -119,6 +119,11 @@ from .hlsl_stage_interfaces import (
 from .hlsl_tess_factors import TessFactorUnsupportedError, fit_tess_factors_to_domain
 from .hlsl_unsigned_system_values import deliver_unsigned_system_values
 from .implicit_lod import ImplicitLodStageUnsupportedError, legalize_implicit_lod
+from .initializer_shapes import (
+    InitializerShapeMismatchError,
+    refuse_initializer_shape_mismatches,
+)
+from .integer_math import IntegerMathError, lower_integer_math
 from .interface_block_instances import (
     InterfaceBlockInstanceUnsupportedError,
     declare_interface_block_instances,
@@ -131,6 +136,7 @@ from .intrinsic_named_functions import (
     IntrinsicOverloadAmbiguousError,
     resolve_intrinsic_named_functions,
 )
+from .libm_binary64 import Binary64MathError, lower_binary64_math
 from .local_structs import LocalStructUnsupportedError, hoist_local_structs
 from .lower import Lowerer, RuleInexpressibleError
 from .matrix_spellings import (
@@ -250,6 +256,7 @@ from .texture_swizzles import canonicalize_texture_swizzles
 from .tuple_fields import TupleFieldUnsupportedError, refuse_tuple_fields
 from .type_aliases import TypeAliasUnsupportedError, resolve_type_aliases
 from .uniform_variables import lower_uniform_variables
+from .union_word_views import UnionWordViewError, split_union_word_views
 from .unsized_arrays import (
     StorageBufferParameterUnsupportedError,
     UnsizedArrayUnsupportedError,
@@ -269,6 +276,10 @@ from .work_graph_nodes import (
     check_work_graph_nodes,
     refuse_work_graph_nodes,
 )
+from .workgroup_uniform_load import (
+    WorkgroupUniformLoadError,
+    lower_workgroup_uniform_loads,
+)
 from .written_stage_inputs import copy_written_stage_inputs
 
 __all__ = [
@@ -278,6 +289,7 @@ __all__ = [
     "AggregateEqualityUnsupportedError",
     "AmbiguousMatrixSpellingError",
     "ArrayConstructorUnsupportedError",
+    "Binary64MathError",
     "BindingIndexUnresolvedError",
     "BlockMatrixOrderError",
     "BuiltinValueUnsupportedError",
@@ -307,11 +319,14 @@ __all__ = [
     "HitObjectUnsupportedError",
     "WorkGraphNodeError",
     "WorkGraphUnsupportedError",
+    "WorkgroupUniformLoadError",
     "HlslGeometryStreamUnsupportedError",
     "RowMajorStructMemberUnsupportedError",
     "HlslRayPayloadUnsupportedError",
     "HlslStageInterfaceUnsupportedError",
     "ImplicitLodStageUnsupportedError",
+    "InitializerShapeMismatchError",
+    "IntegerMathError",
     "InterfaceBlockInstanceUnsupportedError",
     "IntersectionResultUnsupportedError",
     "IntrinsicOverloadAmbiguousError",
@@ -353,6 +368,7 @@ __all__ = [
     "UndeclaredFunctionError",
     "UndeclaredIdentifierError",
     "UndeclaredTypeError",
+    "UnionWordViewError",
     "UnsizedArrayUnsupportedError",
     "VoidCastError",
     "VoidValueError",
@@ -414,7 +430,9 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     :class:`BindingIndexUnresolvedError`; WGSL output keeps a name the program does not declare, for the host to
     declare (:mod:`.binding_constants`).
     User functions named like texture or image built-ins are then renamed, with the calls that resolve to them
-    (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in. ``sizeof``
+    (:mod:`.intrinsic_named_functions`), so no later pass or generator reads such a call as the built-in. Calls of
+    CrossGL's integer combinatorics functions (``gcd``, ``lcm``, ``factorial``, ``comb``, ``perm``) become calls of
+    CrossGL helpers for every target, or are refused with :class:`IntegerMathError` (:mod:`.integer_math`). ``sizeof``
     then becomes its byte count where every target agrees on it, and ``metal_sizeof`` its byte count with MSL's
     layout; other operands are refused with :class:`SizeofUnsupportedError` (:mod:`.sizeof_values`). Every use of a
     type alias then names the aliased type, the MSL, HLSL and GLSL generators keeping program-scope aliases
@@ -519,7 +537,9 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     registers; on Metal, DirectX, CUDA and HIP, which compute them with integer promotion, the narrow results of a
     non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). A SPIR-V
     operation the importer kept as a call is then refused with :class:`SpirvOperationUnsupportedError` for every
-    target but CrossGL (:mod:`.spirv_instructions`). Families a target meets for the whole program, such as
+    target but CrossGL (:mod:`.spirv_instructions`). After the rule intrinsics are lowered, binary64 ``exp``,
+    ``exp2``, ``log``, ``log2`` and ``pow`` calls become calls of CrossGL helpers on the targets whose built-ins
+    take binary32 at most (:mod:`.libm_binary64`). Families a target meets for the whole program, such as
     ``fp_ieee``, are discharged last (:mod:`.program_families`). The AST is
     rewritten in place. Raises :class:`RuleInexpressibleError` when the target
     cannot express a rule, :class:`HalfFloatUnsupportedError` for a binary16 construct the target cannot compute
@@ -565,9 +585,11 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     fold_stage_layout_counts(program, report.target)
     resolve_intrinsic_named_functions(program)
     rename_colliding_functions(program)
+    lower_integer_math(program, report.target)
     hoist_stage_private_variables(program, report.target)
     hoist_static_locals(program, report.target)
     lower_device_private_globals(program, report.target)
+    lower_workgroup_uniform_loads(program, report.target)
     orient_row_major_buffer_struct_members(program, report.target)
     store_row_major_members_transposed(program, report.target)
     store_row_major_constant_members_transposed(program, report.target)
@@ -580,9 +602,11 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     orient_row_major_struct_members(program, report.target)
     resolve_static_assertions(program, report.target)
     zero_empty_scalar_initializers(program, report.target)
+    refuse_initializer_shape_mismatches(program, report.source, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_float_relations(program, report.target)
     lower_enum_values(program, report.target)
+    split_union_word_views(program, report.target)
     lower_device_struct_references(program, report.target)
     separate_initializer_scopes(program, report.source, report.target)
     canonicalize_texture_swizzles(program)
@@ -662,6 +686,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     refuse_spirv_instructions(program, report.target)
     Annotator(program, report.source, report, declared_families).run()
     Lowerer(program, report.target, report).run()
+    lower_binary64_math(program, report.target)
     discharge_program_families(
         program, source_families(report.source) | declared_families, report
     )

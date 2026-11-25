@@ -17,6 +17,7 @@ from ..DirectxAst import (
     VariableNode,
 )
 from ..vk_locations import vk_location_suffix
+from ..work_graph_import import crossgl_work_graph_parameter_attributes
 
 
 class IdentifierAttributeMixin:
@@ -320,7 +321,10 @@ class IdentifierAttributeMixin:
         return f"{' '.join(qualifiers)} " if qualifiers else ""
 
     def should_emit_const_qualifier(self, node):
-        return getattr(node, "value", None) is not None
+        # A $Globals member is read-only already and has no initializer for ``const`` to protect.
+        return getattr(node, "value", None) is not None and id(node) not in getattr(
+            self, "hlsl_program_constant_global_ids", ()
+        )
 
     def format_global_storage_qualifier_prefix(self, node):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
@@ -451,6 +455,9 @@ class IdentifierAttributeMixin:
         attributes = self.format_inline_parameter_attributes(parameter)
         if attributes:
             prefixes.append(attributes)
+        work_graph_attributes = crossgl_work_graph_parameter_attributes(self, parameter)
+        if work_graph_attributes:
+            prefixes.append(work_graph_attributes)
         resource_attributes = self.format_inline_resource_qualifier_attributes(
             parameter
         )

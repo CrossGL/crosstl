@@ -17,6 +17,7 @@ from ..array_element_receivers import (
 )
 from ..auto_placeholders import deduced_auto_type
 from ..text_scanners import find_named_type_declarations
+from .lazy_type_views import LazyTypeView
 from .support import (
     IDENTIFIER_RE,
     MetalStructMethodError,
@@ -892,15 +893,38 @@ class MetalDeclaredTypeMixin:
         # at `position` (nearest preceding declaration wins per name).
         flattened: Dict[str, _DeclaredTypeT] = {}
         for name in declarations:
-            resolved = self._resolve_declared_type_at(declarations, name, position)
+            resolved = self._flatten_type_at(declarations, name, position)
             if resolved is not None:
-                if isinstance(resolved, _MetalAddressableValueType) and (
-                    resolved.scope is None
-                    or not resolved.scope[0] <= position < resolved.scope[1]
-                ):
-                    resolved = str(resolved)
                 flattened[name] = resolved
         return flattened
+
+    def _flatten_type_at(
+        self,
+        declarations: Dict[str, List[Tuple[int, _DeclaredTypeT]]],
+        name: str,
+        position: int,
+    ) -> Optional[_DeclaredTypeT]:
+        # The value `_flatten_types_at` records for `name`, or None when it records none.
+        resolved = self._resolve_declared_type_at(declarations, name, position)
+        if isinstance(resolved, _MetalAddressableValueType) and (
+            resolved.scope is None
+            or not resolved.scope[0] <= position < resolved.scope[1]
+        ):
+            resolved = str(resolved)
+        return resolved
+
+    def _lazy_flattened_types_at(
+        self,
+        declarations: Dict[str, List[Tuple[int, _DeclaredTypeT]]],
+        position: int,
+    ) -> Dict[str, _DeclaredTypeT]:
+        # `_flatten_types_at(declarations, position)`, resolving each name when it is
+        # looked up. `declarations` must not change while the view is in use.
+        def entry(name):
+            resolved = self._flatten_type_at(declarations, name, position)
+            return None if resolved is None else (name, resolved)
+
+        return LazyTypeView(declarations, entry)
 
     def _struct_field_types_at(
         self,
@@ -916,33 +940,72 @@ class MetalDeclaredTypeMixin:
             return {}
         field_types: Dict[str, Dict[str, str]] = {}
         for name in variable_types:
-            struct_type = self._resolve_declared_type_at(variable_types, name, position)
-            if struct_type is None:
-                continue
-            indirection_match = re.search(r"(?P<indirection>[*&]+)\s*$", struct_type)
-            indirection = (
-                indirection_match.group("indirection")
-                if indirection_match is not None
-                else ""
+            found = self._struct_field_type_entry_at(
+                variable_types, structs_by_name, name, position
             )
-            if indirection not in {"", "*", "&"}:
-                continue
-            base_type = (
-                struct_type[: indirection_match.start()].strip()
-                if indirection_match is not None
-                else struct_type
-            )
-            struct = structs_by_name.get(self._normalize_inferred_type(base_type))
-            if struct is None or not struct.data_member_types:
-                continue
-            access_key = f"{name}->" if indirection == "*" else name
-            field_types[access_key] = {
-                member: self._canonicalize_struct_scoped_type(
-                    declared_type, struct, structs_by_name
-                )
-                for member, declared_type in struct.data_member_types.items()
-            }
+            if found is not None:
+                field_types[found[0]] = found[1]
         return field_types
+
+    def _struct_field_type_entry_at(
+        self,
+        variable_types: Dict[str, List[Tuple[int, str]]],
+        structs_by_name: Dict[str, _MetalStructDefinition],
+        name: str,
+        position: int,
+    ) -> Optional[Tuple[str, Dict[str, str]]]:
+        # The `(access key, field types)` entry `_struct_field_types_at` records for
+        # `name`, or None when it records none.
+        struct_type = self._resolve_declared_type_at(variable_types, name, position)
+        if struct_type is None:
+            return None
+        indirection_match = re.search(r"(?P<indirection>[*&]+)\s*$", struct_type)
+        indirection = (
+            indirection_match.group("indirection")
+            if indirection_match is not None
+            else ""
+        )
+        if indirection not in {"", "*", "&"}:
+            return None
+        base_type = (
+            struct_type[: indirection_match.start()].strip()
+            if indirection_match is not None
+            else struct_type
+        )
+        struct = structs_by_name.get(self._normalize_inferred_type(base_type))
+        if struct is None or not struct.data_member_types:
+            return None
+        access_key = f"{name}->" if indirection == "*" else name
+        return access_key, {
+            member: self._canonicalize_struct_scoped_type(
+                declared_type, struct, structs_by_name
+            )
+            for member, declared_type in struct.data_member_types.items()
+        }
+
+    def _lazy_struct_field_types_at(
+        self,
+        variable_types: Optional[Dict[str, List[Tuple[int, str]]]],
+        structs_by_name: Optional[Dict[str, _MetalStructDefinition]],
+        position: int,
+    ) -> Dict[str, Dict[str, str]]:
+        # `_struct_field_types_at(variable_types, structs_by_name, position)`, resolving
+        # each access key when it is looked up. `variable_types` must not change while
+        # the view is in use.
+        if not variable_types or not structs_by_name:
+            return {}
+
+        def entry(name):
+            return self._struct_field_type_entry_at(
+                variable_types, structs_by_name, name, position
+            )
+
+        def name_of(key):
+            if isinstance(key, str) and key.endswith("->"):
+                return key[:-2]
+            return key
+
+        return LazyTypeView(variable_types, entry, name_of)
 
     # ------------------------------------------------------------------ #
     # Conservative call-argument type inference (template member methods). #
@@ -1272,9 +1335,11 @@ class MetalDeclaredTypeMixin:
             if not initializer:
                 continue
             position = match.start()
-            buffer_view = self._flatten_types_at(buffer_element_types, position)
-            local_view = self._flatten_types_at(local_variable_types, position)
-            struct_field_types = self._struct_field_types_at(
+            # The views resolve only the names the initializer reads; the declaration
+            # maps change only after the initializer is typed.
+            buffer_view = self._lazy_flattened_types_at(buffer_element_types, position)
+            local_view = self._lazy_flattened_types_at(local_variable_types, position)
+            struct_field_types = self._lazy_struct_field_types_at(
                 local_variable_types, structs_by_name, position
             )
             inferred = self._infer_argument_type(

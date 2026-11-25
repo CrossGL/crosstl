@@ -283,11 +283,13 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         # An initialized __device__ variable is device memory the module load fills, which no buffer the host
-        # binds carries; it used to import as a per-invocation private variable.
-        with pytest.raises(CudaImportRefused) as raised:
-            CudaToCrossGLConverter().generate(ast)
-        assert "'g_uids' has an initializer" in str(raised.value)
-        assert "'grid_dot_result' has an initializer" in str(raised.value)
+        # binds carries: it imports as one initialized object in the CrossGL device address space, not as a
+        # storage buffer or a per-invocation private variable.
+        result = CudaToCrossGLConverter().generate(ast)
+        assert "var<device> g_uids: i32 = 0;" in result
+        assert "var<device> grid_dot_result: f64 = 0.0;" in result
+        assert "@binding" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_cuda_constant_memory_globals_use_distinct_crossgl_bindings(self):
         code = """
@@ -1134,7 +1136,7 @@ class TestCudaCodeGen:
         assert "cuda::thread_scope" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
-    def test_syncwarp_mask_emits_explicit_diagnostic(self):
+    def test_syncwarp_mask_stays_a_cuda_call(self):
         code = """
         __global__ void sync(unsigned int mask) {
             __syncwarp(mask);
@@ -1146,19 +1148,30 @@ class TestCudaCodeGen:
         parser = CudaParser(tokens)
         ast = parser.parse()
 
-        codegen = CudaToCrossGLConverter()
-        result, message = cuda_import_partial_output(codegen.generate, ast)
+        result = CudaToCrossGLConverter().generate(ast)
 
-        # A full-warp __syncwarp stays a CUDA call: a subgroup barrier waits for a subgroup of another size on most
-        # targets. A mask that may name fewer lanes has no CrossGL barrier.
+        # Both forms stay CUDA calls: a subgroup barrier waits for a subgroup of another size on most targets, and
+        # a mask may name only some lanes. CUDA and HIP output write them back; crosstl.translator.semantics.warp
+        # emulates the full-warp form and refuses a mask it cannot show to name the whole warp.
+        assert "__syncwarp(mask);" in result
         assert "__syncwarp();" in result
         assert "subgroupBarrier" not in result
-        assert (
-            "CUDA __syncwarp(mask): CrossGL has no barrier over a subset of the subgroup"
-            in message
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_syncwarp_mask_with_too_many_arguments_is_refused(self):
+        code = """
+        __global__ void sync(unsigned int mask) {
+            __syncwarp(mask, 1);
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+
+        result, message = cuda_import_partial_output(
+            CudaToCrossGLConverter().generate, ast
         )
-        assert "__syncwarp(mask)" not in result
-        assert "None" not in result
+
+        assert "CUDA __syncwarp(mask, 1) takes one mask" in message
+        assert "__syncwarp(mask" not in result
 
     def test_nvidia_cuda_shfl_sync_full_width_argument_converts(self):
         code = """

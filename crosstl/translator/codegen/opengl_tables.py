@@ -586,6 +586,17 @@ class OpenGLTableMixin:
     GLSL_INT64_EXTENSION = "GL_ARB_gpu_shader_int64"
     GLSL_INT64_EXTENSION_LINE = "#extension GL_ARB_gpu_shader_int64 : require"
     GLSL_INT64_SCALAR_TYPES = {"int64_t", "uint64_t"}
+    # GL_NV_shader_atomic_int64 adds the 64-bit integer overloads of the buffer and shared-memory atomic
+    # functions; glslang declares them from GLSL 4.40 (it maps them to the SPIR-V Int64Atomics capability).
+    GLSL_INT64_ATOMICS_EXTENSION = "GL_NV_shader_atomic_int64"
+    GLSL_INT64_ATOMICS_VERSION = 440
+    # The memory types of the GLSL atomic functions with the zero an unchanged-value atomicOr adds.
+    GLSL_ATOMIC_MEMORY_ZEROS = {
+        "int": "0",
+        "uint": "0u",
+        "int64_t": "0l",
+        "uint64_t": "0ul",
+    }
     GLSL_SUBGROUP_BASIC_EXTENSION_LINE = (
         "#extension GL_KHR_shader_subgroup_basic : require"
     )
