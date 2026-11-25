@@ -532,18 +532,20 @@ MLX_DIRECTX_VULKAN_FRONTIER_SOURCES = (
 # Before #2256 these produced SPIR-V that dropped the construct, so they were never translated correctly.
 # binary_two.metal left this set when the exact binary16 fmod helper reached SPIR-V (#3981); it is part
 # of the clean Vulkan frontier again, so it must translate and pass the Vulkan toolchain.
-# random.metal's rbits union views a uint2 as uchar4[2]. Before #4782 SPIR-V wrote that union as a
-# struct with separate members, so the byte writes never reached the words; SPIR-V now refuses
-# sub-word union views until #4795 lowers them over the shared 32-bit words.
+# LayerNorm passes thread-local pointers to its threadgroup_sum helper, which SPIR-V
+# cannot lower yet (https://github.com/CrossGL/crosstl/issues/2283).
+# random.metal's rbits union views a uint2 as uchar4[2]. SPIR-V refused that sub-word view
+# (#4795) until #4800 lowered a union's uchar4 byte view over its 32-bit storage words, so
+# random.metal is part of the clean Vulkan frontier again and must pass the Vulkan toolchain.
 MLX_VULKAN_FRONTIER_REFUSALS: dict[str, tuple[str, str]] = {
-    MLX_RANDOM_SOURCE: (
-        "project.translate.vulkan-union-layout-unsupported",
-        "https://github.com/CrossGL/crosstl/issues/4795",
+    MLX_LAYER_NORM_SOURCE: (
+        "project.translate.vulkan-lowering-unsupported",
+        "https://github.com/CrossGL/crosstl/issues/2283",
     ),
 }
-# LayerNorm also needs the SPIR-V lowering tracked in
-# https://github.com/CrossGL/crosstl/issues/2283, but its kernels take the host's
-# threadgroup size, so Vulkan refuses it first as a dynamic-workgroup source.
+# Sources whose kernels take the host's threadgroup size. Project translation sizes
+# such kernels at dispatch: HLSL reads the CROSSGL_WORKGROUP_SIZE_* macros and SPIR-V
+# declares LocalSizeId specialization constants, so DirectX and Vulkan translate them.
 MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = (
     MLX_ARG_REDUCE_SOURCE,
     MLX_LAYER_NORM_SOURCE,
@@ -552,36 +554,37 @@ MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = (
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
     MLX_SOFTMAX_SOURCE,
 )
-# Vulkan fixes the workgroup size in the shader, as DirectX and OpenGL do (#2601).
-# A multi-entry artifact whose kernels take the host's threadgroup size therefore
-# refuses there too, instead of emitting LocalSize 1 1 1 for every entry.
-MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = tuple(
-    source
-    for source in MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
-    if source in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
-    and source not in MLX_VULKAN_FRONTIER_REFUSALS
-)
+# No Vulkan or DirectX frontier source is refused for its workgroup size any more:
+# one artifact packages several host-sized entries, each sized at dispatch. The
+# harness keeps the per-target blocked sets so that a regression is reported as such.
+MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES: tuple[str, ...] = ()
 MLX_VULKAN_FRONTIER_SOURCES = tuple(
     source
     for source in MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     if source not in MLX_VULKAN_FRONTIER_REFUSALS
     and source not in MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
 )
-MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES = tuple(
-    source
-    for source in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
-    if source not in {MLX_LAYER_NORM_SOURCE, MLX_LOGSUMEXP_SOURCE, MLX_RMS_NORM_SOURCE}
+# LayerNorm, LogSumExp and RMSNorm are translated per bounded dispatch contract.
+MLX_DIRECTX_DISPATCH_CONTRACT_SOURCES = (
+    MLX_LAYER_NORM_SOURCE,
+    MLX_LOGSUMEXP_SOURCE,
+    MLX_RMS_NORM_SOURCE,
 )
+MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES: tuple[str, ...] = ()
 MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES = tuple(
     source
     for source in MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
-    if source not in MLX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    if source not in MLX_DIRECTX_DISPATCH_CONTRACT_SOURCES
+    and source not in MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
 )
 MLX_DIRECTX_NATIVE_BFLOAT16_STORAGE_SOURCES = (
     MLX_ARANGE_SOURCE,
+    MLX_ARG_REDUCE_SOURCE,
     MLX_BINARY_TWO_SOURCE,
     MLX_RANDOM_SOURCE,
     MLX_ROPE_SOURCE,
+    MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE,
+    MLX_SOFTMAX_SOURCE,
     MLX_TERNARY_SOURCE,
 )
 MLX_DIRECTX_BFLOAT16_LOWERING_EVIDENCE = {
@@ -676,12 +679,32 @@ MLX_OPENGL_INDEX_RANGE_ASSERTION_EXPRESSIONS = {
         "gx + i + r",
         "gw + i + r",
     ),
+    # arg_reduce starts each thread at `in + in_idx + current_index * axis_stride` and steps that pointer by
+    # `axis_stride` once per read, reading `*current_in` only while `current_index < axis_size`. MLX passes the
+    # input's own strides (primitives.cpp), and a reversed view has a negative one. A negative stride lets the start
+    # and stepped offsets of the padding threads fall below the buffer, which OpenGL cannot index, so the host must
+    # pass a non-negative axis stride: copy a reversed view to row-contiguous memory first.
+    MLX_ARG_REDUCE_SOURCE: (
+        "in_ + in_idx + current_index * axis_stride",
+        "out_idx",
+        "current_in + 0",
+        "axis_stride",
+        "current_in + axis_stride",
+    ),
     # sdpa_vector rebases the key and value pointers by head, SIMD group and lane strides, then reads `ptr + j`.
+    # The first two-pass kernel rebases them by batch head and block, reads `ptr + i`, and advances them by
+    # `blocks * k_seq_stride` per step; each complete rebase is an element index into the key or value array.
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: (
         "kv_head_idx * k_head_stride + simd_gid * k_seq_stride + simd_lid * qk_per_thread",
         "kv_head_idx * v_head_stride + simd_gid * v_seq_stride + simd_lid * v_per_thread",
         "keys + j",
         "values + j",
+        "kv_batch_head_idx * k_head_stride + block_idx * k_seq_stride + simd_lid * qk_per_thread",
+        "keys + kv_batch_head_idx * k_head_stride + block_idx * k_seq_stride + simd_lid * qk_per_thread",
+        "kv_batch_head_idx * v_head_stride + block_idx * v_seq_stride + simd_lid * v_per_thread",
+        "values + kv_batch_head_idx * v_head_stride + block_idx * v_seq_stride + simd_lid * v_per_thread",
+        "keys + i",
+        "values + i",
     ),
     MLX_SOFTMAX_SOURCE: (
         "gid * uint64(axis_size) + lid * SOFTMAX_N_READS",
@@ -752,7 +775,7 @@ MLX_DIRECTX_TOOLCHAIN_FRONTIER_SOURCES = tuple(
     source
     for source in MLX_DIRECTX_VULKAN_FRONTIER_SOURCES
     if source in MLX_DIRECTX_TRANSLATED_FRONTIER_SOURCES
-    or source in {MLX_LAYER_NORM_SOURCE, MLX_LOGSUMEXP_SOURCE, MLX_RMS_NORM_SOURCE}
+    or source in MLX_DIRECTX_DISPATCH_CONTRACT_SOURCES
 )
 MLX_DIRECTX_TOOLCHAIN_ENTRY_POINT_COUNTS = {
     source: (
@@ -991,10 +1014,12 @@ MLX_OPENGL_TRANSLATED_FRONTIER_ARTIFACT_COUNT = sum(
     MLX_OPENGL_FRONTIER_ENTRY_POINT_COUNTS[source]
     for source in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
 )
-# Per-entry outcomes of the OpenGL dynamic-workgroup frontier. An entry that consumes
-# threads_per_threadgroup needs a concrete workgroup size. Every other entry translates once
+# Per-entry outcomes of the OpenGL dynamic-workgroup frontier. Every entry translates once
 # MLX_OPENGL_DYNAMIC_WORKGROUP_INDEX_RANGE_ASSERTIONS bound its uint64_t pointer offsets to
-# the int range OpenGL indexes with.
+# the int range OpenGL indexes with. An entry that reads threads_per_threadgroup and matches
+# no rule below reads the host-chosen size as gl_WorkGroupSize: the artifact takes it from
+# the CROSSGL_WORKGROUP_SIZE_* macros, or from the local_size_*_id specialization constants
+# when compiled to SPIR-V.
 #
 # MLX dispatches each looped row kernel with [maxTotalThreadsPerThreadgroup, 1, 1]
 # (MLX_DYNAMIC_WORKGROUP_DISPATCH_EVIDENCE), which is 1024 for these pipelines on Apple GPUs,
@@ -1012,18 +1037,36 @@ MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_RULES = {
     MLX_SOFTMAX_SOURCE: {"looped_softmax_*": MLX_OPENGL_LOOPED_WORKGROUP_SIZE},
 }
 MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_OUTCOMES = {
-    MLX_ARG_REDUCE_SOURCE: {entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 24},
+    MLX_ARG_REDUCE_SOURCE: {entry_frontier.ENTRY_OUTCOME_TRANSLATED: 24},
     MLX_LOGSUMEXP_SOURCE: {entry_frontier.ENTRY_OUTCOME_TRANSLATED: 6},
     MLX_RMS_NORM_SOURCE: {entry_frontier.ENTRY_OUTCOME_TRANSLATED: 12},
     MLX_SCALED_DOT_PRODUCT_ATTENTION_SOURCE: {
-        entry_frontier.ENTRY_OUTCOME_TRANSLATED: 27,
-        entry_frontier.WORKGROUP_SIZE_REQUIRED_CODE: 15,
+        entry_frontier.ENTRY_OUTCOME_TRANSLATED: 42
     },
     MLX_SOFTMAX_SOURCE: {entry_frontier.ENTRY_OUTCOME_TRANSLATED: 10},
 }
 _MLX_FLOAT_TYPE_NAMES = ("float32", "float16", "bfloat16")
 MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES = {
     # Listed in materialization order: each type instantiates every kernel of its family.
+    # arg_reduce names its bool kernels with a trailing underscore.
+    MLX_ARG_REDUCE_SOURCE: tuple(
+        f"{op}_{type_name}"
+        for type_name in (
+            "bool_",
+            "uint8",
+            "uint16",
+            "uint32",
+            "uint64",
+            "int8",
+            "int16",
+            "int32",
+            "int64",
+            "float16",
+            "float32",
+            "bfloat16",
+        )
+        for op in ("argmin", "argmax")
+    ),
     MLX_LOGSUMEXP_SOURCE: tuple(
         f"{kind}_logsumexp_{type_name}"
         for type_name in _MLX_FLOAT_TYPE_NAMES
@@ -1039,7 +1082,7 @@ MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES = {
         for dtype in ("float", "bfloat16_t", "float16_t")
         for entry in (
             *(
-                f"sdpa_vector_{dtype}_{qk_dim}_{value_dim}"
+                f"sdpa_vector{kind}_{dtype}_{qk_dim}_{value_dim}"
                 for qk_dim, value_dim in (
                     (64, 64),
                     (96, 96),
@@ -1047,6 +1090,7 @@ MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES = {
                     (192, 128),
                     (256, 256),
                 )
+                for kind in ("", "_2pass_1")
             ),
             *(
                 f"sdpa_vector_2pass_2_{dtype}_{head_dim}"
@@ -1073,6 +1117,13 @@ MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT = sum(
 )
 MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ARTIFACT_COUNT = sum(
     len(entries) for entries in MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ENTRIES.values()
+)
+# Sources with an entry the OpenGL dynamic-workgroup frontier still refuses.
+MLX_OPENGL_WORKGROUP_BLOCKED_FRONTIER_SOURCES = tuple(
+    source
+    for source in MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+    if set(MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_OUTCOMES[source])
+    - {entry_frontier.ENTRY_OUTCOME_TRANSLATED}
 )
 MLX_FRONTIER_SPECIALIZATION_CONSTANTS = {
     "1": False,
@@ -7061,34 +7112,37 @@ def _translate_directx_frontier(
     )
 
     blocked_output_dir = work_dir / "out-directx-workgroup-frontier"
-    blocked_result, blocked_payload, _blocked_config, blocked_report_path = (
-        _run_frontier_project(
-            mlx_root=mlx_root,
-            config_dir=config_dir,
-            report_dir=report_dir,
-            log_dir=log_dir,
-            python=python,
-            command_name="directx-workgroup-frontier",
+    dispatch_evidence: dict[str, Any] = {}
+    blocked_report_path: Path | None = None
+    if MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES:
+        blocked_result, blocked_payload, _blocked_config, blocked_report_path = (
+            _run_frontier_project(
+                mlx_root=mlx_root,
+                config_dir=config_dir,
+                report_dir=report_dir,
+                log_dir=log_dir,
+                python=python,
+                command_name="directx-workgroup-frontier",
+                target="directx",
+                sources=MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+                output_dir=blocked_output_dir,
+                validate=True,
+                check=False,
+                specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
+            )
+        )
+        _require(
+            blocked_result.returncode == 1,
+            "DirectX dynamic-workgroup frontier must fail with exit code 1",
+        )
+        dispatch_evidence = _require_dynamic_workgroup_blocker_report(
+            mlx_root,
+            blocked_output_dir,
+            blocked_payload,
             target="directx",
             sources=MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
-            output_dir=blocked_output_dir,
-            validate=True,
-            check=False,
-            specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
+            validated=True,
         )
-    )
-    _require(
-        blocked_result.returncode == 1,
-        "DirectX dynamic-workgroup frontier must fail with exit code 1",
-    )
-    dispatch_evidence = _require_dynamic_workgroup_blocker_report(
-        mlx_root,
-        blocked_output_dir,
-        blocked_payload,
-        target="directx",
-        sources=MLX_DIRECTX_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
-        validated=True,
-    )
 
     directx_runs: list[Mapping[str, Any]] = []
     if run_toolchains and require_directx_toolchain:
@@ -7314,7 +7368,9 @@ def _translate_directx_frontier(
         "layerNormDispatchReport": _relpath(layer_norm_report_path, mlx_root),
         "logsumexpDispatchReport": _relpath(logsumexp_report_path, mlx_root),
         "rmsNormDispatchReport": _relpath(rms_norm_report_path, mlx_root),
-        "workgroupBlockedReport": _relpath(blocked_report_path, mlx_root),
+        "workgroupBlockedReport": (
+            _relpath(blocked_report_path, mlx_root) if blocked_report_path else None
+        ),
         "sources": list(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
         "unitCount": len(MLX_DIRECTX_VULKAN_FRONTIER_SOURCES),
         "artifactCount": (
@@ -7525,34 +7581,36 @@ def _translate_vulkan_frontier(
     )
 
     blocked_output_dir = work_dir / "out-vulkan-workgroup-frontier"
-    blocked_result, blocked_payload, _blocked_config, blocked_report_path = (
-        _run_frontier_project(
-            mlx_root=mlx_root,
-            config_dir=config_dir,
-            report_dir=report_dir,
-            log_dir=log_dir,
-            python=python,
-            command_name="vulkan-workgroup-frontier",
+    blocked_report_path: Path | None = None
+    if MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES:
+        blocked_result, blocked_payload, _blocked_config, blocked_report_path = (
+            _run_frontier_project(
+                mlx_root=mlx_root,
+                config_dir=config_dir,
+                report_dir=report_dir,
+                log_dir=log_dir,
+                python=python,
+                command_name="vulkan-workgroup-frontier",
+                target="vulkan",
+                sources=MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
+                output_dir=blocked_output_dir,
+                validate=True,
+                check=False,
+                specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
+            )
+        )
+        _require(
+            blocked_result.returncode == 1,
+            "Vulkan dynamic-workgroup frontier must fail with exit code 1",
+        )
+        _require_dynamic_workgroup_blocker_report(
+            mlx_root,
+            blocked_output_dir,
+            blocked_payload,
             target="vulkan",
             sources=MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
-            output_dir=blocked_output_dir,
-            validate=True,
-            check=False,
-            specialization_constants=MLX_FRONTIER_SPECIALIZATION_CONSTANTS,
+            validated=True,
         )
-    )
-    _require(
-        blocked_result.returncode == 1,
-        "Vulkan dynamic-workgroup frontier must fail with exit code 1",
-    )
-    _require_dynamic_workgroup_blocker_report(
-        mlx_root,
-        blocked_output_dir,
-        blocked_payload,
-        target="vulkan",
-        sources=MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES,
-        validated=True,
-    )
 
     return {
         "name": "vulkan-frontier",
@@ -7571,7 +7629,9 @@ def _translate_vulkan_frontier(
         "regressionEvidence": regression_evidence,
         "trackedIssues": list(FRONTIER_VALIDATION_TRACKED_ISSUES),
         "trackedRefusals": refusals,
-        "workgroupBlockedReport": _relpath(blocked_report_path, mlx_root),
+        "workgroupBlockedReport": (
+            _relpath(blocked_report_path, mlx_root) if blocked_report_path else None
+        ),
         "workgroupBlockedSources": list(MLX_VULKAN_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
         "workgroupBlockedEntryPointCount": sum(
             MLX_DYNAMIC_WORKGROUP_ENTRY_POINT_COUNTS[source]
@@ -7979,9 +8039,15 @@ def _check_opengl_frontier(
             entry_workgroup_size_rules=MLX_OPENGL_DYNAMIC_WORKGROUP_ENTRY_RULES,
         )
     )
+    blocked_artifact_count = (
+        MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT
+        - MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ARTIFACT_COUNT
+    )
+    expected_returncode = 1 if blocked_artifact_count else 0
     _require(
-        blocked_result.returncode == 1,
-        "OpenGL dynamic-workgroup frontier must fail with exit code 1",
+        blocked_result.returncode == expected_returncode,
+        "OpenGL dynamic-workgroup frontier must exit with code "
+        f"{expected_returncode}",
     )
     entry_evidence, blocked_artifacts = entry_frontier.require_entry_outcome_frontier(
         mlx_root,
@@ -8050,13 +8116,13 @@ def _check_opengl_frontier(
         )
         if source in validation_outputs
     ]
-    blocked_artifact_count = (
-        MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT
-        - MLX_OPENGL_DYNAMIC_WORKGROUP_TRANSLATED_ARTIFACT_COUNT
-    )
     return {
         "name": "opengl-frontier",
-        "status": "passed-with-expected-workgroup-blockers",
+        "status": (
+            "passed-with-expected-workgroup-blockers"
+            if blocked_artifact_count
+            else "passed"
+        ),
         "scope": "target-split-frontier",
         "report": _relpath(report_path, mlx_root),
         "workgroupBlockedReport": _relpath(blocked_report_path, mlx_root),
@@ -8074,7 +8140,8 @@ def _check_opengl_frontier(
             source: len(clean_artifacts[source])
             for source in MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
         },
-        "workgroupBlockedSources": list(MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
+        "workgroupFrontierSources": list(MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES),
+        "workgroupBlockedSources": list(MLX_OPENGL_WORKGROUP_BLOCKED_FRONTIER_SOURCES),
         "workgroupFrontierArtifactCount": MLX_OPENGL_DYNAMIC_WORKGROUP_ARTIFACT_COUNT,
         "workgroupFrontierTranslatedArtifactCount": len(blocked_translated),
         "workgroupBlockedArtifactCount": blocked_artifact_count,
@@ -11560,7 +11627,7 @@ def run_checks(args: argparse.Namespace) -> dict[str, Any]:
                 MLX_OPENGL_TRANSLATED_FRONTIER_SOURCES
             ),
             "openglWorkgroupBlockedFrontierSources": list(
-                MLX_OPENGL_DYNAMIC_WORKGROUP_FRONTIER_SOURCES
+                MLX_OPENGL_WORKGROUP_BLOCKED_FRONTIER_SOURCES
             ),
             "hostDispatchImportResolvedIssue": MLX_HOST_DISPATCH_IMPORT_RESOLVED_ISSUE,
             "fullCorpusTargets": list(FULL_CORPUS_TARGETS),

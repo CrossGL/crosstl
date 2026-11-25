@@ -3543,18 +3543,25 @@ The current harness verifies:
   emitting a target file. The blocked contract is tracked by
   [#1537](https://github.com/CrossGL/crosstl/issues/1537);
 - materialization evidence for all 24 host-named `arg_reduce.metal` compute
-  entries within 39 total specializations. Vulkan emits the aggregate artifact.
-  DirectX and OpenGL fail before emission with
-  `project.translate.workgroup-size-entry-ambiguous` because pinned host
-  dispatch uses runtime axis and pipeline-limit operands unavailable to source
-  materialization;
+  entries within 39 total specializations. DirectX and Vulkan emit the
+  aggregate artifact. Pinned host dispatch chooses the threadgroup size from
+  runtime axis and pipeline-limit operands, so each entry is host-sized: the
+  HLSL reads the `CROSSGL_WORKGROUP_SIZE_X/Y/Z` macros and the SPIR-V declares
+  `LocalSizeId` specialization constants, which the host sets per dispatch.
+  OpenGL still fails before emission with
+  `project.translate.workgroup-size-entry-ambiguous`;
 - DirectX HLSL compiler checks with official DXC v1.9.2602.24 on Windows CI for
-  the 21-artifact frontier representing eight pinned sources: `arange.metal`,
-  `binary_two.metal`, two bounded `layer_norm.metal` entries, two bounded
-  `logsumexp.metal` entries, `random.metal`, 12 test-derived `rms_norm.metal`
-  entries, `rope.metal`, and `ternary.metal`. At the pinned revision the gate
-  compiles 11, 225, 2, 2, 2, 12, 18, and 212 entries respectively, for 484
-  generated compute entries in total. Each LayerNorm, LogSumExp, and RMSNorm
+  the 24-artifact frontier representing all 11 pinned sources: `arange.metal`,
+  `arg_reduce.metal`, `binary_two.metal`, two bounded `layer_norm.metal`
+  entries, two bounded `logsumexp.metal` entries, `random.metal`, 12
+  test-derived `rms_norm.metal` entries, `rope.metal`,
+  `scaled_dot_product_attention.metal`, `softmax.metal`, and `ternary.metal`.
+  At the pinned revision the gate compiles 11, 24, 225, 2, 2, 2, 12, 18, 42,
+  10, and 212 entries respectively, for 560 generated compute entries in total.
+  The `arg_reduce.metal`, `scaled_dot_product_attention.metal`, and
+  `softmax.metal` artifacts each package every host-sized entry of the source;
+  the compile check defines the `CROSSGL_WORKGROUP_SIZE_*` macros, and no
+  placeholder workgroup size is emitted into the artifact. Each LayerNorm, LogSumExp, and RMSNorm
   artifact is emitted independently with its host-derived workgroup size and
   exact subgroup width; specialization constants are retained where required.
   The 16 normalization artifact references include explicit source-width index
@@ -3585,11 +3592,11 @@ The current harness verifies:
   now passes its 20 bounded numerical cases on OpenGL, DirectX and generated
   Metal, including required Windows native execution. `RandomBits` host
   integration is not enabled.
-  The three pending aggregate sources cover 76 compute entries. Those historical
-  aggregate runs do not consume the later entry-scoped bounded contracts and
-  remain asserted as failed artifacts; no placeholder workgroup size is
-  restored. Separate bounded GEMV, arg-reduce, Softmax, and scaled-attention
-  translation, package, and native-runtime proofs are documented below.
+  The 76 host-sized arg-reduce, attention, and Softmax entries were refused
+  before emission until project translation let host-sized kernels read their
+  threadgroup size. Separate bounded GEMV, arg-reduce, Softmax, and
+  scaled-attention translation, package, and native-runtime proofs are
+  documented below.
   `fence.metal` is
   excluded because its DirectX translation intentionally fails under
   [#1537](https://github.com/CrossGL/crosstl/issues/1537) before DXC. This gate
@@ -3650,17 +3657,22 @@ The current harness verifies:
   `spirv-val`. Their project configuration supplies 24 source-qualified
   index-range assertions, and the portability report must reproduce the exact
   assertion count and content. The other five sources run as a second project
-  with 28 source-qualified index-range assertions. Each of their 94 kernels gets
+  with 39 source-qualified index-range assertions. Each of their 94 kernels gets
   its own artifact. The 14 looped kernels of `logsumexp.metal`, `rms_norm.metal`
   and `softmax.metal`, which MLX dispatches with
   `[maxTotalThreadsPerThreadgroup, 1, 1]`, receive that dispatch as 1024 threads
   through `project.entry_workgroup_size_rules`. 1024 is the size the parity
   suites use on Apple GPUs, and OpenGL 4.3 guarantees it for
-  `GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS`. The block kernels keep the
-  host-chosen size. 55 kernels translate and pass the same validators. The 39
-  that still consume an unconfigured `threads_per_threadgroup` (24 `arg_reduce`
-  and 15 attention kernels) produce the exact fail-closed workgroup-size
-  diagnostic and no target file. The translated kernels use hardware subgroups
+  `GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS`. The other kernels keep the
+  host-chosen size: those that read `threads_per_threadgroup` (24 `arg_reduce`
+  and 15 two-pass attention kernels among them) read it as `gl_WorkGroupSize`,
+  which the artifact takes from the `CROSSGL_WORKGROUP_SIZE_*` macros or, when
+  compiled to SPIR-V, from the `local_size_*_id` specialization constants. All
+  94 kernels translate and pass the same validators. The `arg_reduce`
+  assertions require a non-negative axis stride: MLX passes the input's own
+  strides, and the padding threads of a reversed view would step below the
+  buffer, so a host must copy such a view to row-contiguous memory first. The
+  translated kernels use hardware subgroups
   and size their threadgroup partials for 32-lane SIMD groups, so they compute
   the source result only on devices whose subgroup width is 32, which the
   runtime contracts below check before dispatch
@@ -3796,10 +3808,10 @@ compile with DXC. Separate native tests translate and execute the reduced
 immutable lookup fixture and the pinned source's generated uint32 arange entry
 through Direct3D 12. The arange test is numerical evidence for that one source,
 entry, dtype, dispatch shape, and fixture only; it does not turn the frontier
-compiler gate into a general runtime-parity claim. The five aggregate DirectX
-frontier artifacts carry exact per-source bfloat16 report evidence. All five
+compiler gate into a general runtime-parity claim. The eight aggregate DirectX
+frontier artifacts carry exact per-source bfloat16 report evidence. All eight
 report `status=exact`, `approximationUsed=false`, a `uint-low-16-bits` register
-representation, and round-to-nearest, ties-to-even conversion. All five
+representation, and round-to-nearest, ties-to-even conversion. All eight
 aggregate sources require native `uint16` storage declarations and report the
 `directx.native-16bit-types` capability. The harness compares each artifact's
 `bfloat16Lowering` and `requiredCapabilities` fields with this pinned contract
@@ -3807,7 +3819,7 @@ and fails closed if either field is missing or changes. Native-profile bfloat
 helpers now use exact `uint16_t` boundaries, and the two selected
 `random.metal` entries compile without the promotion warnings tracked by
 [#1799](https://github.com/CrossGL/crosstl/issues/1799). DXC reports zero
-warnings across all 484 entry-point runs in the 21-artifact emitted frontier.
+warnings across all 560 entry-point runs in the 24-artifact emitted frontier.
 The harness records this as a warning-clean contract and rejects any newly
 observed warning. Contextual destination conversion under
 [#1801](https://github.com/CrossGL/crosstl/issues/1801) is resolved for the
@@ -3847,6 +3859,17 @@ Clone MLX and check out the pinned revision:
 ```bash
 git clone https://github.com/ml-explore/mlx.git /tmp/mlx
 git -C /tmp/mlx checkout 4367c73b60541ddd5a266ce4644fd93d20223b6e
+```
+
+CI jobs check MLX out with `fetch_upstream.py` instead, which also works
+locally. It makes one shallow fetch of the full 40-digit commit, retries a
+failed attempt from an empty directory up to four times (waiting 15, 30 and
+60 s), and then fails unless `core.autocrlf` is off, `HEAD` is that commit and
+the tree is clean. `--sparse` limits the tree to the named directories:
+
+```bash
+python -m demos.integrations.mlx.fetch_upstream /tmp/mlx \
+  4367c73b60541ddd5a266ce4644fd93d20223b6e --sparse mlx/backend/metal/kernels
 ```
 
 Run the project-porting harness from the CrossTL repository:
@@ -5121,8 +5144,10 @@ inclusive bounds `[0, 2147483647]`. The expressions are `offset + i`, `a_idx`,
 `batch_idx * offset_stride`, `freq_stride * pos.x`, `in_index_1`, `in_index_2`,
 `out_index_1`, and `out_index_2` for `rope.metal`; and `offset + i`, `a_idx`,
 `b_idx`, `c_idx`, `bidx`, `cidx`, `out_idx`, `out_idx++`, `idx.x`, `idx.y`, and
-`idx.z` for `ternary.metal`. The dynamic-workgroup frontier supplies 28 more,
-with the same bounds: `gid * uint64(axis_size) + lid * 4`, `in_ + i`,
+`idx.z` for `ternary.metal`. The dynamic-workgroup frontier supplies 39 more,
+with the same bounds: `in_ + in_idx + current_index * axis_stride`, `out_idx`,
+`current_in + 0`, `axis_stride`, and `current_in + axis_stride` for
+`arg_reduce.metal`; `gid * uint64(axis_size) + lid * 4`, `in_ + i`,
 `gid * uint64(axis_size)`, and `in_ + offset + i` for `logsumexp.metal`;
 `gid * uint64(axis_size) + lid * RMS_N_READS`, `x + i`, `g + i`, `out_ + i`,
 `gx + i`, `gw + i`, `i + r`, `r + i`, `x + i + r`, `x + r + i`, `out_ + r + i`,
@@ -5131,16 +5156,28 @@ value rebases
 `kv_head_idx * k_head_stride + simd_gid * k_seq_stride + simd_lid * qk_per_thread`
 and
 `kv_head_idx * v_head_stride + simd_gid * v_seq_stride + simd_lid * v_per_thread`,
-`keys + j`, and `values + j` for `scaled_dot_product_attention.metal`; and
+`keys + j`, and `values + j` of `sdpa_vector`, and the two-pass rebases
+`kv_batch_head_idx * k_head_stride + block_idx * k_seq_stride + simd_lid * qk_per_thread`,
+`keys + kv_batch_head_idx * k_head_stride + block_idx * k_seq_stride + simd_lid * qk_per_thread`,
+`kv_batch_head_idx * v_head_stride + block_idx * v_seq_stride + simd_lid * v_per_thread`,
+and
+`values + kv_batch_head_idx * v_head_stride + block_idx * v_seq_stride + simd_lid * v_per_thread`
+with their reads `keys + i` and `values + i`, for
+`scaled_dot_product_attention.metal`; and
 `gid * uint64(axis_size) + lid * SOFTMAX_N_READS`, `in_ + i`, `out_ + i`,
 `gid * uint64(axis_size)`, `in_ + offset + i`, and `out_ + offset + i` for
-`softmax.metal`. Without them, OpenGL refuses 43 of those kernels: it indexes
-storage with `int`, and their `uint64_t` row and head offsets have no proven
-32-bit range. The looped row kernels rebase to the row start
+`softmax.metal`. Without them, OpenGL refuses 82 of those 94 kernels with
+`project.translate.opengl-index-type-unsupported`: it indexes storage with `int`,
+and their 64-bit row, head and stride offsets have no proven 32-bit range. The looped row kernels rebase to the row start
 `gid * uint64(axis_size)` and walk the row with an `offset` or `r` stride, so
 their complete keys name the same element index and the relative `i + r` stays
-below `axis_size`. MLX dispatches these kernels over contiguous arrays, so each
-offset is an element index into one array. These records are explicit MLX
+below `axis_size`. The first two-pass attention kernel advances its key and value
+pointers by `blocks * k_seq_stride` per step, so each complete rebase is an
+element index into the key or value array. MLX dispatches the row and attention
+kernels over contiguous arrays, so each offset is an element index into one
+array. `arg_reduce` instead steps its read pointer by the input's own
+`axis_stride`, and its padding threads compute offsets past the last read, so the
+`axis_stride` assertion makes a non-negative axis stride a host precondition. These records are explicit MLX
 host/runtime portability preconditions for OpenGL. They are not inferred guarantees, CrossTL
 does not enforce them at runtime, and they do not establish runtime integration
 or numerical parity.

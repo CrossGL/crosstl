@@ -696,10 +696,10 @@ because a GLSL program has a single ``main``. Entry rules keep that split: each
 artifact applies the rule of its own entry, and pattern coverage is checked
 against every discovered entry of the unit. An entry that no entry rule names,
 in a source without a source-wide fallback, keeps the size its source or host
-gives it. If it reads ``threads_per_threadgroup`` without such a size, it fails
-with ``project.translate.workgroup-size-required``. Targets that emit every
-entry into one artifact, such as DirectX and Metal, still need a rule for each
-entry.
+gives it: a Metal entry that reads ``threads_per_threadgroup`` without a source
+size reads the host-chosen size described below, never another entry's rule.
+Targets that emit every entry into one artifact, such as DirectX and Metal,
+still need a rule for each entry once a source has entry rules.
 
 Metal also consumes source-wide and entry-specific workgroup-size rules, but as
 host-dispatch contracts rather than source specialization. MSL does not encode
@@ -710,15 +710,27 @@ match the contract. DirectX and OpenGL continue to encode the same canonical
 sizes in HLSL and GLSL respectively. This distinction prevents a host dispatch
 requirement from being mistaken for Metal source metadata.
 
-For DirectX and OpenGL project translation, a consumed Metal
-``[[threads_per_threadgroup]]`` parameter requires this concrete configuration
-or equivalent concrete source execution metadata. Translation emits
-``[numthreads(x, y, z)]`` and the matching OpenGL local-size declaration from
-the same canonical value. A scalar source parameter observes ``.x``, a
+For DirectX, OpenGL and Vulkan project translation, a consumed Metal
+``[[threads_per_threadgroup]]`` parameter takes this concrete configuration or
+equivalent concrete source execution metadata when either exists. Translation
+emits ``[numthreads(x, y, z)]`` and the matching OpenGL local-size declaration
+from the same canonical value. A scalar source parameter observes ``.x``, a
 two-component parameter observes ``.xy``, and a three-component parameter
-retains all components. Missing, malformed, non-positive, target-limit-
-exceeding, or conflicting values fail the artifact with an
-``execution-specialization`` diagnostic instead of using a default local size.
+retains all components. Malformed, non-positive, target-limit-exceeding, or
+conflicting values fail the artifact with an ``execution-specialization``
+diagnostic instead of using a default local size.
+
+Without either, the Metal host chooses the size at dispatch time, so the
+generated kernel leaves it to the target's host: HLSL reads the
+``CROSSGL_WORKGROUP_SIZE_{X,Y,Z}`` macros the host defines when it compiles the
+shader, GLSL reads specialization ids or the same macros, and SPIR-V reads three
+specialization constants. The parameter then observes the size the host sets,
+as it does on Metal, and the artifact records no ``execution`` size. An HLSL
+file or SPIR-V module that holds several such kernels needs no shared size
+either, because each pipeline the host builds from it sets its own kernel's
+size. A CrossGL
+source has no host-chosen size, so reading ``gl_WorkGroupSize`` without a
+configured size still fails with ``project.translate.workgroup-size-required``.
 
 DirectX can package several materialized compute entries in one HLSL artifact.
 Each exported entry receives its own ``numthreads`` declaration and retains its
