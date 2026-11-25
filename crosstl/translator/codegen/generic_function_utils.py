@@ -535,21 +535,24 @@ def reject_unresolved_generic_function_call(generator, func_name, target_name):
 def generic_function_value_arguments(generator, func_name, args):
     """Return value arguments after any leading explicit generic type arguments."""
     definitions = getattr(generator, "generic_function_definitions", {}) or {}
-    func = definitions.get(func_name)
-    if func is None:
+    overloads = definitions.get(func_name)
+    if overloads is None:
         return list(args or [])
-
-    generic_params = generic_function_parameters(func)
-    param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
-    explicit_substitutions, value_args = _explicit_generic_call_parts(
-        generator,
-        generic_params,
-        param_list,
-        list(args or []),
-    )
-    if explicit_substitutions is None:
-        return list(args or [])
-    return value_args
+    if not isinstance(overloads, list):
+        overloads = [overloads]
+    call_args = list(args or [])
+    for func in overloads:
+        generic_params = generic_function_parameters(func)
+        param_list = list(getattr(func, "parameters", getattr(func, "params", [])) or [])
+        explicit_substitutions, value_args = _explicit_generic_call_parts(
+            generator,
+            generic_params,
+            param_list,
+            call_args,
+        )
+        if explicit_substitutions is not None:
+            return value_args
+    return call_args
 
 
 def generic_function_call_key(generator, func_name, args):
@@ -741,6 +744,19 @@ def _generic_function_candidate_call_match(
         if explicit_substitutions is not None:
             substitutions.update(explicit_substitutions)
         else:
+            # When ``_explicit_generic_call_parts`` could not read leading
+            # arguments as type parameters for *this* overload (because the
+            # total argument count does not equal this overload's parameter
+            # count plus its generic-parameter count), check whether those
+            # leading arguments look like type names.  If they do, the call
+            # was written as an overloaded explicit generic call — e.g.
+            # ``sel(Foo, f)`` targeting a one-parameter overload — and this
+            # overload (which has more value parameters) must not consume
+            # ``Foo`` as a plain value argument.
+            if _call_args_have_leading_type_arguments(
+                generator, generic_params, call_args
+            ):
+                return None
             value_args = call_args
 
     # A generic overload matches a call only when the argument count lies
@@ -903,6 +919,24 @@ def _explicit_generic_call_parts(generator, generic_params, param_list, args):
         )
 
     return substitutions, args[generic_count:]
+
+
+def _call_args_have_leading_type_arguments(generator, generic_params, args):
+    """Return ``True`` when the leading ``len(generic_params)`` args are type names.
+
+    Used to detect ``sel(Foo, f)`` as an overloaded explicit generic call when
+    the total argument count does not match this particular overload's expected
+    count (value parameters + generic parameters).  Returns ``False`` when
+    there are no generic parameters, when the argument list is too short, or
+    when any leading argument is not a known type name.
+    """
+    generic_count = len(generic_params)
+    if generic_count == 0 or len(args) < generic_count:
+        return False
+    for arg in args[:generic_count]:
+        if _type_argument_name(generator, arg) is None:
+            return False
+    return True
 
 
 def generate_numeric_trait_method_call(generator, func_expr, args):

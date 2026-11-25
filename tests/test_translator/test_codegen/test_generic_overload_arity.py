@@ -7,6 +7,8 @@ their compilers reject. The call now goes to an overload that takes it, or is re
 parameter with a default value still keeps working: ``scale(x)`` for ``scale<T>(T v, float k = 2.0)`` compiles.
 """
 
+import re
+
 import pytest
 
 import crosstl
@@ -185,3 +187,111 @@ def test_two_argument_call_specializes_only_the_two_parameter_overload(
     code = translate(tmp_path, TWO_GENERIC_OVERLOADS, backend)
     assert "inc_float2_overload1" in code
     assert "inc_float2_overload0" not in code
+
+STRUCT_TYPE_AS_LEADING_ARG_SINGLE_OVERLOAD = """
+shader P {
+    buffer float* outp;
+    struct Foo { float v; };
+    T sel<T>(T a) { return a; }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            Foo f;
+            f.v = outp[i];
+            Foo g = sel(Foo, f);
+            outp[i] = g.v;
+        }
+    }
+}
+"""
+
+
+STRUCT_TYPE_AS_LEADING_ARG = """
+shader P {
+    buffer float* outp;
+    struct Foo { float v; };
+    T sel<T>(T a) { return a; }
+    T sel<T>(T a, T b) { return b; }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            Foo f;
+            f.v = outp[i];
+            Foo g = sel(Foo, f);
+            outp[i] = g.v;
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("backend", C_STYLE_TARGETS)
+def test_struct_type_as_leading_argument_selects_one_parameter_overload(tmp_path, backend):
+    # ``sel(Foo, f)`` has two arguments and ``sel<T>(T a)`` has one parameter, so
+    # the extra leading argument names the type: ``sel(Foo, f)`` means ``sel<Foo>(f)``.
+    # The two-parameter overload ``sel<T>(T a, T b)`` must not consume ``Foo`` as a value.
+    code = translate(tmp_path, STRUCT_TYPE_AS_LEADING_ARG, backend)
+    # The one-parameter overload specialized for Foo must appear.
+    assert "sel_Foo" in code
+    # The two-parameter overload must NOT be selected: its specialization name
+    # would contain "overload1" and the call would pass the type as a value.
+    assert "sel_Foo_overload1" not in code
+
+
+@pytest.mark.parametrize("backend", C_STYLE_TARGETS)
+def test_struct_type_as_leading_argument_does_not_emit_type_as_value(tmp_path, backend):
+    code = translate(tmp_path, STRUCT_TYPE_AS_LEADING_ARG, backend)
+    # The call must not pass the type name as a value argument.
+    assert re.search(r"sel_Foo\w*\(\s*Foo\s*,", code) is None
+    # The overload selected must be the one-parameter form: its call has one argument.
+    assert re.search(r"sel_Foo\w*\(\s*f\s*\)", code) is not None
+    # The two-parameter overload must not be used.
+    assert "overload1" not in code
+
+
+@pytest.mark.parametrize("backend", ["vulkan", "wgsl"])
+def test_struct_type_as_leading_argument_raises_on_unsupported_targets(tmp_path, backend):
+    with pytest.raises(Exception):
+        translate(tmp_path, STRUCT_TYPE_AS_LEADING_ARG, backend)
+
+
+@pytest.mark.parametrize("backend", C_STYLE_TARGETS)
+def test_struct_type_as_leading_argument_single_overload(tmp_path, backend):
+    """sel(Foo, f) with only one overload T sel<T>(T a) specializes as sel<Foo>(f)."""
+    code = translate(tmp_path, STRUCT_TYPE_AS_LEADING_ARG_SINGLE_OVERLOAD, backend)
+    # The specialization for Foo must appear.
+    assert "sel_Foo" in code
+    # The call must not pass the type name as a value argument.
+    assert re.search(r"sel_Foo\w*\(\s*Foo\s*,", code) is None
+    # The call must be in one-argument form.
+    assert re.search(r"sel_Foo\w*\(\s*f\s*\)", code) is not None
+    # None of the generated targets should use the two-parameter overload.
+    assert "overload1" not in code
+
+
+ONLY_TWO_PARAM_OVERLOAD = """
+shader P {
+    buffer float* outp;
+    struct Foo { float v; };
+    T sel<T>(T a, T b) { return b; }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            Foo f;
+            f.v = outp[i];
+            Foo g = sel(Foo, f);
+            outp[i] = g.v;
+        }
+    }
+}
+"""
+
+
+@pytest.mark.parametrize("backend", C_STYLE_TARGETS)
+def test_struct_type_as_leading_arg_refused_when_no_matching_overload(tmp_path, backend):
+    """sel(Foo, f) is refused when only sel<T>(T a, T b) exists (no one-parameter overload)."""
+    with pytest.raises(Exception, match="cannot infer concrete template arguments"):
+        translate(tmp_path, ONLY_TWO_PARAM_OVERLOAD, backend)
