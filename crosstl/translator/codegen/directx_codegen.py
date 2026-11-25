@@ -283,7 +283,6 @@ from .image_access_contracts import (
     is_texture_sample_offset_operation,
     is_texture_sample_operation,
     record_explicit_image_metadata,
-    unsupported_multisample_texel_fetch_offset_expression,
 )
 from .lane_symmetry import SYMMETRIC, UNIFORM
 from .loop_induction import (
@@ -8876,7 +8875,12 @@ class HLSLCodeGen(
             if self.is_cube_texture_resource_type(texture_type):
                 return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
             if self.is_multisample_texture_resource_type(texture_type):
-                return unsupported_multisample_texel_fetch_offset_expression("DirectX")
+                # The sample operand stays second; the offset moves into the location, as for the other shapes.
+                if shape_type == "Texture2DMSArray":
+                    coord_xy = self.vector_component(coord, "xy")
+                    layer = self.vector_component(coord, "z")
+                    return f"{texture_name}.Load(int3(({coord_xy} + {offset}), {layer}), {lod})"
+                return f"{texture_name}.Load(({coord} + {offset}), {lod})"
             if shape_type == "Texture2DArray":
                 coord_xy = self.vector_component(coord, "xy")
                 layer = self.vector_component(coord, "z")
