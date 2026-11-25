@@ -36,6 +36,7 @@ from .comma_expressions import (
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_library_functions import rename_cuda_library_functions
+from .cuda_reserved_names import rename_reserved_program_names
 from .cuda_subscripts import matrix_column_type
 from .cuda_texel_buffers import (
     TEXEL_BUFFER_QUERY_SPEC,
@@ -316,6 +317,8 @@ class HipCodeGen(
         node = canonicalize_separate_textures(node)
         # A user function named like a device library function would redefine it or make its calls ambiguous.
         node = rename_cuda_library_functions(node)
+        # A program-scope value is declared in the global namespace, where C++ reserves names that start with ``_``.
+        node = rename_reserved_program_names(node)
         # GLSL's lessThan, equal, not and the other relational built-ins are the componentwise operators.
         lower_relational_builtins(node)
         # HIP has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.
