@@ -100,10 +100,6 @@ from .slang_call_expressions import SlangCallExpressionMixin
 from .slang_conservative_depth import slang_conservative_depth_semantic
 from .slang_control_flow import SlangControlFlowMixin
 from .slang_cull_distance import slang_cull_distance_member_type
-from .slang_push_constant_structs import (
-    slang_member_offset_prefix,
-    slang_push_constant_struct_names,
-)
 from .slang_declaration_modifiers import (
     is_slang_declaration_metadata_attribute,
     slang_member_modifier_prefix,
@@ -128,6 +124,10 @@ from .slang_numeric_types import slang_unrepresentable_type_reason
 from .slang_pointer_declarations import refuse_slang_pointer_declarations
 from .slang_precise_functions import SlangPreciseFunctionMixin
 from .slang_program_symbols import SlangProgramSymbolsMixin
+from .slang_push_constant_structs import (
+    slang_member_offset_prefix,
+    slang_push_constant_struct_names,
+)
 from .slang_rasterizer_order import slang_rasterizer_ordered_type
 from .slang_ray_tracing import SlangRayTracingMixin
 from .slang_refusals import SlangLoweringRefused

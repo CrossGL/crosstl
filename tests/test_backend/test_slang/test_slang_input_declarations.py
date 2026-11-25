@@ -97,20 +97,26 @@ def test_for_init_keeps_a_type_for_each_declarator_of_another_type(tmp_path):
 
 
 def test_c_style_array_typedef_is_an_array_type(tmp_path):
-    source = COMPUTE + """typedef float Triple[3];
+    source = (
+        COMPUTE
+        + """typedef float Triple[3];
 Triple spread(float x) {
     Triple t = { x, x * 2.0, x * 3.0 };
     return t;
 }
-""" + entry("""    Triple t = spread(fin[i]);
+"""
+        + entry("""    Triple t = spread(fin[i]);
     outp[i] = t[0] + t[1] + t[2];""")
+    )
     crossgl = round_trip(tmp_path, source)
 
     assert "typedef float[3] Triple;" in crossgl
 
 
 def test_struct_named_by_a_crossgl_keyword_is_renamed(tmp_path):
-    source = COMPUTE + """struct match {
+    source = (
+        COMPUTE
+        + """struct match {
     float a;
     int b;
 };
@@ -123,8 +129,10 @@ match make(float x) {
 float weigh(match t) {
     return t.a + float(t.b);
 }
-""" + entry("""    match t = make(float(iin[i] & 7));
+"""
+        + entry("""    match t = make(float(iin[i] & 7));
     outp[i] = weigh(t);""")
+    )
     crossgl = squash(round_trip(tmp_path, source))
 
     assert "struct match_ {" in crossgl
@@ -135,13 +143,17 @@ float weigh(match t) {
 
 
 def test_struct_rename_avoids_another_struct_name(tmp_path):
-    source = COMPUTE + """struct match_ { float a; };
+    source = (
+        COMPUTE
+        + """struct match_ { float a; };
 struct match { float b; };
-""" + entry("""    match m;
+"""
+        + entry("""    match m;
     m.b = fin[i];
     match_ n;
     n.a = 1.0;
     outp[i] = m.b + n.a;""")
+    )
     crossgl = squash(round_trip(tmp_path, source))
 
     assert "struct match_ { float a; }" in crossgl
@@ -150,13 +162,17 @@ struct match { float b; };
 
 
 def test_generic_function_keeps_its_type_parameter(tmp_path):
-    source = COMPUTE + """T twice<T : IArithmetic>(T x) {
+    source = (
+        COMPUTE
+        + """T twice<T : IArithmetic>(T x) {
     return x + x;
 }
-""" + entry("""    float x = float(iin[i]);
+"""
+        + entry("""    float x = float(iin[i]);
     int k = iin[i] & 7;
     float2 w = twice(float2(x, 1.0));
     outp[i] = twice(x) + float(twice(k)) * 64.0 + w.y;""")
+    )
     crossgl = round_trip(tmp_path, source)
 
     assert "T twice<T: IArithmetic>(T x)" in crossgl
@@ -166,7 +182,9 @@ def test_generic_function_keeps_its_type_parameter(tmp_path):
 
 
 def test_generic_prefix_and_value_parameters(tmp_path):
-    source = COMPUTE + """__generic<T : IFloat & IArithmetic>
+    source = (
+        COMPUTE
+        + """__generic<T : IFloat & IArithmetic>
 T scaled(T x) {
     return x * T(2.0);
 }
@@ -180,7 +198,11 @@ float repeat<let N : int>(float x) {
 float widen<T, int M>(T x) {
     return float(M);
 }
-""" + entry("""    outp[i] = scaled(fin[i]) + repeat<3>(fin[i]) + widen<float, 4>(fin[i]);""")
+"""
+        + entry(
+            """    outp[i] = scaled(fin[i]) + repeat<3>(fin[i]) + widen<float, 4>(fin[i]);"""
+        )
+    )
     crossgl = round_trip(tmp_path, source)
 
     assert "T scaled<T: IFloat + IArithmetic>(T x)" in crossgl

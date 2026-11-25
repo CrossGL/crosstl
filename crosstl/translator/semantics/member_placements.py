@@ -365,7 +365,8 @@ def _check_slang_cbuffer(structs, block, target, name=None):
 
 def _check_slang_push_constant_struct(structs, variable, struct, target):
     """Slang output writes the ``[[vk::offset(N)]]`` of each ``@ offset(N)`` member of the struct a push-constant
-    ``ConstantBuffer<T>`` holds (:mod:`..codegen.slang_push_constant_structs`), and no ``@ align(N)``."""
+    ``ConstantBuffer<T>`` holds (:mod:`..codegen.slang_push_constant_structs`), and no ``@ align(N)``.
+    """
     for member in struct.members or []:
         if isinstance(member, A.StructMemberNode) and (
             member_explicit_alignment(member) is not None

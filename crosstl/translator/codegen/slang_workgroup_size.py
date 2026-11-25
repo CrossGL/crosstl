@@ -29,13 +29,13 @@ from __future__ import annotations
 
 from typing import Any
 
+from .global_specialization_constants import specialization_constant_declarations
 from .host_workgroup_size_ids import (
     HOST_WORKGROUP_SIZE_CONSTANT_NAMES,
     HOST_WORKGROUP_SIZE_MACROS,
     host_workgroup_size_ids,
     is_host_sized_workgroup,
 )
-from .global_specialization_constants import specialization_constant_declarations
 from .specialization_constants import specialization_constant_ids
 from .specialized_workgroup_size import workgroup_size_specialization_ids
 from .stage_utils import compute_local_size

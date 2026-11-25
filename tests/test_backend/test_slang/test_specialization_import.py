@@ -16,8 +16,8 @@ import crosstl.translator as cgl_translator
 from crosstl.backend.import_refusals import SlangImportRefused
 from crosstl.backend.slang import SlangCrossGLCodeGen, SlangLexer, SlangParser
 from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
-from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.slang_codegen import SlangCodeGen
+from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 
 ENTRY = """
 RWStructuredBuffer<float> outp;
@@ -259,7 +259,9 @@ def test_slang_output_names_the_workgroup_size_constant():
         ),
     ],
 )
-def test_computed_specialized_workgroup_size_is_refused(declarations, numthreads, named):
+def test_computed_specialized_workgroup_size_is_refused(
+    declarations, numthreads, named
+):
     source = declarations + (
         "RWStructuredBuffer<float> outp;\n"
         '[shader("compute")]\n'

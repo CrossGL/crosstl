@@ -19,8 +19,8 @@ from .slang_clock_import import SLANG_CLOCK_IMPORTS
 from .slang_matrix_import import SlangMatrixImportMixin
 from .slang_narrow_arithmetic import SlangNarrowArithmeticMixin
 from .slang_specialization_import import (
-    specialization_ids,
     specialization_constant_defaults,
+    specialization_ids,
     specialized_workgroup_layout,
 )
 from .slang_stage_roles import (
