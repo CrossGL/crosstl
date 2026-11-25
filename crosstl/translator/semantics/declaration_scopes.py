@@ -111,12 +111,11 @@ def _has_hazard(roots) -> bool:
         elif isinstance(item, A.ASTNode) and not isinstance(item, A.IdentifierNode):
             if isinstance(item, A.VariableNode) and _hazard(item):
                 return True
-            call = isinstance(item, A.FunctionCallNode)
-            for field, child in vars(item).items():
-                if isinstance(child, (list, A.ASTNode)) and not (
-                    field in _SKIPPED or (call and field in _CALLEE_FIELDS)
-                ):
-                    stack.append(child)
+            stack.extend(
+                child
+                for child in _children(item)
+                if isinstance(child, (list, A.ASTNode))
+            )
     return False
 
 
