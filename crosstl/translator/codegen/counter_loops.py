@@ -88,7 +88,83 @@ def _structured_loops(statements, found, visible, redeclared):
             _structured_loops(statement, found, visible, redeclared)
 
 
-def any_start_counter_loops(function, walk_ast, writes):
+def _straight_line_events(statements, events):
+    """Record, in source order, what runs without entering a loop.
+
+    ``events`` receives ``(name, id(node))`` for each assignment or step of
+    an identifier and ``(None, id(loop))`` for each ``for`` loop, reached
+    through blocks and ``if`` branches only. Such a write runs at most once
+    per invocation, never during a loop.
+    """
+    if statements is None:
+        return
+    if isinstance(statements, BlockNode):
+        statements = statements.statements
+    if not isinstance(statements, (list, tuple)):
+        statements = [statements]
+    for statement in statements:
+        expression = getattr(statement, "expression", statement)
+        if isinstance(expression, AssignmentNode) and isinstance(
+            expression.target, IdentifierNode
+        ):
+            events.append((expression.target.name, id(expression)))
+        elif (
+            isinstance(expression, UnaryOpNode)
+            and expression.operator in _INCREMENTS | _DECREMENTS
+            and isinstance(expression.operand, IdentifierNode)
+        ):
+            events.append((expression.operand.name, id(expression)))
+        elif isinstance(statement, ForNode):
+            events.append((None, id(statement)))
+        elif isinstance(statement, IfNode):
+            _straight_line_events(statement.then_branch, events)
+            for body in getattr(statement, "else_if_bodies", None) or []:
+                _straight_line_events(body, events)
+            _straight_line_events(statement.else_branch, events)
+        elif isinstance(statement, BlockNode):
+            _straight_line_events(statement, events)
+
+
+def _writes_before_loops(body, counters):
+    """Ids of straight-line counter writes that precede the counter's loops."""
+    loops = {name: {id(loop) for loop, _ in group} for name, group in counters.items()}
+    events = []
+    _straight_line_events(body, events)
+    started, found = set(), set()
+    for name, node_id in events:
+        if name is None:
+            started.update(key for key, ids in loops.items() if node_id in ids)
+        elif name in loops and name not in started:
+            found.add(node_id)
+    return found
+
+
+def _loop_local_writes(body, walk_ast, found):
+    """Collect writes to the variable a ``for`` loop's initializer declares.
+
+    ``for (int i = 0; i < n; i++)`` writes its own ``i``, never a counter of
+    the same name declared outside it.
+    """
+    for loop in walk_ast(body):
+        if not isinstance(loop, ForNode) or not isinstance(loop.init, VariableNode):
+            continue
+        name = loop.init.name
+        for part in (loop.condition, loop.update, loop.body):
+            for node in walk_ast(part):
+                if (
+                    isinstance(node, AssignmentNode)
+                    and isinstance(node.target, IdentifierNode)
+                    and node.target.name == name
+                ) or (
+                    isinstance(node, UnaryOpNode)
+                    and node.operator in _INCREMENTS | _DECREMENTS
+                    and isinstance(node.operand, IdentifierNode)
+                    and node.operand.name == name
+                ):
+                    found.add(id(node))
+
+
+def any_start_counter_loops(function, walk_ast, writes, *, tracked_writes=False):
     """Find initializer-free loops whose counter only those loops write.
 
     Each loop sits outside every other loop, reached only through blocks and
@@ -102,6 +178,15 @@ def any_start_counter_loops(function, walk_ast, writes):
     value at each loop is uniform is a flow fact the caller tracks.
     ``writes(node)`` names what a call or a pointer or reference declaration
     may write or alias. Returns ``{id(loop): (name, declaration, loop)}``.
+
+    With ``tracked_writes`` the counter may also be assigned or stepped,
+    before the first of its loops, by statements reached without entering a
+    loop, as in ``int i = b; if (c) { i += o; } for (; i + K < n; i += S)
+    { ... } for (; i < n; i += T) { ... }``. Such a write runs once, ahead
+    of every loop on the counter, so the caller's flow analysis decides
+    whether the counter is uniform where each loop starts. Writes a ``for``
+    loop makes to its own initializer's variable of the same name are to
+    another variable and are ignored too.
     """
     body = getattr(function, "body", None)
     if body is None:
@@ -121,6 +206,9 @@ def any_start_counter_loops(function, walk_ast, writes):
     if not counters:
         return {}
     updates = {id(loop.update) for group in counters.values() for loop, _ in group}
+    if tracked_writes:
+        updates |= _writes_before_loops(body, counters)
+        _loop_local_writes(body, walk_ast, updates)
     disqualified = set(redeclared)
     for node in walk_ast(body):
         if id(node) in updates:
