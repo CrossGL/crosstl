@@ -82,6 +82,7 @@ SLANG = {
         ),
     ),
     "discard": _slang(HLSL["discard"], "fragment"),
+    "tessellation-evaluation": tessellation.hlsl_domain_stage(slang=True),
     # The stage attribute goes on the entry point, ahead of its other attributes.
     **{
         name: replace(
@@ -92,7 +93,6 @@ SLANG = {
         )
         for name, stage, attribute in (
             ("tessellation-control", "hull", "[domain("),
-            ("tessellation-evaluation", "domain", "[domain("),
             ("mesh", "mesh", "[numthreads("),
             ("task", "amplification", "[numthreads("),
         )
