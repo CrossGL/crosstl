@@ -30,6 +30,36 @@ from .mojo_tables import (
     MOJO_SCALAR_ATOMIC_TYPES,
 )
 
+# CrossGL built-ins that apply per lane and return the type of their operands (a vector operand gives the vector
+# type), so ``nextafter(abs(x), y)`` and ``isinf(abs(x))`` see a float operand.
+_PER_LANE_SAME_TYPE_BUILTINS = frozenset(
+    {
+        "abs",
+        "acos",
+        "acosh",
+        "asin",
+        "asinh",
+        "atanh",
+        "ceil",
+        "cos",
+        "cosh",
+        "exp",
+        "exp2",
+        "floor",
+        "fma",
+        "log",
+        "log2",
+        "round",
+        "sign",
+        "sin",
+        "sinh",
+        "sqrt",
+        "tan",
+        "tanh",
+        "trunc",
+    }
+)
+
 
 class MojoResultTypeMixin:
     """Result-type members of ``MojoCodeGen.expression_result_type``."""
@@ -282,6 +312,13 @@ class MojoResultTypeMixin:
             numeric_type = mojo_numeric_function_result_type(self, func_name, expr.args)
             if numeric_type is not None:
                 return numeric_type
+            if (
+                func_name in _PER_LANE_SAME_TYPE_BUILTINS
+                and expr.args
+                and func_name not in self.function_return_types
+                and not self.is_user_defined_function(func_name)
+            ):
+                return self.per_lane_builtin_result_type(expr.args)
             return self.function_return_types.get(func_name)
         return UNHANDLED
 
@@ -355,3 +392,11 @@ class MojoResultTypeMixin:
                 return self.texture_result_type_name(resource_type)
             return "vec4"
         return UNHANDLED
+
+    def per_lane_builtin_result_type(self, args):
+        """The type of a per-lane built-in call: its first vector operand's type, else its first operand's."""
+        operand_types = [self.expression_result_type(arg) for arg in args]
+        for operand_type in operand_types:
+            if self.vector_type_info(operand_type) is not None:
+                return operand_type
+        return operand_types[0]

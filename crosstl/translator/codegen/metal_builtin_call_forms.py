@@ -38,6 +38,9 @@ from .metal_bit_scans import (
 from .metal_constructor_names import (
     METAL_BUILTIN_CONSTRUCTOR_NAMES,
 )
+from .metal_integer_sign import (
+    metal_integer_sign_call,
+)
 from .pack_builtins import (
     PACK_FUNCTIONS,
     metal_pack_call,
@@ -89,6 +92,9 @@ class MetalBuiltinCallFormMixin:
         bit_scan_call = metal_bit_scan_call(self, func_name, expr.args)
         if bit_scan_call is not None:
             return bit_scan_call
+        integer_sign = metal_integer_sign_call(self, func_name, expr.args)
+        if integer_sign is not None:
+            return integer_sign
         extended_arithmetic = metal_extended_arithmetic_call(self, func_name, expr.args)
         if extended_arithmetic is not None:
             return extended_arithmetic

@@ -14,6 +14,10 @@ on:
       - main
   workflow_dispatch:
   merge_group:
+  schedule:
+    # Every test, including the ones pull requests and merge groups deselect as unaffected
+    # (tools/pytest_scope.py), so dependency updates reach them within a day.
+    - cron: "37 0 * * *"
 
 permissions:
   contents: read
@@ -67,6 +71,21 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          # The parent commit lists the files a pull request or merge group changes.
+          fetch-depth: 2
+
+      - name: List the files the change touches
+        # A pull request checks out its merge commit and a merge group its queued commit, so the first parent is
+        # the base. tools/pytest_scope.py deselects the scoped tests no listed path can affect; pushes, the
+        # nightly run, dispatches and pull requests labelled ci:full run every test.
+        if: >-
+          github.event_name == 'merge_group' ||
+          (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))
+        run: |
+          mkdir -p build
+          git diff --name-only HEAD^1 HEAD > build/changed-files.txt
+          echo "$(wc -l < build/changed-files.txt) changed files"
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -95,8 +114,12 @@ jobs:
         # rest. Work stealing moves queued tests to whichever worker runs dry.
         run: |
           mkdir -p build/reports
+          scope=()
+          if [ -f build/changed-files.txt ]; then
+            scope=(-p tools.pytest_scope --changed-files build/changed-files.txt)
+          fi
           python -m pytest tests demos/integrations \
-            -p tools.pytest_shard --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
+            -p tools.pytest_shard --shard "${{ matrix.shard }}/${{ strategy.job-total }}" "${scope[@]}" \
             --durations=25 -n auto --dist worksteal --junitxml build/reports/full-tests-pytest.xml
 
       - name: Write complete test failure summary
