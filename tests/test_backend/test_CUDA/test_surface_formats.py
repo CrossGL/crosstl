@@ -64,7 +64,8 @@ def test_pointer_form_read_assigns_the_texel(tmp_path, suffix):
         ("opengl", "layout(r32f, CROSSGL_BINDING(0, 2, 0)) uniform image2D img;"),
         ("metal", "texture2d<float, access::read_write> img"),
         ("directx", "RWTexture2D<float> img : register(u2);"),
-        ("vulkan", 'OpName %img "img"'),
+        # SPIR-V ids are names only where SPIRV-Tools is installed; the image type carries the format either way.
+        ("vulkan", "2D 0 0 0 2 R32f"),
     ],
 )
 def test_read_write_surface_reaches_every_target(
@@ -203,7 +204,7 @@ def test_surface_reference_keeps_the_format(tmp_path, suffix):
         ("opengl", "uniform iimage2D gimg;"),
         ("metal", "texture2d<int, access::read_write> gimg"),
         ("directx", "RWTexture2D<int2> gimg"),
-        ("vulkan", 'OpName %gimg "gimg"'),
+        ("vulkan", "2D 0 0 0 2 Rg16i"),
     ],
 )
 def test_device_surface_handle_reaches_every_target(
