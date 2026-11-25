@@ -129,7 +129,10 @@ from .slang_push_constant_structs import (
     slang_member_offset_prefix,
     slang_push_constant_struct_names,
 )
-from .slang_rasterizer_order import slang_rasterizer_ordered_type
+from .slang_rasterizer_order import (
+    rasterizer_ordered_parameters,
+    slang_rasterizer_ordered_type,
+)
 from .slang_ray_tracing import SlangRayTracingMixin
 from .slang_refusals import SlangLoweringRefused
 from .slang_resource_bindings import SlangResourceBindingsMixin
@@ -521,6 +524,9 @@ class SlangCodeGen(
             )
             self.slang_helper_resource_arguments = helper_resource_argument_names(
                 ast, self.user_function_names
+            )
+            self.slang_rasterizer_ordered_parameters = rasterizer_ordered_parameters(
+                ast
             )
             self.generic_function_definitions = {}
             self.generic_function_definition_ordinals = {}
