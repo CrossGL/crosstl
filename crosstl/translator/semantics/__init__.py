@@ -52,7 +52,12 @@ from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
     hoist_constant_reference_layouts,
 )
-from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
+from .debug_printf import (
+    DebugPrintfUnsupportedError,
+    DebugPrintfValueUnsupportedError,
+    refuse_debug_printf,
+    refuse_debug_printf_values,
+)
 from .declaration_scopes import separate_initializer_scopes
 from .declared_functions import UndeclaredFunctionError, refuse_undeclared_functions
 from .declared_identifiers import (
@@ -306,6 +311,7 @@ __all__ = [
     "PartitionedWaveUnsupportedError",
     "WaveRotationUnsupportedError",
     "DebugPrintfUnsupportedError",
+    "DebugPrintfValueUnsupportedError",
     "DescriptorArrayUnsupportedError",
     "DeviceReferenceUnsupportedError",
     "DeviceVariableUnsupportedError",
@@ -489,7 +495,8 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     (:mod:`.fixed_samplers`), and is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
     Shader Model 6.9 hit objects (``dx::HitObject``) are refused for every target but Direct3D (:mod:`.hit_objects`).
     Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), debug
-    prints for targets that cannot print from a shader (:mod:`.debug_printf`), and
+    prints for targets that cannot print from a shader and debug prints whose value is read for targets whose print
+    has no such value (:mod:`.debug_printf`), and
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`),
     and texture residency queries for targets that do not lower them (:mod:`.texture_residency`).
     Sampler feedback textures are refused for every target but Direct3D (:mod:`.feedback_textures`).
@@ -665,6 +672,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     legalize_sampler_states(program, report.target)
     refuse_shader_record_buffers(program, report.target)
     refuse_debug_printf(program, report.target)
+    refuse_debug_printf_values(program, report.source, report.target)
     check_texture_operands(program, report.target)
     refuse_texture_lod_clamp(program, report.target)
     refuse_texture_residency(program, report.target)
