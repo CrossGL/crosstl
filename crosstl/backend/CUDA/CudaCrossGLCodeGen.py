@@ -17,6 +17,7 @@ from ..thread_hierarchy import (
 from .array_extents import IntegerConstants
 from .block_votes import BlockVoteLibrary, insert_block_vote_functions
 from .buffer_layout_import import EmittedBufferLayouts
+from .buffer_memory_qualifiers import buffer_memory_attributes
 from .crossgl_codegen.cooperative_groups import CudaImportCooperativeGroupMixin
 from .crossgl_codegen.declarations import CudaImportDeclarationMixin
 from .crossgl_codegen.intrinsics import CudaImportIntrinsicMixin
@@ -49,7 +50,6 @@ from .function_templates import (
 )
 from .keyword_renames import source_identifier_names
 from .parameter_defaults import parameter_default_suffix
-from .buffer_memory_qualifiers import buffer_memory_attributes
 from .struct_methods import lower_struct_methods
 from .union_layout_import import UnionLayoutContracts
 

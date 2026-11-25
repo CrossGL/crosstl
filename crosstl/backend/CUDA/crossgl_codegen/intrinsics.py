@@ -4,9 +4,9 @@ from ...assignment_operands import grouped_operand
 from ...bfloat16_conversions import format_bfloat16_conversion
 from ...thread_hierarchy import global_invocation_axis
 from ..bit_intrinsics import format_bit_intrinsic
-from ..float_classification import format_float_classification_intrinsic
 from ..CudaAst import UnaryOpNode
 from ..directed_rounding import directed_rounding_call, refuse_directed_rounding
+from ..float_classification import format_float_classification_intrinsic
 from ..function_templates import generic_call_name
 from ..pointer_math_import import format_pointer_output_call
 from ..sizeof_operands import sizeof_type_operand

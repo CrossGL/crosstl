@@ -7,6 +7,7 @@ from ...translator.semantics.warp import ORDERED_WORKGROUP_BARRIER
 from ..CUDA.array_extents import IntegerConstants
 from ..CUDA.block_votes import BlockVoteLibrary, insert_block_vote_functions
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
+from ..CUDA.buffer_memory_qualifiers import buffer_memory_attributes
 from ..CUDA.directed_rounding import (
     DirectedRoundingLibrary,
     insert_directed_rounding_functions,
@@ -20,7 +21,6 @@ from ..CUDA.keyword_renames import source_identifier_names
 from ..CUDA.parameter_defaults import merge_declared_defaults, parameter_default_suffix
 from ..CUDA.pointer_math_import import sine_cosine_statements
 from ..CUDA.reference_parameters import ReferenceParameters
-from ..CUDA.buffer_memory_qualifiers import buffer_memory_attributes
 from ..import_refusals import HipImportRefused, ImportRefusalMixin
 from ..no_contraction import (
     PRECISE_FUNCTION_ATTRIBUTE,

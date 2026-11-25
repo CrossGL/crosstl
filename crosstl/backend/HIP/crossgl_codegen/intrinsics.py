@@ -3,8 +3,8 @@
 import re
 
 from ...CUDA.bit_intrinsics import format_bit_intrinsic
-from ...CUDA.float_classification import format_float_classification_intrinsic
 from ...CUDA.directed_rounding import directed_rounding_call, refuse_directed_rounding
+from ...CUDA.float_classification import format_float_classification_intrinsic
 from ...CUDA.function_templates import generic_call_name
 from ...CUDA.pointer_math_import import format_pointer_output_call
 from ..HipAst import FunctionCallNode, MemberAccessNode, UnaryOpNode
