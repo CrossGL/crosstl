@@ -1082,14 +1082,11 @@ MOJO_VECTOR_ARITHMETIC_OPS = {
     "/": "div",
 }
 MOJO_MATH_HELPERS = {
-    "clamp",
     "cross_product",
     "dot_product",
     "fmod",
     "lerp",
     "magnitude",
-    "max",
-    "min",
     "normalize",
     "power",
     "reflect",

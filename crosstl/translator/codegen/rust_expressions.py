@@ -26,6 +26,10 @@ from .rust_gpu_builtins import generate_rust_gpu_builtin_call
 from .rust_gpu_geometry import generate_rust_geometry_call
 from .rust_gpu_images import generate_rust_gpu_image_call
 from .rust_gpu_mesh import generate_rust_mesh_call
+from .rust_gpu_ray_queries import (
+    generate_rust_gpu_ray_query_member_call,
+    rust_gpu_ray_query_constant,
+)
 from .rust_memory_atomics import generate_rust_memory_atomic_call
 from .shader_clock_refusals import (
     SHADER_CLOCK_BUILTINS,
@@ -57,6 +61,9 @@ class RustExpressionMixin:
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             name = getattr(expr, "name", str(expr))
+            ray_query_constant = rust_gpu_ray_query_constant(self, name)
+            if ray_query_constant is not None:
+                return ray_query_constant
             return self.generate_identifier_value_expression(name)
         elif isinstance(expr, VariableNode):
             if hasattr(expr, "name"):
@@ -147,6 +154,11 @@ class RustExpressionMixin:
                 slice_length = self.generate_rust_gpu_slice_length(func_expr, args)
                 if slice_length is not None:
                     return slice_length
+                ray_query_call = generate_rust_gpu_ray_query_member_call(
+                    self, func_expr, args
+                )
+                if ray_query_call is not None:
+                    return ray_query_call
 
             qualified_method_call = self.generate_qualified_generic_trait_method_call(
                 func_expr,

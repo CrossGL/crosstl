@@ -1,5 +1,7 @@
 """Probes for the geometry, tessellation, mesh, task and ray-tracing stages."""
 
+import re
+
 from tools.coverage import constructs, probes, runner
 from tools.coverage.templates import (
     meshes,
@@ -142,6 +144,46 @@ def test_tessellation_probes_state_each_languages_domain_spacing_and_patch_value
     for language, missing in absent.items():
         listed = {f.name for f in constructs.features(language, GRAMMAR)}
         assert listed & names == names - missing, language
+
+
+def test_hlsl_and_slang_domain_probes_carry_the_hull_a_pipeline_pairs_them_with():
+    """HLSL states the partitioning and the output topology only on the hull shader, so each domain probe carries a
+    hull with GLSL's defaults (integer partitioning, counter-clockwise triangles, lines for isolines) and the domain
+    shader stays the entry point ``main``."""
+    from tools.coverage.templates.hlsl import HLSL
+    from tools.coverage.templates.slang import SLANG
+
+    domains = {
+        "tessellation-domain-quads": ("quad", 4, "triangle_ccw"),
+        "tessellation-domain-isolines": ("isoline", 2, "line"),
+        "tessellation-level-input": ("tri", 3, "triangle_ccw"),
+        "tessellation-patch-input": ("tri", 3, "triangle_ccw"),
+        "tessellation-evaluation": ("tri", 3, "triangle_ccw"),
+    }
+    for language, templates in (("hlsl", HLSL), ("slang", SLANG)):
+        for name, (domain, count, topology) in domains.items():
+            template = templates[name]
+            source = template.program
+            hull, _, rest = source.partition("ControlPoint hull_main(")
+            assert rest, (language, name)
+            stage = '[shader("hull")]\n' if language == "slang" else ""
+            assert hull.endswith(
+                f'{stage}[domain("{domain}")]\n[partitioning("integer")]\n'
+                f'[outputtopology("{topology}")]\n[outputcontrolpoints({count})]\n'
+                '[patchconstantfunc("patch_constants")]\n'
+            ), (language, name)
+            assert "PatchConstants patch_constants(InputPatch<ControlPoint" in hull
+            stage = '[shader("domain")]\n' if language == "slang" else ""
+            assert f'{stage}[domain("{domain}")]\nfloat4 main(' in rest, (
+                language,
+                name,
+            )
+            assert (
+                len(re.findall(r"\bmain\(", source)) == 1 and template.entry == "main"
+            )
+    # The stage probe of the evaluation stage is the triangle domain probe.
+    assert "position * coord.z;\n}\n" in HLSL["tessellation-evaluation"].program
+    assert SLANG["tessellation-evaluation"].program.count('[shader("') == 2
 
 
 def test_mesh_probes_state_each_languages_topology_primitive_values_and_payload():

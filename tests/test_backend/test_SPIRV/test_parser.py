@@ -4,6 +4,7 @@ import pytest
 
 from crosstl.backend.common_ast import InitializerListNode
 from crosstl.backend.SPIRV import VulkanParser
+from crosstl.backend.SPIRV.ray_tracing_import import SpirvInstructionUnsupportedError
 from crosstl.backend.SPIRV.VulkanAst import (
     ArrayAccessNode,
     AssignmentNode,
@@ -1068,6 +1069,133 @@ OpDecorate %out_color Location 0
 %loaded = OpLoad %v4float %in_color
 %broadcast = OpGroupNonUniformBroadcast %v4float %scope_subgroup %loaded %lane_zero
 OpStore %out_color %broadcast
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_SUBGROUP_VOTE_BALLOT_SHUFFLE_QUAD_ASSEMBLY = """
+; Source spec: https://registry.khronos.org/SPIR-V/specs/unified1/SPIRV.html
+; Source pattern: reduced from the GL_KHR_shader_subgroup_vote, _ballot,
+; _shuffle and _quad extensions; every OpGroupNonUniform* result the importer
+; used to drop (#4570) is stored to a typed output here.
+OpCapability Shader
+OpCapability GroupNonUniform
+OpCapability GroupNonUniformVote
+OpCapability GroupNonUniformBallot
+OpCapability GroupNonUniformShuffle
+OpCapability GroupNonUniformShuffleRelative
+OpCapability GroupNonUniformQuad
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %in_bool %in_uint %in_v4uint %out_bool %out_uint %out_v4uint
+OpExecutionMode %main LocalSize 64 1 1
+OpName %in_bool "inBool"
+OpName %in_uint "inUint"
+OpName %in_v4uint "inVec"
+OpName %out_bool "outBool"
+OpName %out_uint "outUint"
+OpName %out_v4uint "outVec"
+OpDecorate %in_bool Location 0
+OpDecorate %in_uint Location 1
+OpDecorate %in_v4uint Location 2
+OpDecorate %out_bool Location 0
+OpDecorate %out_uint Location 1
+OpDecorate %out_v4uint Location 2
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%bool = OpTypeBool
+%uint = OpTypeInt 32 0
+%v4uint = OpTypeVector %uint 4
+%scope = OpConstant %uint 3
+%zero = OpConstant %uint 0
+%one = OpConstant %uint 1
+%two = OpConstant %uint 2
+%ptr_in_bool = OpTypePointer Input %bool
+%ptr_in_uint = OpTypePointer Input %uint
+%ptr_in_v4uint = OpTypePointer Input %v4uint
+%ptr_out_bool = OpTypePointer Output %bool
+%ptr_out_uint = OpTypePointer Output %uint
+%ptr_out_v4uint = OpTypePointer Output %v4uint
+%in_bool = OpVariable %ptr_in_bool Input
+%in_uint = OpVariable %ptr_in_uint Input
+%in_v4uint = OpVariable %ptr_in_v4uint Input
+%out_bool = OpVariable %ptr_out_bool Output
+%out_uint = OpVariable %ptr_out_uint Output
+%out_v4uint = OpVariable %ptr_out_v4uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%lb = OpLoad %bool %in_bool
+%lu = OpLoad %uint %in_uint
+%lv = OpLoad %v4uint %in_v4uint
+%r0 = OpGroupNonUniformAll %bool %scope %lb
+OpStore %out_bool %r0
+%r1 = OpGroupNonUniformAny %bool %scope %lb
+OpStore %out_bool %r1
+%r2 = OpGroupNonUniformAllEqual %bool %scope %lu
+OpStore %out_bool %r2
+%r3 = OpGroupNonUniformElect %bool %scope
+OpStore %out_bool %r3
+%r4 = OpGroupNonUniformBallot %v4uint %scope %lb
+OpStore %out_v4uint %r4
+%r5 = OpGroupNonUniformInverseBallot %bool %scope %lv
+OpStore %out_bool %r5
+%r6 = OpGroupNonUniformBallotBitExtract %bool %scope %lv %one
+OpStore %out_bool %r6
+%r7 = OpGroupNonUniformBallotBitCount %uint %scope Reduce %lv
+OpStore %out_uint %r7
+%r8 = OpGroupNonUniformBallotBitCount %uint %scope InclusiveScan %lv
+OpStore %out_uint %r8
+%r9 = OpGroupNonUniformBallotBitCount %uint %scope ExclusiveScan %lv
+OpStore %out_uint %r9
+%r10 = OpGroupNonUniformBallotFindLSB %uint %scope %lv
+OpStore %out_uint %r10
+%r11 = OpGroupNonUniformBallotFindMSB %uint %scope %lv
+OpStore %out_uint %r11
+%r12 = OpGroupNonUniformShuffle %uint %scope %lu %one
+OpStore %out_uint %r12
+%r13 = OpGroupNonUniformShuffleXor %uint %scope %lu %one
+OpStore %out_uint %r13
+%r14 = OpGroupNonUniformShuffleUp %uint %scope %lu %one
+OpStore %out_uint %r14
+%r15 = OpGroupNonUniformShuffleDown %uint %scope %lu %one
+OpStore %out_uint %r15
+%r16 = OpGroupNonUniformQuadBroadcast %uint %scope %lu %one
+OpStore %out_uint %r16
+%r17 = OpGroupNonUniformQuadSwap %uint %scope %lu %zero
+OpStore %out_uint %r17
+%r18 = OpGroupNonUniformQuadSwap %uint %scope %lu %one
+OpStore %out_uint %r18
+%r19 = OpGroupNonUniformQuadSwap %uint %scope %lu %two
+OpStore %out_uint %r19
+OpReturn
+OpFunctionEnd
+"""
+
+SPIRV_SUBGROUP_QUAD_SWAP_DYNAMIC_DIRECTION_ASSEMBLY = """
+; OpGroupNonUniformQuadSwap with a non-constant direction has no CrossGL
+; counterpart, so the importer refuses it naming the instruction (#4570).
+OpCapability Shader
+OpCapability GroupNonUniform
+OpCapability GroupNonUniformQuad
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %in_uint %out_uint
+OpExecutionMode %main LocalSize 64 1 1
+OpName %in_uint "inUint"
+OpName %out_uint "outUint"
+OpDecorate %in_uint Location 0
+OpDecorate %out_uint Location 0
+%void = OpTypeVoid
+%fn = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%scope = OpConstant %uint 3
+%ptr_in_uint = OpTypePointer Input %uint
+%ptr_out_uint = OpTypePointer Output %uint
+%in_uint = OpVariable %ptr_in_uint Input
+%out_uint = OpVariable %ptr_out_uint Output
+%main = OpFunction %void None %fn
+%label = OpLabel
+%lu = OpLoad %uint %in_uint
+%r = OpGroupNonUniformQuadSwap %uint %scope %lu %lu
+OpStore %out_uint %r
 OpReturn
 OpFunctionEnd
 """
@@ -2458,6 +2586,55 @@ def test_glslang_subgroup_broadcast_parse():
     assert body[0].right.args[0].name == "inColor"
     assert body[0].right.args[1] == "0"
     assert isinstance(body[1], ReturnNode)
+
+
+def test_spirv_subgroup_vote_ballot_shuffle_quad_parse():
+    tokens = tokenize_code(SPIRV_SUBGROUP_VOTE_BALLOT_SHUFFLE_QUAD_ASSEMBLY)
+    ast = parse_code(tokens)
+    body = ast.functions[0].body
+
+    assert ast.functions[0].spirv_execution_model == "GLCompute"
+    expected = [
+        ("subgroupAll", ["inBool"]),
+        ("subgroupAny", ["inBool"]),
+        ("subgroupAllEqual", ["inUint"]),
+        ("subgroupElect", []),
+        ("subgroupBallot", ["inBool"]),
+        ("subgroupInverseBallot", ["inVec"]),
+        ("subgroupBallotBitExtract", ["inVec", "1"]),
+        ("subgroupBallotBitCount", ["inVec"]),
+        ("subgroupBallotInclusiveBitCount", ["inVec"]),
+        ("subgroupBallotExclusiveBitCount", ["inVec"]),
+        ("subgroupBallotFindLSB", ["inVec"]),
+        ("subgroupBallotFindMSB", ["inVec"]),
+        ("subgroupShuffle", ["inUint", "1"]),
+        ("subgroupShuffleXor", ["inUint", "1"]),
+        ("subgroupShuffleUp", ["inUint", "1"]),
+        ("subgroupShuffleDown", ["inUint", "1"]),
+        ("subgroupQuadBroadcast", ["inUint", "1"]),
+        ("subgroupQuadSwapHorizontal", ["inUint"]),
+        ("subgroupQuadSwapVertical", ["inUint"]),
+        ("subgroupQuadSwapDiagonal", ["inUint"]),
+    ]
+    assert len(body) == len(expected) + 1
+    for statement, (name, args) in zip(body, expected):
+        assert isinstance(statement, AssignmentNode)
+        assert isinstance(statement.right, FunctionCallNode)
+        assert statement.right.name == name
+        assert [
+            arg.name if isinstance(arg, VariableNode) else arg
+            for arg in statement.right.args
+        ] == args
+    assert isinstance(body[-1], ReturnNode)
+
+
+def test_spirv_subgroup_quad_swap_dynamic_direction_refused():
+    tokens = tokenize_code(SPIRV_SUBGROUP_QUAD_SWAP_DYNAMIC_DIRECTION_ASSEMBLY)
+    with pytest.raises(
+        SpirvInstructionUnsupportedError,
+        match="OpGroupNonUniformQuadSwap swaps in direction",
+    ):
+        parse_code(tokens)
 
 
 def test_spirv_assembly_uniform_constant_resources_parse():

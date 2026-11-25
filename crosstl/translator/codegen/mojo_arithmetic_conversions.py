@@ -13,7 +13,12 @@ literal next to an integer operand converts that operand to float instead.
 from ..ast import LiteralNode, UnaryOpNode
 from .mojo_tables import MOJO_SCALAR_DTYPES
 
-__all__ = ["MojoArithmeticConversionMixin", "mojo_scalar_kind"]
+__all__ = [
+    "MojoArithmeticConversionMixin",
+    "common_scalar_dtype",
+    "mojo_dtype_type_name",
+    "mojo_scalar_kind",
+]
 
 _SHIFT_OPERATORS = frozenset({"<<", ">>"})
 _FLOAT_BITS = {"DType.float16": 16, "DType.float32": 32, "DType.float64": 64}
@@ -50,6 +55,11 @@ def mojo_scalar_kind(codegen, type_name):
     if dtype in _FLOAT_BITS or dtype in _INTEGER_BITS:
         return dtype
     return None
+
+
+def mojo_dtype_type_name(dtype):
+    """The CrossGL scalar type name of a numeric Mojo DType."""
+    return _DTYPE_TYPE_NAMES[dtype]
 
 
 def _is_literal(expr):
