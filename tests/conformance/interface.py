@@ -183,40 +183,46 @@ def _hlsl_constant_buffers(text):
 
 def _hlsl(text, group, constants, input_count):
     entry = _single(ENTRY_PATTERNS["hlsl"], text)
+    from . import directx_resources
+
     blocks = _hlsl_constant_buffers(text)
-    declared = re.findall(
-        r"\b(RW)?(StructuredBuffer|ByteAddressBuffer)\s*(?:<\s*([\w\s]+?)\s*>)?\s+(\w+)\s*:\s*"
-        r"register\(\s*([a-z])(\d+)\s*(?:,\s*space(\d+)\s*)?\)",
-        text,
-    )
+    declared = directx_resources.declarations(text)
     registers = re.findall(HLSL_REGISTER, text)
     if len(registers) != len(declared) + len(blocks) or any(
-        space not in ("", "0") for *_, space in declared
+        record["space"] for record in declared
     ):
         raise InterfaceChanged(f"Unexpected HLSL registers: {registers}")
+    # The kernel's other resources bind as :mod:`.directx_resources` describes.
+    buffers, extras = directx_resources.split(declared, input_count)
     resources = {}
-    for writable, kind, element, name, register, slot, _ in declared:
-        if (register, bool(writable)) not in {("t", False), ("u", True)}:
+    for slot, record in buffers.items():
+        kind, register, name = record["type"], record["register"], record["name"]
+        writable = kind.startswith("RW")
+        if (register, writable) not in {("t", False), ("u", True)}:
             raise InterfaceChanged(
-                f"Register class {register} does not match {writable}{kind} {name}"
+                f"Register class {register} does not match {kind} {name}"
             )
-        resources[int(slot)] = {
+        element = record["element"]
+        resources[slot] = {
             "register": f"{register}{slot}",
             "name": name,
-            "kind": "structured" if kind == "StructuredBuffer" else "raw",
+            "kind": "structured" if kind.endswith("StructuredBuffer") else "raw",
             "stride": _hlsl_stride(element, text) if element else 0,
         }
     bindings = _slots(list(resources), "HLSL register", input_count)
     # The inputs take slots 0 through n-1 and the output, which the shader writes, the UAV u<n>.
     if resources[input_count]["register"] != f"u{input_count}":
         raise InterfaceChanged(f"The output buffer must be the UAV u{input_count}")
-    return {
+    found = {
         "entry": entry.group(4),
         "group": tuple(int(entry.group(i)) for i in (1, 2, 3)),
         "bindings": bindings,
         "resources": [resources[slot] for slot in bindings],
         "constants": _constants(blocks, constants, "HLSL constant buffers"),
     }
+    if extras:
+        found["extras"] = directx_resources.records(extras, text)
+    return found
 
 
 def _glsl(text, _group, constants, input_count):

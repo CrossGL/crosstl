@@ -13,6 +13,11 @@ components of the three-dimensional one.
 and declares the source parameter as a local at the top of the body, initialized with the leading components
 converted to its type. Reads and writes of the parameter then use the local, which WGSL, unlike a parameter, lets
 the body write.
+
+The fragment input ``sample_mask`` is a ``u32`` too. GLSL declares its input ``int gl_SampleMaskIn[]``, one ``int``
+per 32 samples (GLSL 4.60 section 7.1.5), which the SPIR-V importer writes as ``int[1]``; such a parameter is
+received as ``u32`` and its local array's one element is set from it. A longer array is left for naga to reject,
+since WGSL's mask has 32 bits.
 """
 
 from __future__ import annotations
@@ -23,6 +28,8 @@ from .. import ast as A
 from ..semantics.hub_types import type_from_node
 
 __all__ = ["SCALAR_BUILTINS", "VECTOR_COMPUTE_BUILTINS", "lower_integer_builtin_inputs"]
+
+SAMPLE_MASK = "sample_mask"
 
 VECTOR_COMPUTE_BUILTINS = frozenset(
     {"global_invocation_id", "local_invocation_id", "workgroup_id", "num_workgroups"}
@@ -76,6 +83,41 @@ def _narrow_integer_type(type_node, wgsl_lanes):
     return value.lanes
 
 
+def _one_word_mask_element(type_node):
+    """The element type of an ``int[1]`` or ``uint[1]`` sample mask, else ``None``."""
+    if not isinstance(type_node, A.ArrayType):
+        return None
+    size = type_node.size
+    size = getattr(size, "value", size)
+    value = type_from_node(type_node.element_type)
+    if str(size) != "1" or value is None or value.kind not in ("i", "u"):
+        return None
+    if value.bits != 32 or value.lanes != 1:
+        return None
+    return type_node.element_type
+
+
+def _received_sample_mask(parameter, taken):
+    """A ``u32`` parameter for an ``int[1]`` sample mask, and the statements that fill the source array."""
+    element = _one_word_mask_element(parameter.param_type)
+    if element is None:
+        return None, []
+    received = copy.copy(parameter)
+    received.name = _fresh_name(f"{parameter.name}_{SAMPLE_MASK}", taken)
+    received.param_type = A.PrimitiveType("uint")
+    statements = [
+        A.VariableNode(parameter.name, parameter.param_type),
+        A.AssignmentNode(
+            A.ArrayAccessNode(
+                A.IdentifierNode(parameter.name),
+                A.LiteralNode(0, A.PrimitiveType("int")),
+            ),
+            A.CastNode(A.IdentifierNode(received.name), element),
+        ),
+    ]
+    return received, statements
+
+
 def lower_integer_builtin_inputs(program, builtin_of) -> int:
     """Receive integer built-in parameters of entry points in their WGSL types, in place; return the count.
 
@@ -100,6 +142,15 @@ def lower_integer_builtin_inputs(program, builtin_of) -> int:
             builtin = next(
                 iter(builtins & (VECTOR_COMPUTE_BUILTINS | SCALAR_BUILTINS)), None
             )
+            if builtin is None and SAMPLE_MASK in builtins:
+                if taken is None:
+                    taken = _identifiers(program)
+                received, statements = _received_sample_mask(parameter, taken)
+                if received is not None:
+                    entry.parameters[index] = received
+                    declarations.extend(statements)
+                    count += 1
+                continue
             if builtin is None:
                 continue
             wgsl_lanes = 3 if builtin in VECTOR_COMPUTE_BUILTINS else 1

@@ -33,12 +33,14 @@ from ..ast import (
     WhileNode,
 )
 from .array_utils import prepend_array_dimension
+from .rust_gpu_constant_blocks import CONSTANT_BLOCK_FLAG
 from .rust_gpu_images import rust_gpu_image_parameter_type
 from .rust_gpu_interface import (
     STORAGE_SLICE_KIND,
     UNIFORM_VALUE_KIND,
     WORKGROUP_KIND,
     builtin_input_infos,
+    declared_builtin_input_info,
     is_uniform_value,
     is_workgroup_array,
     slice_type_name,
@@ -217,6 +219,12 @@ class RustProgramAnalysisMixin:
                 continue
             declared.add(name)
             type_name = self.rust_variable_source_type(node)
+            builtin = declared_builtin_input_info(node)
+            if builtin is not None and self.map_type(type_name) == self.map_type(
+                builtin["type_name"]
+            ):
+                resources[name] = builtin
+                continue
             interface = self.rust_gpu_interface_info(node, type_name)
             if interface is not None:
                 resources[name] = interface
@@ -253,9 +261,14 @@ class RustProgramAnalysisMixin:
                 "kind": WORKGROUP_KIND,
             }
         if is_uniform_value(node, self.type_name_string(type_name)):
-            self.refuse_rust_gpu_layout(
-                node, self.type_name_string(type_name), STD140, element_of_slice=False
-            )
+            # A constant block's struct already places every member at its block offset.
+            if not getattr(node, CONSTANT_BLOCK_FLAG, None):
+                self.refuse_rust_gpu_layout(
+                    node,
+                    self.type_name_string(type_name),
+                    STD140,
+                    element_of_slice=False,
+                )
             return {"node": node, "type_name": type_name, "kind": UNIFORM_VALUE_KIND}
         return None
 

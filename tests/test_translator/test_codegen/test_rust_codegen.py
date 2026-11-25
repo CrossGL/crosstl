@@ -11090,12 +11090,12 @@ def test_unsized_cbuffer_arrays_do_not_derive_copy():
     ast = parse_code(tokens)
     with pytest.raises(
         RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
+        match="constant block 'DynamicBlock': unsized arrays in uniform blocks are not supported",
     ):
         generate_code(ast)
 
 
-def test_cbuffer_scalar_statics_use_const_default_literals():
+def test_cbuffer_scalar_statics_use_const_default_literals(tmp_path):
     code = """
     cbuffer Material {
         float exposure;
@@ -11110,14 +11110,16 @@ def test_cbuffer_scalar_statics_use_const_default_literals():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert "pub exposure: f32," in generated_code
+    assert "pub enabled: u32," in generated_code
+    assert "pub values: [Vec4; 4]," in generated_code
+    assert "pub indices: [IVec4; 2]," in generated_code
+    assert "pub flags: [UVec4; 3]," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_vector_matrix_array_statics_use_zeroed_static_fallback():
+def test_vector_matrix_array_statics_use_zeroed_static_fallback(tmp_path):
     code = """
     vec3 globalDirs[2];
     dvec2 globalPrecise[3];
@@ -11132,14 +11134,18 @@ def test_vector_matrix_array_statics_use_zeroed_static_fallback():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert "pub directions: [Vec4; 2]," in generated_code
+    assert "pub transforms: [Mat4; 2]," in generated_code
+    assert "pub precise: [DVec2; 3]," in generated_code
+    assert (
+        "fn GLOBAL_DIRS() -> [Vec3; 2] {\n    [Default::default(); 2]\n}"
+        in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_default_composite_statics_use_lazy_lock():
+def test_default_composite_statics_use_lazy_lock(tmp_path):
     code = """
     vec3 direction;
     mat4 transform;
@@ -11152,11 +11158,12 @@ def test_default_composite_statics_use_lazy_lock():
 
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert "pub tint: Vec3," in generated_code
+    assert "pub model: Mat4," in generated_code
+    assert "fn DIRECTION() -> Vec3 {" in generated_code
+    assert "fn TRANSFORM() -> Mat4 {" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_lazy_lock_static_use_sites_are_dereferenced(tmp_path):
@@ -17193,7 +17200,7 @@ def test_generic_vector_composite_types_emit_rust_names(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_array_access():
+def test_array_access(tmp_path):
     code = """
     shader main {
         struct VSInput {
@@ -17222,11 +17229,14 @@ def test_array_access():
     try:
         tokens = tokenize_code(code)
         ast = parse_code(tokens)
-        with pytest.raises(
-            RustLoweringRefused,
-            match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-        ):
-            generate_code(ast)
+        generated_code = generate_code(ast)
+        # std140 places each float of the array in its own 16-byte register.
+        assert "pub values: [Vec4; 4]," in generated_code
+        assert (
+            "material.values[0].x, material.values[1].x, material.values[2].x"
+            in generated_code
+        )
+        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
     except SyntaxError:
         pytest.fail("Array access codegen not implemented")
 
@@ -17593,7 +17603,7 @@ def test_rust_invalid_shader_missing_return_type(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_cbuffer_basic_uniform_buffer():
+def test_rust_cbuffer_basic_uniform_buffer(tmp_path):
     code = """
     cbuffer SceneData {
         mat4 viewProjection;
@@ -17603,14 +17613,18 @@ def test_rust_cbuffer_basic_uniform_buffer():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert (
+        "#[repr(C)]\n#[derive(Debug, Clone, Copy, Default)]\npub struct SceneData {"
+        in generated_code
+    )
+    assert "pub viewProjection: Mat4," in generated_code
+    assert "pub cameraPosition: Vec3," in generated_code
+    assert "pub time: f32," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_cbuffer_with_arrays():
+def test_rust_cbuffer_with_arrays(tmp_path):
     code = """
     cbuffer LightBuffer {
         vec4 lightPositions[8];
@@ -17620,14 +17634,14 @@ def test_rust_cbuffer_with_arrays():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert "pub lightPositions: [Vec4; 8]," in generated_code
+    assert "pub intensities: [Vec4; 8]," in generated_code
+    assert "pub lightCount: i32," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_cbuffer_multiple_buffers():
+def test_rust_cbuffer_multiple_buffers(tmp_path):
     code = """
     cbuffer PerFrame {
         float time;
@@ -17640,14 +17654,15 @@ def test_rust_cbuffer_multiple_buffers():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert "pub struct PerFrame {" in generated_code
+    assert "pub deltaTime: f32," in generated_code
+    assert "pub struct PerObject {" in generated_code
+    assert "pub normalMatrix: Mat4," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_cbuffer_used_in_vertex_stage():
+def test_rust_cbuffer_used_in_vertex_stage(tmp_path):
     code = """
     shader CbufferUsage {
         cbuffer Transform {
@@ -17671,11 +17686,14 @@ def test_rust_cbuffer_used_in_vertex_stage():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert (
+        "#[spirv(uniform, descriptor_set = 0, binding = 0)] transform: &Transform"
+        in generated_code
+    )
+    assert "(input.position + transform.offset)" in generated_code
+    assert "(transform.mvp * " in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_struct_member_semantic_position():
@@ -17962,7 +17980,7 @@ def test_rust_vertex_stage_basic():
     )
 
 
-def test_rust_vertex_stage_with_transform():
+def test_rust_vertex_stage_with_transform(tmp_path):
     code = """
     shader TransformVert {
         cbuffer Transforms {
@@ -17988,11 +18006,13 @@ def test_rust_vertex_stage_with_transform():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert (
+        "#[spirv(uniform, descriptor_set = 0, binding = 0)] transforms: &Transforms"
+        in generated_code
+    )
+    assert "transforms.modelViewProjection * " in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_vertex_stage_passthrough():
@@ -18031,7 +18051,7 @@ def test_rust_vertex_stage_passthrough():
     assert "// texcoord(0)" in generated_code
 
 
-def test_rust_vertex_and_fragment_pipeline():
+def test_rust_vertex_and_fragment_pipeline(tmp_path):
     code = """
     shader FullPipeline {
         cbuffer Material {
@@ -18067,14 +18087,16 @@ def test_rust_vertex_and_fragment_pipeline():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert (
+        "#[spirv(uniform, descriptor_set = 0, binding = 0)] material: &Material"
+        in generated_code
+    )
+    assert "material.baseColor.x * lighting" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_cbuffer_repr_c_and_derive():
+def test_rust_cbuffer_repr_c_and_derive(tmp_path):
     code = """
     cbuffer CameraData {
         mat4 view;
@@ -18086,11 +18108,15 @@ def test_rust_cbuffer_repr_c_and_derive():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert (
+        "#[repr(C)]\n#[derive(Debug, Clone, Copy, Default)]\npub struct CameraData {"
+        in generated_code
+    )
+    assert "pub eyePosition: Vec3," in generated_code
+    assert "pub nearPlane: f32," in generated_code
+    assert "pub farPlane: f32," in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_struct_member_semantics_tangent_binormal():
@@ -18124,7 +18150,7 @@ def test_rust_struct_member_semantics_tangent_binormal():
     assert "// texcoord(0)" in generated_code
 
 
-def test_rust_multiple_cbuffers_in_shader():
+def test_rust_multiple_cbuffers_in_shader(tmp_path):
     code = """
     shader MultiBuffer {
         cbuffer PerFrame {
@@ -18152,11 +18178,11 @@ def test_rust_multiple_cbuffers_in_shader():
     """
     tokens = tokenize_code(code)
     ast = parse_code(tokens)
-    with pytest.raises(
-        RustLoweringRefused,
-        match="resource: constant buffers are not lowered to rust-gpu uniform blocks",
-    ):
-        generate_code(ast)
+    generated_code = generate_code(ast)
+    assert "pub struct PerFrame {" in generated_code
+    assert "pub struct PerMaterial {" in generated_code
+    assert "pub struct PerObject {" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_structured_buffer_type_mapping():

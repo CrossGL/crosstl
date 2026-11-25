@@ -88,11 +88,10 @@ MOJO_PLACEHOLDER_EXAMPLE_CASES = (
 MOJO_MODULE_VARIABLE_EXAMPLE_REFUSALS = (
     ("compute/ParticleSimulation.cgl", "mojo", "particle_buffer: ParticleBuffer"),
 )
-# Rust output writes rust-gpu kernels and refuses, by construct, what rust-gpu cannot express yet: constant
-# buffers (no std140 uniform-block lowering), uniform structs whose std140 offsets differ from the #[repr(C)] glam
-# layout, storage blocks declared outside an entry point, buffer pointers passed to helpers and warp shuffles.
+# Rust output writes rust-gpu kernels and refuses, by construct, what rust-gpu cannot express yet: uniform structs
+# whose std140 offsets differ from the #[repr(C)] glam layout, storage blocks declared outside an entry point, buffer
+# pointers passed to helpers and warp shuffles.
 RUST_EXAMPLE_REFUSALS = (
-    ("advanced/ArrayTest.cgl", "rust", "constant buffers are not lowered"),
     (
         "compute/ParticleSimulation.cgl",
         "rust",

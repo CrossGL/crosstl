@@ -27,6 +27,7 @@ from .rust_exact_lookups import (
 from .rust_expressions import RustExpressionMixin
 from .rust_function_signatures import RustFunctionSignatureMixin
 from .rust_global_declarations import RustGlobalDeclarationMixin
+from .rust_gpu_constant_blocks import lower_rust_gpu_constant_blocks
 from .rust_gpu_constants import rust_integer_constants
 from .rust_gpu_entry_buffers import normalize_rust_gpu_buffers
 from .rust_gpu_images import (
@@ -406,6 +407,7 @@ class RustCodeGen(
         self.validate_supported_stage_types(ast)
         normalize_rust_gpu_buffers(self, ast)
         ast = prepare_rust_gpu_images(self, ast)
+        lower_rust_gpu_constant_blocks(self, ast)
         explicit_specialization_refusals(self, ast, "Rust")
         self.rust_referenced_names = referenced_identifier_names(ast)
         self.struct_member_types = {}
