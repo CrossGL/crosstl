@@ -24,15 +24,35 @@ CASES = {
     "broadcast": ("quad_broadcast(v, 2)", "QuadReadLaneAt(v, 2u)"),
     "shuffle": (
         "quad_shuffle(v, in_[tid] & 3u)",
-        "QuadReadLaneAt(v, (uint(buffer_load(in_, tid) & 3u) & 65535u))",
+        "QuadReadLaneAt(v, (((0x3210u | ((WaveGetLaneIndex() & 3u) << 16u)) >> "
+        "(min((uint(buffer_load(in_, tid) & 3u) & 65535u), 4u) << 2u)) & 3u))",
     ),
+    # A lane or mask of 4 or more reads the caller's own value on Apple GPUs.
+    "shuffle_high": ("quad_shuffle(v, in_[tid] & 15u)", None),
+    "shuffle_constant_high": (
+        "quad_shuffle(v, 9u)",
+        "QuadReadLaneAt(v, (WaveGetLaneIndex() & 3u))",
+    ),
+    "broadcast_high": ("quad_broadcast(v, in_[tid & ~3u] & 7u)", None),
+    "broadcast_constant_high": (
+        "quad_broadcast(v, 5)",
+        "QuadReadLaneAt(v, (WaveGetLaneIndex() & 3u))",
+    ),
+    "xor_high": ("quad_shuffle_xor(v, in_[tid & ~3u] & 7u)", None),
+    "xor_constant_high": (
+        "quad_shuffle_xor(v, ushort(6))",
+        "QuadReadLaneAt(v, (WaveGetLaneIndex() & 3u))",
+    ),
+    "up_high": ("quad_shuffle_up(v, in_[tid & ~3u] & 7u)", None),
+    "down_high": ("quad_shuffle_down(v, in_[tid & ~3u] & 7u)", None),
+    "rotate_up_high": ("quad_shuffle_rotate_up(v, in_[tid & ~3u] & 7u)", None),
     "xor1": ("quad_shuffle_xor(v, 1)", "QuadReadAcrossX(v)"),
     "xor2": ("quad_shuffle_xor(v, 2u)", "QuadReadAcrossY(v)"),
     "xor3": ("quad_shuffle_xor(v, 3)", "QuadReadAcrossDiagonal(v)"),
     "xor_run_time": (
         "quad_shuffle_xor(v, in_[0] & 3u)",
-        "QuadReadLaneAt(v, (((WaveGetLaneIndex() & 3u) ^ "
-        "(uint(buffer_load(in_, 0) & 3u) & 65535u)) & 3u))",
+        "QuadReadLaneAt(v, ((WaveGetLaneIndex() & 3u) ^ ((0x3210u >> "
+        "(min((uint(buffer_load(in_, 0) & 3u) & 65535u), 4u) << 2u)) & 3u)))",
     ),
     "up": (
         "quad_shuffle_up(v, 1)",

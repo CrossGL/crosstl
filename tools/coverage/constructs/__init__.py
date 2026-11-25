@@ -196,7 +196,7 @@ def _lines(text: str, spelled: dict[str, str]) -> list[str]:
 # GLSL tools tell a program's stage from its file suffix.
 _PROGRAM_SUFFIX = {
     language: {stage: f".{suffix}" for stage, suffix in GLSL_STAGES.items()}
-    for language in ("glsl", "webgl")
+    for language in ("gles", "glsl", "webgl")
 }
 
 

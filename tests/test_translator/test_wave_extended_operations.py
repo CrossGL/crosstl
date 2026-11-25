@@ -199,8 +199,9 @@ void main() { f[0] = subgroupAdd(f[0]); }
 """
     crossgl = _translate(tmp_path, source, "cgl")
 
-    assert "subgroupAdd(" in crossgl
-    assert "WaveActiveSum" not in crossgl
+    assert "float subgroupAdd_(float value)" in crossgl
+    assert "= subgroupAdd_(" in crossgl
+    assert not any(isinstance(node, WaveOpNode) for node in _walk(parse(crossgl)))
 
 
 def test_glsl_round_trip_keeps_subgroup_builtins(tmp_path):

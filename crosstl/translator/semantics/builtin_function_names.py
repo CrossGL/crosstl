@@ -31,6 +31,7 @@ __all__ = [
     "GLSL_FUNCTION_NAMES",
     "HLSL_FUNCTION_NAMES",
     "HLSL_INTRINSIC_FUNCTION_NAMES",
+    "HLSL_PREVIEW_FUNCTION_NAMES",
     "METAL_FUNCTION_NAMES",
     "METAL_LIBRARY_FUNCTION_NAMES",
     "METAL_OTHER_FUNCTION_NAMES",
@@ -68,6 +69,11 @@ textureQueryLevels textureQueryLod textureSamples textureSize transpose trunc ua
 umulExtended unpackDouble2x32 unpackHalf2x16 unpackSnorm2x16 unpackSnorm4x8 unpackUnorm2x16 unpackUnorm4x8
 usubBorrow
 """)
+
+# Free Shader Model 6.10 intrinsics of the DXC v1.10.2605.37 preview table (utils/hct/gen_intrin_main.txt at
+# c4d8f4f9, from which the HLSL coverage feature list takes them) that the inventory predates. The preview renamed
+# TriangleObjectPosition to TriangleObjectPositions. Slang 2026.20 declares neither.
+HLSL_PREVIEW_FUNCTION_NAMES = _names("DebugBreak TriangleObjectPositions")
 
 # HLSL intrinsic functions and methods as DXC declares them in utils/hct/gen_intrin_main.txt
 # (tests/conformance/inventory/data/hlsl.json, category builtin-function).
@@ -123,7 +129,7 @@ refract reversebits round rsqrt saturate select sign sin sincos sinh smoothstep 
 tex1D tex1Dbias tex1Dgrad tex1Dlod tex1Dproj tex2D tex2Dbias tex2Dgrad tex2Dlod tex2Dproj tex3D tex3Dbias
 tex3Dgrad tex3Dlod tex3Dproj texCUBE texCUBEbias texCUBEgrad texCUBElod texCUBEproj transpose trunc unpack_s8s16
 unpack_s8s32 unpack_u8u16 unpack_u8u32
-""")
+""") | HLSL_PREVIEW_FUNCTION_NAMES
 
 # The HLSL intrinsics DXC declares as free functions, without the object methods
 # (tests/conformance/inventory/data/hlsl.json, builtin-function items of kind intrinsic).
@@ -155,7 +161,7 @@ pack_clamp_u8 pack_s8 pack_u8 pow printf radians rcp reflect refract reversebits
 sin sincos sinh smoothstep source_mark sqrt step tan tanh tex1D tex1Dbias tex1Dgrad tex1Dlod tex1Dproj tex2D
 tex2Dbias tex2Dgrad tex2Dlod tex2Dproj tex3D tex3Dbias tex3Dgrad tex3Dlod tex3Dproj texCUBE texCUBEbias texCUBEgrad
 texCUBElod texCUBEproj transpose trunc unpack_s8s16 unpack_s8s32 unpack_u8u16 unpack_u8u32
-""")
+""") | HLSL_PREVIEW_FUNCTION_NAMES
 
 # Metal Shading Language 4.1 chapter 6 standard library functions, unqualified
 # (tests/conformance/inventory/data/metal.json, category builtin-function).
@@ -327,14 +333,15 @@ CUDA_FUNCTION_NAMES = (
 # barrier family, sparse residency and sampler feedback writes, fine and coarse derivative widths, bit
 # reinterpretation of 64-bit values, debug output, fragment discard, ``inverseSqrt``, the ``sizeof`` and ``alignof``
 # operators (with ``metal_sizeof``, a size in the MSL layout, :mod:`.sizeof_values`), lambdas, Mojo's ``assert`` and
-# ``raise``, and the constructor and helpers of the built-in ``Option<T>`` that the generators declare when a
-# program uses them.
+# ``raise``, the constructor and helpers of the built-in ``Option<T>`` that the generators declare when a
+# program uses them, and the integer combinatorics functions that :mod:`.integer_math` lowers.
 _CROSSGL_OPERATION_NAMES = _names("""
 atomicLoad atomicStore atomicCompareExchange atomicCompareExchangeWeak atomicThreadFence workgroupBarrier
+workgroupUniformLoad
 workgroupExecutionBarrier subgroupExecutionBarrier deviceMemoryBarrier allMemoryBarrier textureResidency
 textureResident textureGatherCompareOffsets textureSamplePosition write_sampler_feedback write_sampler_feedback_bias
 write_sampler_feedback_grad write_sampler_feedback_level fwidth_fine fwidth_coarse doubleBitsToLong longBitsToDouble
-printf discard inverseSqrt alignof lambda assert raise Some is_Some is_None unwrap_Some
+printf discard inverseSqrt alignof lambda assert raise Some is_Some is_None unwrap_Some gcd lcm factorial comb perm
 """) | frozenset(SIZEOF_LAYOUTS)
 
 # CrossGL's intrinsic functions: the wave, subgroup, ray tracing and mesh intrinsics the parser and

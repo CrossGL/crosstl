@@ -12,15 +12,12 @@ from .generic_function_utils import (
     generic_function_call_name,
     reject_unresolved_generic_function_call,
 )
-from .shader_clock_refusals import (
-    SHADER_CLOCK_BUILTINS,
-    refuse_shader_clock_call,
-)
 from .slang_buffer_lengths import (
     slang_glsl_buffer_block_length,
     slang_structured_buffer_length,
 )
 from .slang_core_functions import generate_slang_core_function_call
+from .slang_shader_clocks import generate_slang_shader_clock_call
 from .slang_value_resizes import slang_resize_constructor
 from .slang_wave_shuffles import (
     as_type_target,
@@ -39,11 +36,12 @@ class SlangCallExpressionMixin:
         if func_expr is None:
             func_expr = node.name
         clock_name = getattr(func_expr, "name", func_expr)
-        if (
-            clock_name in SHADER_CLOCK_BUILTINS
-            and clock_name not in self.user_function_names
-        ):
-            return refuse_shader_clock_call("Slang", clock_name)
+        if isinstance(clock_name, str) and clock_name not in self.user_function_names:
+            clock_call = generate_slang_shader_clock_call(
+                self, clock_name, getattr(node, "args", None)
+            )
+            if clock_call is not None:
+                return clock_call
         ray_query_call = self.slang_ray_query_call_parts(node)
         if ray_query_call is not None:
             operation, query_expr, args = ray_query_call

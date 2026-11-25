@@ -1329,7 +1329,8 @@ def test_external_rocm_docs_system_scope_atomics_codegen_reparse():
     }
     """
 
-    ast, crossgl, message = refused_crossgl_from_hip(source)
+    ast = parse_hip_source(source)
+    crossgl = HipToCrossGLConverter().generate(ast)
     body = ast.statements[0].body
     assert isinstance(body[0].value, AtomicOperationNode)
     assert body[0].value.operation == "atomicAdd_system"
@@ -1337,15 +1338,12 @@ def test_external_rocm_docs_system_scope_atomics_codegen_reparse():
     assert body[1].operation == "atomicOr_system"
     assert isinstance(body[2].value, AtomicOperationNode)
     assert body[2].value.operation == "atomicCAS_system"
-    # A device-scoped atomic is not atomic for the host and peer devices.
-    for name in ("atomicAdd_system", "atomicOr_system", "atomicCAS_system"):
-        assert f"HIP {name}: CrossGL atomics are device-scoped" in message
-    assert "atomicAdd(bins[gl_LocalInvocationID.x], 1u)" in crossgl
-    assert "atomicOr(flags, old)" in crossgl
-    assert "atomicCompareExchange(flags, 0u, 1u)" in crossgl
-    assert "atomicAdd_system(" not in crossgl
-    assert "atomicOr_system(" not in crossgl
-    assert "atomicCAS_system(" not in crossgl
+    # A system-scoped atomic is also atomic for the host and peer devices, which a device-scoped CrossGL atomic is
+    # not: it keeps its HIP name, which CUDA and HIP output write back and the other generators refuse.
+    assert "atomicAdd_system(bins[gl_LocalInvocationID.x], 1u)" in crossgl
+    assert "atomicOr_system(flags, old)" in crossgl
+    assert "atomicCAS_system(flags, 0u, 1u)" in crossgl
+    CrossGLParser(CrossGLLexer(crossgl).tokens).parse()
 
 
 def test_external_hip_tests_bare_atomic_compat_block_macro_codegen_reparse():

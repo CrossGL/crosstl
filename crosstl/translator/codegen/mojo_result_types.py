@@ -18,6 +18,7 @@ from .generic_function_utils import (
     generic_function_call_name,
     numeric_trait_method_result_type,
 )
+from .mojo_numeric_functions import mojo_numeric_function_result_type
 from .mojo_tables import (
     MOJO_ATOMIC_OP_ALIASES,
     MOJO_BUILTIN_PLACEHOLDERS,
@@ -259,6 +260,10 @@ class MojoResultTypeMixin:
                     if self.is_texture_resource_type(resource_type):
                         return self.texture_result_type_name(resource_type)
                 return "vec4"
+            if func_name == "atomicStore" and not self.is_user_defined_function(
+                func_name
+            ):
+                return "void"
             if func_name in MOJO_SCALAR_ATOMIC_OPS and expr.args:
                 target_type = self.type_name(self.expression_result_type(expr.args[0]))
                 if target_type in MOJO_SCALAR_ATOMIC_TYPES:
@@ -271,6 +276,9 @@ class MojoResultTypeMixin:
                 return "int"
             if func_name == "__shfl_down_sync" and len(expr.args) >= 2:
                 return self.expression_result_type(expr.args[1])
+            numeric_type = mojo_numeric_function_result_type(self, func_name, expr.args)
+            if numeric_type is not None:
+                return numeric_type
             return self.function_return_types.get(func_name)
         return UNHANDLED
 

@@ -2300,6 +2300,7 @@ class HLSLParser:
                     "anyhit": "ray_any_hit",
                     "miss": "ray_miss",
                     "callable": "ray_callable",
+                    "node": "node",
                 }
                 if stage_name in stage_map:
                     return stage_map[stage_name]

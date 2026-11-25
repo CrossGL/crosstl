@@ -14,10 +14,23 @@ function of a program and decides how each parameter imports:
   :class:`ReferenceParameterError`: ``inout`` needs an lvalue argument, and CrossGL cannot rebind a caller's pointer.
 
 Copy-in and copy-out matches a reference only while nothing else reaches the argument's object during the call. A
-call that passes an argument to an ``inout`` parameter must therefore name storage of the caller's own: a by-value
-local or parameter whose address the caller never takes, a member or element of one, or an ``inout`` parameter of
-the caller. The reference arguments of such a call must not overlap. Arguments in shared, global or pointed-to
-memory, which other threads and other arguments can reach, raise :class:`ReferenceParameterError`.
+call that passes an argument to an ``inout`` parameter names either storage of the caller's own (a by-value local or
+parameter whose address the caller never takes, a member or element of one, or an ``inout`` parameter of the caller)
+or an element or member of shared, global or pointed-to memory, as in ``grow(out[i], k)``. The reference arguments of
+a call must not overlap. Memory that other threads and other arguments can reach binds an ``inout`` parameter only
+when the call cannot tell a copy from a reference:
+
+* the callee is *isolated*: it and every function it calls take no pointer or array parameter, name no writable
+  ``__device__``, ``__shared__`` or ``__managed__`` variable, call no barrier, fence, atomic, warp, clock or
+  cache-operator built-in, no method and no namespaced function, and hold no inline assembly. Its only way to the
+  argument's memory is then the reference itself, and with no synchronization in the call another thread can observe
+  the object only through a data race, whose result the CUDA memory model leaves undefined (CUDA C++ Programming
+  Guide, "Memory Consistency"), so a copy written back at the return is one of the behaviours a reference allows;
+* every other reference argument of the call is storage of the caller's own, because two pointers may name the same
+  object and the copies would then miss each other's writes;
+* the argument's indices have no side effects, so the write-back names the element the call read.
+
+Any other argument in such memory raises :class:`ReferenceParameterError`.
 """
 
 from __future__ import annotations
@@ -29,6 +42,7 @@ from ..common_ast import (
     ArrayAccessNode,
     AssignmentNode,
     ASTNode,
+    CastNode,
     EnumNode,
     FunctionCallNode,
     FunctionNode,
@@ -48,6 +62,21 @@ _ALIAS_WORDS = re.compile(r"(\s+|[&*<>(),\[\]])")
 _STORAGE_QUALIFIERS = frozenset(
     {"__shared__", "__device__", "__constant__", "__managed__", "static", "extern"}
 )
+_READ_ONLY_QUALIFIERS = frozenset({"__constant__", "const", "constexpr"})
+# Built-in calls through which a callee synchronizes with, or reaches memory of, other threads: barriers, fences,
+# atomics, warp and wave collectives, clocks, cache-operator loads and stores, cooperative groups and inline assembly.
+_SHARED_STATE_CALL = re.compile(
+    r"sync|fence|barrier|atomic|shfl|ballot|vote|match|reduce|activemask|^__any|^__all|lane|wave|warp|permute|"
+    r"readfirst|clock|timer|^__ld|^__st|nontemporal|cooperative|grid|group|asm|::",
+    re.IGNORECASE,
+)
+# Statements and expressions through which a callee synchronizes, calls a method or callable value, launches work,
+# allocates, declares block-shared storage or runs inline assembly.
+_SHARED_STATE_NODE = re.compile(
+    r"Sync|Asm|MethodCall|^CallNode$|Launch|^NewNode$|^DeleteNode$|SharedMemory"
+)
+_SIDE_EFFECT_OPS = ("++", "--")
+_WORD = re.compile(r"[A-Za-z_]\w*")
 
 
 class ReferenceParameterError(TranslationDiagnostic):
@@ -151,8 +180,10 @@ def _walk(node, seen=None):
 
 
 def _program_parts(program):
-    """The functions of ``program``, nested ones included, and the names it declares outside them."""
-    functions, names = [], set()
+    """The functions of ``program``, nested ones included, the names it declares outside them, the read-only ones,
+    and the records with a pointer or reference member mapped to the record types their members name.
+    """
+    functions, names, read_only, records = [], set(), set(), {}
     pending = [program]
     seen = set()
     while pending:
@@ -169,6 +200,15 @@ def _program_parts(program):
         if isinstance(node, EnumNode):
             continue
         if isinstance(node, StructNode):
+            member_types = [
+                str(getattr(member, "vtype", "") or "")
+                for member in getattr(node, "members", None) or []
+                if isinstance(member, VariableNode)
+            ]
+            records[str(node.name)] = (
+                any(_reaches_memory(text) for text in member_types),
+                {word for text in member_types for word in _WORD.findall(text)},
+            )
             # Members are not module-scope variables; member functions and nested records still count.
             pending.extend(
                 item
@@ -178,12 +218,38 @@ def _program_parts(program):
             continue
         if isinstance(node, VariableNode):
             names.add(str(node.name))
+            qualifiers = {str(q) for q in getattr(node, "qualifiers", None) or []}
+            vtype = str(getattr(node, "vtype", "") or "")
+            # A pointer variable is read-only only as a pointer: the memory it points to stays writable.
+            if not _reaches_memory(vtype) and (
+                getattr(node, "is_const", False)
+                or (qualifiers | set(vtype.split())) & _READ_ONLY_QUALIFIERS
+            ):
+                read_only.add(str(node.name))
         pending.extend(
             value
             for value in vars(node).values()
             if isinstance(value, (ASTNode, list, tuple))
         )
-    return functions, names
+    return functions, names, read_only, records
+
+
+def _reaches_memory(type_text):
+    """Whether a value of type ``type_text`` holds a pointer, a reference or an array, which reach memory."""
+    return any(mark in str(type_text) for mark in ("*", "&", "["))
+
+
+def _pointer_records(records):
+    """The record names whose values hold a pointer or reference, directly or through a member of record type."""
+    holding = {name for name, (direct, _) in records.items() if direct}
+    changed = True
+    while changed:
+        changed = False
+        for name, (_, words) in records.items():
+            if name not in holding and words & holding:
+                holding.add(name)
+                changed = True
+    return holding
 
 
 def _path(argument):
@@ -256,6 +322,26 @@ def _is_storage_type(type_text):
     return "*" not in tokens and "&" not in tokens and "&&" not in tokens
 
 
+def _identifiers(node):
+    """Every word the nodes under ``node`` hold as text: the names they read, write and call, and their literals."""
+    for item in _walk(node):
+        for value in vars(item).values():
+            values = value if isinstance(value, (list, tuple)) else (value,)
+            for text in values:
+                if isinstance(text, str):
+                    yield from _WORD.findall(text)
+
+
+def _side_effect_free(expression):
+    """Whether evaluating ``expression`` twice reads what evaluating it once does: no call, assignment or ``++``/``--``."""
+    for node in _walk(expression):
+        if isinstance(node, (FunctionCallNode, AssignmentNode)):
+            return False
+        if any(step in str(getattr(node, "op", "")) for step in _SIDE_EFFECT_OPS):
+            return False
+    return True
+
+
 class ReferenceParameters:
     """How the reference parameters of every function of a CUDA or HIP program import; see the module docstring."""
 
@@ -268,7 +354,9 @@ class ReferenceParameters:
             and not getattr(node, "array_sizes", None)
             and not getattr(node, "declarator_type_suffix", "")
         }
-        self.functions, self.module_names = _program_parts(program)
+        self.functions, self.module_names, read_only, records = _program_parts(program)
+        self.writable_module_names = self.module_names - read_only
+        self.pointer_records = _pointer_records(records)
         self.by_name = {}
         for function in self.functions:
             name = _short_name(getattr(function, "name", ""))
@@ -283,6 +371,7 @@ class ReferenceParameters:
         self.written = {id(function): set() for function in self.functions}
         self._find_writes()
         self._check_kinds()
+        self.isolated = self._find_isolated()
         for function in self.functions:
             self._check_calls(function)
 
@@ -437,6 +526,76 @@ class ReferenceParameters:
             )
         raise ReferenceParameterError(reason, target=self.target)
 
+    # Isolated callees --------------------------------------------------------------------------------------------
+    def _locally_isolated(self, function):
+        """Whether ``function``'s own parameters and body reach no memory but its references (module docstring)."""
+        for parameter in _parameters(function):
+            raw = self.resolve(_parameter_type(parameter))
+            if "*" in _top_level_tokens(raw) or "[" in raw or "volatile" in raw:
+                return False
+            if set(_WORD.findall(raw)) & self.pointer_records:
+                return False
+        body = getattr(function, "body", None)
+        for node in _walk(body):
+            if _SHARED_STATE_NODE.search(type(node).__name__):
+                return False
+            if isinstance(node, CastNode) and "*" in str(node.target_type):
+                return False
+            if isinstance(node, FunctionCallNode):
+                name = node.name
+                if not isinstance(name, str):
+                    return False
+                if _short_name(name) not in self.by_name and _SHARED_STATE_CALL.search(
+                    name
+                ):
+                    return False
+        return not any(
+            word in self.writable_module_names for word in _identifiers(body)
+        )
+
+    def _find_isolated(self):
+        """The ids of the isolated functions: locally isolated, and calling only isolated functions of the program."""
+        isolated = {
+            id(function)
+            for function in self.functions
+            if self._locally_isolated(function)
+        }
+        changed = True
+        while changed:
+            changed = False
+            for function in self.functions:
+                if id(function) not in isolated:
+                    continue
+                for node in _walk(getattr(function, "body", None)):
+                    if not isinstance(node, FunctionCallNode):
+                        continue
+                    callees = self.by_name.get(_short_name(node.name), ())
+                    if any(id(callee) not in isolated for callee in callees):
+                        isolated.discard(id(function))
+                        changed = True
+                        break
+        return isolated
+
+    def _copies_shared_argument(self, node, index, arguments, references, local):
+        """Whether argument ``index`` of call ``node``, in memory others can reach, may bind its ``inout`` by copy."""
+        callees = [
+            callee
+            for callee in self.by_name.get(_short_name(node.name), ())
+            if len(_parameters(callee)) == len(arguments)
+        ]
+        if not callees or any(id(callee) not in self.isolated for callee in callees):
+            return False
+        if not _side_effect_free(arguments[index]):
+            return False
+        for other, argument in enumerate(arguments):
+            address = isinstance(argument, UnaryOpNode) and argument.op == "&"
+            if other == index or (other not in references and not address):
+                continue
+            path = _path(argument.operand if address else argument)
+            if path is None or path[0] not in local:
+                return False
+        return True
+
     # Call sites --------------------------------------------------------------------------------------------------
     def _local_storage(self, function):
         """Names that denote storage only ``function`` itself reaches."""
@@ -471,8 +630,23 @@ class ReferenceParameters:
                     other.add(root)
         return local - other
 
+    def _reference_names(self, function):
+        """Names ``function`` declares as references, which a copy in and out of the referred object cannot bind."""
+        names = {
+            _parameter_name(parameter)
+            for index, parameter in enumerate(_parameters(function))
+            if self.mode(function, index) != "inout"
+            and reference_kind(self.resolve(_parameter_type(parameter))) is not None
+        }
+        for node in _walk(getattr(function, "body", None)):
+            if isinstance(node, (VariableNode, RangeForNode)):
+                raw = self.resolve(str(getattr(node, "vtype", "") or ""))
+                if reference_kind(raw) is not None or "&" in raw:
+                    names.add(str(node.name))
+        return names
+
     def _check_calls(self, function):
-        local = None
+        local = reference_locals = None
         for node in _walk(getattr(function, "body", None)):
             if not isinstance(node, FunctionCallNode):
                 continue
@@ -482,6 +656,7 @@ class ReferenceParameters:
                 continue
             if local is None:
                 local = self._local_storage(function)
+                reference_locals = self._reference_names(function)
             references = self._reference_indices(node.name, len(arguments))
             name = _short_name(node.name)
             reached = []
@@ -490,7 +665,17 @@ class ReferenceParameters:
                 if index not in references and not address:
                     continue
                 path = _path(argument.operand if address else argument)
-                if index in inout and (path is None or path[0] not in local):
+                if (
+                    index in inout
+                    and (path is None or path[0] not in local)
+                    and (
+                        path is None
+                        or path[0] in reference_locals
+                        or not self._copies_shared_argument(
+                            node, index, arguments, references, local
+                        )
+                    )
+                ):
                     raise ReferenceParameterError(
                         f"argument {index + 1} of '{name}' binds a reference parameter to storage that other "
                         "threads or other arguments can reach; CrossGL passes it in and out by copy",

@@ -23,6 +23,7 @@ from __future__ import annotations
 from ..semantics.builtin_function_names import (
     BUILTIN_FUNCTION_NAMES,
     HLSL_FUNCTION_NAMES,
+    HLSL_PREVIEW_FUNCTION_NAMES,
 )
 from ..stage_utils import requested_stage_name
 from .hlsl_semantic_attributes import HLSL_SEMANTIC_NAME
@@ -70,7 +71,10 @@ SLANG_BITCAST_INTRINSICS = {
     "uintBitsToFloat": "asfloat",
 }
 
-_SLANG_CALLABLE_FUNCTION_NAMES = HLSL_FUNCTION_NAMES | SLANG_CORE_FUNCTION_NAMES
+# The HLSL intrinsics Slang declares too: all but the Shader Model 6.10 preview ones.
+_SLANG_CALLABLE_FUNCTION_NAMES = (
+    HLSL_FUNCTION_NAMES - HLSL_PREVIEW_FUNCTION_NAMES
+) | SLANG_CORE_FUNCTION_NAMES
 
 
 def slang_shader_stage(stage_name):

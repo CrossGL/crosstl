@@ -178,7 +178,7 @@ def test_cross_of_four_component_vectors_is_refused(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "call", ["acos(x)", "exp(x)", "pow(x, y)", "atan2(y, x)", "log10(x)", "tanh(x)"]
+    "call", ["acos(x)", "sinh(x)", "asin(x)", "atan2(y, x)", "log10(x)", "tanh(x)"]
 )
 def test_double_operands_of_float_only_functions_are_refused(tmp_path, call):
     with pytest.raises(OpenGLBuiltinOperandError) as caught:
