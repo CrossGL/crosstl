@@ -8596,7 +8596,8 @@ class TestHipCodeGen:
         )
         assert (
             "accum = cgl_float4_add(accum, cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
-            "(fixedImages[fixedSlot], pixel.x * sizeof(ushort4), pixel.y)));" in hip_code
+            "(fixedImages[fixedSlot], pixel.x * sizeof(ushort4), pixel.y)));"
+            in hip_code
         )
         assert (
             "int2 fixedTexSize = cgl_textureSize_sampler2D"

@@ -26,8 +26,7 @@ class HipResourceCallMixin:
                 )
 
         if (
-            func_name
-            in {
+            func_name in {
                 "texture",
                 "textureLod",
                 "textureGrad",
@@ -63,8 +62,7 @@ class HipResourceCallMixin:
                 return texture_gather
 
         if (
-            func_name
-            in {
+            func_name in {
                 "textureGather",
                 "textureGatherOffset",
                 "textureGatherOffsets",
@@ -80,8 +78,7 @@ class HipResourceCallMixin:
                 )
 
         if (
-            func_name
-            in {
+            func_name in {
                 "textureProj",
                 "textureProjLod",
                 "textureProjGrad",
@@ -108,8 +105,7 @@ class HipResourceCallMixin:
     ):
         """Emit offset and projective texture sampling."""
         if (
-            func_name
-            in {
+            func_name in {
                 "textureOffset",
                 "textureLodOffset",
                 "textureGradOffset",

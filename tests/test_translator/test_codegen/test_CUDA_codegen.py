@@ -14171,7 +14171,8 @@ class TestCudaCodeGen:
         assert "return tex2D<float4>(dynGrid[layer][slot], uv.x, uv.y);" in cuda_code
         assert (
             "float4 color = cgl_rgba16f_texel(surf2Dread<ushort4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in cuda_code
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
             "uint count = surf2Dread<uint>"
@@ -14820,7 +14821,8 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 loaded = cgl_rgba16f_texel(surf2Dread<ushort4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in cuda_code
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
             "int2 texSize = cgl_textureSize_sampler2D"
@@ -14840,7 +14842,8 @@ class TestCudaCodeGen:
         )
         assert (
             "accum = cgl_float4_add(accum, cgl_rgba16f_texel(surf2Dread<ushort4>"
-            "(fixedImages[fixedSlot], pixel.x * sizeof(ushort4), pixel.y)));" in cuda_code
+            "(fixedImages[fixedSlot], pixel.x * sizeof(ushort4), pixel.y)));"
+            in cuda_code
         )
         assert (
             "int2 fixedTexSize = cgl_textureSize_sampler2D"
@@ -14927,7 +14930,8 @@ class TestCudaCodeGen:
         )
         assert (
             "float4 loaded = cgl_rgba16f_texel(surf2Dread<ushort4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in cuda_code
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
             "surf2Dwrite(cgl_rgba16f_element(loaded), dynImages[layer][slot], "
@@ -15227,7 +15231,8 @@ class TestCudaCodeGen:
         )
         assert (
             "result.loaded = cgl_rgba16f_texel(surf2Dread<ushort4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in cuda_code
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
             "result.texSize = cgl_textureSize_sampler2D"
@@ -15348,7 +15353,8 @@ class TestCudaCodeGen:
         )
         assert (
             "envelope.result.loaded = cgl_rgba16f_texel(surf2Dread<ushort4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in cuda_code
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
             "envelope.result.texSize = cgl_textureSize_sampler2D"
@@ -15479,7 +15485,8 @@ class TestCudaCodeGen:
         )
         assert (
             "envelope.results[slot].loaded = cgl_rgba16f_texel(surf2Dread<ushort4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in cuda_code
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
             "envelope.results[slot].texSize = cgl_textureSize_sampler2D"
@@ -15628,7 +15635,8 @@ class TestCudaCodeGen:
         )
         assert (
             "envelope.result.loaded = cgl_rgba16f_texel(surf2Dread<ushort4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in cuda_code
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
             "envelope.result.sampled = tex2D<float4>(dynTex[fallback][slot], uv.x, uv.y);"

@@ -56,8 +56,7 @@ class CudaResourceCallMixin:
     ):
         """Refuse or lower the gather, compare, offset, projective and offset-fetch forms that need special handling."""
         if (
-            func_name
-            in {
+            func_name in {
                 "texture",
                 "textureLod",
                 "textureGrad",
@@ -95,8 +94,7 @@ class CudaResourceCallMixin:
                 return texture_gather
 
         if (
-            func_name
-            in {
+            func_name in {
                 "textureGather",
                 "textureGatherOffset",
                 "textureGatherOffsets",
@@ -112,8 +110,7 @@ class CudaResourceCallMixin:
                 )
 
         if (
-            func_name
-            in {
+            func_name in {
                 "textureOffset",
                 "textureLodOffset",
                 "textureGradOffset",
@@ -123,8 +120,7 @@ class CudaResourceCallMixin:
             return self.generate_texture_offset_call(func_name, raw_args, args)
 
         if (
-            func_name
-            in {
+            func_name in {
                 "textureProj",
                 "textureProjOffset",
                 "textureProjLod",
@@ -148,8 +144,7 @@ class CudaResourceCallMixin:
     ):
         """Emit offset and projective texture sampling."""
         if (
-            func_name
-            in {
+            func_name in {
                 "textureOffset",
                 "textureLodOffset",
                 "textureGradOffset",
