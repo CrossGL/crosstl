@@ -23,6 +23,7 @@ from crosstl.translator.codegen.written_function_names import (
 )
 from crosstl.translator.semantics.builtin_function_names import (
     HLSL_INTRINSIC_FUNCTION_NAMES,
+    HLSL_PREVIEW_FUNCTION_NAMES,
     METAL_LIBRARY_FUNCTION_NAMES,
 )
 
@@ -51,7 +52,12 @@ def _translate(tmp_path, body, backend, declarations=""):
 @pytest.mark.parametrize(
     ("language", "kind", "group"),
     [
-        ("hlsl", "intrinsic", HLSL_INTRINSIC_FUNCTION_NAMES),
+        # The DXC 1.9 inventory predates the Shader Model 6.10 preview intrinsics.
+        (
+            "hlsl",
+            "intrinsic",
+            HLSL_INTRINSIC_FUNCTION_NAMES - HLSL_PREVIEW_FUNCTION_NAMES,
+        ),
         ("metal", "library-function", METAL_LIBRARY_FUNCTION_NAMES),
     ],
 )

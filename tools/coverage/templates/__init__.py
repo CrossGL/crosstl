@@ -16,6 +16,7 @@ from __future__ import annotations
 from .base import ABSENT, Template
 from .cuda import CUDA
 from .family import C_FAMILY
+from .gles import GLES
 from .glsl import GLSL
 from .hip import HIP
 from .hlsl import HLSL
@@ -35,6 +36,7 @@ TEMPLATES = {
     "mojo": MOJO,
     "opencl": OPENCL,
     "rust": RUST,
+    "gles": GLES,
     "glsl": GLSL,
     "hlsl": HLSL,
     "metal": METAL,

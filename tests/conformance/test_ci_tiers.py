@@ -322,7 +322,7 @@ HOSTED = [
         # Relevant pull requests run Linux only unless labelled.
         ("conformance", "pull_request", False, ["crosstl/x.py"], LINUX),
         ("conformance", "pull_request", True, ["crosstl/x.py"], LINUX + HOSTED),
-        ("corpus", "pull_request", False, ["crosstl/x.py"], LINUX),
+        ("corpus", "pull_request", False, ["crosstl/x.py"], "lean"),
         ("corpus", "pull_request", True, ["crosstl/x.py"], LINUX + HOSTED),
         # Unknown changes count as relevant.
         ("conformance", "pull_request", False, None, LINUX),
@@ -334,9 +334,31 @@ HOSTED = [
     ],
 )
 def test_plan(workflow, event, full, paths, expected):
+    if expected == "lean":
+        expected = [{**leg, "slices": ci_plan.lean_slices(workflow)} for leg in LINUX]
     legs, reason = ci_plan.plan(workflow, event, full, LINUX, HOSTED, paths)
     assert legs == expected
     assert reason
+
+
+def test_lean_corpus_runs_skip_only_the_metal_source_slices():
+    manifest = json.loads(Path(ci_plan.CORPUS_MANIFEST).read_text(encoding="utf-8"))
+    languages = {name: entry["language"] for name, entry in manifest["slices"].items()}
+    lean = ci_plan.lean_slices("corpus").split(",")
+    assert lean == [name for name, language in languages.items() if language != "metal"]
+    assert {languages[name] for name in lean} == set(languages.values()) - {"metal"}
+    assert ci_plan.lean_slices("conformance") is None
+
+
+def test_corpus_measures_the_planned_slices_unless_a_manual_run_names_them():
+    steps = load("corpus.yml")["jobs"]["corpus"]["steps"]
+    step = next(step for step in steps if "SLICES" in step.get("env", {}))
+    assert step["env"]["SLICES"] == "${{ github.event.inputs.slices || matrix.slices }}"
+    assert '${SLICES:+--slices "$SLICES"}' in step["run"]
+    linux, hosted = leg_lists(load("corpus.yml"))
+    assert all(
+        leg["slices"] == "" for leg in linux + hosted
+    ), "an unplanned leg runs every slice"
 
 
 @pytest.mark.skipif(GIT is None, reason="needs git")
@@ -392,7 +414,9 @@ def test_plan_step_runs_as_written(name):
     workflow = load(name)
     linux, hosted = leg_lists(workflow)
     # Without a base the changed paths are unknown, so a pull request runs its Linux legs.
-    assert run_plan_step(workflow, "pull_request") == linux
+    lean = ci_plan.lean_slices(name[:-4])
+    lean_linux = linux if lean is None else [{**leg, "slices": lean} for leg in linux]
+    assert run_plan_step(workflow, "pull_request") == lean_linux
     assert run_plan_step(workflow, "pull_request", full=True) == linux + hosted
     assert run_plan_step(workflow, "schedule") == linux + hosted
     assert run_plan_step(workflow, "workflow_dispatch") == linux + hosted

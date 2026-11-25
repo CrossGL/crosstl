@@ -29,6 +29,7 @@ from ..host_workgroup_size import function_entry_execution_config
 from ..refusals import RustRefusal
 from .host_workgroup_size_ids import is_host_sized_workgroup
 from .rust_exact_lookups import call_names_resolving_to
+from .rust_gpu_math_calls import rust_gpu_math_mutated_roots
 from .rust_memory_atomics import rust_memory_atomic_location_roots
 from .specialized_workgroup_size import require_fixed_workgroup_size
 from .stage_utils import compute_local_size
@@ -351,6 +352,7 @@ class RustFunctionSignatureMixin:
                     names.update(self.mutable_reference_borrow_root_names(argument))
                 names.update(self.rust_output_argument_roots(func_name, args))
                 names.update(rust_memory_atomic_location_roots(self, func_name, args))
+                names.update(rust_gpu_math_mutated_roots(self, func_name, args))
                 collect(current.function)
                 collect(args)
                 return
@@ -645,6 +647,7 @@ class RustFunctionSignatureMixin:
                 )
             self.add_builtin_function_call_constraints(node, generic_names, constraints)
             self.add_user_function_call_constraints(node, generic_names, constraints)
+            self.check_generic_concrete_function_call(node, generic_names)
             return
 
         if isinstance(node, MemberAccessNode):
@@ -716,6 +719,35 @@ class RustFunctionSignatureMixin:
                     caller_type,
                     self.substitute_generic_bound(bound, callee_param, caller_type),
                 )
+
+    def check_generic_concrete_function_call(self, call_node, generic_names):
+        """Refuse a generic function body that calls a concrete function with a generic argument.
+
+        Rust type-checks a generic body once for every type parameter, not once per call site,
+        so a call such as ``combine(x, x)`` where ``combine`` expects ``float`` cannot compile
+        unless the generic function is monomorphized for each concrete caller. Rust output
+        emits native generics, so it refuses the program instead of writing a generic that
+        rustc would reject.
+        """
+        if not generic_names:
+            return
+        func_name = self.function_call_name(getattr(call_node, "function", None))
+        if not isinstance(func_name, str) or not self.is_user_defined_function(
+            func_name
+        ):
+            return
+        callee = self.user_function_nodes.get(func_name)
+        if callee is None or getattr(callee, "generic_params", None):
+            return
+        for argument in getattr(call_node, "arguments", []) or []:
+            arg_type = self.expression_result_type(argument)
+            if arg_type in generic_names:
+                self.refuse_lowering(
+                    f"Rust generic function calls concrete function '{func_name}' "
+                    f"with generic argument of type '{arg_type}'; the body only "
+                    "type-checks for the concrete call sites"
+                )
+                return
 
     def function_call_name(self, function_expr):
         if isinstance(function_expr, IdentifierNode):

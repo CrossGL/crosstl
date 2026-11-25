@@ -8,7 +8,10 @@ from ..local_aggregate_declarators import (
     unnamed_aggregate_display_name,
 )
 from ..MetalAst import VariableNode
-from ..scoped_member_types import resolve_concrete_scoped_member_type
+from ..scoped_member_types import (
+    record_block_local_struct_alias,
+    resolve_concrete_scoped_member_type,
+)
 from .support import MetalFunctionLocalTypeResolutionError
 
 
@@ -491,6 +494,7 @@ class MetalLocalAggregateMixin:
         # Struct aliases remain uninlined, but scoped static-member references
         # need their concrete owner to resolve constants and backing globals.
         self.local_struct_type_aliases[name] = alias_type
+        record_block_local_struct_alias(self, name)
         if (
             self.wide_vector_type_info(
                 alias_type, getattr(alias, "source_location", None)

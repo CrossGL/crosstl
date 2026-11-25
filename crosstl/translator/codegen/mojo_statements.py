@@ -49,7 +49,9 @@ class MojoStatementMixin:
 
         indent_str = "    " * indent
         self.validate_resource_write_access(node.left, "assignment")
-        left = self.generate_expression(node.left)
+        # The target's own side effects, as in ``vals[k++] = x``, run once, before the value is computed; C leaves
+        # the order of the two operands unsequenced.
+        left_prelude, left = self.generate_expression_with_prelude(node.left, indent)
         left_type = self.expression_result_type(node.left)
         self.validate_expression_target_shape(
             node.right, left_type, "assignment target"
@@ -62,7 +64,7 @@ class MojoStatementMixin:
         )
         op = self.map_operator(node.operator)
         self.register_resource_assignment_alias_metadata(node.left, node.right, op)
-        return f"{prelude}{indent_str}{left} {op} {right}\n"
+        return f"{left_prelude}{prelude}{indent_str}{left} {op} {right}\n"
 
     def generate_swizzle_assignment_statement(self, node, indent):
         target = getattr(node, "left", getattr(node, "target", None))
@@ -853,15 +855,31 @@ class MojoStatementMixin:
             block, indent + 1
         )
 
-    def generate_if(self, node, indent):
-        indent_str = "    " * indent
+    def generate_if(self, node, indent, chained=False):
+        """An ``if`` statement; ``chained`` writes it as the ``elif`` of an enclosing ``if`` at ``indent``.
+
+        A condition with side effects, such as ``++j > 8``, writes them to a prelude before the test. The prelude
+        of a chained condition cannot precede an ``elif``, so that condition becomes an ``if`` nested in ``else:``.
+        """
         condition_expr = (
             node.condition if hasattr(node, "condition") else node.if_condition
         )
-        condition = self.generate_expression(condition_expr)
+        prelude, condition = self.generate_expression_with_prelude(
+            condition_expr, indent + 1 if chained else indent
+        )
         self.validate_condition_scalar(condition_expr, "if condition")
         entry_alias_state = self.resource_access_alias_state()
-        code = f"{indent_str}if {condition}:\n"
+        keyword = "if"
+        if chained and prelude:
+            code = f"{'    ' * indent}else:\n{prelude}"
+            indent += 1
+        elif chained:
+            code = ""
+            keyword = "elif"
+        else:
+            code = prelude
+        indent_str = "    " * indent
+        code += f"{indent_str}{keyword} {condition}:\n"
 
         if_body = getattr(node, "then_branch", getattr(node, "if_body", None))
         self.restore_resource_access_alias_state(entry_alias_state)
@@ -872,12 +890,8 @@ class MojoStatementMixin:
         else_branch = getattr(node, "else_branch", None)
         if else_branch:
             self.restore_resource_access_alias_state(entry_alias_state)
-            if hasattr(else_branch, "__class__") and "If" in str(else_branch.__class__):
-                remaining_code = self.generate_if(else_branch, indent)
-                remaining_lines = remaining_code.splitlines(keepends=True)
-                if remaining_lines and remaining_lines[0].strip().startswith("if "):
-                    remaining_lines[0] = remaining_lines[0].replace("if ", "elif ", 1)
-                code += "".join(remaining_lines)
+            if isinstance(else_branch, IfNode):
+                code += self.generate_if(else_branch, indent, chained=True)
             else:
                 code += f"{indent_str}else:\n"
                 code += self.generate_branch_statements(else_branch, indent + 1)
@@ -916,13 +930,10 @@ class MojoStatementMixin:
             for item in inits
         )
         if node.condition is None:
-            condition = "True"
+            code += f"{indent_str}while True:\n"
         else:
-            condition = self.generate_expression(node.condition)
-            self.validate_condition_scalar(node.condition, "for condition")
+            code += self.generate_loop_header(node.condition, indent, "for condition")
         entry_alias_state = self.resource_access_alias_state()
-
-        code += f"{indent_str}while {condition}:\n"
 
         self.loop_depth += 1
         self.for_contexts.append({"loop_depth": self.loop_depth, "update": node.update})
@@ -1024,13 +1035,28 @@ class MojoStatementMixin:
         iterable = self.generate_expression(iterable_node)
         return f"range({iterable})"
 
-    def generate_while(self, node, indent):
-        indent_str = "    " * indent
-        condition = self.generate_expression(node.condition)
-        self.validate_condition_scalar(node.condition, "while condition")
-        entry_alias_state = self.resource_access_alias_state()
+    def generate_loop_header(self, condition_expr, indent, context):
+        """The ``while`` line of a loop that tests ``condition_expr`` before each iteration.
 
-        code = f"{indent_str}while {condition}:\n"
+        A condition with side effects, such as ``k++ < n`` or ``(t -= 3) > 0``, is tested inside ``while True:``
+        after its prelude, so the side effects run before every test, including the one that ends the loop, and
+        a ``continue`` reaches them again.
+        """
+        indent_str = "    " * indent
+        prelude, condition = self.generate_expression_with_prelude(
+            condition_expr, indent + 1
+        )
+        self.validate_condition_scalar(condition_expr, context)
+        if not prelude:
+            return f"{indent_str}while {condition}:\n"
+        return (
+            f"{indent_str}while True:\n{prelude}"
+            f"{indent_str}    if not ({condition}):\n{indent_str}        break\n"
+        )
+
+    def generate_while(self, node, indent):
+        code = self.generate_loop_header(node.condition, indent, "while condition")
+        entry_alias_state = self.resource_access_alias_state()
 
         self.loop_depth += 1
         self.push_loop_exit_alias_state_scope()
@@ -1084,7 +1110,10 @@ class MojoStatementMixin:
         indent_str = "    " * indent
         break_flag = f"__cgl_do_break_{self.do_while_counter}"
         self.do_while_counter += 1
-        condition = self.generate_expression(node.condition)
+        # The test follows the body; a prelude of its side effects runs just before it.
+        condition_prelude, condition = self.generate_expression_with_prelude(
+            node.condition, indent + 1
+        )
         self.validate_condition_scalar(node.condition, "do-while condition")
 
         code = f"{indent_str}var {break_flag}: Bool = False\n"
@@ -1111,6 +1140,7 @@ class MojoStatementMixin:
             code += f"{indent_str}        break\n"
         code += f"{indent_str}    if {break_flag}:\n"
         code += f"{indent_str}        break\n"
+        code += condition_prelude
         code += f"{indent_str}    if not {condition}:\n"
         code += f"{indent_str}        break\n"
 

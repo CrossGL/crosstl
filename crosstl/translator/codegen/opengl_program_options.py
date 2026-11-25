@@ -698,8 +698,19 @@ class OpenGLProgramOptionMixin:
             )
 
         lines = str(code).splitlines(keepends=True)
-        if (self.glsl_version_number(version_line) or 0) < 400:
-            upgraded_version = self.glsl_version_line_with_minimum(version_line, 400)
+        minimum_version = (
+            self.GLSL_INT64_ATOMICS_VERSION
+            if re.search(
+                r"^\s*#extension\s+GL_(?:NV|EXT)_shader_atomic_int64\s*:",
+                str(code),
+                flags=re.MULTILINE,
+            )
+            else 400
+        )
+        if (self.glsl_version_number(version_line) or 0) < minimum_version:
+            upgraded_version = self.glsl_version_line_with_minimum(
+                version_line, minimum_version
+            )
             for index, line in enumerate(lines):
                 if not line.strip().startswith("#version"):
                     continue
