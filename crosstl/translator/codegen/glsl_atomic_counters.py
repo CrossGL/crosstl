@@ -32,7 +32,9 @@ def _offset_attribute(codegen, node, name):
         arguments = getattr(attr, "arguments", None) or []
         offset = codegen.binding_index_value(arguments[0]) if arguments else None
         if offset is None or offset % COUNTER_BYTES:
-            source = codegen.attribute_value_to_string(arguments[0]) if arguments else None
+            source = (
+                codegen.attribute_value_to_string(arguments[0]) if arguments else None
+            )
             raise OpenGLRefusal(
                 f"GLSL output cannot place atomic counter '{name}' at offset {source}: an atomic counter offset is "
                 "an integer literal that is a multiple of 4"
@@ -94,7 +96,9 @@ def counter_placements(codegen, nodes):
         if source_binding not in extents:
             extents[source_binding] = end
         elif extents[source_binding] is not None:
-            extents[source_binding] = None if end is None else max(extents[source_binding], end)
+            extents[source_binding] = (
+                None if end is None else max(extents[source_binding], end)
+            )
 
     bases = {}
     base = 0
