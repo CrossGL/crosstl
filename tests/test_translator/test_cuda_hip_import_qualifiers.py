@@ -21,6 +21,7 @@ generator writes a ``@volatile`` storage buffer, parameter or program-scope poin
 memory, as the HIP generator does.
 """
 
+import re
 import shutil
 import subprocess
 
@@ -122,7 +123,17 @@ __kernel __attribute__((reqd_work_group_size(1, 1, 1))) void probe(__global floa
 def _translate(tmp_path, source, suffix, backend):
     path = tmp_path / f"probe{suffix}"
     path.write_text(source)
-    return crosstl.translate(str(path), backend=backend)
+    # Unformatted, so the text does not depend on whether clang-format or SPIRV-Tools are installed.
+    return crosstl.translate(str(path), backend=backend, format_output=False)
+
+
+def _member_decorations(spirv, block):
+    """The decorations of member 0 of the block named ``block``, whether or not SPIRV-Tools named its ids."""
+    ids = {
+        name: f"%{ident}" for ident, name in re.findall(r'OpName %(\w+) "(\w+)"', spirv)
+    }
+    block_id = ids.get(block, f"%{block}")
+    return set(re.findall(rf"OpMemberDecorate {re.escape(block_id)} 0 (\w+)", spirv))
 
 
 def _flat(code):
@@ -213,20 +224,20 @@ def test_buffer_memory_qualifiers_become_attributes(tmp_path, suffix):
 @pytest.mark.parametrize("suffix", SUFFIXES)
 def test_buffer_memory_qualifiers_reach_spirv_glsl_and_metal(tmp_path, suffix):
     spirv = _translate(tmp_path, QUALIFIERS, suffix, "vulkan")
-    assert "OpMemberDecorate %finBuffer 0 Restrict" in spirv
-    assert "OpMemberDecorate %outpBuffer 0 Restrict" in spirv
-    assert "OpMemberDecorate %flagsBuffer 0 Volatile" in spirv
-    assert "%otherBuffer 0 Restrict" not in spirv
+    assert "Restrict" in _member_decorations(spirv, "finBuffer")
+    assert "Restrict" in _member_decorations(spirv, "outpBuffer")
+    assert "Volatile" in _member_decorations(spirv, "flagsBuffer")
+    assert "Restrict" not in _member_decorations(spirv, "otherBuffer")
     glsl = _flat(_translate(tmp_path, QUALIFIERS, suffix, "opengl"))
     assert "restrict" in glsl.split("buffer finBuffer")[0].rsplit(";", 1)[-1]
     assert "restrict buffer outpBuffer" in glsl
     assert "volatile buffer flagsBuffer" in glsl
     assert "restrict buffer otherBuffer" not in glsl
     metal = _flat(_translate(tmp_path, QUALIFIERS, suffix, "metal"))
-    assert "volatile device float *flags" in metal
+    assert "volatile device float* flags" in metal
     if suffix == ".cu":
         # CUDA kernels reach Metal through the target lowering of kernel parameters, which keeps @restrict.
-        assert "device float *__restrict outp" in metal
+        assert "device float* __restrict outp" in metal
 
 
 @pytest.mark.parametrize("suffix", SUFFIXES)
