@@ -520,13 +520,11 @@ class HipVisitorMixin:
         if stage_name in self.hip_ray_stage_names() and name == "main":
             return f"{stage_name}_{name}"
         if (
-            stage_name
-            in {
+            stage_name in {
                 "geometry",
                 "tessellation_control",
                 "tessellation_evaluation",
-            }
-            | self.hip_mesh_task_stage_names()
+            } | self.hip_mesh_task_stage_names()
             and name == "main"
         ):
             return f"{stage_name}_{name}"
