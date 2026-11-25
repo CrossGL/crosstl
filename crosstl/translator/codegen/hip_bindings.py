@@ -55,11 +55,10 @@ class HipBindingMixin:
             arguments = self.attribute_arguments(attr)
             if not arguments:
                 continue
-            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
-                binding = self.resource_binding_index_value(
-                    arguments[0], ("b", "s", "t", "u")
-                )
-            elif attr_name == "register":
+            if (
+                attr_name in {"binding", "buffer", "sampler", "texture", "uav"}
+                or attr_name == "register"
+            ):
                 binding = self.resource_binding_index_value(
                     arguments[0], ("b", "s", "t", "u")
                 )
@@ -107,11 +106,10 @@ class HipBindingMixin:
             arguments = self.attribute_arguments(attr)
             if not arguments:
                 continue
-            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
-                binding = self.resource_binding_index_value(
-                    arguments[0], ("b", "s", "t", "u")
-                )
-            elif attr_name == "register":
+            if (
+                attr_name in {"binding", "buffer", "sampler", "texture", "uav"}
+                or attr_name == "register"
+            ):
                 binding = self.resource_binding_index_value(
                     arguments[0], ("b", "s", "t", "u")
                 )
@@ -119,6 +117,24 @@ class HipBindingMixin:
                 binding = None
             if binding is not None:
                 return attr_name
+        return None
+
+    def hip_resource_register_class(self, node):
+        """Return the HLSL register class letter from an explicit ``register`` attribute."""
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "register":
+                continue
+            arguments = self.attribute_arguments(attr)
+            if not arguments:
+                continue
+            raw_value = self.attribute_value_to_string(arguments[0]) or ""
+            raw_value = str(raw_value).strip().lower()
+            if (
+                raw_value
+                and raw_value[0] in ("b", "s", "t", "u")
+                and raw_value[1:].isdigit()
+            ):
+                return raw_value[0]
         return None
 
     def hip_resource_base_type_and_count(self, type_name):
@@ -190,6 +206,12 @@ class HipBindingMixin:
             return 1
         return count
 
+    def hip_resource_binding_family_keys(self, base_namespace, set_index):
+        """Yield the unscoped key and all class-scoped keys for a base namespace."""
+        yield (base_namespace, set_index)
+        for cls in ("b", "s", "t", "u"):
+            yield (f"{base_namespace}:{cls}", set_index)
+
     def hip_resource_binding_range_conflicts(self, key, binding, count):
         end = binding + count - 1
         for used_start, used_end, _used_name in self.hip_used_resource_bindings.get(
@@ -199,10 +221,20 @@ class HipBindingMixin:
                 return True
         return False
 
+    def hip_resource_binding_family_conflicts(
+        self, base_namespace, set_index, binding, count
+    ):
+        for key in self.hip_resource_binding_family_keys(base_namespace, set_index):
+            if self.hip_resource_binding_range_conflicts(key, binding, count):
+                return True
+        return False
+
     def next_available_hip_resource_binding(self, namespace, set_index, count):
         key = (namespace, set_index)
         binding = self.hip_resource_binding_cursors.get(key, 0)
-        while self.hip_resource_binding_range_conflicts(key, binding, count):
+        while self.hip_resource_binding_family_conflicts(
+            namespace, set_index, binding, count
+        ):
             binding += 1
         self.hip_resource_binding_cursors[key] = binding + count
         return binding
@@ -210,17 +242,33 @@ class HipBindingMixin:
     def reserve_hip_resource_binding(self, namespace, set_index, binding, count, name):
         key = (namespace, set_index)
         end = binding + count - 1
+        base_namespace = namespace.split(":", 1)[0] if ":" in namespace else namespace
+
+        # Register-class resources only conflict with the same class, but still
+        # conflict with classless resources in the unscoped namespace. Classless
+        # resources conflict with every class-scoped range in the same family.
+        if ":" in namespace:
+            keys_to_check = [(namespace, set_index), (base_namespace, set_index)]
+        else:
+            keys_to_check = self.hip_resource_binding_family_keys(
+                base_namespace, set_index
+            )
+
+        for check_key in keys_to_check:
+            for used_start, used_end, used_name in self.hip_used_resource_bindings.get(
+                check_key, []
+            ):
+                if binding <= used_end and used_start <= end:
+                    if used_start == binding and used_end == end and used_name == name:
+                        return
+                    raise HipRefusal(
+                        "Conflicting HIP resource binding for "
+                        f"'{name}': {base_namespace} set {set_index} binding "
+                        f"{binding}-{end} overlaps '{used_name}' binding "
+                        f"{used_start}-{used_end}"
+                    )
+
         ranges = self.hip_used_resource_bindings.setdefault(key, [])
-        for used_start, used_end, used_name in ranges:
-            if binding <= used_end and used_start <= end:
-                if used_start == binding and used_end == end and used_name == name:
-                    return
-                raise HipRefusal(
-                    "Conflicting HIP resource binding for "
-                    f"'{name}': {namespace} set {set_index} binding "
-                    f"{binding}-{end} overlaps '{used_name}' binding "
-                    f"{used_start}-{used_end}"
-                )
         ranges.append((binding, end, name))
         self.hip_resource_binding_cursors[key] = max(
             self.hip_resource_binding_cursors.get(key, 0), end + 1
@@ -237,6 +285,9 @@ class HipBindingMixin:
             node, resource_kind, count
         )
         namespace = self.hip_resource_binding_namespace(resource_kind)
+        register_class = self.hip_resource_register_class(node)
+        if register_class is not None:
+            namespace = f"{namespace}:{register_class}"
         set_index = self.explicit_hip_resource_set_index(node)
         binding = self.explicit_hip_resource_binding_index(node)
         if binding is None:
@@ -290,6 +341,9 @@ class HipBindingMixin:
             node, resource_kind, count
         )
         namespace = self.hip_resource_binding_namespace(resource_kind)
+        register_class = self.hip_resource_register_class(node)
+        if register_class is not None:
+            namespace = f"{namespace}:{register_class}"
         set_index = self.explicit_hip_resource_set_index(node)
         self.reserve_hip_resource_binding(
             namespace, set_index, binding, validation_count, name

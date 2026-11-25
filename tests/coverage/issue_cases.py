@@ -73,11 +73,24 @@ def kinds(actions):
 
 
 class Repository(github.GitHub):
-    """An in-memory repository of managed issues."""
+    """An in-memory repository of managed issues.
 
-    def __init__(self, existing=()):
+    ``closers`` maps an issue number to the commit that closed it, and ``history`` maps a commit to its ancestors.
+    """
+
+    def __init__(self, existing=(), closers=None, history=None):
         super().__init__("o/r")
         self.issues = list(existing)
+        self.closers = dict(closers or {})
+        self.history = dict(history or {})
+        self.asked = []
+
+    def closing_commit(self, number):
+        self.asked.append(number)
+        return self.closers.get(number, "")
+
+    def contains(self, head, commit):
+        return commit == head or commit in self.history.get(head, ())
 
     def managed(self):
         return list(self.issues)

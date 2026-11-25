@@ -1076,9 +1076,11 @@ EXTERNAL_FIXTURES = [
                 return a + m + m3[0].xyxy + m3[1].xyxy;
             }
         """).strip(),
+        # DXC makes both globals $Globals members and ignores their initializers
+        # ("Initializer of external global will be ignored").
         contains=(
-            "vec4 m = vec4(4, 5, 6, 7);",
-            "const vec2[2] m3 = {12, 13, 14, 15};",
+            "@ hlsl_program_constant\n    vec4 m;",
+            "@ hlsl_program_constant\n    vec2 m3[2];",
             "return ((a + m) + m3[0].xyxy) + m3[1].xyxy;",
         ),
     ),
@@ -1786,10 +1788,13 @@ EXTERNAL_FIXTURES = [
                 return float4(g_pre_uni_con_init, 0.0f, 0.0f, 1.0f);
             }
         """).strip(),
+        # A uniform global is a $Globals member, whose initializer DXC ignores, so the
+        # shader reads the value the host binds.
         contains=(
-            "precise const float g_pre_uni_con_init = 1.0;",
+            "@ hlsl_program_constant\n    precise float g_pre_uni_con_init;",
             "return vec4(g_pre_uni_con_init, 0.0, 0.0, 1.0);",
         ),
+        absent=("g_pre_uni_con_init = 1.0",),
     ),
     ExternalFixture(
         name="unity_builtin_shaderlab_shadowcaster_unexpanded_statement_macros",

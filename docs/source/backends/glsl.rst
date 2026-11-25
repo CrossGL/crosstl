@@ -38,6 +38,25 @@ Boolean per component, including inside ``any`` and ``all`` or another vector
 comparison. Scalar comparisons retain scalar operators. Implicit Boolean-vector
 reduction to a scalar remains an error.
 
+GLSL ES Output
+--------------
+
+The ``opengl`` backend writes desktop GLSL. Its ``gles`` target (also
+``opengles`` and ``opengl-es``) writes GLSL ES for OpenGL ES 3.x: the output
+starts at ``#version 300 es`` and names 3.10 or 3.20 when a construct needs it,
+such as a compute stage or a geometry shader.
+
+.. code-block:: python
+
+    import crosstl
+
+    gles = crosstl.translate("saxpy.cgl", backend="gles")
+
+The coverage report has a GLSL ES row for this target. Its feature list is the
+GLSL ES 3.20 text of the same specification source the GLSL row reads, and
+glslang checks each translation as GLSL ES. The WebGL row measures GLSL ES 3.00
+output for WebGL 2.
+
 Half-Precision Values
 ---------------------
 
