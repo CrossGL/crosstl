@@ -32,7 +32,9 @@ An array of storage blocks, ``RWStructuredBuffer<Block> v[N]``, is rewritten the
 variable keeps its array size (``RWStructuredBuffer<T> v[N]`` or ``Block v[N] @glsl_buffer_block(std430)``, the GLSL
 importer's forms for ``buffer B { ... } v[N]``).
 
-A variable used other than through ``v[0]`` (``v[k][0]`` for an array) or ``spirvArrayLength``, or whose name a local
+A variable that no function reads is rewritten too when its block ends in a runtime array, since no target can
+declare that block's struct: a module keeps the bindings of buffers its entry point never touches. A variable used
+other than through ``v[0]`` (``v[k][0]`` for an array) or ``spirvArrayLength``, or whose name a local
 declaration shadows, is left as it is. A ``spirvArrayLength`` call that is not rewritten is refused with
 :class:`SpirvArrayLengthUnsupportedError`, since no target defines that name, unless the program defines a function
 of that name itself.
@@ -184,7 +186,11 @@ class StorageBlockNormalizer:
             self.collect_uses(blocks)
         changed = False
         for block in blocks.values():
-            if block.other or not (block.instances or block.lengths):
+            if block.other:
+                continue
+            if not (block.instances or block.lengths) and not _ends_in_runtime_array(
+                block.struct
+            ):
                 continue
             member = block.flat_member()
             if member is not None and self.flat_uses(block, member):

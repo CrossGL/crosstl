@@ -283,6 +283,10 @@ from .work_graph_nodes import (
     check_work_graph_nodes,
     refuse_work_graph_nodes,
 )
+from .workgroup_collectives import (
+    WorkgroupCollectiveError,
+    lower_workgroup_collectives,
+)
 from .workgroup_uniform_load import (
     WorkgroupUniformLoadError,
     lower_workgroup_uniform_loads,
@@ -328,6 +332,7 @@ __all__ = [
     "HitObjectUnsupportedError",
     "WorkGraphNodeError",
     "WorkGraphUnsupportedError",
+    "WorkgroupCollectiveError",
     "WorkgroupUniformLoadError",
     "HlslGeometryStreamUnsupportedError",
     "RowMajorStructMemberUnsupportedError",
@@ -420,6 +425,9 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     Two different structures of one name in a scope are then refused with :class:`ConflictingStructError`, two
     different program constants of one name with :class:`ConflictingConstantError`, and a repeated identical one
     is kept once (:mod:`.struct_declarations`).
+    Workgroup reductions, scans, votes and broadcasts become calls of CrossGL helpers that combine the
+    invocations' values through a ``shared`` array, on every target that does not write them itself, or are refused
+    with :class:`WorkgroupCollectiveError` (:mod:`.workgroup_collectives`).
     Shader-scope functions that name a stage's declarations become functions of the stages that call them
     (:mod:`.stage_bound_functions`).
     Structure member functions then become free functions taking the receiver first (:mod:`.struct_methods`).
@@ -565,6 +573,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     hoist_local_structs(program, report.target)
     refuse_conflicting_structs(program, report.target)
     fill_generic_struct_defaults(program, report.target)
+    lower_workgroup_collectives(program, report.target)
     bind_stage_functions(program)
     lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)

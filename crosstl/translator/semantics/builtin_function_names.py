@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from .. import validation as _validation
 from .. import wave_operations as _wave_operations
+from .. import workgroup_operations as _workgroup_operations
 from ..codegen.cuda_library_functions import CUDA_LIBRARY_FUNCTIONS
 from ..codegen.generic_function_utils import RESERVED_GENERIC_FUNCTION_BUILTIN_NAMES
 from ..parsing import vocabulary as _parser_vocabulary
@@ -345,7 +346,8 @@ printf discard inverseSqrt alignof lambda assert raise Some is_Some is_None unwr
 """) | frozenset(SIZEOF_LAYOUTS)
 
 # CrossGL's intrinsic functions: the wave, subgroup, ray tracing and mesh intrinsics the parser and
-# :mod:`~crosstl.translator.wave_operations` define, the buffer, image and texture resource intrinsics, and the
+# :mod:`~crosstl.translator.wave_operations` define, the workgroup collectives of
+# :mod:`~crosstl.translator.workgroup_operations`, the buffer, image and texture resource intrinsics, and the
 # operations above.
 CROSSGL_FUNCTION_NAMES = (
     frozenset(_parser_vocabulary.WAVE_INTRINSICS)
@@ -353,6 +355,7 @@ CROSSGL_FUNCTION_NAMES = (
     | frozenset(_parser_vocabulary.MESH_INTRINSICS)
     | frozenset(_wave_operations.GLSL_SUBGROUP_FUNCTIONS)
     | frozenset(_wave_operations.WAVE_EXTENDED_OPERATIONS)
+    | frozenset(_workgroup_operations.WORKGROUP_COLLECTIVES)
     | frozenset(_validation.IMAGE_RESOURCE_INTRINSIC_NAMES)
     | frozenset(RESERVED_GENERIC_FUNCTION_BUILTIN_NAMES)
     | _CROSSGL_OPERATION_NAMES
