@@ -20,6 +20,7 @@ from ..CUDA.keyword_renames import source_identifier_names
 from ..CUDA.parameter_defaults import merge_declared_defaults, parameter_default_suffix
 from ..CUDA.pointer_math_import import sine_cosine_statements
 from ..CUDA.reference_parameters import ReferenceParameters
+from ..CUDA.surface_formats import SurfaceElementKey, declared_variable_types
 from ..import_refusals import HipImportRefused, ImportRefusalMixin
 from ..no_contraction import (
     PRECISE_FUNCTION_ATTRIBUTE,
@@ -218,26 +219,6 @@ class HipToCrossGLConverter(
         "float1": "f32",
         "double1": "f64",
     }
-    HIP_SURFACE_VECTOR_COMPONENTS = ("x", "y", "z", "w")
-    HIP_SURFACE_SCALAR_TYPES = frozenset(
-        {
-            "char",
-            "uchar",
-            "short",
-            "ushort",
-            "int",
-            "uint",
-            "long",
-            "ulong",
-            "longlong",
-            "ulonglong",
-            "half",
-            "__half",
-            "float",
-            "double",
-            "bool",
-        }
-    )
     CROSSL_SCALAR_TYPES = {
         "bool",
         "f16",
@@ -626,6 +607,7 @@ class HipToCrossGLConverter(
         self.vector1_name_scopes = [{}]
         self.user_function_names = set()
         self.global_resource_object_type_hints = {}
+        self.global_surface_variable_types = {}
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.variable_type_scopes = [{}]
@@ -689,6 +671,11 @@ class HipToCrossGLConverter(
             for stmt in getattr(ast_node, "statements", None) or []
             if isinstance(stmt, FunctionNode)
         )
+        self.global_surface_variable_types = {
+            var.name: var.vtype
+            for var in getattr(ast_node, "global_variables", []) or []
+            if isinstance(var, VariableNode) and var.name
+        }
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
         )
@@ -830,6 +817,7 @@ class HipToCrossGLConverter(
 
     def collect_resource_object_type_hints(self, node, declared_names=None):
         hints = {}
+        variable_types = declared_variable_types(node)
 
         def collect(current):
             if current is None:
@@ -859,6 +847,10 @@ class HipToCrossGLConverter(
                             ),
                             resource_type,
                         )
+                # A global surface's element is merged over the whole program instead.
+                self.collect_surface_element_hint(
+                    hints, current, variable_types, declared_names
+                )
 
             for value in vars(current).values():
                 collect(value)
@@ -866,12 +858,19 @@ class HipToCrossGLConverter(
         collect(node)
         for name in declared_names or []:
             hints.setdefault(name, None)
+            # A local name hides the element of a global surface of the same name.
+            hints.setdefault(SurfaceElementKey(name), None)
         return hints
 
     def collect_global_resource_object_type_hints_from_function(
         self, node, global_names, hints
     ):
         local_names = self.collect_declared_variable_names(node)
+        variable_types = {
+            **self.global_surface_variable_types,
+            **declared_variable_types(node),
+        }
+        surface_names = set(global_names) - set(local_names)
 
         def collect(current):
             if current is None:
@@ -901,6 +900,9 @@ class HipToCrossGLConverter(
                             self.add_resource_object_type_hint(
                                 hints, name, resource_type
                             )
+                self.collect_surface_element_hint(
+                    hints, current, variable_types, surface_names
+                )
 
             for value in vars(current).values():
                 collect(value)
@@ -1314,8 +1316,9 @@ class HipToCrossGLConverter(
                         if isinstance(param, dict)
                         else getattr(param, "vtype", "int")
                     )
-                    param_type = self.convert_hip_variable_type_to_crossgl(
-                        raw_type, param_name
+                    param_type = self.surface_declaration_type(
+                        self.convert_hip_variable_type_to_crossgl(raw_type, param_name),
+                        param_name,
                     )
                     parameter_record = self.record_definition_from_type(raw_type)
                     self.validate_record_layout_use(
@@ -1485,8 +1488,11 @@ class HipToCrossGLConverter(
                             f"{output_name}: array<{element_type}>"
                         )
                     else:
-                        param_type = self.convert_hip_variable_type_to_crossgl(
-                            raw_type, param_name
+                        param_type = self.surface_declaration_type(
+                            self.convert_hip_variable_type_to_crossgl(
+                                raw_type, param_name
+                            ),
+                            param_name,
                         )
                         output_name = self.register_identifier_name(param_name)
                         self.register_vector1_name(param_name, raw_type)
@@ -1927,40 +1933,23 @@ class HipToCrossGLConverter(
     def format_unsupported_hip_resource_expression(self, kind, member, fallback):
         return self.refuse_import(f"HIP {kind}.{member} has no CrossGL form", fallback)
 
-    def scale_hip_surface_byte_offset(self, raw_offset, value_type, function_name):
+    def scale_hip_surface_byte_offset(self, raw_offset, element_size, function_name):
         """Scale a HIP surface x byte offset down to a texel coordinate.
 
-        HIP surface functions take x as a byte offset while CrossGL
-        ``imageLoad``/``imageStore`` take a texel coordinate, so the offset is divided by
-        the element size. The quotient is folded when the offset is provably a multiple of
-        the element size (``x * 4 + 4`` with a 4-byte element becomes ``x + 1``). Anything
-        else is refused: passing an unscaled byte offset through would silently address
-        the wrong texel.
+        HIP surface functions take x as a byte offset while CrossGL ``imageLoad``/``imageStore`` take a texel
+        coordinate, so the offset is divided by the element size. The quotient is folded when the offset is
+        provably a multiple of the element size (``x * 4 + 4`` with a 4-byte element becomes ``x + 1``). Anything
+        else is refused: passing an unscaled byte offset through would silently address the wrong texel.
         """
+        divided = self.divide_surface_byte_offset(raw_offset, element_size, None)
+        if divided is not None:
+            return divided[0]
         offset_text = self.visit(raw_offset) if raw_offset is not None else "?"
-        if value_type is None:
-            raise HipSurfaceByteOffsetError(
-                f"{function_name} cannot scale its x byte offset {offset_text}: "
-                "the element type is unknown, so the offset cannot be shown to be "
-                "a multiple of the element size"
-            )
-        byte_size = self.hip_surface_value_type_size(value_type)
-        divided = self.divide_hip_surface_byte_offset(raw_offset, byte_size, value_type)
-        if divided is None:
-            if byte_size is None:
-                raise HipSurfaceByteOffsetError(
-                    f"{function_name} cannot scale its x byte offset {offset_text}: "
-                    f"element type {value_type!r} has no known size, so the offset "
-                    "cannot be shown to be a multiple of the element size; write the "
-                    f"offset with sizeof({value_type}), for example "
-                    f"x * sizeof({value_type})"
-                )
-            raise HipSurfaceByteOffsetError(
-                f"{function_name} x byte offset {offset_text} is not provably a multiple "
-                f"of sizeof({value_type}) ({byte_size} bytes); write the offset as a "
-                f"multiple of the element size, for example x * sizeof({value_type})"
-            )
-        return divided[0]
+        raise HipSurfaceByteOffsetError(
+            f"{function_name} x byte offset {offset_text} is not provably a multiple "
+            f"of the {element_size}-byte surface element; write the offset as a "
+            "multiple of the element size, for example x * sizeof(T)"
+        )
 
     def visit_NewNode(self, node):
         placement_args = getattr(node, "placement_args", None)

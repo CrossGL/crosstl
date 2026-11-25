@@ -9026,9 +9026,17 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
+        # Every surface is read as float: one r32f channel, the .x of the texel imageLoad returns.
+        for declaration in (
+            "@format(r32f) image2D img,",
+            "@format(r32f) image1D line,",
+            "@format(r32f) image3D vol,",
+            "@format(r32f) imageCube cube,",
+        ):
+            assert declaration in result
         assert (
             "var clamped: f32 = imageLoad(img, clamp(vec2<i32>(x, y), "
-            "vec2<i32>(0, 0), imageSize(img) - vec2<i32>(1, 1)));" in result
+            "vec2<i32>(0, 0), imageSize(img) - vec2<i32>(1, 1))).x;" in result
         )
         # cudaBoundaryModeZero and a mode that is not a constant keep the CUDA call, which every target refuses.
         assert (
@@ -9036,20 +9044,20 @@ class TestCudaCodeGen:
             in result
         )
         assert "imageStore(img" not in result
-        assert "var trapped: f32 = imageLoad(img, vec2<i32>(x, y));" in result
-        assert "var plain: f32 = imageLoad(img, vec2<i32>(x, y));" in result
+        assert "var trapped: f32 = imageLoad(img, vec2<i32>(x, y)).x;" in result
+        assert "var plain: f32 = imageLoad(img, vec2<i32>(x, y)).x;" in result
         assert (
             "var lineClamped: f32 = imageLoad(line, "
-            "clamp(x, 0, imageSize(line) - 1));" in result
+            "clamp(x, 0, imageSize(line) - 1)).x;" in result
         )
         assert (
             "var voxelClamped: f32 = imageLoad(vol, clamp(vec3<i32>(x, y, z), "
-            "vec3<i32>(0, 0, 0), imageSize(vol) - vec3<i32>(1, 1, 1)));" in result
+            "vec3<i32>(0, 0, 0), imageSize(vol) - vec3<i32>(1, 1, 1))).x;" in result
         )
         assert (
             "var faceClamped: f32 = imageLoad(cube, vec3<i32>("
             "clamp(x, 0, imageSize(cube).x - 1), "
-            "clamp(y, 0, imageSize(cube).y - 1), z));" in result
+            "clamp(y, 0, imageSize(cube).y - 1), z)).x;" in result
         )
         assert (
             "var unknown: f32 = surf2Dread<float>(img, (x * sizeof(float)), y, "
@@ -9088,11 +9096,11 @@ class TestCudaCodeGen:
         assert (
             "var a: f32 = imageLoad(layers, vec3<i32>("
             "clamp(x, 0, imageSize(layers).x - 1), "
-            "clamp(y, 0, imageSize(layers).y - 1), layer));" in result
+            "clamp(y, 0, imageSize(layers).y - 1), layer)).x;" in result
         )
         assert (
             "var b: f32 = imageLoad(lines, vec2<i32>("
-            "clamp(x, 0, imageSize(lines).x - 1), layer));" in result
+            "clamp(x, 0, imageSize(lines).x - 1), layer)).x;" in result
         )
         assert (
             "imageStore(cubes, vec3<i32>(clamp(x, 0, imageSize(cubes).x - 1), "

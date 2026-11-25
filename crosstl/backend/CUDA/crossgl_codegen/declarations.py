@@ -245,11 +245,12 @@ class CudaImportDeclarationMixin:
                 self,
                 node,
                 output_name,
-                var_type,
+                self.surface_image_type(var_type, node.name),
                 self.allocate_global_resource_binding,
             )
             if declaration is not None:
-                self.emit(declaration)
+                # A __device__ surface handle keeps the format of the texels its accesses read and write.
+                self.emit(self.surface_format_attribute(node.name) + declaration)
             return
         dim3_value = self.format_cuda_dim3_initializer(node)
         if dim3_value is not None:
