@@ -25,6 +25,7 @@ _ANSI = re.compile(r"\x1b\[[0-9;]*m")
 # The tool each language is validated with, and the suffix its compiler expects.
 TOOLS = {
     "cuda": "nvcc",
+    "gles": "glslangValidator",
     "glsl": "glslangValidator",
     "hip": "hipcc",
     "hlsl": "dxc",
@@ -39,6 +40,7 @@ TOOLS = {
 }
 SUFFIX = {
     "cuda": ".cu",
+    "gles": ".comp",
     "glsl": ".comp",
     "hip": ".hip",
     "hlsl": ".hlsl",
@@ -269,7 +271,7 @@ def run(
 
 def suffix(language: str, stage: str) -> str:
     """The file suffix of a probe, from which glslang tells its stage. A WebGL kernel probe is a fragment shader."""
-    if language == "glsl":
+    if language in ("glsl", "gles"):
         return f".{GLSL_STAGES[stage]}"
     if language == "webgl":
         return ".vert" if stage == "vertex" else ".frag"
@@ -285,6 +287,19 @@ def _essl(name: str, source: str, scratch: str) -> Verdict:
     if not _ESSL_VERSION.match(source):
         return Verdict(False, "error: the shader does not begin with #version 300 es")
     return run([*command("glslangValidator"), name], scratch)
+
+
+# An OpenGL ES 3.2 shader names one of the GLSL ES versions OpenGL ES 3.x runs.
+_GLES_VERSION = re.compile(r"\A(?:\s|//[^\n]*\n)*#\s*version\s+3[012]0\s+es\b")
+
+
+def _gles(name: str, source: str, stage: str, target: str, scratch: str) -> Verdict:
+    """Check a shader with glslang as GLSL ES 3.00, 3.10 or 3.20, as its ``#version`` line names."""
+    if not _GLES_VERSION.match(source):
+        return Verdict(
+            False, "error: the shader does not begin with #version 300, 310 or 320 es"
+        )
+    return _glsl(name, source, stage, target, scratch)
 
 
 # Entry-point names HLSL writers conventionally give each stage, tried when a shader has no ``main``.
@@ -594,6 +609,8 @@ def validate(
             return run([*command(TOOLS[language]), *arguments], scratch)
         if language == "webgl":
             return _essl(name, source, scratch)
+        if language == "gles":
+            return _gles(name, source, stage, target, scratch)
         if language == "glsl":
             return _glsl(name, source, stage, target, scratch)
         if language == "hlsl":

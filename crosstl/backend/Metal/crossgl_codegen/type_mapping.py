@@ -5,6 +5,7 @@ import re
 from ....translator.codegen.array_utils import prepend_array_dimension
 from ..conditional_types import split_template_arguments
 from ..generic_local_aliases import refuse_unresolved_local_alias_type
+from ..scoped_member_types import inherited_scoped_member_type
 from ..simd_aliases import SIMD_TYPE_ALIASES
 from ..sparse_color import refuse_sparse_color_type
 from ..texture_types import (
@@ -453,6 +454,9 @@ class MetalTypeMappingMixin:
                 return self.sanitize_identifier(text)
             return text
 
+        inherited = inherited_scoped_member_type(self, type_name)
+        if inherited is not None:
+            return self.map_type(inherited)
         base_name, _generic_args = self.generic_type_parts(type_name)
         if base_name and "::" in base_name:
             return type_name

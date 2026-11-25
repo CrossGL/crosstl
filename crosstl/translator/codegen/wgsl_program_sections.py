@@ -19,6 +19,10 @@ from .global_specialization_constants import (
 from .stage_utils import (
     normalize_stage_name,
 )
+from .wgsl_clip_distances import (
+    CLIP_DISTANCES_ENABLE_DIRECTIVE,
+    collect_clip_distance_members,
+)
 from .wgsl_enums import (
     generate_enum_constants,
     split_enums,
@@ -133,6 +137,9 @@ class WGSLProgramSectionMixin:
         self._builtin_option_specializations = {}
         self._generic_function_specializer = None
         self._uses_primitive_index = False
+        self._uses_clip_distances = False
+        self._clip_distance_members = set()
+        self._scalar_clip_distance_members = set()
         self._int_builtin_members = {}
 
     def collect_wgsl_program_tables(
@@ -165,6 +172,7 @@ class WGSLProgramSectionMixin:
         self._stage_interface_structs_by_name = {
             getattr(struct, "name", ""): struct for struct in structs
         }
+        collect_clip_distance_members(self, structs)
         self._stage_interface_builtin_members = self.stage_interface_builtin_members(
             ast,
             target_stage,
@@ -476,6 +484,14 @@ class WGSLProgramSectionMixin:
                 "\n\n".join(section for section in emitted_sections if section)
             )
 
-        if self._uses_primitive_index:
-            # An enable directive comes before every declaration.
-            lines[1:1] = ["", PRIMITIVE_INDEX_ENABLE_DIRECTIVE]
+        # Enable directives come before every declaration.
+        enable_directives = [
+            directive
+            for used, directive in (
+                (self._uses_clip_distances, CLIP_DISTANCES_ENABLE_DIRECTIVE),
+                (self._uses_primitive_index, PRIMITIVE_INDEX_ENABLE_DIRECTIVE),
+            )
+            if used
+        ]
+        if enable_directives:
+            lines[1:1] = ["", *enable_directives]

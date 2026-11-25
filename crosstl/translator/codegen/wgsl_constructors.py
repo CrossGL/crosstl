@@ -8,6 +8,7 @@ from ..ast import (
 )
 from ..refusals import WGSLRefusal
 from .generic_struct_utils import named_struct_constructor_arguments
+from .wgsl_clip_distances import scalar_clip_distance_value
 from .wgsl_matrix_resize import wgsl_matrix_resize
 
 
@@ -27,8 +28,13 @@ class WGSLConstructorMixin:
             ]
             arguments = named_struct_constructor_arguments(struct_name, node, fields)
             args = ", ".join(
-                self.generate_expression_for_target(arg, field_type)
-                for arg, field_type in arguments
+                scalar_clip_distance_value(
+                    self,
+                    struct_name,
+                    field_name,
+                    self.generate_expression_for_target(arg, field_type),
+                )
+                for (field_name, _), (arg, field_type) in zip(fields, arguments)
             )
             return f"{self.type_name_string(node.constructor_type)}({args})"
         if len(node.arguments) == 1:

@@ -236,6 +236,10 @@ from .hlsl_groupshared_word_views import lower_groupshared_word_views
 from .hlsl_half_private_storage import lower_half_private_storage
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_host_workgroup_size import hlsl_entry_local_size
+from .hlsl_initialized_globals import (
+    hlsl_initialized_private_global,
+    hlsl_static_global_initializer,
+)
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_mesh_semantics import collect_hlsl_mesh_output_struct_offsets
 from .hlsl_narrow_integers import HLSLNarrowIntegerMixin
@@ -2279,22 +2283,20 @@ class HLSLCodeGen(
                     "static",
                 } & storage_qualifiers and not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
+                elif hlsl_initialized_private_global(node, qualifier):
+                    qualifier = "static " + qualifier
             code += resource_identity_marker(node, var_name)
             if id(node) in self.hlsl_inferred_global_node_ids:
                 if not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
-                initializer = self.generate_expression_with_expected(
-                    node.initial_value, node.var_type
-                )
+                initializer = hlsl_static_global_initializer(self, node)
                 declaration += f" = {initializer}"
             elif (
                 qualifier.startswith("static")
                 and getattr(node, "initial_value", None) is not None
             ):
                 # A static global starts from its initializer, not from zero.
-                initializer = self.generate_expression_with_expected(
-                    node.initial_value, node.var_type
-                )
+                initializer = hlsl_static_global_initializer(self, node)
                 declaration += f" = {initializer}"
             image_format_prefix = self.storage_image_format_prefix(mapped_type, node)
             code += f"{image_format_prefix}{qualifier}{declaration}{register};\n"
