@@ -459,9 +459,7 @@ class SlangStorageImageAccessMixin:
             )
         shape = self.storage_image_value_shape(target)
         if shape is not None and shape != ("float", 1):
-            raise SlangImportRefused(
-                [f"Slang {function_name} needs a float location"]
-            )
+            raise SlangImportRefused([f"Slang {function_name} needs a float location"])
         rendered = [self.generate_expression(arg, is_main) for arg in args]
         return f"{function_name}({', '.join(rendered)})"
 

@@ -21,8 +21,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from ..ast import ArrayAccessNode, FunctionCallNode, FunctionNode, IdentifierNode
-from ..ast import VariableNode
+from ..ast import (
+    ArrayAccessNode,
+    FunctionCallNode,
+    FunctionNode,
+    IdentifierNode,
+    VariableNode,
+)
 from .array_utils import split_array_type_suffix
 
 __all__ = [
