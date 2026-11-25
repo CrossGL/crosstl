@@ -1139,9 +1139,11 @@ class SlangToCrossGLConverter(
         name_map = getattr(self, "struct_name_map", None)
         if not name_map or not isinstance(type_name, str):
             return type_name
+        # Only the renamed struct names match, longest first, so each match has a CrossGL name.
+        names = "|".join(re.escape(name) for name in sorted(name_map, key=lambda n: (-len(n), n)))
         return re.sub(
-            r"(?<![\w.:])[A-Za-z_]\w*(?![\w(])",
-            lambda match: name_map.get(match.group(0), match.group(0)),
+            rf"(?<![\w.:])(?:{names})(?![\w(])",
+            lambda match: name_map[match.group(0)],
             type_name,
         )
 

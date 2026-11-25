@@ -328,7 +328,10 @@ def _check_elements(structs, program, target, native, skip):
             )
 
 
-def _check_slang_cbuffer(structs, block, target, name=None):
+_SLANGC_MOVES_OFFSET = "slangc moves such a [[vk::offset]] to that alignment"
+
+
+def _check_slang_cbuffer(structs, block, target, name=None, moved=_SLANGC_MOVES_OFFSET):
     """slangc keeps a push-constant member's [[vk::offset(N)]] only at a multiple of its std430 alignment."""
     name = block.name if name is None else name
     for member in block.members or []:
@@ -359,7 +362,7 @@ def _check_slang_cbuffer(structs, block, target, name=None):
                 target,
                 name,
                 f"member '{member_name}' is at byte {offset}, which is not a multiple of its std430 alignment "
-                f"{alignment}; slangc moves such a [[vk::offset]] to that alignment",
+                f"{alignment}; {moved}",
             )
 
 
@@ -377,7 +380,14 @@ def _check_slang_push_constant_struct(structs, variable, struct, target):
                 f"member '{member.name}' of struct '{struct.name}' carries @align, and Slang places a push-constant "
                 "ConstantBuffer<T>'s members with [[vk::offset]] only",
             )
-    _check_slang_cbuffer(structs, struct, target, variable.name)
+    _check_slang_cbuffer(
+        structs,
+        struct,
+        target,
+        variable.name,
+        "Slang declares a push-constant ConstantBuffer<T> with std430 offsets, and "
+        + _SLANGC_MOVES_OFFSET,
+    )
 
 
 def _check_slang(structs, program, target):
