@@ -7,6 +7,8 @@ WebGL emitters scan the rendered program and refuse each one with the reason the
 
 import re
 
+from .glsl_builtin_extensions import BUILTIN_EXTENSIONS
+
 _QUAD_GROUP = "GLSL has no quad-group index; only a compute shader derives it, from gl_LocalInvocationIndex"
 
 # Desktop OpenGL GLSL 4.60 (GL_KHR_vulkan_glsl section "Removed features" lists the Vulkan-only additions).
@@ -50,6 +52,14 @@ WEBGL_UNAVAILABLE_BUILTINS = {
     "gl_DrawID": "GLSL ES 3.00 has no draw index",
     "gl_BaseVertex": "GLSL ES 3.00 has no base vertex",
     "gl_BaseInstance": "GLSL ES 3.00 has no base instance",
+    **{
+        name: f"GLSL ES 3.00 has no subgroup built-in variables ({extension})"
+        for name, extension in BUILTIN_EXTENSIONS.items()
+        if extension in {
+            "GL_KHR_shader_subgroup_basic",
+            "GL_KHR_shader_subgroup_ballot",
+        }
+    },
     # GL_EXT_fragment_invocation_density and GL_EXT_fragment_shading_rate are not WebGL 2 extensions.
     "gl_FragSizeEXT": _ES_DENSITY,
     "gl_FragInvocationCountEXT": _ES_DENSITY,

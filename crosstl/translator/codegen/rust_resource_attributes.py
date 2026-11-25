@@ -321,11 +321,10 @@ class RustResourceAttributeMixin:
             arguments = self.attribute_arguments(attr)
             if not arguments:
                 continue
-            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
-                binding = self.resource_binding_index_value(
-                    arguments[0], ("b", "s", "t", "u")
-                )
-            elif attr_name == "register":
+            if (
+                attr_name in {"binding", "buffer", "sampler", "texture", "uav"}
+                or attr_name == "register"
+            ):
                 binding = self.resource_binding_index_value(
                     arguments[0], ("b", "s", "t", "u")
                 )
@@ -373,11 +372,10 @@ class RustResourceAttributeMixin:
             arguments = self.attribute_arguments(attr)
             if not arguments:
                 continue
-            if attr_name in {"binding", "buffer", "sampler", "texture", "uav"}:
-                binding = self.resource_binding_index_value(
-                    arguments[0], ("b", "s", "t", "u")
-                )
-            elif attr_name == "register":
+            if (
+                attr_name in {"binding", "buffer", "sampler", "texture", "uav"}
+                or attr_name == "register"
+            ):
                 binding = self.resource_binding_index_value(
                     arguments[0], ("b", "s", "t", "u")
                 )
@@ -385,6 +383,24 @@ class RustResourceAttributeMixin:
                 binding = None
             if binding is not None:
                 return attr_name
+        return None
+
+    def rust_resource_register_class(self, node):
+        """Return the HLSL register class letter from an explicit ``register`` attribute."""
+        for attr in getattr(node, "attributes", []) or []:
+            if str(getattr(attr, "name", "")).lower() != "register":
+                continue
+            arguments = self.attribute_arguments(attr)
+            if not arguments:
+                continue
+            raw_value = self.attribute_argument_text(arguments[0]) or ""
+            raw_value = str(raw_value).strip().lower()
+            if (
+                raw_value
+                and raw_value[0] in ("b", "s", "t", "u")
+                and raw_value[1:].isdigit()
+            ):
+                return raw_value[0]
         return None
 
     def rust_resource_base_type_and_count(self, type_name):
@@ -457,6 +473,17 @@ class RustResourceAttributeMixin:
             return 1
         return count
 
+    # HLSL register classes are separate namespaces; Vulkan descriptor sets are not.
+    # Class order matches the SPIR-V and GLSL remappers so register(t0) and
+    # register(u0) keep distinct binding numbers independent of declaration order.
+    HLSL_REGISTER_CLASS_ORDER = {"b": 0, "t": 1, "u": 2, "s": 3}
+
+    def rust_resource_binding_family_keys(self, base_namespace, set_index):
+        """Yield the unscoped key and all class-scoped keys for a base namespace."""
+        yield (base_namespace, set_index)
+        for cls in ("b", "s", "t", "u"):
+            yield (f"{base_namespace}:{cls}", set_index)
+
     def rust_resource_binding_range_conflicts(self, key, binding, count):
         end = binding + count - 1
         for used_start, used_end, _used_name in self.rust_used_resource_bindings.get(
@@ -466,10 +493,23 @@ class RustResourceAttributeMixin:
                 return True
         return False
 
+    def rust_resource_binding_family_conflicts(
+        self, base_namespace, set_index, binding, count
+    ):
+        for key in self.rust_resource_binding_family_keys(base_namespace, set_index):
+            if self.rust_resource_binding_range_conflicts(key, binding, count):
+                return True
+        return False
+
     def next_available_rust_resource_binding(self, namespace, set_index, count):
         key = (namespace, set_index)
         binding = self.rust_resource_binding_cursors.get(key, 0)
-        while self.rust_resource_binding_range_conflicts(key, binding, count):
+        # Auto-assignment is always classless, so consult the whole family of
+        # class-scoped reservations the same way CUDA, HIP and Mojo do.
+        base_namespace = namespace.split(":", 1)[0] if ":" in namespace else namespace
+        while self.rust_resource_binding_family_conflicts(
+            base_namespace, set_index, binding, count
+        ):
             binding += 1
         self.rust_resource_binding_cursors[key] = binding + count
         return binding
@@ -477,21 +517,103 @@ class RustResourceAttributeMixin:
     def reserve_rust_resource_binding(self, namespace, set_index, binding, count, name):
         key = (namespace, set_index)
         end = binding + count - 1
+        base_namespace = namespace.split(":", 1)[0] if ":" in namespace else namespace
+
+        # Register-class resources only conflict with the same class, but still
+        # conflict with classless resources in the unscoped namespace. Classless
+        # resources conflict with every class-scoped range in the same family.
+        if ":" in namespace:
+            keys_to_check = [(namespace, set_index), (base_namespace, set_index)]
+        else:
+            keys_to_check = self.rust_resource_binding_family_keys(
+                base_namespace, set_index
+            )
+
+        for check_key in keys_to_check:
+            for used_start, used_end, used_name in self.rust_used_resource_bindings.get(
+                check_key, []
+            ):
+                if binding <= used_end and used_start <= end:
+                    if used_start == binding and used_end == end and used_name == name:
+                        return
+                    raise RustRefusal(
+                        "Conflicting Rust resource binding for "
+                        f"'{name}': {base_namespace} set {set_index} binding "
+                        f"{binding}-{end} overlaps '{used_name}' binding "
+                        f"{used_start}-{used_end}"
+                    )
+
         ranges = self.rust_used_resource_bindings.setdefault(key, [])
-        for used_start, used_end, used_name in ranges:
-            if binding <= used_end and used_start <= end:
-                if used_start == binding and used_end == end and used_name == name:
-                    return
-                raise RustRefusal(
-                    "Conflicting Rust resource binding for "
-                    f"'{name}': {namespace} set {set_index} binding "
-                    f"{binding}-{end} overlaps '{used_name}' binding "
-                    f"{used_start}-{used_end}"
-                )
         ranges.append((binding, end, name))
         self.rust_resource_binding_cursors[key] = max(
             self.rust_resource_binding_cursors.get(key, 0), end + 1
         )
+
+    def next_free_emitted_rust_binding(self, set_index, start, count):
+        """Return the lowest free emitted binding at or after ``start`` in ``set_index``."""
+        binding = start
+        while any(
+            (set_index, index) in self.rust_used_emitted_bindings
+            for index in range(binding, binding + count)
+        ):
+            binding += 1
+        return binding
+
+    def claim_emitted_rust_binding(self, set_index, binding, count):
+        """Mark ``binding``..``binding + count - 1`` as used in the emitted Vulkan table."""
+        for index in range(binding, binding + count):
+            self.rust_used_emitted_bindings.add((set_index, index))
+        self.rust_emitted_binding_cursors[set_index] = max(
+            self.rust_emitted_binding_cursors.get(set_index, 0), binding + count
+        )
+
+    def assign_rust_emitted_descriptor_bindings(
+        self, exact_bindings, deferred_registers
+    ):
+        """Assign unique rust-gpu ``binding = N`` values within each descriptor set.
+
+        Class-scoped reservations still allow ``register(b0)`` next to ``register(u0)``.
+        Exact ``@binding`` / ``@buffer`` slots keep their numbers. HLSL registers are
+        remapped like SPIR-V: keep the register number when free, otherwise the next
+        free one, visiting classes in b/t/u/s order then register number.
+        """
+        for node, set_index, binding, count, _name in exact_bindings:
+            self.claim_emitted_rust_binding(set_index, binding, count)
+            self.rust_emitted_binding_by_node[id(node)] = binding
+
+        ordered = sorted(
+            deferred_registers,
+            key=lambda entry: (
+                self.HLSL_REGISTER_CLASS_ORDER[entry[1]],
+                entry[2],
+                entry[3],
+                entry[6],
+            ),
+        )
+        for (
+            node,
+            _register_class,
+            register_index,
+            set_index,
+            count,
+            _name,
+            _order,
+        ) in ordered:
+            binding = self.next_free_emitted_rust_binding(
+                set_index, register_index, count
+            )
+            self.claim_emitted_rust_binding(set_index, binding, count)
+            self.rust_emitted_binding_by_node[id(node)] = binding
+
+    def allocate_emitted_rust_binding(self, node, set_index, preferred, count):
+        """Return the emitted Vulkan binding for ``node``, allocating one if needed."""
+        emitted = self.rust_emitted_binding_by_node.get(id(node))
+        if emitted is not None:
+            return emitted
+        binding = self.next_free_emitted_rust_binding(set_index, preferred, count)
+        self.claim_emitted_rust_binding(set_index, binding, count)
+        self.rust_emitted_binding_by_node[id(node)] = binding
+        return binding
 
     def rust_resource_binding_info(self, node, type_name, kind=None):
         name = getattr(node, "name", None)
@@ -509,21 +631,34 @@ class RustResourceAttributeMixin:
             node, resource_kind, count
         )
         namespace = self.rust_resource_binding_namespace(resource_kind)
+        register_class = self.rust_resource_register_class(node)
+        if register_class is not None:
+            namespace = f"{namespace}:{register_class}"
         set_index = self.explicit_rust_resource_set_index(node)
-        binding = self.explicit_rust_resource_binding_index(node)
-        if binding is None:
-            binding = self.next_available_rust_resource_binding(
+        source_binding = self.explicit_rust_resource_binding_index(node)
+        if source_binding is None:
+            # Class-scoped family check for conflict detection / auto numbering.
+            source_binding = self.next_available_rust_resource_binding(
                 namespace, set_index, validation_count
             )
             binding_source = "automatic"
             self.reserve_rust_resource_binding(
-                namespace, set_index, binding, validation_count, name
+                namespace, set_index, source_binding, validation_count, name
             )
+            preferred = self.rust_emitted_binding_cursors.get(set_index, 0)
         else:
             binding_source = "explicit"
             self.reserve_rust_resource_binding(
-                namespace, set_index, binding, validation_count, name
+                namespace, set_index, source_binding, validation_count, name
             )
+            preferred = source_binding
+
+        # rust-gpu attributes are the Vulkan interface: every resource in a
+        # descriptor set needs its own binding, even when HLSL register classes
+        # share a number.
+        binding = self.allocate_emitted_rust_binding(
+            node, set_index, preferred, validation_count
+        )
 
         info = {
             "name": name,
@@ -598,47 +733,89 @@ class RustResourceAttributeMixin:
             return f"{attribute}{name}: &{self.map_type(type_name)}"
         return f"{attribute}{name}: {self.map_function_parameter_type(type_name)}"
 
-    def reserve_explicit_rust_resource_binding(self, node, type_name, kind=None):
+    def reserve_explicit_rust_resource_binding(
+        self, node, type_name, kind=None, order=0
+    ):
+        """Reserve class-scoped conflict slots and record the node for emitted remapping.
+
+        Returns ``("register", ...)`` or ``("exact", ...)`` when the resource has an
+        explicit binding, otherwise ``None``.
+        """
         name = getattr(node, "name", None)
         resource_kind = self.rust_resource_kind(type_name, node=node, forced_kind=kind)
         binding = self.explicit_rust_resource_binding_index(node)
         if not name or resource_kind is None or binding is None:
-            return
+            return None
         _base_type, count = self.rust_resource_base_type_and_count(type_name)
         validation_count = self.rust_resource_binding_validation_count(
             node, resource_kind, count
         )
         namespace = self.rust_resource_binding_namespace(resource_kind)
+        register_class = self.rust_resource_register_class(node)
+        if register_class is not None:
+            namespace = f"{namespace}:{register_class}"
         set_index = self.explicit_rust_resource_set_index(node)
         self.reserve_rust_resource_binding(
             namespace, set_index, binding, validation_count, name
         )
+        attr_name = self.rust_explicit_resource_binding_attribute(node)
+        if register_class is not None and attr_name == "register":
+            return (
+                "register",
+                node,
+                register_class,
+                binding,
+                set_index,
+                validation_count,
+                name,
+                order,
+            )
+        return ("exact", node, set_index, binding, validation_count, name)
 
     def reserve_explicit_rust_resource_bindings(self, ast):
-        def reserve_variable(node):
-            if isinstance(node, ArrayNode):
-                element_type = self.convert_type_node_to_string(
-                    getattr(node, "element_type", "float")
-                )
-                size = self.format_array_size(getattr(node, "size", None))
-                type_name = prepend_array_dimension(element_type, size)
+        exact_bindings = []
+        deferred_registers = []
+        order = 0
+
+        def record(entry):
+            if entry is None:
+                return
+            kind = entry[0]
+            if kind == "register":
+                deferred_registers.append(entry[1:])
             else:
-                type_name = self.get_variable_type(node) or "float"
-            type_name = self.resource_type_with_attributes(type_name, node)
-            self.reserve_explicit_rust_resource_binding(node, type_name)
+                exact_bindings.append(entry[1:])
+
+        def reserve_variable(node, kind=None):
+            nonlocal order
+            if kind is None:
+                if isinstance(node, ArrayNode):
+                    element_type = self.convert_type_node_to_string(
+                        getattr(node, "element_type", "float")
+                    )
+                    size = self.format_array_size(getattr(node, "size", None))
+                    type_name = prepend_array_dimension(element_type, size)
+                else:
+                    type_name = self.get_variable_type(node) or "float"
+                type_name = self.resource_type_with_attributes(type_name, node)
+            else:
+                type_name = getattr(node, "name", None)
+            entry = self.reserve_explicit_rust_resource_binding(
+                node, type_name, kind=kind, order=order
+            )
+            order += 1
+            record(entry)
 
         for node in getattr(ast, "global_variables", []) or []:
             reserve_variable(node)
         for cbuffer in self.get_cbuffer_nodes(ast):
-            self.reserve_explicit_rust_resource_binding(
-                cbuffer, getattr(cbuffer, "name", None), kind="cbuffer"
-            )
+            reserve_variable(cbuffer, kind="cbuffer")
         for stage in (
             getattr(ast, "stages", {}).values() if hasattr(ast, "stages") else []
         ):
             for node in getattr(stage, "local_variables", []) or []:
                 reserve_variable(node)
             for cbuffer in getattr(stage, "local_cbuffers", []) or []:
-                self.reserve_explicit_rust_resource_binding(
-                    cbuffer, getattr(cbuffer, "name", None), kind="cbuffer"
-                )
+                reserve_variable(cbuffer, kind="cbuffer")
+
+        self.assign_rust_emitted_descriptor_bindings(exact_bindings, deferred_registers)

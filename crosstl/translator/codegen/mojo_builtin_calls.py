@@ -274,12 +274,14 @@ class MojoBuiltinCallMixin:
             raise MojoRefusal(
                 f"Unsupported {func_name} for Mojo codegen; assignable target required"
             )
-        expected_args = 3 if operation == "compare_exchange" else 2
+        expected_args = {"compare_exchange": 3, "load": 1}.get(operation, 2)
         if len(args) != expected_args:
             raise MojoRefusal(
                 f"Unsupported {func_name} for Mojo codegen; expected "
                 f"{expected_args} argument(s), got {len(args)}"
             )
+        if operation in {"load", "store"}:
+            return self.generate_scalar_atomic_access(func_name, operation, args)
         if not self.expression_prelude_stack:
             raise MojoRefusal(
                 f"Unsupported {func_name} for Mojo codegen; "
@@ -347,6 +349,26 @@ class MojoBuiltinCallMixin:
         )
         lines.append(f"{indent_str}    pass\n")
         return temp_name
+
+    def generate_scalar_atomic_access(self, func_name, operation, args):
+        """``atomicLoad(x)`` and ``atomicStore(x, v)`` as std.atomic's static ``Atomic`` load and store.
+
+        Both take the address of the target and need no temporary, so they are expressions in any context; Mojo's
+        default ordering, sequentially consistent, is at least as strong as the relaxed order CrossGL's atomics
+        have.
+        """
+        target_type = self.type_name(self.expression_result_type(args[0]))
+        if operation == "load":
+            self.validate_resource_read_access(args[0], func_name)
+        else:
+            self.validate_resource_write_access(args[0], func_name)
+        mojo_type = self.map_type(target_type)
+        pointer = f"UnsafePointer(to={self.generate_expression(args[0])})"
+        self.requires_atomic_import = True
+        if operation == "load":
+            return f"Atomic[{mojo_type}].load({pointer})"
+        value = self.generate_expression(args[1], target_type, f"{func_name} value")
+        return f"Atomic[{mojo_type}].store({pointer}, {value})"
 
     def is_assignable_atomic_target(self, target):
         return isinstance(

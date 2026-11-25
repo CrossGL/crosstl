@@ -1,0 +1,1 @@
+GLSL, SPIR-V and HLSL output compute `exp`, `exp2`, `log`, `log2` and `pow` of `double` operands with CrossGL helpers in binary64 arithmetic, since those targets declare the functions for 32-bit floats only. Before, the translation was refused.
