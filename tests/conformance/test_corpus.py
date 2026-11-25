@@ -257,6 +257,37 @@ def test_hlsl_entry_discovery():
     )
 
 
+PRINTF_VERTEX_HLSL = """float4 main(float4 position : POSITION) : SV_Position {
+    // printf reports the position in a debug build.
+    printf("Position = %v4f", position);
+    return position;
+}
+"""
+
+
+def test_printf_intrinsic_detection_ignores_declared_functions_and_comments():
+    assert checks.calls_printf_intrinsic(PRINTF_VERTEX_HLSL)
+    assert checks.calls_printf_intrinsic('uint f(uint v) { return printf("%u", v); }')
+    declared = "void printf(uint v) {}\nvoid f() { printf(1u); }"
+    assert not checks.calls_printf_intrinsic(declared)
+    assert not checks.calls_printf_intrinsic("// printf(1u);\nvoid f() {}")
+
+
+def test_hlsl_printf_artifacts_are_checked_as_spirv(tmp_path):
+    if not checks.tool("dxc").available:
+        pytest.skip(checks.tool("dxc").reason)
+    printing = tmp_path / "printing.hlsl"
+    printing.write_text(PRINTF_VERTEX_HLSL)
+    plain = tmp_path / "plain.hlsl"
+    plain.write_text(PRINTF_VERTEX_HLSL.replace("printf(", "(void)("))
+
+    verdict = checks.check(printing, "hlsl", ("vertex",))
+    assert verdict["verdict"] == "accepted", verdict["log"]
+    assert "-spirv" in verdict["commands"][0].split()
+    dxil = checks.check(plain, "hlsl", ("vertex",))
+    assert "-spirv" not in dxil["commands"][0].split()
+
+
 def test_glsl_environment_checks_ray_and_mesh_stages_with_vulkan_rules():
     # GL_EXT_ray_tracing and GL_EXT_mesh_shader exist only for SPIR-V generation; every other stage keeps the
     # OpenGL rules.

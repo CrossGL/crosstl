@@ -76,7 +76,10 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
 )
-from .generic_global_types import collect_constant_and_cbuffer_member_types
+from .generic_global_types import (
+    collect_constant_and_cbuffer_member_types,
+    metal_generic_global_types,
+)
 from .generic_pointer_spaces import (
     assign_generic_pointer_spaces,
     refuse_written_generic_pointers,
@@ -121,6 +124,10 @@ from .slang_numeric_types import slang_unrepresentable_type_reason
 from .slang_pointer_declarations import refuse_slang_pointer_declarations
 from .slang_precise_functions import SlangPreciseFunctionMixin
 from .slang_program_symbols import SlangProgramSymbolsMixin
+from .slang_push_constant_structs import (
+    slang_member_offset_prefix,
+    slang_push_constant_struct_names,
+)
 from .slang_rasterizer_order import slang_rasterizer_ordered_type
 from .slang_ray_tracing import SlangRayTracingMixin
 from .slang_refusals import SlangLoweringRefused
@@ -329,6 +336,7 @@ class SlangCodeGen(
         self.slang_fragment_output_location_ids = set()
         self.literal_int_constants = {}
         self.glsl_buffer_block_struct_names = set()
+        self.slang_push_constant_struct_names = frozenset()
         self.lowered_glsl_buffer_blocks = {}
         self.glsl_buffer_block_lowering_failures = {}
         self.glsl_buffer_block_struct_lowering_failures = {}
@@ -526,6 +534,9 @@ class SlangCodeGen(
                 if getattr(struct, "name", None)
             }
             self.structs_by_name = dict(self.user_structs_by_name)
+            self.slang_push_constant_struct_names = slang_push_constant_struct_names(
+                ast
+            )
             self.vertex_entry_input_struct_names = (
                 self.collect_slang_vertex_entry_input_struct_names(ast)
             )
@@ -594,12 +605,20 @@ class SlangCodeGen(
                     self, self.generic_enum_specializations
                 )
             )
+            # A generic call deduces its arguments' types before the globals are declared, so it reads the
+            # written types of the value, texture and buffer globals (``outp[i]`` of a structured buffer).
+            generic_global_types = metal_generic_global_types(
+                self, getattr(ast, "global_variables", None)
+            )
+            generic_global_types.update(
+                collect_constant_and_cbuffer_member_types(
+                    self, ast, type_renderer=self.convert_type_node_to_string
+                )
+            )
             generic_function_specializations = prepare_generic_function_specializations(
                 self,
                 list(iter_function_nodes(ast)),
-                collect_constant_and_cbuffer_member_types(
-                    self, ast, type_renderer=self.convert_type_node_to_string
-                ),
+                generic_global_types,
                 ast=ast,
             )
             if generic_function_specializations:
@@ -1109,7 +1128,8 @@ class SlangCodeGen(
             semantic_str = self.semantic_suffix(semantic)
             member_type = slang_cull_distance_member_type(self, member, member_type)
             declaration = (
-                struct_member_location_prefix(
+                slang_member_offset_prefix(self, node.name, member)
+                + struct_member_location_prefix(
                     self, node, member, default_member_semantics
                 )
                 + self.slang_interpolation_attribute_prefix(member)

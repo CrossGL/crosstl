@@ -173,10 +173,11 @@ class TextureMethodDescriptorMixin:
             elif resource_base and resource_base not in {
                 "Texture2DMS",
                 "Texture2DMSArray",
+                "RWTexture2DMS",
+                "RWTexture2DMSArray",
             }:
                 diagnostic_reason = (
-                    "GetSamplePosition is only available on sampled multisample "
-                    "textures"
+                    "GetSamplePosition is only available on multisample textures"
                 )
 
             descriptor = {
@@ -240,23 +241,18 @@ class TextureMethodDescriptorMixin:
                 "function": "textureGatherCompare",
                 "texture_function": "textureGatherCompare",
                 "buffer_function": None,
-                "component": None,
+                # textureGatherCompare[Offset](t, s, P, ref[, offset], comp): the component goes last, and
+                # the red one (0) is the default the call without it compares.
+                "component": None if component == "0" else component,
                 "usage": "comparison",
                 "buffer_when_max_args": None,
                 "diagnostic_label": "texture gather-compare component",
             }
             if resource_type is not None:
                 descriptor["resource_type"] = resource_type
-            if component != "0":
-                descriptor["diagnostic_reason"] = (
-                    f"{member} requires a compare-gather component selector; "
-                    "CrossGL only represents the default/red compare gather"
-                )
-                descriptor["fallback_expression"] = "vec4(0.0)"
-                return descriptor
             if arg_count in {7, 8}:
                 descriptor["diagnostic_reason"] = (
-                    "GatherCmpRed four-offset overload has no CrossGL helper yet"
+                    f"{member} four-offset overload has no CrossGL helper yet"
                 )
                 descriptor["fallback_expression"] = "vec4(0.0)"
                 return descriptor
@@ -308,6 +304,13 @@ class TextureMethodDescriptorMixin:
                     "textureCompareOffsetClamp",
                     "textureCompareClamp",
                 ),
+                # SampleCmpBias (Shader Model 6.8): CrossGL's compare forms take the bias last.
+                "SampleCmpBias": (
+                    4,
+                    "textureCompareOffset",
+                    "textureCompareOffsetClamp",
+                    "textureCompareClamp",
+                ),
                 "SampleCmpGrad": (
                     5,
                     "textureCompareGradOffset",
@@ -347,38 +350,6 @@ class TextureMethodDescriptorMixin:
                 texture_function = "textureCompareLodOffset"
                 if arg_count == 6:
                     dropped_parameters.append("status output")
-            elif (
-                member == "SampleCmpBias"
-                and cube_family_resource
-                and arg_count in {
-                    4,
-                    5,
-                    6,
-                }
-            ):
-                texture_function = "textureCompare"
-                if arg_count == 4:
-                    dropped_parameters.append("LOD bias")
-                elif arg_count == 5:
-                    dropped_parameters.extend(["LOD bias", "LOD clamp"])
-                else:
-                    dropped_parameters.extend(
-                        ["LOD bias", "LOD clamp", "status output"]
-                    )
-            elif member == "SampleCmpBias" and arg_count in {4, 5, 6, 7}:
-                if arg_count == 4:
-                    texture_function = "textureCompare"
-                    dropped_parameters.append("LOD bias")
-                else:
-                    texture_function = "textureCompareOffset"
-                    if arg_count == 5:
-                        dropped_parameters.append("LOD bias")
-                    elif arg_count == 6:
-                        dropped_parameters.extend(["LOD bias", "LOD clamp"])
-                    else:
-                        dropped_parameters.extend(
-                            ["LOD bias", "LOD clamp", "status output"]
-                        )
             elif (
                 member == "SampleCmpLevelZero"
                 and cube_family_resource

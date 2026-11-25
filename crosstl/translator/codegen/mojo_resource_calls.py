@@ -389,6 +389,11 @@ class MojoResourceCallMixin:
             )
 
         arguments = getattr(expr, "arguments", [])
+        buffer_object_call = self.generate_mojo_buffer_object_member_call(
+            operation, buffer_expr, arguments
+        )
+        if buffer_object_call is not None:
+            return buffer_object_call
         args = [buffer_expr, *arguments]
         if operation == "Load":
             return self.generate_buffer_load_call(args)
@@ -443,12 +448,17 @@ class MojoResourceCallMixin:
         return f"buffer_store{width}({generated_args})"
 
     def generate_member_function_call(self, func_expr, args):
+        member = getattr(func_expr, "member", None)
+        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
+        buffer_object_call = self.generate_mojo_buffer_object_member_call(
+            member, obj_expr, args
+        )
+        if buffer_object_call is not None:
+            return buffer_object_call
         texture_call = self.generate_texture_member_function_call(func_expr, args)
         if texture_call is not None:
             return texture_call
 
-        member = getattr(func_expr, "member", None)
-        obj_expr = getattr(func_expr, "object", getattr(func_expr, "object_expr", None))
         obj_type = self.expression_result_type(obj_expr)
         info = self.buffer_resource_info(obj_type)
         if info is None:

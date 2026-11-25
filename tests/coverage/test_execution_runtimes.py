@@ -7,7 +7,7 @@ import pytest
 
 from tests.conformance import runner as harness
 from tests.conformance import runtimes
-from tools.coverage import execution, lowering, probes, validators
+from tools.coverage import execution, lanes, lowering, probes, validators
 from tools.coverage.model import Feature, Result, Signature, Type
 
 from .execution_cases import CALLS, NATIVE, SIN, fake_harness, hlsl_result
@@ -324,7 +324,9 @@ def test_the_reference_compiler_keeps_the_harness_interface(tmp_path, language):
                 interface.interface(path, "spirv", 1)
             continue
         found = interface.interface(path, "spirv", 1)
-        assert found["bindings"] == (0, 1) and found["group"] == (1, 1, 1)
+        # A probe whose lanes cooperate, such as WaveGetLaneIndex, runs one workgroup of execution.THREADS lanes.
+        width = execution.THREADS if lanes.cooperative(probe) else 1
+        assert found["bindings"] == (0, 1) and found["group"] == (width, 1, 1)
     source = probes.build(feature, language).source
     if language == "hlsl":
         renamed = source.replace("void main", "void CSMain")

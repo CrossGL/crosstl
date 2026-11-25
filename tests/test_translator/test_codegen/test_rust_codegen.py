@@ -12555,7 +12555,7 @@ def test_rust_refuses_synchronization_and_subgroup_operations_without_a_lowering
         assert codegen.generate_wave_op_expression(wave) == "0"
     assert codegen.refusals.reasons == [
         "synchronization deviceScopeFence has no rust-gpu barrier",
-        "subgroup operation WaveUnknownOperation",
+        "subgroup operation WaveUnknownOperation(?) has no spirv_std lowering for these operands",
     ]
     with pytest.raises(RustLoweringRefused, match="2 constructs"):
         codegen.refusals.raise_pending()
@@ -19842,11 +19842,10 @@ def test_wave_active_sum_emits_rust_subgroup_intrinsic():
         }
     }
     """
-    with pytest.raises(
-        RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "spirv_std::arch::subgroup_i_add(lane)" in generated
+    assert "#[spirv(subgroup_local_invocation_id)]" in generated
+    assert "WaveActiveSum" not in generated
 
 
 def test_wave_ballot_emits_rust_subgroup_ballot():
@@ -19860,14 +19859,11 @@ def test_wave_ballot_emits_rust_subgroup_ballot():
         }
     }
     """
-    with pytest.raises(
-        RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "spirv_std::arch::subgroup_ballot(active)" in generated
 
 
-def test_wave_match_count_and_quad_forms_emit_rust_subgroup_intrinsics():
+def test_wave_count_and_quad_forms_emit_rust_subgroup_intrinsics():
     code = """
     shader ComputeWave {
         compute {
@@ -19878,7 +19874,6 @@ def test_wave_match_count_and_quad_forms_emit_rust_subgroup_intrinsics():
                 bool equal = WaveActiveAllEqual(lane);
                 uint bitCount = WaveActiveCountBits(equal);
                 uint prefixCount = WavePrefixCountBits(equal);
-                uvec4 mask = WaveMatch(lane);
                 uint quadLane = QuadReadLaneAt(lane, 1u);
                 uint quadX = QuadReadAcrossX(lane);
                 uint quadY = QuadReadAcrossY(lane);
@@ -19888,14 +19883,38 @@ def test_wave_match_count_and_quad_forms_emit_rust_subgroup_intrinsics():
     }
     """
 
+    generated = generate_code(parse_code(tokenize_code(code)))
+    for spelling in (
+        "subgroup_elect()",
+        "subgroup_all_equal(lane)",
+        "subgroup_ballot_bit_count(spirv_std::arch::subgroup_ballot(equal))",
+        "subgroup_ballot_exclusive_bit_count(spirv_std::arch::subgroup_ballot(equal))",
+        "subgroup_quad_broadcast(lane, 1)",
+        "subgroup_quad_swap::<0, _>(lane)",
+        "subgroup_quad_swap::<1, _>(lane)",
+        "subgroup_quad_swap::<2, _>(lane)",
+    ):
+        assert f"spirv_std::arch::{spelling}" in generated, spelling
+
+
+def test_wave_match_is_refused_without_a_spirv_std_lowering():
+    code = """
+    shader ComputeWave {
+        compute {
+            void main() {
+                uint lane = WaveGetLaneIndex();
+                uvec4 mask = WaveMatch(lane);
+            }
+        }
+    }
+    """
     with pytest.raises(
-        RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
+        RustLoweringRefused, match=r"WaveMatch\(uint\) has no spirv_std lowering"
     ):
         generate_code(parse_code(tokenize_code(code)))
 
 
-def test_wave_multi_prefix_forms_emit_rust_partitioned_subgroup_intrinsics():
+def test_wave_multi_prefix_forms_without_a_spirv_std_lowering_are_refused(tmp_path):
     code = """
     shader ComputeWave {
         compute {
@@ -19914,18 +19933,26 @@ def test_wave_multi_prefix_forms_emit_rust_partitioned_subgroup_intrinsics():
     }
     """
 
+    # spirv-std has no partitioned operation, and the translation pipeline's partitioned-wave pass lowers only the
+    # operations of WAVE_PARTITIONED_OPERATIONS; HLSL's exclusive WaveMultiPrefix* forms stay a typed refusal.
+    source = tmp_path / "multi_prefix.cgl"
+    source.write_text(code, encoding="utf-8")
     with pytest.raises(
         RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
+        match=r"WaveMultiPrefixSum\(uint, uvec4\) has no spirv_std lowering",
     ):
-        generate_code(parse_code(tokenize_code(code)))
+        crosstl.translate(str(source), backend="rust", format_output=False)
 
 
 def test_rust_wave_intrinsic_helper_contract_compiles(tmp_path):
     code = """
     shader RustWaveContract {
         compute {
-            void main(uint lane, bool active) {
+            layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* values;
+            void main() {
+                uint lane = values[gl_GlobalInvocationID.x];
+                bool active = lane > 3u;
                 uint sumValue = WaveActiveSum(lane);
                 uint productValue = WaveActiveProduct(lane + 1u);
                 uint minValue = WaveActiveMin(sumValue);
@@ -19946,31 +19973,31 @@ def test_rust_wave_intrinsic_helper_contract_compiles(tmp_path):
                 uint prefixSum = WavePrefixSum(laneValue);
                 uint prefixProduct = WavePrefixProduct(prefixSum + 1u);
                 uint prefixCount = WavePrefixCountBits(allLane);
-                uvec4 matchMask = WaveMatch(prefixProduct);
+                uvec4 matchMask = WaveActiveBallot(prefixProduct > 1u);
                 uint quadLane = QuadReadLaneAt(prefixProduct, 1u);
                 uint quadX = QuadReadAcrossX(quadLane);
                 uint quadY = QuadReadAcrossY(quadX);
                 uint quadDiagonal = QuadReadAcrossDiagonal(quadY);
-                bool quadAny = QuadAny(active);
-                bool quadAll = QuadAll(quadAny);
-                uint shuffled = WaveShuffle(quadDiagonal, 0u);
+                bool quadAll = WaveActiveAllTrue(active);
+                uint shuffled = WaveReadLaneAt(quadDiagonal, 0u);
                 uint shuffledXor = WaveShuffleXor(shuffled, 1u);
-                uint partitionedSum = WaveMultiPrefixSum(shuffledXor, ballot);
-                uint partitionedProduct = WaveMultiPrefixProduct(partitionedSum, ballot);
-                uint partitionedCount = WaveMultiPrefixCountBits(quadAll, matchMask);
-                uint partitionedAnd = WaveMultiPrefixBitAnd(partitionedProduct, matchMask);
-                uint partitionedOr = WaveMultiPrefixBitOr(partitionedAnd, matchMask);
-                uint partitionedXor = WaveMultiPrefixBitXor(partitionedOr, matchMask);
+                uint partitionedSum = WaveMultiPrefixInclusiveSum(shuffledXor, ballot);
+                uint partitionedProduct = WaveMultiProduct(partitionedSum, ballot);
+                uint partitionedCount = quadAll ? 1u : 0u;
+                uint partitionedAnd = WaveMultiPrefixInclusiveBitAnd(partitionedProduct, matchMask);
+                uint partitionedOr = WaveMultiBitOr(partitionedAnd, matchMask);
+                uint partitionedXor = WaveMultiPrefixInclusiveBitXor(partitionedOr, matchMask);
+                values[gl_GlobalInvocationID.x] = partitionedXor + laneCount;
             }
         }
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    source = tmp_path / "wave_contract.cgl"
+    source.write_text(code, encoding="utf-8")
+    generated = crosstl.translate(str(source), backend="rust", format_output=False)
+    assert not re.search(r"\b(Wave|Quad)[A-Z]\w*\s*\(", generated)
+    assert_generated_rust_smoke_compiles(generated, tmp_path)
 
 
 def test_rust_backend_import_preserves_spirv_std_parameter_metadata():
@@ -20185,11 +20212,11 @@ def test_multiple_wave_ops_in_one_function():
         }
     }
     """
-    with pytest.raises(
-        RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert "spirv_std::arch::subgroup_i_add(lane)" in generated
+    assert "spirv_std::arch::subgroup_any((sumVal > 0))" in generated
+    assert "spirv_std::arch::subgroup_ballot(anyTrue)" in generated
+    assert "spirv_std::arch::subgroup_shuffle(sumVal, 0)" in generated
 
 
 def test_mixed_sync_and_wave_ops():
@@ -20206,11 +20233,11 @@ def test_mixed_sync_and_wave_ops():
         }
     }
     """
-    with pytest.raises(
-        RustLoweringRefused,
-        match="subgroup operations: not lowered to rust-gpu's spirv_std",
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated = generate_code(parse_code(tokenize_code(code)))
+    assert generated.index(
+        "workgroup_memory_barrier_with_group_sync()"
+    ) < generated.index("subgroup_i_add(lane)")
+    assert "spirv_std::arch::all_memory_barrier()" in generated
 
 
 def test_rust_generic_call_keeps_turbofish():

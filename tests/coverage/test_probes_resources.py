@@ -362,7 +362,7 @@ def test_wgsl_probe_binds_a_texture_and_a_sampler_and_crossgl_calls_the_counterp
     assert "vec4 r = textureLod(u0, a1, a2);" in crossgl
 
 
-@pytest.mark.skipif(not validators.available("wgsl"), reason="naga is not installed")
+@pytest.mark.skipif(not validators.command("naga"), reason="naga is not installed")
 def test_wgsl_texture_probe_is_valid_wgsl():
     probe = probes.build(WGSL_SAMPLE_LEVEL, "wgsl")
     verdict = validators.validate("wgsl", probe.source, entry=probe.entry)

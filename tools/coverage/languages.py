@@ -265,6 +265,16 @@ class WGSL(Dialect):
     def buffer_element(self, kind: Type, atomic: bool) -> str:
         return f"atomic<{self.type(kind)}>" if atomic else self.type(kind)
 
+    def enable(self, extension: str) -> list[str]:
+        lines = [f"enable {extension};"]
+        if extension == "subgroups":
+            # A subgroup built-in computes over the active invocations wherever it is called, as the other
+            # languages' do, and the probes of reductions call it with some invocations inactive. So the probe turns
+            # off the subgroup_uniformity diagnostic (WGSL, "Filterable Triggering Rules"), whose default severity,
+            # error, requires subgroup-uniform control flow and lane arguments.
+            lines.append("diagnostic(off, subgroup_uniformity);")
+        return lines
+
     def keep(self, atomic: bool) -> str:
         # An atomic buffer element can only be used through atomic built-in functions.
         return "" if atomic else self.store("outp[i]")

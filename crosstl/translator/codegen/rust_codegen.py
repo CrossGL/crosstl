@@ -35,17 +35,14 @@ from .rust_gpu_images import (
     prepare_rust_gpu_images,
     rust_gpu_image_result_type,
 )
-from .rust_gpu_interface import RUST_GPU_PRELUDE, UNIFORM_VALUE_KIND
+from .rust_gpu_interface import RUST_GPU_PRELUDE
 from .rust_gpu_math_calls import rust_gpu_math_result_type
 from .rust_gpu_slice_length import RustGpuSliceLengthMixin
-from .rust_gpu_spec_constants import (
-    SPEC_CONSTANT_KIND,
-    spec_constant_infos,
-    spec_constant_local,
-)
+from .rust_gpu_spec_constants import spec_constant_infos
 from .rust_gpu_spelling import glam_spelling
 from .rust_gpu_stage_io import GRAPHICS_STAGES, RustGpuStageIoMixin
 from .rust_gpu_storage import PADDED_ELEMENTS, RustGpuPaddedSliceMixin
+from .rust_gpu_subgroups import rewrite_rust_gpu_lane_queries
 from .rust_gpu_subset import refuse_host_only_rust, refuse_outside_rust_gpu_subset
 from .rust_match_lowering import RustMatchMixin
 from .rust_memory_atomics import rust_memory_atomic_result_type
@@ -71,6 +68,7 @@ from .rust_tables import (
 from .rust_type_definitions import RustTypeDefinitionMixin
 from .rust_values import RustValueMixin
 from .rust_vector_elements import RustVectorElementMixin
+from .rust_workgroup_references import RustWorkgroupReferenceMixin
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import is_fragment_output_parameter, normalize_stage_name
 
@@ -107,6 +105,7 @@ class RustCodeGen(
     RustGpuStageIoMixin,
     LoweringRefusalMixin,
     RustBuiltinResultTypeMixin,
+    RustWorkgroupReferenceMixin,
     RustVectorElementMixin,
 ):
     """Emit rust-gpu shader crates from the shared CrossGL AST."""
@@ -398,6 +397,8 @@ class RustCodeGen(
         refuse_cooperative_matrices(ast, label="Rust", target="rust")
         refuse_precise_evaluation(ast, label="Rust", target="rust")
         ast = canonicalize_separate_textures(ast)
+        rewrite_rust_gpu_lane_queries(ast)
+        self.rust_current_program = ast
         return glam_spelling(self.refusals.run(self.generate_program, ast))
 
     def generate_program(self, ast):
@@ -825,6 +826,10 @@ class RustCodeGen(
         self.current_mutated_names = self.collect_mutated_binding_names(
             getattr(func, "body", None)
         )
+        saved_workgroup_references = self.bind_rust_workgroup_references(
+            [p.name for p in param_list]
+            + [info["node"].name for info in promoted_resource_params]
+        )
 
         inferred_constraints = self.combined_function_generic_constraints(func)
         self.current_function_generic_constraints = inferred_constraints
@@ -937,21 +942,12 @@ class RustCodeGen(
             emitted_param_names.add(param_name)
         for info in promoted_resource_params:
             params.append(self.generate_rust_resource_parameter(info))
-            if info.get("kind") == UNIFORM_VALUE_KIND:
-                # A uniform is read-only, so the entry point reads it once into a local of the same name.
-                uniform_name = self.rust_identifier(info["node"].name)
-                local_alias_declarations.append(
-                    f"let {uniform_name}: {self.map_type(info['type_name'])} = *{uniform_name};"
-                )
-            elif info.get("kind") == SPEC_CONSTANT_KIND:
-                spec_name = self.rust_identifier(info["node"].name)
-                local = spec_constant_local(
-                    spec_name, info, self.map_type(info["type_name"])
-                )
-                if local is not None:
-                    local_alias_declarations.append(local)
+            local = self.rust_resource_parameter_local(info)
+            if local is not None:
+                local_alias_declarations.append(local)
 
         params_str = ", ".join(params) if params else ""
+        self.retype_rust_workgroup_references()
 
         if shader_type in GRAPHICS_STAGES:
             code += self.rust_gpu_stage_attribute(shader_type, stage_interface)
@@ -1065,6 +1061,7 @@ class RustCodeGen(
         self.current_mutated_names = saved_mutated_names
         self.current_rust_output_parameters = saved_output_parameters
         self.current_rust_stage_outputs = saved_stage_outputs
+        self.restore_rust_workgroup_references(saved_workgroup_references)
         return code
 
     def is_function_prototype(self, func):
