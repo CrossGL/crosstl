@@ -346,12 +346,16 @@ class MetalFunctionPartsMixin:
             if self.is_plain_metal_fragment_stage_input_parameter(
                 raw_param_type, param_type, p, shader_type
             ):
+                varying_attribute = metal_varying_attribute(self, p, semantic)
+                if varying_attribute is not None:
+                    # The [[stage_in]] member keeps the parameter's interpolation, as a struct member does.
+                    varying_attribute += self.metal_interpolation_only_suffix(p)
                 fragment_stage_input_parameters.append(
                     {
                         "name": p.name,
                         "raw_type": raw_param_type,
                         "mapped_type": param_type,
-                        "attribute": metal_varying_attribute(self, p, semantic),
+                        "attribute": varying_attribute,
                         "semantic": semantic,
                         "preserve_user_attribute": True,
                     }
