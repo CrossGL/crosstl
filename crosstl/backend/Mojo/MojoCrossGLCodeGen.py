@@ -9,6 +9,12 @@ from ..import_refusals import ImportRefusalMixin, MojoImportRefused
 from .MojoAst import *
 from .MojoLexer import *
 from .MojoParser import *
+from .pointer_kernels import (
+    POINTER_KERNEL_BUILTINS,
+    is_pointer_kernel,
+    pointer_kernel_header,
+    top_level_program,
+)
 
 
 class MojoToCrossGLConverter(ImportRefusalMixin):
@@ -158,6 +164,7 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         "block_idx": "gl_WorkGroupID",
         "block_dim": "gl_WorkGroupSize",
         "thread_idx": "gl_LocalInvocationID",
+        **POINTER_KERNEL_BUILTINS,
     }
     MOJO_DTYPE_TYPE_MAP = {
         "DType.float16": "half",
@@ -183,6 +190,8 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         self.selected_gpu_kernel_names = set()
         self.reachable_gpu_function_names = set()
         self.current_function_is_mojo_gpu_kernel = False
+        # The function being rendered; a function a kernel calls reads the GPU index values as the kernel does.
+        self.current_function_name = None
         self.force_typed_declarations = False
         self.scoped_value_names = []
         self.function_body_depth = 0
@@ -341,9 +350,18 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         ]
         self.push_value_scope(global_value_names)
         try:
-            return self.generate_shader(ast)
+            code = self.generate_shader(ast)
         finally:
             self.pop_value_scope()
+        functions = {
+            node.name: node
+            for node in getattr(ast, "functions", []) or []
+            if isinstance(node, FunctionNode)
+        }
+        kernels = [functions.get(name) for name in self.selected_gpu_kernel_names]
+        if kernels and all(kernel and is_pointer_kernel(kernel) for kernel in kernels):
+            return top_level_program(code)
+        return code
 
     def generate_shader(self, ast):
         code = "shader main {\n"
@@ -412,6 +430,10 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
                 for kernel_name in sorted(kernel_names):
                     func = functions_by_name.get(kernel_name)
                     if func is None:
+                        continue
+                    if is_pointer_kernel(func):
+                        # A pointer kernel is a compute entry of its own (pointer_kernels.py).
+                        code += self.generate_function(func, indent=1)
                         continue
                     code += "    // Compute Shader\n"
                     code += "    compute {\n"
@@ -521,7 +543,7 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
             param_type = getattr(parameter, "vtype", None)
             if isinstance(param_type, str) and param_type.startswith("TileTensor["):
                 return True
-        return False
+        return is_pointer_kernel(function)
 
     def collect_reachable_gpu_function_names(self, ast, kernel_names):
         if not kernel_names:
@@ -890,8 +912,10 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         indent_str = "    " * indent
         is_selected_gpu_kernel = func.name in self.selected_gpu_kernel_names
         previous_gpu_kernel = self.current_function_is_mojo_gpu_kernel
+        previous_function_name = self.current_function_name
         previous_force_typed_declarations = self.force_typed_declarations
         self.current_function_is_mojo_gpu_kernel = is_selected_gpu_kernel
+        self.current_function_name = func.name
         if is_selected_gpu_kernel:
             self.force_typed_declarations = True
         named_result = self.get_named_result_parameter(func)
@@ -933,10 +957,13 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
             func_attributes = self.map_function_attributes(func)
             func_name = self.map_identifier_name(func.name)
 
-            code += (
-                f"{indent_str}{return_type} {func_name}({params_str})"
-                f"{func_attributes} {{\n"
-            )
+            if is_selected_gpu_kernel and is_pointer_kernel(func):
+                code += pointer_kernel_header(self, func, indent_str)
+            else:
+                code += (
+                    f"{indent_str}{return_type} {func_name}({params_str})"
+                    f"{func_attributes} {{\n"
+                )
             if named_result:
                 result_type = self.map_type(named_result.vtype)
                 code += f"{indent_str}    {result_type} {named_result_name};\n"
@@ -964,6 +991,7 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
                 self.function_body_depth = saved_body_depth
         finally:
             self.current_function_is_mojo_gpu_kernel = previous_gpu_kernel
+            self.current_function_name = previous_function_name
             self.force_typed_declarations = previous_force_typed_declarations
 
         code += f"{indent_str}}}\n\n"
@@ -1889,7 +1917,10 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         return False
 
     def map_mojo_gpu_builtin_name(self, name):
-        if self.current_function_is_mojo_gpu_kernel:
+        if (
+            self.current_function_is_mojo_gpu_kernel
+            or self.current_function_name in self.reachable_gpu_function_names
+        ):
             return self.MOJO_GPU_BUILTIN_MAP.get(name, self.map_identifier_name(name))
         return self.map_identifier_name(name)
 

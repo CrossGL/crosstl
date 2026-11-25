@@ -4,6 +4,7 @@ import re
 
 from ..ast import StructNode
 from ..matrix_shape import matrix_type_spelling
+from ..refusals import MojoRefusal
 from .enum_utils import (
     build_generic_enum_specialization,
     collect_generic_enum_specializations,
@@ -357,6 +358,12 @@ class MojoGenericTypeMixin:
                         converted_args.append(self.convert_type_node_to_string(arg))
                 args = ", ".join(converted_args)
                 return f"{type_node.name}<{args}>"
+            if not isinstance(type_node.name, str):
+                # An expression in a type's argument list, such as the ``DType.float32`` of a Mojo ``SIMD[...]``
+                # type that an importer wrote verbatim, names no CrossGL type.
+                raise MojoRefusal(
+                    f"the type argument {type(type_node).__name__} names no CrossGL type"
+                )
             return type_node.name
         elif hasattr(type_node, "element_type") and hasattr(type_node, "size"):
             element_type = self.convert_type_node_to_string(type_node.element_type)
