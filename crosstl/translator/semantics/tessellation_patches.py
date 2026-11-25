@@ -238,8 +238,9 @@ class _TessellationLowering:
     def structs(self, stage):
         return {
             struct.name: struct
-            for struct in list(getattr(self.program, "structs", None) or [])
-            + list(getattr(stage, "local_structs", None) or [])
+            for struct in list(getattr(self.program, "structs", None) or []) + list(
+                getattr(stage, "local_structs", None) or []
+            )
             if isinstance(struct, A.StructNode)
         }
 
