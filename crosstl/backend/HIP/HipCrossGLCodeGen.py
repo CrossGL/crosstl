@@ -20,6 +20,7 @@ from ..CUDA.keyword_renames import source_identifier_names
 from ..CUDA.parameter_defaults import merge_declared_defaults, parameter_default_suffix
 from ..CUDA.pointer_math_import import sine_cosine_statements
 from ..CUDA.reference_parameters import ReferenceParameters
+from ..CUDA.buffer_memory_qualifiers import buffer_memory_attributes
 from ..import_refusals import HipImportRefused, ImportRefusalMixin
 from ..no_contraction import (
     PRECISE_FUNCTION_ATTRIBUTE,
@@ -1478,6 +1479,7 @@ class HipToCrossGLConverter(
                             element_type,
                         )
                         params.append(
+                            f"{buffer_memory_attributes(raw_type)}"
                             f"@group(0) @binding({self.global_resource_binding_count + len(params)}) "
                             f"var<storage, {access}> "
                             f"{output_name}: array<{element_type}>"
@@ -1621,6 +1623,11 @@ class HipToCrossGLConverter(
 
         if function_name in {"__activemask", "__ballot_sync"}:
             return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+
+        # __lane_id() is the lane's index in its wavefront (hip/amd_detail/amd_device_functions.h), the subgroup
+        # invocation index that warpSize, imported as the subgroup size, counts.
+        if function_name == "__lane_id" and not args:
+            return "WaveGetLaneIndex()"
 
         if function_name in {"__any", "__all"}:
             if len(args) != 1:

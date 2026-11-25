@@ -427,12 +427,18 @@ def _binding_attribute(binding):
     )
 
 
+# The attributes of a storage parameter its structured buffer keeps: the layout, and the memory qualifiers that
+# leave the buffer's type alone (``@restrict``, ``@coherent``, ``@volatile``), which the GLSL, SPIR-V and Metal
+# generators write on a buffer as they do on a parameter.
+_KEPT_STORAGE_ATTRIBUTES = frozenset({"buffer_layout", "restrict", "coherent", "volatile"})
+
+
 def _layout_attributes(parameter):
-    """The ``@buffer_layout`` of a storage parameter, which its structured buffer keeps."""
+    """The ``@buffer_layout`` and memory qualifiers of a storage parameter, which its structured buffer keeps."""
     return [
         attribute
         for attribute in getattr(parameter, "attributes", []) or []
-        if str(getattr(attribute, "name", "")).lower() == "buffer_layout"
+        if str(getattr(attribute, "name", "")).lower() in _KEPT_STORAGE_ATTRIBUTES
     ]
 
 

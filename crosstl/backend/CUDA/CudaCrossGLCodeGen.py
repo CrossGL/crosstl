@@ -49,6 +49,7 @@ from .function_templates import (
 )
 from .keyword_renames import source_identifier_names
 from .parameter_defaults import parameter_default_suffix
+from .buffer_memory_qualifiers import buffer_memory_attributes
 from .struct_methods import lower_struct_methods
 from .union_layout_import import UnionLayoutContracts
 
@@ -882,7 +883,8 @@ class CudaToCrossGLConverter(
                         element_type,
                     )
                     params.append(
-                        f"@group(0) @binding({binding}) var<storage, read_write> {param_name}: {storage_type}"
+                        f"{buffer_memory_attributes(param.vtype)}@group(0) @binding({binding}) "
+                        f"var<storage, read_write> {param_name}: {storage_type}"
                     )
                 else:
                     param_type = self.convert_cuda_variable_type_to_crossgl(

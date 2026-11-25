@@ -1,5 +1,7 @@
 """Resource access of the CUDA generator: GLSL buffer blocks, buffer access diagnostics, qualifiers, the variable registry and resource queries."""
 
+import re
+
 from ..ast import (
     ArrayAccessNode,
     FunctionCallNode,
@@ -374,6 +376,18 @@ class CudaResourceAccessMixin:
         if position < 0:
             return declaration
         return f"{declaration[:position]} __restrict__{declaration[position:]}"
+
+    def apply_volatile_qualifier_to_parameter(self, declarator, node):
+        """Write a CrossGL ``volatile`` buffer parameter as a pointer to ``volatile`` memory, as HIP output does."""
+        if (
+            "*" not in declarator
+            or "volatile" not in self.declaration_qualifier_names(node)
+            or re.search(r"\bvolatile\b", declarator)
+        ):
+            return declarator
+        if declarator.startswith("const "):
+            return f"const volatile {declarator[len('const '):]}"
+        return f"volatile {declarator}"
 
     def apply_readonly_qualifier_to_type(self, type_name, node):
         """Apply readonly declaration qualifiers to pointer/reference types."""

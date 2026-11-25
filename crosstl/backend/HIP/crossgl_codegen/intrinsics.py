@@ -3,6 +3,7 @@
 import re
 
 from ...CUDA.bit_intrinsics import format_bit_intrinsic
+from ...CUDA.float_classification import format_float_classification_intrinsic
 from ...CUDA.directed_rounding import directed_rounding_call, refuse_directed_rounding
 from ...CUDA.function_templates import generic_call_name
 from ...CUDA.pointer_math_import import format_pointer_output_call
@@ -65,6 +66,9 @@ class HipIntrinsicMixin:
         bit_intrinsic = format_bit_intrinsic(self, func_name, raw_args, args, "HIP")
         if bit_intrinsic is not None:
             return bit_intrinsic
+        classification = format_float_classification_intrinsic(func_name, args)
+        if classification is not None:
+            return classification
 
         device_heap_call = self.format_device_heap_call(func_name, args)
         if device_heap_call is not None:

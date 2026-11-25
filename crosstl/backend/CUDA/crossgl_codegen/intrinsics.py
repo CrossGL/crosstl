@@ -4,6 +4,7 @@ from ...assignment_operands import grouped_operand
 from ...bfloat16_conversions import format_bfloat16_conversion
 from ...thread_hierarchy import global_invocation_axis
 from ..bit_intrinsics import format_bit_intrinsic
+from ..float_classification import format_float_classification_intrinsic
 from ..CudaAst import UnaryOpNode
 from ..directed_rounding import directed_rounding_call, refuse_directed_rounding
 from ..function_templates import generic_call_name
@@ -92,6 +93,9 @@ class CudaImportIntrinsicMixin:
         bit_intrinsic = format_bit_intrinsic(self, raw_name, node.args, args, "CUDA")
         if bit_intrinsic is not None:
             return bit_intrinsic
+        classification = format_float_classification_intrinsic(raw_name, args)
+        if classification is not None:
+            return classification
         if raw_name == "sizeof" and len(args) == 1 and isinstance(node.args[0], str):
             # The type operand of ``sizeof(let)`` names the struct as its declaration does.
             args = [
