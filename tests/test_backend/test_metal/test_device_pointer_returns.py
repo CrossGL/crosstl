@@ -87,7 +87,8 @@ WORDS = [((i * 2654435761) & 0xFFFFFFFF) >> 9 for i in range(COUNT + 4)]
 def _translate(tmp_path, source, name, backend):
     path = tmp_path / name
     path.write_text(source, encoding="utf-8")
-    return crosstl.translate(str(path), backend=backend)
+    # Unformatted, so the spelling checked below does not depend on whether clang-format is installed.
+    return crosstl.translate(str(path), backend=backend, format_output=False)
 
 
 def _compile(tmp_path, source, stem):
@@ -171,10 +172,10 @@ def test_metal_round_trip_compiles_and_computes_the_source_results(
 def test_metal_output_writes_buffer_handle_results_and_locals_as_pointers(tmp_path):
     metal = _translate(tmp_path, CROSSGL_HANDLES, "handles.cgl", "metal")
 
-    assert "const device int *same(const device int *v)" in metal
-    assert "device int *out_of(device int *r)" in metal
-    assert "device int *o = out_of(results);" in metal
-    assert "const device int *s = inputs;" in metal
+    assert "const device int* same(const device int* v)" in metal
+    assert "device int* out_of(device int* r)" in metal
+    assert "device int* o = out_of(results);" in metal
+    assert "const device int* s = inputs;" in metal
     assert "StructuredBuffer" not in metal
     _compile(tmp_path, metal, "handles")
     entry = next(
