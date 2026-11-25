@@ -18,6 +18,7 @@ from .generic_function_utils import (
     generic_function_call_name,
     numeric_trait_method_result_type,
 )
+from .mojo_min_max import mojo_min_max_result_type
 from .mojo_numeric_functions import mojo_numeric_function_result_type
 from .mojo_tables import (
     MOJO_ATOMIC_OP_ALIASES,
@@ -222,6 +223,9 @@ class MojoResultTypeMixin:
                         return arg_type
                 return self.expression_result_type(expr.args[0]) or "float"
             if func_name in {"min", "max", "clamp"} and expr.args:
+                min_max_type = mojo_min_max_result_type(self, expr.args)
+                if min_max_type is not None:
+                    return min_max_type
                 for arg in expr.args:
                     arg_type = self.expression_result_type(arg)
                     if self.vector_type_info(arg_type) is not None:

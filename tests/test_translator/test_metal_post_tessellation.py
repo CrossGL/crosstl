@@ -18,7 +18,6 @@ from crosstl.translator.codegen.metal_codegen import MetalCodeGen
 from crosstl.translator.codegen.metal_post_tessellation import (
     MetalPostTessellationError,
 )
-from crosstl.translator.codegen.metal_stage_refusals import MetalStageUnsupportedError
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 
@@ -191,18 +190,6 @@ def test_isoline_domain_is_refused():
         MetalCodeGen().generate(parse(source))
 
 
-def test_glsl_form_evaluation_stage_is_a_stage_refusal(tmp_path):
-    path = tmp_path / "triangles.tese"
-    path.write_text(
-        "#version 450\nlayout(triangles, equal_spacing, cw) in;\n"
-        "void main() { gl_Position = gl_TessCoord.x * gl_in[0].gl_Position; }\n"
-    )
-    with pytest.raises(MetalStageUnsupportedError) as raised:
-        crosstl.translate(str(path), backend="metal")
-    assert raised.value.stage == "tessellation_evaluation"
-    assert "gl_in" in str(raised.value)
-
-
 def test_metal_patch_function_imports_as_a_tessellation_evaluation_stage(tmp_path):
     path = tmp_path / "patch.metal"
     path.write_text(METAL)
@@ -210,12 +197,91 @@ def test_metal_patch_function_imports_as_a_tessellation_evaluation_stage(tmp_pat
 
     assert "tessellation_evaluation {" in crossgl
     assert "patch_control_point" not in crossgl
+    # The HLSL importer's spelling: the domain before the entry (an attribute after the parameter list is the
+    # return value's semantic) and the position in the patch as gl_TessCoord, which GLSL also reads.
     assert (
-        "vec4 probe(Patch patch, OutputPatch<ControlPoint, 4> patch_points, "
-        "vec2 coord @SV_DomainLocation, uint id @gl_PrimitiveID) @domain(quad)"
+        '@domain("quad")\n        vec4 probe(Patch patch, OutputPatch<ControlPoint, 4> patch_points, '
+        "vec2 coord @gl_TessCoord, uint id @gl_PrimitiveID) {"
     ) in crossgl
+    assert "SV_DomainLocation" not in crossgl
     assert "patch_points[i].position" in crossgl
     assert "i < 4;" in crossgl
+
+
+TRIANGLE_POINTS_ONLY = textwrap.dedent("""
+    #include <metal_stdlib>
+    using namespace metal;
+
+    struct ControlPoint {
+        float4 position [[attribute(0)]];
+    };
+
+    struct Patch {
+        patch_control_point<ControlPoint> points;
+    };
+
+    [[patch(triangle, 3)]]
+    vertex float4 probe(Patch patch [[stage_in]], float3 coord [[position_in_patch]]) {
+        return patch.points[0].position * coord.x + patch.points[1].position * coord.y
+            + patch.points[2].position * coord.z;
+    }
+    """)
+
+
+def test_metal_patch_function_without_patch_constants_drops_the_empty_structure(
+    tmp_path,
+):
+    path = tmp_path / "patch.metal"
+    path.write_text(TRIANGLE_POINTS_ONLY)
+    crossgl = crosstl.translate(str(path), backend="cgl")
+
+    assert "struct Patch" not in crossgl
+    assert (
+        '@domain("tri")\n        vec4 probe(OutputPatch<ControlPoint, 3> patch_points, '
+        "vec3 coord @gl_TessCoord) {"
+    ) in crossgl
+    hlsl = crosstl.translate(str(path), backend="directx")
+    assert '[domain("tri")]' in hlsl
+    assert "SV_DomainLocation" in hlsl
+    assert "struct Patch" not in hlsl
+    code = crosstl.translate(str(path), backend="metal")
+    assert "[[patch(triangle, 3)]]" in code
+    compile_metal(tmp_path, code)
+
+
+HLSL_DOMAIN = textwrap.dedent("""
+    struct ControlPoint { float4 position : POSITION; };
+    struct PatchConstants {
+        float edges[3] : SV_TessFactor;
+        float inside : SV_InsideTessFactor;
+        float4 extra : EXTRA;
+    };
+    struct DomainOutput { float4 position : SV_Position; };
+
+    [domain("tri")]
+    DomainOutput main(PatchConstants constants, float3 coord : SV_DomainLocation,
+                      const OutputPatch<ControlPoint, 3> patch) {
+        DomainOutput output;
+        output.position = patch[0].position * coord.x + patch[1].position * coord.y
+            + patch[2].position * coord.z + constants.extra;
+        return output;
+    }
+    """)
+
+
+def test_hlsl_domain_shader_translates_to_a_patch_vertex_function(tmp_path):
+    # The HLSL importer names the tessellation factors gl_TessLevelOuter and gl_TessLevelInner; they stay out of
+    # the stage input as SV_TessFactor and SV_InsideTessFactor do.
+    path = tmp_path / "domain.hlsl"
+    path.write_text(HLSL_DOMAIN)
+    code = crosstl.translate(str(path), backend="metal")
+
+    assert "[[patch(triangle, 3)]]" in code
+    assert "float4 position [[attribute(0)]];" in code
+    assert "float4 extra [[attribute(1)]];" in code
+    assert "edges [[" not in code and "inside [[" not in code
+    assert "float3 coord [[position_in_patch]]" in code
+    compile_metal(tmp_path, code)
 
 
 def test_metal_patch_function_round_trip_keeps_attribute_indices(tmp_path):

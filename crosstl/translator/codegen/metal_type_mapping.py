@@ -680,6 +680,8 @@ class MetalTypeMappingMixin:
         if semantic is None:
             return False
         return str(semantic).lower() in {
+            "gl_tesslevelinner",
+            "gl_tesslevelouter",
             "sv_domainlocation",
             "sv_insidetessfactor",
             "sv_outputcontrolpointid",
