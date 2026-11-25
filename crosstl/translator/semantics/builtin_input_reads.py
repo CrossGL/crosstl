@@ -38,6 +38,16 @@ the start of the entry point; a ``uint`` input the entry point already declares 
 read. The generators spell the draw
 parameters from the parameter's built-in and refuse the ones a target lacks: HLSL, MSL and WGSL have no draw index,
 WGSL has no base vertex or base instance, and HLSL has them only from Shader Model 6.8.
+
+A fragment shader's ``gl_Layer``, ``gl_ViewportIndex``, ``gl_ViewIndex`` and ``gl_SampleMaskIn`` (GLSL 4.60 section
+7.1.5, ``GL_EXT_multiview``) are bound by no generator, so every read of them is passed. They arrive as ``uint``
+(``SV_RenderTargetArrayIndex``, ``SV_ViewportArrayIndex``, ``SV_ViewID``, ``SV_Coverage`` and their MSL attributes).
+``gl_SampleMaskIn`` is an array of 32-bit words, and these targets deliver one word, so a read of
+``gl_SampleMaskIn[0]`` becomes the scalar input and any other read is refused.
+
+SPIR-V and HIP input declare a compute built-in as a stage variable (``uint3 gl_GlobalInvocationID @input
+@gl_GlobalInvocationID;``) that module-scope helpers read by name. The generators bind it in the entry point only,
+so a helper that reads it takes it as a trailing parameter, and the entry point passes the variable by its own name.
 """
 
 from __future__ import annotations
@@ -391,9 +401,7 @@ def pass_builtin_inputs(program, target) -> int:
         if "gl_SampleMaskIn" in candidates:
             _read_sample_mask_word([entry, *helpers], index, target, program_names)
         # gather_stage_interface_variables turns a vertex or fragment stage's declared inputs into parameters.
-        declared_inputs = (
-            _declared_inputs(stage, inputs) if kind == "compute" else {}
-        )
+        declared_inputs = _declared_inputs(stage, inputs) if kind == "compute" else {}
         direct = {
             function.name: (
                 index.reads(function, candidates - index.declared(function))

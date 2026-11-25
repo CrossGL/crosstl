@@ -193,9 +193,7 @@ def test_a_sample_mask_word_other_than_zero_is_refused(tmp_path, backend, read):
 
 
 @pytest.mark.parametrize("backend", ["opengl", "vulkan"])
-def test_targets_with_builtin_globals_keep_the_layer_and_sample_mask(
-    tmp_path, backend
-):
+def test_targets_with_builtin_globals_keep_the_layer_and_sample_mask(tmp_path, backend):
     code = _translate(tmp_path, LAYER_VIEW_SAMPLE_MASK, backend)
 
     assert "cgl_" not in code
