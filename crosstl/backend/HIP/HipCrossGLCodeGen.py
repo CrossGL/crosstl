@@ -50,6 +50,12 @@ from .crossgl_codegen.surfaces import HipSurfaceMixin
 from .crossgl_codegen.textures import HipTextureMixin
 from .crossgl_codegen.type_conversion import HipTypeConversionMixin
 from .crossgl_codegen.union_layouts import HipUnionLayoutMixin
+from .crossgl_codegen.wave_shuffles import (
+    ballot_mask,
+    is_repeatable,
+    is_runtime_width,
+    runtime_width_shuffle,
+)
 from .HipAst import (
     ArrayAccessNode,
     EnumNode,
@@ -1564,10 +1570,18 @@ class HipToCrossGLConverter(
         if function_name not in {"clock", "clock64", "wall_clock64"}:
             return None
 
-        return self.refuse_import(
-            f"HIP device timer {function_name}({', '.join(args)}): CrossGL has no clock counter",
-            "0",
-        )
+        if args:
+            return self.refuse_import(
+                f"HIP device timer {function_name}({', '.join(args)}) takes no arguments",
+                "0",
+            )
+        # clock64() and clock() both return __clock64(), the shader cycle counter (s_memtime) as a long long
+        # (hip/amd_detail/amd_device_functions.h); CrossGL's clockARB() is that counter (HIP output writes it as
+        # clock64()). wall_clock64() reads the constant-rate counter, CrossGL's clockRealtimeEXT() (HIP C++ language
+        # extensions, "Timer functions").
+        if function_name == "wall_clock64":
+            return "i64(clockRealtimeEXT())"
+        return "i64(clockARB())"
 
     def format_hip_load_cache_intrinsic_call(
         self, function_name, raw_args, formatted_args
@@ -1699,6 +1713,14 @@ class HipToCrossGLConverter(
             # 5.7.1 does not declare the ``_sync`` forms at all, so these are
             # the ones real kernels compile against.
             width_limit = self.hip_warp_shuffle_segment_width(args[2:] or None)
+            if (
+                len(args) == 3
+                and width_limit is None
+                and is_runtime_width(args[2])
+                and is_repeatable(args[1])
+                and is_repeatable(args[2])
+            ):
+                return runtime_width_shuffle(function_name, *args)
             if len(args) not in {2, 3} or width_limit is None:
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
             value, lane = args[0], args[1]
@@ -1771,7 +1793,9 @@ class HipToCrossGLConverter(
             )
 
         if function_name == "__ballot":
-            return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+            if len(args) != 1 or not is_repeatable(args[0]):
+                return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+            return ballot_mask(self.format_wave_predicate(args[0]))
 
         return None
 
@@ -2156,6 +2180,8 @@ class HipToCrossGLConverter(
             "double": "f64",
             "size_t": "u64",
             "ptrdiff_t": "i64",
+            # clock_t is long on the LP64 hosts CUDA and ROCm compile device code for (C11 7.27.1).
+            "clock_t": "i64",
             "hipArray": "ptr<void>",
             "hipArray_t": "ptr<void>",
             "hipTextureObject_t": "sampler",

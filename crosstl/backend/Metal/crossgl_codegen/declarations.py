@@ -27,6 +27,7 @@ from ..MetalAst import (
 from ..MetalLexer import MetalLexer
 from ..MetalParser import MetalParser
 from ..preprocessor import DEFAULT_EXPLICIT_TEMPLATE_SPECIALIZATION_LIMIT
+from ..scoped_member_types import refuse_undeclared_scoped_member_type
 from .support import (
     MetalScalarAliasResolutionError,
     MetalStaticConstantResolutionError,
@@ -344,6 +345,7 @@ class MetalDeclarationMixin:
         if self.zero_extent_metal_array_type_parts(raw_type):
             array_type = None
         type_to_map = array_type[0] if array_type else raw_type
+        refuse_undeclared_scoped_member_type(self, type_to_map)
         if (
             id(var) in self.storage_texture_declaration_ids
             or getattr(var, "name", None) in self.current_storage_texture_names

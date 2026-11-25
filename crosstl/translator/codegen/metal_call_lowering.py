@@ -5,6 +5,7 @@ import re
 from ...backend.common_ast import ReturnNode as BackendReturnNode
 from ..ast import (
     ArrayAccessNode,
+    ArrayLiteralNode,
     AssignmentNode,
     FunctionCallNode,
     IdentifierNode,
@@ -17,10 +18,18 @@ from ..ast import (
 from ..refusals import MetalRefusal
 from .array_utils import split_array_type_suffix
 from .buffer_length import BufferLengthUnsupportedError
+from .generic_function_utils import (
+    generic_function_call_name,
+    generic_function_specialization_named,
+)
 from .image_access_contracts import (
     is_integer_coordinate_type_name,
     texture_resource_dimension_descriptor,
     texture_resource_offset_dimension_key,
+)
+from .metal_array_copies import (
+    generate_metal_array_initializer,
+    generate_metal_value_array_literal,
 )
 from .metal_buffer_scalars import is_metal_buffer_scalar_type_name
 from .metal_colour_attachment_inputs import is_metal_colour_attachment_input_parameter
@@ -695,10 +704,72 @@ class MetalCallLoweringMixin:
     def metal_expression_returns_value_array(self, expression):
         if not isinstance(expression, FunctionCallNode):
             return False
-        return_type = self.function_return_types.get(
-            self.function_call_name(expression)
-        )
+        name = self.function_call_name(expression)
+        return_type = self.function_return_types.get(name)
+        if not (isinstance(return_type, str) and "[" in return_type):
+            # A generic call returns the result type of the specialization it calls, ``float[2]`` for
+            # ``T pick<T>(T x)`` called with a ``float[2]``.
+            specialized = generic_function_call_name(
+                self,
+                name,
+                getattr(expression, "arguments", getattr(expression, "args", [])),
+            )
+            if specialized is None:
+                return False
+            return_type = self.function_return_types.get(specialized)
+            if return_type is None:
+                clone = generic_function_specialization_named(self, specialized)
+                if clone is None:
+                    return False
+                return_type = self.type_name_string(
+                    self.metal_effective_function_return_type(clone)
+                )
         return isinstance(return_type, str) and "[" in return_type
+
+    def metal_expression_is_value_array(self, expression):
+        """Whether ``expression`` is a Metal ``array<T, N>`` value: a user-function result, such a local or a row of one."""
+        if self.metal_expression_returns_value_array(expression):
+            return True
+        if isinstance(expression, ArrayAccessNode):
+            return "[" in self.type_name_string(
+                self.expression_result_type(expression)
+            ) and self.metal_expression_is_value_array(expression.array_expr)
+        return isinstance(expression, (IdentifierNode, VariableNode)) and (
+            getattr(expression, "name", None)
+            in (getattr(self, "current_metal_value_array_names", None) or ())
+        )
+
+    def metal_c_array_return(self, value):
+        """Brace list returning C-array ``value`` as the function's ``array<T, N>`` result, or ``None``.
+
+        Metal returns a CrossGL array as ``metal::array<T, N>``, an aggregate with no conversion from a C array or
+        from the pointer a C-array parameter is adjusted to ([dcl.fct]/5), so ``return x;`` of a parameter, of a
+        structure member or of a program-scope constant does not compile. The brace list ``{x[0], x[1]}``
+        initializes the result element by element, which keeps the value semantics of the source return.
+        ``None`` leaves an ``array<T, N>`` value, or a function that returns no array, to plain ``return``.
+        """
+        return_type = getattr(self, "current_function_return_type", None)
+        if return_type is None or "[" not in self.type_name_string(return_type):
+            return None
+        if self.metal_expression_is_value_array(value):
+            return None
+        return generate_metal_array_initializer(
+            self, value, return_type, value_array=True
+        )
+
+    def metal_value_array_initializer(self, value, declared_type):
+        """Brace list initializing an ``array<T, N>`` local from C-array ``value``, or ``None`` to render it as is.
+
+        ``array<T, N>`` has no conversion from a C array either, so a returned local initialized with a parameter
+        or another C array takes its elements.
+        """
+        if self.metal_expression_is_value_array(value):
+            return None
+        if isinstance(value, ArrayLiteralNode):
+            return generate_metal_value_array_literal(self, value, declared_type)
+        return generate_metal_array_initializer(
+            self, value, declared_type, value_array=True
+        )
 
     def metal_local_value_array_type(self, node, declared_type):
         """Return ``array<T, N>`` for a local that holds an array result."""

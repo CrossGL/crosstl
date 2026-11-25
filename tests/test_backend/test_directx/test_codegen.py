@@ -2140,9 +2140,10 @@ def test_global_static_const_array_initializer_generates_crossgl():
     ] == [0.25, 0.75]
 
 
-def test_codegen_global_const_initializer_preserves_const_from_hlsl_variable_syntax():
-    # Source: Microsoft Learn HLSL variable syntax documents const type modifiers.
-    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-variable-syntax
+def test_codegen_global_const_without_static_is_a_host_bound_constant():
+    # A const global without static is a $Globals member: DXC loads it from the
+    # constant buffer (cbufferLoadLegacy) and ignores its initializer, so CrossGL
+    # declares it as a program constant without the initializer.
     output = generate_crossgl("""
         const float ExposureScale = 1.25f;
 
@@ -2152,8 +2153,9 @@ def test_codegen_global_const_initializer_preserves_const_from_hlsl_variable_syn
     """)
 
     lines = {line.strip() for line in output.splitlines()}
-    assert "const float ExposureScale = 1.25;" in lines
-    assert "float ExposureScale = 1.25;" not in lines
+    assert "float ExposureScale;" in lines
+    assert "@ hlsl_program_constant" in lines
+    assert not any("1.25" in line for line in lines)
     parse_crossgl(output)
 
 
@@ -2946,20 +2948,18 @@ def test_codegen_node_shader_attribute_reparses_from_dxc_callgraph():
 
     crossgl = generate_crossgl(code)
 
-    assert '@shader("node")' in crossgl
-    assert '@ shader("node")' not in crossgl
+    # [shader("node")] makes main the entry of a CrossGL node stage, and its attributes the node's.
+    assert "node {" in crossgl
+    assert "shader(" not in crossgl
 
     shader_ast = parse_crossgl(crossgl)
-    main = next(
-        function for function in shader_ast.functions if function.name == "main"
-    )
+    main = shader_ast.stages[ShaderStage.NODE].entry_point
 
+    assert main.name == "main"
     assert [
         (attr.name, [arg.value for arg in attr.arguments]) for attr in main.attributes
-    ] == [
-        ("shader", ["node"]),
-        ("NodeLaunch", ["thread"]),
-    ]
+    ] == [("node_launch", ["thread"])]
+    assert [function.name for function in shader_ast.functions] == ["intermediate"]
 
 
 def test_codegen_pascal_case_mesh_attributes_infer_stage():

@@ -1427,15 +1427,16 @@ def test_metal_stage_local_descriptor_arrays_can_reuse_source_bindings():
         "array<texture2d<float>, RESOURCE_COUNT> heightMaps [[texture(1)]]"
         in generated_code
     )
+    # Each entry has its own argument table, so the fragment arrays keep the source bindings the vertex arrays use.
     assert (
-        "array<texture2d<float>, RESOURCE_COUNT> colorMaps [[texture(3)]]"
+        "array<texture2d<float>, RESOURCE_COUNT> colorMaps [[texture(1)]]"
         in generated_code
     )
     assert (
         "array<sampler, RESOURCE_COUNT> heightSamplers [[sampler(3)]]" in generated_code
     )
     assert (
-        "array<sampler, RESOURCE_COUNT> linearSamplers [[sampler(5)]]" in generated_code
+        "array<sampler, RESOURCE_COUNT> linearSamplers [[sampler(3)]]" in generated_code
     )
 
 

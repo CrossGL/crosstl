@@ -340,6 +340,8 @@ class HipTypeConversionMixin:
             # Math functions
             "sqrtf": "sqrt",
             "powf": "pow",
+            # HIP's single-precision integer power; CrossGL spells both precisions powi.
+            "powif": "powi",
             # The accurate sinf and cosf are bounded over the whole binary32 range, which the libm rule
             # carries; CrossGL's sin and cos have the precision of the target.
             "sinf": "__cgl_libm_sin",
@@ -417,6 +419,8 @@ class HipTypeConversionMixin:
             "double": "f64",
             "size_t": "u64",
             "ptrdiff_t": "i64",
+            # clock_t is long on the LP64 hosts CUDA and ROCm compile device code for (C11 7.27.1).
+            "clock_t": "i64",
             # Vector functions
             **self.VECTOR_CONSTRUCTOR_MAPPING,
             "dim3": "vec3<u32>",

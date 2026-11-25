@@ -15,6 +15,7 @@ from ..storage_image_texels import (
     texel_attribute_arguments,
 )
 from .float_literals import check_float_literal_range
+from .slang_clock_import import SLANG_CLOCK_IMPORTS
 from .slang_matrix_import import SlangMatrixImportMixin
 from .slang_narrow_arithmetic import SlangNarrowArithmeticMixin
 from .slang_specialization_import import (
@@ -22,14 +23,18 @@ from .slang_specialization_import import (
     specialized_workgroup_sizes,
 )
 from .slang_stage_roles import (
+    slang_geometry_primitive,
     slang_mesh_parameter_role,
     slang_mesh_stage_attributes,
+    slang_patch_constant_function_names,
+    slang_primitive_stage_attributes,
     slang_ray_parameter_role,
 )
 from .slang_storage_image_access import (
     SlangStorageImageAccessMixin,
     texel_element_shape,
 )
+from .slang_wave_import import crossgl_slang_wave_call
 from .SlangAst import *
 from .SlangLexer import *
 from .SlangParser import *
@@ -585,6 +590,7 @@ class SlangToCrossGLConverter(
             ),
         }
         self.user_function_names = set()
+        self.patch_constant_function_names = frozenset()
         self.narrow_function_returns = {}
         self.function_name_map = {}
         self.sampleable_resource_scopes = [set()]
@@ -675,6 +681,12 @@ class SlangToCrossGLConverter(
             "SV_StartInstanceLocation": "gl_BaseInstance",
             "SV_DrawIndex": "gl_DrawID",
             "SV_PrimitiveID": "gl_PrimitiveID",
+            # Geometry and tessellation values, as the HLSL importer maps them.
+            "SV_GSInstanceID": "gl_InvocationID",
+            "SV_OutputControlPointID": "gl_InvocationID",
+            "SV_TessFactor": "gl_TessLevelOuter",
+            "SV_InsideTessFactor": "gl_TessLevelInner",
+            "SV_DomainLocation": "gl_TessCoord",
             "SV_CullPrimitive": "gl_CullPrimitiveEXT",
             # Vertex outputs. The clip position is the built-in, as the HLSL
             # importer maps it; a fragment input is gl_FragCoord (map_semantic).
@@ -757,6 +769,9 @@ class SlangToCrossGLConverter(
         )
         self.user_function_names = {getattr(func, "name", None) for func in functions}
         self.user_function_names.discard(None)
+        self.patch_constant_function_names = slang_patch_constant_function_names(
+            functions
+        )
         self.collect_narrow_function_returns(functions)
         self.function_name_map = self.collect_function_name_map(functions)
         resource_types = self.collect_sampleable_resource_types(ast)
@@ -868,6 +883,7 @@ class SlangToCrossGLConverter(
             elif qualifier:
                 code += f"    {qualifier} {{\n"
                 code += slang_mesh_stage_attributes(func, qualifier)
+                code += slang_primitive_stage_attributes(func, qualifier)
                 code += self.generate_function(func)
                 code += "    }\n\n"
             else:
@@ -1313,11 +1329,15 @@ class SlangToCrossGLConverter(
         function_qualifier = self.effective_function_qualifier(func)
         preserve_parameter_qualifiers = self.is_entry_like_function(func)
         unnamed_parameter_names = self.collect_unnamed_parameter_names(func.params)
+        parameter_stage = function_qualifier
+        if parameter_stage is None and func.name in self.patch_constant_function_names:
+            # A hull stage's patch constant function reads the stage's InputPatch and OutputPatch.
+            parameter_stage = "tessellation_control"
         params = ", ".join(
             self.generate_parameter(
                 p,
                 preserve_parameter_qualifiers,
-                function_qualifier,
+                parameter_stage,
                 unnamed_parameter_names.get(id(p)),
                 parameter_index=index,
             )
@@ -1386,6 +1406,9 @@ class SlangToCrossGLConverter(
         role = slang_mesh_parameter_role(param, function_qualifier)
         if role is not None:
             qualifier_prefix = f"@ {role} {qualifier_prefix}"
+        primitive = slang_geometry_primitive(param, function_qualifier)
+        if primitive is not None:
+            qualifier_prefix = f"{primitive} {qualifier_prefix}"
         parameter_name = param.name or fallback_name or "_param"
         parameter_type = self.map_parameter_type(param.vtype, function_qualifier)
         array_suffix = self.format_array_suffixes(param)
@@ -2432,6 +2455,10 @@ class SlangToCrossGLConverter(
             if bitcast_call is not None:
                 return bitcast_call
             args = ", ".join(rendered_args)
+            if is_hlsl_namespace_builtin or expr.name not in self.user_function_names:
+                wave_call = crossgl_slang_wave_call(function_name, rendered_args)
+                if wave_call is not None:
+                    return wave_call
             if (
                 function_name in CUDA_THREAD_BUILTINS
                 and not expr.args
@@ -2441,6 +2468,15 @@ class SlangToCrossGLConverter(
                 )
             ):
                 return CUDA_THREAD_BUILTINS[function_name]
+            if (
+                function_name in SLANG_CLOCK_IMPORTS
+                and not expr.args
+                and (
+                    is_hlsl_namespace_builtin
+                    or expr.name not in self.user_function_names
+                )
+            ):
+                return SLANG_CLOCK_IMPORTS[function_name]
             if (
                 function_name == "saturate"
                 and len(expr.args) == 1
