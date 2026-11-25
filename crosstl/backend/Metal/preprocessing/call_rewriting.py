@@ -537,6 +537,10 @@ class MetalCallRewriteMixin:
                 declaration.type_position,
             )
         if resolved_type != struct_name:
+            resolved_type = self._qualified_receiver_struct(
+                code, declaration, {struct_name}
+            )
+        if resolved_type != struct_name:
             return None
 
         return self._receiver_contract_from_type_text(

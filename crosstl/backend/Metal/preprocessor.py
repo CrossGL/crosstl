@@ -134,6 +134,7 @@ from .static_member_constants import (
     materialized_struct_for_template_id,
     static_member_constant_substituter,
 )
+from .struct_homonyms import distinct_struct_homonyms
 from .swizzle_types import infer_swizzle_type
 from .template_carried_reachability import template_carried_reachable_spans
 from .template_constants import unresolved_constant_references
@@ -360,6 +361,7 @@ class MetalPreprocessor(
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
         processed = self._canonicalize_metal_library_matrix_typedefs(processed)
+        processed = distinct_struct_homonyms(processed)
         if re.search(r"\b(?:fp|FP_CONTRACT)\b", processed):
             # Inspect active expanded tokens before materialization changes the
             # lexical scope of a directive or prunes its containing template.
