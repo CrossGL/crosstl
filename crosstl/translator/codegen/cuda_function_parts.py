@@ -111,7 +111,7 @@ class CudaFunctionPartsMixin:
                 declarator = self.apply_restrict_qualifier_to_declaration(
                     declarator, param_name, param
                 )
-                declarator = self.apply_volatile_qualifier_to_parameter(
+                declarator = self.apply_volatile_qualifier_to_declarator(
                     declarator, param
                 )
                 params.append(declarator)

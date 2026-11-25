@@ -3,6 +3,7 @@
 import re
 
 from ...CUDA.array_extents import declare_enumerators
+from ...CUDA.libm_names import LIBM_BINARY32_FUNCTIONS
 
 
 class HipTypeConversionMixin:
@@ -350,9 +351,7 @@ class HipTypeConversionMixin:
             "sinhf": "sinh",
             "coshf": "cosh",
             "tanhf": "tanh",
-            "asinhf": "asinh",
-            "acoshf": "acosh",
-            "atanhf": "atanh",
+            **LIBM_BINARY32_FUNCTIONS,
             "asinf": "asin",
             "acosf": "acos",
             "atanf": "atan",

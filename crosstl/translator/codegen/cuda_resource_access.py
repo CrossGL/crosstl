@@ -377,8 +377,8 @@ class CudaResourceAccessMixin:
             return declaration
         return f"{declaration[:position]} __restrict__{declaration[position:]}"
 
-    def apply_volatile_qualifier_to_parameter(self, declarator, node):
-        """Write a CrossGL ``volatile`` buffer parameter as a pointer to ``volatile`` memory, as HIP output does."""
+    def apply_volatile_qualifier_to_declarator(self, declarator, node):
+        """Write a CrossGL ``volatile`` buffer parameter or global as a pointer to ``volatile`` memory, as HIP does."""
         if (
             "*" not in declarator
             or "volatile" not in self.declaration_qualifier_names(node)

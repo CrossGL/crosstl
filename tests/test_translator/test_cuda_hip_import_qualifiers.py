@@ -13,7 +13,12 @@ promise of the source:
   ``@restrict`` on the storage buffer, and the target lowering of kernel parameters keeps both.
 
 HIP's ``__lane_id()`` was written unchanged as well; it is the lane's index in its wavefront, the subgroup invocation
-index, as ``warpSize`` already imports as the subgroup size.
+index, as ``warpSize`` already imports as the subgroup size. So were the ``float`` math functions ``acoshf``,
+``copysignf``, ``cospif``, ``exp10f``, ``fdimf``, ``ilogbf``, ``ldexpf``, ``log10f``, ``nextafterf``, ``sinpif`` and
+the rest of :mod:`crosstl.backend.CUDA.libm_names`; they import as CrossGL's unsuffixed names, and the CUDA and HIP
+generators spell ``exp10`` as ``exp10f`` or ``exp10`` by precision instead of ``exp2(x * log2(10))``. The CUDA
+generator writes a ``@volatile`` storage buffer, parameter or program-scope pointer, as a pointer to ``volatile``
+memory, as the HIP generator does.
 """
 
 import shutil
@@ -85,6 +90,31 @@ extern "C" __global__ void __launch_bounds__(64) probe(
     float* other) {
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
     outp[i] = fin[i] * 2.0f + flags[i] + plain[i] + other[i];
+}
+"""
+
+LIBM = """
+extern "C" __global__ void __launch_bounds__(64) probe(const float* a, float* outp) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    float x = a[i];
+    float y = a[i + 1];
+    outp[i] = asinhf(x) + acoshf(y) + atanhf(x) + copysignf(x, y) + cospif(x) + sinpif(x);
+    outp[i + 1] = exp10f(x) + fdimf(x, y) + (float)ilogbf(y) + ldexpf(x, 3) + log10f(y) + nextafterf(x, y);
+}
+"""
+
+EXP10_DOUBLE = """
+extern "C" __global__ void __launch_bounds__(64) probe(double* d) {
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    d[i] = exp10(d[i]);
+}
+"""
+
+# OpenCL C input lowers kernel buffer parameters to program-scope storage buffers, which keep ``@volatile``.
+VOLATILE_GLOBAL = """
+__kernel __attribute__((reqd_work_group_size(1, 1, 1))) void probe(__global float* fin, __global volatile float* outp) {
+    uint i = get_global_id(0);
+    outp[i] = fin[i] * 2.0;
 }
 """
 
@@ -167,7 +197,11 @@ def test_unscoped_enumerators_compile_in_glsl(tmp_path, suffix):
 @pytest.mark.parametrize("suffix", SUFFIXES)
 def test_buffer_memory_qualifiers_become_attributes(tmp_path, suffix):
     code = _translate(tmp_path, QUALIFIERS, suffix, "cgl")
-    lines = {line.split(":")[0].split()[-1]: line.strip() for line in code.splitlines() if "var<storage" in line}
+    lines = {
+        line.split(":")[0].split()[-1]: line.strip()
+        for line in code.splitlines()
+        if "var<storage" in line
+    }
     assert lines["fin"].startswith("@restrict @group(0)")
     assert lines["outp"].startswith("@restrict @group(0)")
     assert lines["flags"].startswith("@volatile @group(0)")
@@ -218,6 +252,64 @@ extern "C" __global__ void __launch_bounds__(64) probe(float* outp) {
     assert "thread_index_in_simdgroup" in metal
 
 
+@pytest.mark.parametrize("suffix", SUFFIXES)
+def test_float_math_functions_import_without_their_suffix(tmp_path, suffix):
+    code = _flat(_translate(tmp_path, LIBM, suffix, "cgl"))
+    assert (
+        "outp[i] = (((((asinh(x) + acosh(y)) + atanh(x)) + copysign(x, y)) + cospi(x)) + sinpi(x));"
+        in code
+    )
+    assert (
+        "outp[(i + 1)] = (((((exp10(x) + fdim(x, y)) + f32(ilogb(y))) + ldexp(x, 3)) + log10(y)) "
+        "+ nextafter(x, y));" in code
+    )
+    for name in (
+        "acoshf",
+        "copysignf",
+        "exp10f",
+        "fdimf",
+        "ilogbf",
+        "ldexpf",
+        "nextafterf",
+    ):
+        assert f"{name}(" not in code
+
+
+@pytest.mark.parametrize("suffix", SUFFIXES)
+def test_float_math_functions_reach_metal(tmp_path, suffix):
+    code = _translate(tmp_path, LIBM, suffix, "metal")
+    for name in (
+        "acosh",
+        "copysign",
+        "cospi",
+        "exp10",
+        "fdim",
+        "ldexp",
+        "log10",
+        "nextafter",
+    ):
+        assert f"{name}(" in code, name
+        assert f"{name}f(" not in code, name
+
+
+@pytest.mark.parametrize("suffix", SUFFIXES)
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_exp10_keeps_the_math_library_function(tmp_path, suffix, backend):
+    code = _translate(tmp_path, LIBM, suffix, backend)
+    assert "exp10f(x)" in code
+    assert "3.321928094887362" not in code
+    code = _translate(tmp_path, EXP10_DOUBLE, suffix, backend)
+    assert "exp10(d[i])" in code
+    assert "3.321928094887362" not in code
+
+
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_volatile_storage_buffers_point_to_volatile_memory(tmp_path, backend):
+    code = _translate(tmp_path, VOLATILE_GLOBAL, ".cl", backend)
+    assert "__device__ volatile float* outp;" in code
+    assert "volatile float* fin" not in code
+
+
 def _compile(tmp_path, tool, args, code, suffix):
     if shutil.which(tool) is None:
         pytest.skip(f"{tool} is not installed")
@@ -232,7 +324,9 @@ def _compile(tmp_path, tool, args, code, suffix):
 
 
 @pytest.mark.parametrize(
-    "source", [CLASSIFICATION, ENUMS, QUALIFIERS], ids=["classification", "enums", "qualifiers"]
+    "source",
+    [CLASSIFICATION, ENUMS, QUALIFIERS, LIBM, EXP10_DOUBLE],
+    ids=["classification", "enums", "qualifiers", "libm", "exp10-double"],
 )
 def test_nvcc_compiles_the_round_trip(tmp_path, source):
     code = _translate(tmp_path, source, ".cu", "cuda")
@@ -240,7 +334,9 @@ def test_nvcc_compiles_the_round_trip(tmp_path, source):
 
 
 @pytest.mark.parametrize(
-    "source", [CLASSIFICATION, ENUMS, QUALIFIERS], ids=["classification", "enums", "qualifiers"]
+    "source",
+    [CLASSIFICATION, ENUMS, QUALIFIERS, LIBM, EXP10_DOUBLE],
+    ids=["classification", "enums", "qualifiers", "libm", "exp10-double"],
 )
 def test_hipcc_compiles_the_round_trip(tmp_path, source):
     code = _translate(tmp_path, source, ".hip", "hip")
