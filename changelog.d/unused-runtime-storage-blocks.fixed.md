@@ -1,0 +1,1 @@
+A storage buffer that SPIR-V declares but the entry point never reads, whose block ends in a runtime array, now translates: its block struct is rewritten like a used one's instead of being declared with an unsized member that every target refused.
