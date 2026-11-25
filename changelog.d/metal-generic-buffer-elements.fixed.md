@@ -1,0 +1,1 @@
+Metal output: a generic function called on an element of a pointer buffer global, as in `pick(data[i])`, deduces its type argument from the buffer's element type and writes the specialization it calls, instead of refusing the program.
