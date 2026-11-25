@@ -70,6 +70,10 @@ CASES = {
         (8192, 16384),
     ),
     "local-factor": ("int step = 1; step <= limit; step *= factor", (1, 2, 4, 8, 16)),
+    # A constant selected by a constant condition, as a template argument
+    # selects a tile extent after instantiation.
+    "local-select": ("short step = 0; step < limit; step += stride", (0, 8)),
+    "local-select-logic": ("int step = 0; step < limit; step += stride", (0, 4, 8)),
     "local-shift": ("uint step = 1u; step < limit; step <<= shift", (1, 4, 16)),
     # Controls that read only literals run the same checked trips in every
     # invocation, even when no stride pattern describes them.
@@ -83,6 +87,14 @@ LOCAL_CONSTANTS = {
     "local-negative": "const int stride = -3;",
     "local-factor": "const int factor = 1 + 1; const int limit = factor * 8;",
     "local-shift": "const uint shift = 2u; const uint limit = 32u;",
+    "local-select": (
+        "const short stride = true ? 8 : 3;"
+        " const short limit = (stride == 8) ? stride * 2 : 1;"
+    ),
+    "local-select-logic": (
+        "const int stride = (!(1 > 2) && (4 != 5)) ? 4 : 1;"
+        " const int limit = false ? 1 : stride * 3;"
+    ),
 }
 
 
@@ -331,6 +343,31 @@ def test_lexical_stride_is_available_before_collective_helper_analysis(
             "int step = 0; step < 16; step += stride",
         ),
         (
+            "const uint stride = (invocation > 0u) ? 8u : 4u;",
+            "",
+            "uint step = 0u; step < 16u; step += stride",
+        ),
+        (
+            "const int stride = true ? (2147483647 + 8) - 2147483647 : 8;",
+            "",
+            "int step = 0; step < 16; step += stride",
+        ),
+        (
+            "const int stride = ((2147483647 + 1) < 0) ? 8 : 4;",
+            "",
+            "int step = 0; step < 16; step += stride",
+        ),
+        (
+            "const int stride = (1 & 1) ? 8 : 4;",
+            "",
+            "int step = 0; step < 16; step += stride",
+        ),
+        (
+            "const int stride = false ? 8 : 0;",
+            "",
+            "int step = 0; step < 16; step += stride",
+        ),
+        (
             "const int stride = 8;",
             "",
             "short step = 32760; step < 32767; step += stride",
@@ -500,9 +537,47 @@ kernel void accumulate(device uint* output [[buffer(0)]],
 """
 
 
+def _template_source(wide):
+    # A template argument selects a constant bound through a ternary, as a tile
+    # template selects an extent from its transpose flag.
+    return f"""#include <metal_stdlib>
+using namespace metal;
+template <bool wide>
+uint collect(uint lane, metal::bool_constant<wide>) {{
+    constexpr short limit = wide ? 16 : 8;
+    uint result = 0u;
+    for (short step = 0; step < limit; step += 8) {{
+        result += simd_sum(lane + uint(step));
+    }}
+    return result;
+}}
+kernel void accumulate(device uint* output [[buffer(0)]],
+                       uint lane [[thread_index_in_threadgroup]],
+                       uint3 group [[threadgroup_position_in_grid]]) {{
+    if (group.x >= 2u) {{ return; }}
+    output[4u + group.x * 64u + lane] =
+        collect(lane, metal::bool_constant<{str(wide).lower()}>{{}});
+}}
+"""
+
+
+TEMPLATE_CASES = {
+    "template-select-wide": (_template_source(True), (0, 8)),
+    "template-select-narrow": (_template_source(False), (0,)),
+}
+HELPER_CASES = [*CASES, *TEMPLATE_CASES]
+
+
+def _case_source(case):
+    if case in TEMPLATE_CASES:
+        return TEMPLATE_CASES[case]
+    return _metal_source(case), CASES[case][1]
+
+
 def _request(root, target, case):
+    metal_source, trips = _case_source(case)
     source, descriptor, package = _package(
-        root, target, "uint", (32, 2, 1), source=_metal_source(case)
+        root, target, "uint", (32, 2, 1), source=metal_source
     )
     guard = 0xDEADBEEF
     expected = [guard] * 201
@@ -511,7 +586,7 @@ def _request(root, target, case):
         expected[4 + lane] = (
             sum(
                 neighbor + step
-                for step in CASES[case][1]
+                for step in trips
                 for neighbor in range(first, first + 32)
             )
             & 0xFFFFFFFF
@@ -533,13 +608,13 @@ def _request(root, target, case):
 
 
 @pytest.mark.parametrize("target", ["metal", "directx", "opengl"])
-@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("case", HELPER_CASES)
 def test_fixed_stride_helpers_translate_and_compile(tmp_path, target, case):
     _, request, _ = _request(tmp_path, target, case)
     _compile(request.artifact_path.read_text(), target, tmp_path)
 
 
-@pytest.mark.parametrize("case", CASES)
+@pytest.mark.parametrize("case", HELPER_CASES)
 def test_fixed_stride_helpers_execute(tmp_path, case):
     if os.environ.get(REQUIRE_ENV) != "1":
         pytest.skip(f"set {REQUIRE_ENV}=1 for required fixed-stride execution")

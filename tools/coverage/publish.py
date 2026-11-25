@@ -1,6 +1,7 @@
 """What the coverage workflow publishes to the ``coverage`` branch: the report, the chart, ``COVERAGE.md``, a
-bounded ``history.csv``, the trend chart drawn from it and one ``pairs/<source>-to-<target>.md`` page with the gaps of
-each translation matrix cell (:mod:`.pairs`).
+bounded ``history.csv``, the trend chart drawn from it, one ``pairs/<source>-to-<target>.md`` page with the gaps of
+each translation matrix cell (:mod:`.pairs`) and one ``languages/<language>.md`` page per language with an
+``index.md`` that lists them (:mod:`.docs`).
 
 ``python -m tools.coverage publish coverage.json --history old.csv --output-dir site`` writes them all, with the
 report's feature rows in ``features/`` (see :func:`tools.coverage.report.site`). Only CI runs it; contributors never
@@ -31,6 +32,8 @@ DETAIL_LIMIT = 160
 # A cause in COVERAGE.md is longer, so that two causes do not read the same once cut.
 CAUSE_LIMIT = 400
 WORKFLOW = "coverage.yml"
+# The directory of the coverage branch that holds one page per language.
+LANGUAGES = "languages"
 # The language ids a matrix page's name may hold, so that a report cannot name a file outside ``pairs/``.
 _LANGUAGE_ID = re.compile(r"[a-z0-9]+")
 
@@ -459,6 +462,9 @@ def markdown(report: dict, repository: str = "CrossGL/crosstl") -> str:
         *_executed(),
         *_table(report),
         "",
+        f"Each language also has [a page of its own]({LANGUAGES}/index.md) with its scores by category, the "
+        "translation matrix cells it is the source or target of, and its gaps.",
+        "",
         *_matrix(report, repository),
         "## Trend",
         "",
@@ -540,7 +546,11 @@ def write_site(
 
     Raises ``ValueError`` before writing anything if a file would exceed :data:`SIZE_LIMIT`.
     """
+    # docs reads this module's helpers, so it is imported only when it is needed.
+    from . import docs
+
     runs = history(report, previous_history)
+    guides = docs.guides(docs.DOCS_SOURCE, docs.languages(report))
     files = {
         **site(report),
         "coverage.svg": chart.render(report),
@@ -550,6 +560,12 @@ def write_site(
         **{
             page(cell): cell_markdown(cell, report, repository)
             for cell in report.get("pairs", [])
+        },
+        **{
+            f"{LANGUAGES}/{name}": text
+            for name, text in docs.pages(
+                report, guides, repository, github=True
+            ).items()
         },
     }
     for filename, text in files.items():

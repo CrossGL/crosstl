@@ -1,0 +1,1 @@
+Metal output writes a CrossGL `Buffer<T>`, `RWBuffer<T>` or `RasterizerOrderedBuffer<T>` as a `texture_buffer<T, access>`, with element reads, stores, atomics and `buffer_dimensions` as texture-buffer calls, where it wrote a `Buffer<float>` global that the Metal compiler rejects; 64-bit, boolean and aggregate elements and stores to a read-only `Buffer<T>` are refused (#3642).

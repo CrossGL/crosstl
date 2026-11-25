@@ -72,7 +72,6 @@ def test_an_operator_crossgl_does_not_define_is_refused():
 @pytest.mark.parametrize(
     "call",
     [
-        "float r = log10(f);",
         "bool r = CheckAccessFullyMapped(u);",
         "uint r = GetRenderTargetSampleCount();",
     ],
@@ -88,6 +87,7 @@ def test_foreign_builtin_calls_without_a_runtime_function_are_refused(call):
     [
         ("float r = sqrt(f);", "let r: f32 = (f).sqrt();"),
         ("float r = clamp(f, 0.0, 1.0);", "let r: f32 = (f).clamp(0.0, 1.0);"),
+        ("float r = log10(f);", "let r: f32 = (f).log10();"),
         (
             "float r = smoothstep(0.0, 1.0, f);",
             "let __t = ((f - __e0) / (__e1 - __e0)).clamp(0.0, 1.0); __t * __t * (3.0 - 2.0 * __t)",

@@ -139,9 +139,10 @@ small scripts with no plotting dependency. Contributors never run a regeneration
 `tools/coverage/issues.py` keeps one tracking issue per backend and direction, titled for example "HLSL output
 coverage: 87 % (23 gaps)", with a checklist of gaps grouped by category. It edits the issue in place, closes it at
 100 % and reopens it on regression. Each `wrong` probe gets a bug issue, at most ten new ones per run, closed when the
-probe passes. Every managed issue carries `<!-- crosstl-coverage key=... -->`, and the reconciler never touches an
-issue without that marker. Pull requests run it with `--dry-run`; `main` and the nightly run apply it. Issues are
-closed, never deleted.
+probe passes. A run that measured a commit without the fix that closed an issue does not reopen it; a run on a
+commit that contains the fix does. Every managed issue carries `<!-- crosstl-coverage key=... -->`, and the
+reconciler never touches an issue without that marker. Pull requests run it with `--dry-run`; `main` and the nightly
+run apply it. Issues are closed, never deleted.
 
 ## What is removed and what depends on it
 

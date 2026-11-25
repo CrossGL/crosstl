@@ -2,12 +2,8 @@
 
 import hashlib
 
-from ...device_globals import is_device_memory
-from ..HipAst import (
-    FunctionNode,
-    StructNode,
-    VariableNode,
-)
+from ...device_globals import binds_device_buffer
+from ..HipAst import FunctionNode, StructNode, VariableNode
 
 
 class HipRecordMaterializationMixin:
@@ -26,7 +22,7 @@ class HipRecordMaterializationMixin:
         """Whether a top-level declaration imports as a resource with a binding."""
         return isinstance(statement, VariableNode) and (
             "__constant__" in set(getattr(statement, "qualifiers", []) or [])
-            or is_device_memory(statement)
+            or binds_device_buffer(statement)
         )
 
     def global_resource_binding_for(self, node):
