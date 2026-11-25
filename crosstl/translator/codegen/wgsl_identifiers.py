@@ -263,7 +263,11 @@ class WGSLIdentifierMixin:
         if name == "_":
             return "identifier_"
         if name.startswith("__"):
-            return f"{name.lstrip('_') or 'identifier'}_"
+            stripped = name.lstrip("_")
+            if not stripped or stripped[0].isdigit():
+                # WGSL identifiers start with a letter or "_" (WGSL section 3.5); SPIR-V's unnamed blocks are "__0".
+                return f"identifier_{stripped}" if stripped else "identifier_"
+            return f"{stripped}_"
         return f"{name}_"
 
     def unique_wgsl_identifier(self, base_name, used_names):

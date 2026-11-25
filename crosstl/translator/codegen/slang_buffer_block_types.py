@@ -1,6 +1,7 @@
 """GLSL buffer blocks in the Slang generator: block discovery, scalar layout members and the Slang resource types that replace them."""
 
 from ..ast import ArrayNode
+from ..semantics.shader_records import is_shader_record_buffer
 from .array_utils import (
     evaluate_literal_int_expression,
     split_array_type_suffix,
@@ -356,7 +357,10 @@ class SlangBufferBlockTypesMixin:
         return bool(attr_name and str(attr_name).lower() == "glsl_buffer_block")
 
     def is_glsl_buffer_block_variable(self, node, vtype=None):
-        if self.glsl_buffer_block_attribute(node) is None:
+        # A shader record is a constant buffer of its struct (:mod:`.slang_shader_records`), not a lowered block.
+        if self.glsl_buffer_block_attribute(node) is None or is_shader_record_buffer(
+            node
+        ):
             return False
         type_name = self.resource_base_type(vtype or glsl_buffer_block_node_type(node))
         return str(type_name) in self.structs_by_name

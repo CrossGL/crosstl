@@ -145,11 +145,13 @@ HLSL = {
         _LOOP.format(_HLSL_SAMPLE.format("tex[k]", "smp", "fin[i]")),
         _HLSL_TEXTURE.format("[2]"),
     ),
+    # The index converts the input as the CrossGL probe does: Direct3D's float-to-uint conversion clamps a negative
+    # value to 0 (WARP picks tex[0]) where int keeps its sign.
     "array-of-textures-nonuniform-index": Template(
         _NONUNIFORM.format(
-            "uint",
-            "uint",
-            "u",
+            "int",
+            "int",
+            "",
             _HLSL_SAMPLE.format("tex[NonUniformResourceIndex(k)]", "smp", "fin[i]"),
         ),
         _HLSL_TEXTURE.format("[2]"),
