@@ -13898,7 +13898,6 @@ def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
             vec4 main(
                 mat3 normal_matrix,
                 mat4 world_matrix,
-                mat3x4 affine,
                 vec3 normal,
                 vec4 position
             ) {
@@ -13908,7 +13907,6 @@ def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
                 let world_inverse = inverse(world_matrix);
                 let world_basis = transpose(world_inverse);
                 let world_weight = determinant(world_basis);
-                let rectangular = transpose(affine);
                 let transformed_normal = normal_inverse * normal;
                 let transformed_position = world_basis * position;
                 return vec4(
@@ -13920,9 +13918,26 @@ def test_matrix_intrinsics_infer_rust_value_types_and_smoke_compile(tmp_path):
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused, match="function: 'inverse' has no rust-gpu lowering"
-    ):
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let normal_inverse: Mat3 = (normal_basis).inverse();" in generated_code
+    assert "let world_weight: f32 = (world_basis).determinant();" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_refuses_rectangular_matrix_parameters():
+    code = """
+    shader RectangularMatrix {
+        fragment {
+            vec4 main(mat3x4 affine) {
+                let rectangular = transpose(affine);
+                return vec4(1.0);
+            }
+        }
+    }
+    """
+
+    with pytest.raises(RustRefusal, match="glam has no 3x4 matrix of f32"):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -14433,32 +14448,55 @@ def test_pack_unpack_intrinsics_infer_result_types_and_smoke_compile(tmp_path):
     code = """
     shader PackUnpackIntrinsicInference {
         fragment {
-            vec4 main(vec2 pair, vec4 color, uint packed2, uint packed4, uvec2 doubleBits, double packedDoubleInput) {
+            vec4 main(vec2 pair, vec4 color, uint packed2, uint packed4) {
                 let packedUnorm2 = packUnorm2x16(pair);
                 let packedSnorm2 = packSnorm2x16(pair);
                 let packedUnorm4 = packUnorm4x8(color);
                 let packedSnorm4 = packSnorm4x8(color);
                 let packedHalf = packHalf2x16(pair);
-                let packedDouble = packDouble2x32(doubleBits);
                 let unpackedUnorm2 = unpackUnorm2x16(packed2);
                 let unpackedSnorm2 = unpackSnorm2x16(packed2);
                 let unpackedUnorm4 = unpackUnorm4x8(packed4);
                 let unpackedSnorm4 = unpackSnorm4x8(packed4);
                 let unpackedHalf = unpackHalf2x16(packed2);
-                let unpackedDouble = unpackDouble2x32(packedDoubleInput);
                 uint packedMix = packedUnorm2 + packedSnorm2 + packedUnorm4
                     + packedSnorm4 + packedHalf;
                 return unpackedUnorm4 + unpackedSnorm4
                     + vec4(unpackedUnorm2, unpackedSnorm2)
-                    + vec4(unpackedHalf, vec2(float(unpackedDouble.x), float(unpackedDouble.y)))
-                    + vec4(vec3(float(packedMix)), float(packedDouble));
+                    + vec4(unpackedHalf, unpackedHalf)
+                    + vec4(float(packedMix));
+            }
+        }
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "let packedUnorm2: u32 = spirv_std::float::vec2_to_u16x2_unorm(pair);" in (
+        generated_code
+    )
+    assert (
+        "let unpackedSnorm4: Vec4 = spirv_std::float::u8x4_to_vec4_snorm(packed4);" in (
+            generated_code
+        )
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_double_packing_is_refused():
+    code = """
+    shader DoublePacking {
+        fragment {
+            vec4 main(uvec2 doubleBits) {
+                let packedDouble = packDouble2x32(doubleBits);
+                return vec4(float(packedDouble));
             }
         }
     }
     """
 
     with pytest.raises(
-        RustLoweringRefused, match="function: 'packUnorm2x16' has no rust-gpu lowering"
+        RustLoweringRefused, match="function: 'packDouble2x32' has no rust-gpu lowering"
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -19581,10 +19619,10 @@ def test_rust_matrix_scalar_and_resize_constructors_compile(tmp_path):
     }
     """
 
-    with pytest.raises(
-        RustLoweringRefused, match="function: 'inverse' has no rust-gpu lowering"
-    ):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "(model).inverse()" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_rust_hlsl_matrix_alias_constructors_compile(tmp_path):
@@ -20327,3 +20365,103 @@ def test_user_function_named_like_a_shader_clock_is_kept_for_rust():
     }
     """
     assert "clockARB()" in generate_code(parse_code(tokenize_code(source_code)))
+
+
+def test_rust_generic_operator_function_emits_copy_bound_and_compiles(tmp_path):
+    """Generic functions that use a value-consuming operator need a Copy bound (#4748)."""
+    code = """
+    shader G8 {
+        generic<T> T twice(T x) {
+            return x + x;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = twice(v);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert (
+        "pub fn twice<T: Copy + core::ops::Add<Output = T>>(x: T) -> T"
+        in generated_code
+    )
+    assert "return (x + x);" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_generic_multi_use_by_value_emits_copy_bound_and_compiles(tmp_path):
+    """Generic values used by value more than once need Copy even without operators (#4748)."""
+    code = """
+    shader MultiUse {
+        generic<T> T f(T x) {
+            T y = x;
+            T z = x;
+            return z;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = f(v);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "pub fn f<T: Copy>(x: T) -> T" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_generic_repeated_call_argument_emits_copy_bound_and_compiles(tmp_path):
+    """Passing the same generic value twice by value needs a Copy bound (#4748)."""
+    code = """
+    shader RepeatedArg {
+        generic<T> T g(T a, T b) {
+            return a;
+        }
+        generic<T> T f(T x) {
+            return g(x, x);
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = f(v);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "pub fn g<T: Copy>(a: T, b: T) -> T" in generated_code
+    assert "pub fn f<T: Copy>(x: T) -> T" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_generic_function_calling_concrete_function_is_refused():
+    """Generic functions whose bodies only type-check per call site are refused (#4748)."""
+    code = """
+    shader G7 {
+        float combine(float a, float b) {
+            return a + b;
+        }
+        generic<T> T twice(T x) {
+            return combine(x, x);
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer float* values;
+            void main() {
+                float v = values[0];
+                values[0] = twice(v);
+            }
+        }
+    }
+    """
+    with pytest.raises(RustLoweringRefused, match="combine"):
+        generate_code(parse_code(tokenize_code(code)))

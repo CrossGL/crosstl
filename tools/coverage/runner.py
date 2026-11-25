@@ -28,6 +28,8 @@ from .semantic import identify, instructions, lower
 
 OUTPUT_BACKENDS = {
     "cuda": "cuda",
+    # GLSL ES 3.x, the opengl backend's gles target.
+    "gles": "gles",
     "glsl": "opengl",
     "hip": "hip",
     "hlsl": "directx",
@@ -314,6 +316,14 @@ def run_output(feature: Feature, language: str) -> Result:
     )
     if ignored:
         return result("wrong", ignored)
+    # A graphics probe never runs; its Metal must keep the native probe's interface (tools/coverage/metal_reflection.py).
+    moved = (
+        metal_reflection.output_difference(feature, translated)
+        if language == "metal"
+        else ""
+    )
+    if moved:
+        return result("wrong", moved)
     # The CrossGL probe reads its inputs like the native probe unless it calls a counterpart overload.
     if _runs(feature, language) and not feature.counterpart:
         try:

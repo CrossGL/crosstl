@@ -9798,7 +9798,7 @@ class TestVulkanSPIRVCodeGen:
         assert "QuadRead" not in spv_code
         assert "WARNING" not in spv_code
 
-    def test_compute_quad_read_lane_requires_literal_lane_index(self):
+    def test_compute_quad_read_lane_refuses_literal_lane_above_three(self):
         source_code = """
         shader ComputeQuadWaveDiagnostics {
             compute {
@@ -9817,9 +9817,9 @@ class TestVulkanSPIRVCodeGen:
         spv_code_refused = str(refusal.value)
         assert (
             spv_code_refused.count(
-                "QuadReadLaneAt requires a literal lane index between 0 and 3"
+                "a literal QuadReadLaneAt lane index must be between 0 and 3"
             )
-            == 2
+            == 1
         )
 
     def test_compute_wave_match_and_multi_prefix_emit_partitioned_operations(self):

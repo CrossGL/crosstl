@@ -326,6 +326,7 @@ METAL_ATTRIBUTE_SEMANTICS = {
     "primitive_id": "gl_PrimitiveID",
     "viewport_array_index": "gl_ViewportIndex",
     "render_target_array_index": "gl_Layer",
+    "primitive_culled": "gl_CullPrimitiveEXT",
     "thread_position_in_grid": "gl_GlobalInvocationID",
     "thread_position_in_threadgroup": "gl_LocalInvocationID",
     "threadgroup_position_in_grid": "gl_WorkGroupID",

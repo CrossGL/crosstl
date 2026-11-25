@@ -41,15 +41,20 @@ from .struct_scalar_splats import struct_member_types
 
 __all__ = [
     "ArrayConstructorUnsupportedError",
+    "array_constructor_dimensions",
     "array_constructor_shape",
     "hoist_array_constructors",
 ]
 
-_ARRAY_CONSTRUCTOR = re.compile(r"\s*(\w+)\s*\[\s*(\d*)\s*\]\s*")
+# ``element[size]``: the outermost size comes first, so ``float[2][3]`` has two ``float[3]`` elements (GLSL 4.60
+# section 4.1.9). A size that names a constant, ``float[N]``, is the number of elements written.
+_ARRAY_CONSTRUCTOR = re.compile(r"\s*(\w+)\s*\[\s*(\w*)\s*\]((?:\s*\[\s*\w*\s*\])*)\s*")
 # Targets whose generators build arrays only in aggregate initializers.
 _DECLARATION_ONLY_TARGETS = frozenset(
     {"metal", "directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12", "vulkan", "spirv"}
 )
+# C++ targets: no array constructor expression, and a C array cannot be assigned.
+_CPP_TARGETS = frozenset({"cuda", "hip"})
 _TEMPORARY_PREFIX = "cgl_array_value"
 # Targets whose generators write a named structure constructor as an aggregate initializer.
 _BRACED_CONSTRUCTOR_TARGETS = frozenset({"metal"})
@@ -72,7 +77,9 @@ class ArrayConstructorUnsupportedError(TranslationDiagnostic):
 def hoist_array_constructors(program, target) -> int:
     """Rewrite array constructors outside declarations in place; returns how many were rewritten."""
     target = str(target or "").lower()
-    if not isinstance(program, A.ShaderNode) or target not in _DECLARATION_ONLY_TARGETS:
+    if not isinstance(program, A.ShaderNode) or target not in (
+        _DECLARATION_ONLY_TARGETS | _CPP_TARGETS
+    ):
         return 0
     hoister = _Hoister(program, target)
     for constant in getattr(program, "constants", None) or []:
@@ -90,17 +97,66 @@ def hoist_array_constructors(program, target) -> int:
 
 
 def array_constructor_shape(expr):
-    """``(element spelling, size)`` of an array constructor call such as ``vec3[2](a, b)``, or ``None``.
+    """``(element spelling, size)`` of a one-dimensional array constructor call such as ``vec3[2](a, b)``, or
+    ``None``; a generator writes it back as ``element[size]``.
 
-    An unsized constructor, ``vec3[](a, b)``, has as many elements as arguments.
+    An unsized constructor, ``vec3[](a, b)``, has as many elements as arguments. A constructor with several
+    dimensions or a named size has no such spelling; ``array_constructor_dimensions`` describes it.
+    """
+    shape = array_constructor_dimensions(expr)
+    if shape is None or not isinstance(shape[1], int) or "[" in shape[0]:
+        return None
+    return shape
+
+
+def array_constructor_dimensions(expr):
+    """``(element spelling, size)`` of any array constructor call, or ``None``.
+
+    The outermost size is the constructor's, so ``float[2][3](...)`` is ``("float[3]", 2)``: two ``float[3]``
+    elements. A literal size is an ``int``, an unsized constructor has as many elements as arguments, and a size
+    that names a constant, ``float[N](...)``, is that name.
     """
     if not isinstance(expr, A.FunctionCallNode):
         return None
-    match = _ARRAY_CONSTRUCTOR.fullmatch(call_name(expr) or "")
+    match = _ARRAY_CONSTRUCTOR.fullmatch(
+        call_name(expr) or _indexed_type(expr.function)
+    )
     if match is None:
         return None
-    size = match.group(2)
-    return match.group(1), int(size) if size else len(expr.arguments or [])
+    size, inner = match.group(2), re.sub(r"\s+", "", match.group(3))
+    if size.isdigit():
+        size = int(size)
+    elif not size:
+        size = len(expr.arguments or [])
+    return match.group(1) + inner, size
+
+
+def _spelled(element, size):
+    """``float[2][3]`` for two ``float[3]`` elements: the outermost size is written first."""
+    return re.sub(r"\w+", lambda base: f"{base.group()}[{size}]", element, count=1)
+
+
+def _indexed_type(callee):
+    """``float[2][3]`` for the callee the parser writes for that constructor, a built-in type name indexed with
+    literal or named sizes; ``""`` for any other callee, so a call through an indexed value is not one.
+    """
+    sizes = []
+    while isinstance(callee, A.ArrayAccessNode):
+        index = callee.index_expr
+        if isinstance(index, A.LiteralNode) and str(index.value).isdigit():
+            sizes.append(str(index.value))
+        elif isinstance(index, A.IdentifierNode) and index.name.isidentifier():
+            sizes.append(index.name)
+        else:
+            return ""
+        callee = callee.array_expr
+    if not sizes or not isinstance(callee, A.IdentifierNode):
+        return ""
+    match = _ARRAY_CONSTRUCTOR.fullmatch(callee.name)
+    base = match.group(1) if match else callee.name
+    if not base.isidentifier() or isinstance(_element_type(base), A.NamedType):
+        return ""
+    return callee.name + "".join(f"[{size}]" for size in reversed(sizes))
 
 
 def _shader_scope_variables(program):
@@ -123,7 +179,7 @@ def _selected_element(node):
     if not isinstance(node, A.ArrayAccessNode):
         return None
     constructor = node.array_expr
-    shape = array_constructor_shape(constructor)
+    shape = array_constructor_dimensions(constructor)
     index = getattr(node.index_expr, "value", None)
     if shape is None or not isinstance(node.index_expr, A.LiteralNode):
         return None
@@ -164,6 +220,7 @@ class _Hoister:
         self._shader_scope = False
         self.structs = set(struct_member_types(program))
         self.names = _declared_names(program)
+        self.constant_sizes = _integer_constants(program)
 
     # Statements ----------------------------------------------------------------------------------------------
     def block(self, statements):
@@ -191,7 +248,7 @@ class _Hoister:
             self.block(node.statements)
         elif isinstance(node, A.VariableNode):
             value = getattr(node, "initial_value", None)
-            if array_constructor_shape(value) is not None:
+            if array_constructor_dimensions(value) is not None:
                 node.initial_value = A.ArrayLiteralNode(list(value.arguments or []))
             self.expression(node, "initial_value", hoisted, once, effects)
         elif isinstance(node, A.ExpressionStatementNode):
@@ -240,7 +297,7 @@ class _Hoister:
         aggregate become lists, and an indexed constructor becomes the element it selects.
         """
         value = getattr(node, field, None)
-        if array_constructor_shape(value) is not None:
+        if array_constructor_dimensions(value) is not None:
             value = A.ArrayLiteralNode(list(value.arguments or []))
             setattr(node, field, value)
             self.count += 1
@@ -278,7 +335,7 @@ class _Hoister:
         value = owner[field] if isinstance(owner, list) else getattr(owner, field, None)
         if not isinstance(value, A.ASTNode):
             return
-        shape = array_constructor_shape(value)
+        shape = array_constructor_dimensions(value)
         before = effects[0]
         self._walk(value, hoisted, slot, effects)
         if shape is not None:
@@ -289,6 +346,17 @@ class _Hoister:
                 set_child(owner, field, None, A.IdentifierNode(name))
 
     def _walk(self, node, hoisted, slot, effects):
+        if (
+            self.target in _CPP_TARGETS
+            and isinstance(node, A.AssignmentNode)
+            and array_constructor_dimensions(node.value) is not None
+        ):
+            self._refuse(
+                f"array constructor '{_spelled(*array_constructor_dimensions(node.value))}' is assigned to an "
+                "array",
+                "array-constructor-assigned",
+                getattr(node, "source_location", None),
+            )
         aggregate = self._is_aggregate(node)
         for field, key in list(child_slots(node)):
             child = get_child(node, field, key)
@@ -298,7 +366,7 @@ class _Hoister:
             # Effects of the constructor's own elements happen when the hoisted local is built, in order.
             before = effects[0]
             self._walk(child, hoisted, child_slot, effects)
-            shape = array_constructor_shape(child)
+            shape = array_constructor_dimensions(child)
             if shape is None:
                 continue
             if aggregate:
@@ -315,7 +383,7 @@ class _Hoister:
     def _is_aggregate(self, node):
         if isinstance(node, A.ArrayLiteralNode):
             return True
-        if array_constructor_shape(node) is not None:
+        if array_constructor_dimensions(node) is not None:
             return True
         if isinstance(node, A.ConstructorNode):
             # Metal writes a named structure constructor, ``W{m: ..., s: ...}``, as the aggregate initializer
@@ -333,7 +401,17 @@ class _Hoister:
         element, size = shape
         elements = list(constructor.arguments or [])
         location = getattr(constructor, "source_location", None)
-        spelled = f"{element}[{size}]"
+        spelled = _spelled(element, size)
+        if not isinstance(size, int):
+            # The local needs the number the name stands for; a specialization constant or a computed constant
+            # has none here.
+            size = self.constant_sizes.get(size)
+            if size is None:
+                self._refuse(
+                    f"array constructor '{spelled}' is sized by a name that is not an integer literal constant",
+                    "array-constructor-size",
+                    location,
+                )
         if slot.repeated:
             self._refuse(
                 f"array constructor '{spelled}' is evaluated on every iteration of a loop condition or update",
@@ -352,9 +430,10 @@ class _Hoister:
                 "array-constructor-conditional-effects",
                 location,
             )
-        if len(elements) != size:
+        # A short constructor zero-fills the rest, as the full-size local's shorter initializer list does (#3639).
+        if len(elements) > size:
             self._refuse(
-                f"array constructor '{spelled}' has {len(elements)} elements",
+                f"array constructor '{spelled}' has {len(elements)} elements, more than its {size}",
                 "array-constructor-element-count",
                 location,
             )
@@ -388,6 +467,18 @@ class _Hoister:
         return name
 
 
+def _integer_constants(program):
+    """Program-scope constants initialized with a non-negative integer literal, ``const int N = 3;``, by name."""
+    sizes = {}
+    for constant in getattr(program, "constants", None) or []:
+        value = getattr(constant, "value", None)
+        if isinstance(constant, A.ConstantNode) and isinstance(value, A.LiteralNode):
+            text = str(value.value).rstrip("uU")
+            if text.isdigit() and not isinstance(value.value, bool):
+                sizes[constant.name] = int(text)
+    return sizes
+
+
 def _type_spelling(node):
     constructed = getattr(node, "constructor_type", None)
     return getattr(constructed, "name", None)
@@ -406,7 +497,10 @@ def _has_own_effects(node):
         return True
     if isinstance(node, A.UnaryOpNode) and node.op in ("++", "--"):
         return True
-    if isinstance(node, A.FunctionCallNode) and array_constructor_shape(node) is None:
+    if (
+        isinstance(node, A.FunctionCallNode)
+        and array_constructor_dimensions(node) is None
+    ):
         return not is_pure(A.FunctionCallNode(node.function, []))
     return False
 

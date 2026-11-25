@@ -166,6 +166,9 @@ OTHER_NAMES = {
     # Vec3::is_finite tests every element at once, and is_finite_mask each one.
     "Float::exp_m1": "expm1",
     "Float::ln_1p": "log1p",
+    # rust-gpu computes cbrt as GLSL.std.450 Pow with the exponent 1/3 (rustc_codegen_spirv's
+    # builder/libm_intrinsics.rs), which is undefined for a negative base, where C's cbrt is negative.
+    "Float::cbrt": "pow({0}, 1.0 / 3.0)",
     "Float::is_finite": "isfinite",
     "Float::is_normal": "isnormal",
     "Float::is_sign_negative": "signbit",
