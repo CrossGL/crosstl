@@ -2687,6 +2687,38 @@ class TestCudaCodeGen:
         assert "(lhs.x % rhs.x)" not in cuda_code
         assert "(lhs.x % rhs)" not in cuda_code
 
+    def test_half_scalar_and_half2_remainder_take_the_float_helpers(self):
+        # https://github.com/CrossGL/crosstl/issues/3119
+        source_code = """
+        shader Mod {
+            half f(half a, half b) { return a % b; }
+            half g(half a, half b) { return mod(a, b); }
+            f16vec2 h(f16vec2 v, f16vec2 w) { return v % w; }
+            f16vec2 k(f16vec2 v, f16vec2 w) { return mod(v, w); }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        # `%` is the truncated remainder (fmodf) of the values converted to float,
+        # mod() floors the quotient, as for float.
+        assert "return cgl_half_mod(a, b);" in cuda_code
+        assert "return cgl_half_glsl_mod(a, b);" in cuda_code
+        assert "return cgl_half2_mod(v, w);" in cuda_code
+        assert "return cgl_half2_glsl_mod(v, w);" in cuda_code
+        assert "return __float2half(fmodf(l, r));" in cuda_code
+        assert "return __float2half((l - r * floorf(l / r)));" in cuda_code
+        assert "__floats2half2_rn(fmodf(lx, rx), fmodf(ly, ry))" in cuda_code
+        assert (
+            "__floats2half2_rn((lx - rx * floorf(lx / rx)), "
+            "(ly - ry * floorf(ly / ry)))"
+        ) in cuda_code
+        assert "(a % b)" not in cuda_code
+        assert "(v % w)" not in cuda_code
+        assert "fmodf(a, b)" not in cuda_code
+        assert "fmodf(v, w)" not in cuda_code
+
     def test_half_vector_mix_fract_step_atan_fma_use_float_helpers(self):
         source_code = """
         shader M {

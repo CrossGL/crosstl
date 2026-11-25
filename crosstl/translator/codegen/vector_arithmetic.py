@@ -1054,6 +1054,10 @@ class VectorArithmeticMixin:
         right_expr,
     ):
         """Lower floating-point scalar modulo to CUDA/HIP math functions."""
+        half_type = self.half_remainder_type(left_node, right_node)
+        if half_type is not None:
+            helper_name = self.require_half_remainder_helper(half_type, glsl_mod=False)
+            return f"{helper_name}({left_expr}, {right_expr})"
         left_type = self.expression_result_type(left_node)
         right_type = self.expression_result_type(right_node)
         left_component = self.scalar_component_type(left_type)
@@ -1063,6 +1067,59 @@ class VectorArithmeticMixin:
         if left_component == "float" or right_component == "float":
             return f"fmodf({left_expr}, {right_expr})"
         return None
+
+    def half_remainder_type(self, left_node, right_node):
+        """Return ``half`` or ``half2`` when both operands of a remainder have that type.
+
+        ``__half`` and ``__half2`` define no ``%`` and ``fmodf`` takes ``float``
+        operands, so their remainders are computed on the values converted to
+        ``float`` and rounded back.
+        """
+        mapped_types = set()
+        for node in (left_node, right_node):
+            type_name = self.expression_result_type(node)
+            if type_name is None:
+                return None
+            if not isinstance(type_name, str):
+                type_name = self.convert_type_node_to_string(type_name)
+            mapped_types.add(self.map_vector_arithmetic_type(type_name))
+        if len(mapped_types) == 1 and mapped_types <= {"half", "half2"}:
+            return mapped_types.pop()
+        return None
+
+    def require_half_remainder_helper(self, half_type, glsl_mod):
+        """Helper for the truncated (``%``) or floored (``mod``) remainder of halves."""
+        suffix = "glsl_mod" if glsl_mod else "mod"
+        helper_name = f"cgl_{half_type}_{suffix}"
+        if helper_name in self.helper_functions:
+            return helper_name
+
+        def remainder(lhs, rhs):
+            if glsl_mod:
+                return f"({lhs} - {rhs} * floorf({lhs} / {rhs}))"
+            return f"fmodf({lhs}, {rhs})"
+
+        if half_type == "half":
+            body = (
+                "    float l = __half2float(lhs);\n"
+                "    float r = __half2float(rhs);\n"
+                f"    return __float2half({remainder('l', 'r')});\n"
+            )
+        else:
+            body = (
+                "    float lx = __low2float(lhs);\n"
+                "    float ly = __high2float(lhs);\n"
+                "    float rx = __low2float(rhs);\n"
+                "    float ry = __high2float(rhs);\n"
+                "    return __floats2half2_rn("
+                f"{remainder('lx', 'rx')}, {remainder('ly', 'ry')});\n"
+            )
+        self.helper_functions[helper_name] = (
+            f"__device__ inline {half_type} {helper_name}"
+            f"({half_type} lhs, {half_type} rhs)\n"
+            "{\n" + body + "}"
+        )
+        return helper_name
 
     def generate_min_max_call(self, func_name, raw_args, args):
         if len(raw_args) != 2 or len(args) != 2:
