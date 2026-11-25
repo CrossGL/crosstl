@@ -10,14 +10,12 @@ narrower array takes the built-in's leading elements and a scalar takes element 
 
 from __future__ import annotations
 
-from typing import Optional
-
 __all__ = ["load_tessellation_level_value"]
 
 _LEVELS = frozenset({"TessLevelOuter", "TessLevelInner"})
 
 
-def load_tessellation_level_value(codegen, variable, result_type) -> Optional[object]:
+def load_tessellation_level_value(codegen, variable, result_type) -> object | None:
     """``variable``, a tessellation level built-in, loaded as ``result_type``.
 
     ``None`` when ``variable`` is not a tessellation level, or when ``result_type`` is the built-in's own type or
