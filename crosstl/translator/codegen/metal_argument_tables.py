@@ -32,6 +32,7 @@ from ..semantics.scoped_walk import program_stages
 __all__ = [
     "ENTRY_ARGUMENT_ANNOTATION",
     "assign_metal_argument_tables",
+    "drop_other_entry_arguments",
     "metal_argument_tables",
     "metal_entry_argument_table",
     "metal_argument_tables_meet",
@@ -70,6 +71,26 @@ def metal_entry_argument_table(function):
 def metal_argument_tables_meet(first, second):
     """Whether one entry can take a declaration of each of two table sets (None: every entry)."""
     return first is None or second is None or bool(first & second)
+
+
+def drop_other_entry_arguments(ast, entry_name):
+    """Remove the program-scope declarations the bridge hoisted from kernels other than ``entry_name``.
+
+    An artifact scoped to one entry keeps only that entry's argument table. The resources and ``<kernel>_Args``
+    block of another kernel were that kernel's parameters, so the scoped entry can never name them, and keeping
+    them would check their bindings and names against the scoped entry's own declarations.
+    """
+    for field in ("global_variables", "cbuffers"):
+        container = getattr(ast, field, None)
+        if not container:
+            continue
+        kept = []
+        for node in container:
+            get = getattr(node, "get_annotation", None)
+            kernel = get(ENTRY_ARGUMENT_ANNOTATION) if callable(get) else None
+            if kernel is None or kernel == entry_name:
+                kept.append(node)
+        setattr(ast, field, kept)
 
 
 def _entries(ast):
