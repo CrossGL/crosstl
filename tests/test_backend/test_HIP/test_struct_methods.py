@@ -241,11 +241,31 @@ def test_the_probe_translates_to_hlsl_with_the_free_functions(tmp_path):
     assert ".width(" not in hlsl
 
 
-def test_a_written_receiver_in_global_memory_is_refused(tmp_path):
+def test_a_written_receiver_in_global_memory_binds_an_isolated_method(tmp_path):
+    # The method reaches no memory but its receiver and does not synchronize, so a copy of the element in and out
+    # is one of the behaviours a reference allows.
     source = """
 struct S {
     float v;
     __device__ void bump() { v += 1.0f; }
+};
+__global__ void k(S* items) {
+    items[threadIdx.x].bump();
+}
+"""
+    cgl = _compact(_translate(tmp_path, source))
+
+    assert "void S_bump(inout S this_)" in cgl
+    assert "S_bump(items[gl_LocalInvocationID.x]);" in cgl
+
+
+def test_a_written_receiver_in_global_memory_is_refused_when_the_method_synchronizes(
+    tmp_path,
+):
+    source = """
+struct S {
+    float v;
+    __device__ void bump() { __syncthreads(); v += 1.0f; }
 };
 __global__ void k(S* items) {
     items[threadIdx.x].bump();
