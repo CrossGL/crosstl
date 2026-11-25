@@ -26,14 +26,22 @@ touches Metal or Direct3D.
   The full MLX native, parity, corpus and host tier runs in the queue only
   when the group changes `demos/integrations/mlx/**` or the MLX workflow, as
   for pushes to `main`. A pull request merges only when this run passes.
+- **Scoped tests.** A test marked `mlx_model` reads only the files under
+  `demos/integrations/mlx/`. On pull requests and in the merge queue the
+  Complete Test Suite deselects it when the change touches no file there and
+  none of the files `tools/pytest_scope.py` lists as affecting every test
+  (`pyproject.toml`, `conftest.py`, the workflow and the plugin): the test
+  would give the result it gave on the commit the change builds on. The
+  `ci:full` label, pushes to `main` the queue did not test, the nightly run
+  and dispatched runs run every test.
 - **Main and nightly.** Pushes to `main` publish coverage. The translator,
   backend, complete and examples workflows skip a push whose commits already
   passed the merge queue, and run in full for any other commit. Conformance,
   the corpus and ComputeSharp report no required check, so they do not run in
   the merge queue: conformance and ComputeSharp test the push to `main`, and
   the corpus tests `main` nightly.
-  The MLX tier, conformance, the corpus and coverage also run nightly, and
-  fuzzing runs weekly.
+  The MLX tier, the Complete Test Suite, conformance, the corpus and
+  coverage also run nightly, and fuzzing runs weekly.
 
 A maintainer can request the merge-queue tier on a pull request before
 queueing it. The `ci:full` label applies from the next push, and
@@ -76,7 +84,7 @@ Push a commit without the marker instead. When the branch is behind `main`,
 |---|---|
 | `translator-tests.yml` | Parser, type checker and code generators; the general tests on Linux and every test on Windows run in three shards each, and every test on macOS in two |
 | `backend-tests.yml` | Importers for each source language |
-| `full-tests.yml` | The whole suite, split by test id into twelve shards (`tools/pytest_shard.py`); shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
+| `full-tests.yml` | The whole suite, split by test id into twelve shards (`tools/pytest_shard.py`), less the scoped tests a pull request or merge group cannot affect (`tools/pytest_scope.py`); shader validators; runtime parity with Mesa OpenGL and Vulkan on Linux, Metal on macOS and Direct3D on Windows; native compiler smoke tests |
 | `examples-test.yml` | Every example translated to each backend its category supports (`examples/test.py`); a backend may refuse only the pairs listed in its `EXPECTED_REJECTIONS` |
 | `coverage.yml` | Backend coverage, published to the [`coverage` branch](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md); `coverage-comment.yml` then comments a pull request's change against `main`. Its Windows job runs the HLSL compute probes on Direct3D 12 WARP, on pushes to `main`, nightly, and on pull requests that change the coverage engine, HLSL's front end or generator modules, or the files the D3D12 runtime executes with, but never in the merge queue (`tools/coverage/legs.py`) |
 | `lint.yml` | The pinned hooks in `.pre-commit-config.yaml`, except the local test hooks, on the files a change touches, and on every file when it changes the hooks |
