@@ -41,11 +41,11 @@ from .cuda_function_prototypes import (
 from .cuda_gather import CudaGatherMixin
 from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_library_functions import rename_cuda_library_functions
-from .cuda_reserved_names import rename_reserved_program_names
 from .cuda_math_calls import CudaMathCallMixin
 from .cuda_query_metadata import CudaQueryMetadataMixin
 from .cuda_query_returns import CudaQueryReturnMixin
 from .cuda_refusals import CudaLoweringRefused
+from .cuda_reserved_names import rename_reserved_program_names
 from .cuda_resource_access import CudaResourceAccessMixin
 from .cuda_resource_calls import CudaResourceCallMixin
 from .cuda_semantics import CudaSemanticMixin
