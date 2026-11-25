@@ -1,0 +1,9 @@
+{
+  "name": "crosstl-coverage-tint",
+  "private": true,
+  "description": "Tint, the WGSL compiler of Dawn, through Dawn's Node.js bindings; tools/coverage/tint.py runs it",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "webgpu": "0.6.2"
+  }
+}

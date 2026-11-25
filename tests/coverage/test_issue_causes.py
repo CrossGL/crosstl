@@ -33,6 +33,33 @@ def test_causes_keep_the_digits_of_template_arguments():
     )
 
 
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/tmp/tmpxft_{}_00000000-6_probe.ptx",
+        r"C:\Users\runneradmin\AppData\Local\Temp\tmpxft_{}_00000000-6_probe.ptx",
+        "tmpxft_{}_00000000-6_probe.ptx",
+    ],
+)
+def test_causes_drop_the_temporary_files_nvcc_names(path):
+    # nvcc names the intermediate files of each compilation after its process, and ptxas quotes the path, so one
+    # code generator bug that ptxas rejects in every probe is one cause.
+    detail = "ptxas {}, line 9; fatal : Parsing error near '_': syntax error"
+    row = backend_row(
+        "cuda",
+        "output",
+        [
+            feature_entry(name, "wrong", detail=detail.format(path.format(process)))
+            for name, process in (("for-loop", "0000cd1c"), ("while-loop", "0000d6be"))
+        ],
+    )
+    [(cause, features)] = causes.grouped(row)
+    assert cause == (
+        "ptxas probe.ptx, line N; fatal : Parsing error near '_': syntax error"
+    )
+    assert [f["name"] for f in features] == ["for-loop", "while-loop"]
+
+
 def test_titles_drop_the_glslang_location():
     detail = "ERROR: probe.frag:2: 'location' : SPIR-V requires location for user input/output"
     row = backend_row(

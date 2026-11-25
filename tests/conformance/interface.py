@@ -241,7 +241,11 @@ def _glsl(text, _group, constants, input_count):
             raise InterfaceChanged("A GLSL uniform block has no explicit binding")
         else:
             uniform_blocks.append({"slot": int(binding.group(1)), "kind": "uniform"})
-    if len(re.findall(r"\buniform\b", text)) != len(uniform_blocks):
+    from . import glsl_resources
+
+    # The host creates the samplers, images and atomic counters :mod:`.glsl_resources` describes.
+    opaque = glsl_resources.declarations(text)
+    if len(re.findall(r"\buniform\b", text)) != len(uniform_blocks) + len(opaque):
         raise InterfaceChanged(
             "The GLSL artifact declares uniforms the host does not provide"
         )
@@ -250,6 +254,7 @@ def _glsl(text, _group, constants, input_count):
         "group": (size.get("x", 1), size.get("y", 1), size.get("z", 1)),
         "bindings": _slots(slots, "GLSL storage binding", input_count),
         "constants": _constants(uniform_blocks, constants, "GLSL uniform blocks"),
+        **glsl_resources.resources(opaque, text),
     }
 
 

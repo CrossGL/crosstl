@@ -485,6 +485,7 @@ class CudaResourceAccessMixin:
         else:
             self.buffer_resource_accesses.pop(name, None)
 
+        self.register_storage_image_texel(name, type_name, node)
         if not self.is_storage_image_type(type_name):
             self.image_resource_accesses.pop(name, None)
             return

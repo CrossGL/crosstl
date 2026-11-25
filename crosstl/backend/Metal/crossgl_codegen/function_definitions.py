@@ -65,6 +65,7 @@ class MetalFunctionDefinitionMixin:
                 getattr(func, "return_qualifiers", None)
                 or getattr(func, "declaration_qualifiers", None)
             ),
+            function=func,
         )
         generic_prefix = (
             ""

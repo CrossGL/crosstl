@@ -85,7 +85,8 @@ def test_rust_subgroup_functions_take_crossgl_wave_names():
     assert spellings.WAVES["rust"]["subgroup_exclusive_u_min"] == (
         "WavePrefixExclusiveMin"
     )
-    # rust-gpu's constant generic cluster size is an argument in CrossGL; the probe passes 1, a power of two.
+    # rust-gpu's constant generic cluster size is an argument in CrossGL; the probe passes 4, the size the native
+    # probe's CLUSTER_SIZE sets, so that both reduce the same clusters.
     clustered = rust._feature(
         "subgroup_clustered_s_max",
         "arch",
@@ -95,9 +96,9 @@ def test_rust_subgroup_functions_take_crossgl_wave_names():
         "compute",
         frozenset(),
     )
-    assert clustered.crossgl == "WaveClusteredMax"
+    assert clustered.crossgl == "WaveClusteredMax({0}, 4u)"
     assert (
-        "int r = WaveClusteredMax(a0, 1u);" in probes.build(clustered, "crossgl").source
+        "int r = WaveClusteredMax(a0, 4u);" in probes.build(clustered, "crossgl").source
     )
 
 

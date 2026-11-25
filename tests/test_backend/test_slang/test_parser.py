@@ -1129,7 +1129,7 @@ def test_generic_function_declaration_after_name_parsing():
 
     assert function.return_type == "float"
     assert getattr(function, "is_generic", False)
-    assert function.generic_parameters == "<letRAY_QUERY_FLAGS:uint>"
+    assert function.generic_parameters == "<let RAY_QUERY_FLAGS:uint>"
     assert function.params[0].vtype == "uint"
     assert function.params[0].name == "rayInlineFlags"
     assert isinstance(function.body[0], ReturnNode)
@@ -1149,7 +1149,7 @@ def test_generic_struct_declaration_after_name_parsing():
     struct = ast.structs[0]
 
     assert struct.name == "GenericStruct"
-    assert struct.generic_parameters == "<T, letN:int>"
+    assert struct.generic_parameters == "<T, let N:int>"
     assert [(member.vtype, member.name) for member in struct.members] == [
         ("T", "value"),
         ("float", "weights"),
@@ -1353,7 +1353,7 @@ def test_interface_conformance_and_attributed_methods_parse():
     assert params.methods[0].attributes == [{"name": "Differentiable", "arguments": []}]
     assert foo.associated_types[0].constraint_type == "IParams"
     assert method.qualifiers == ["static"]
-    assert method.generic_parameters == "<letN:uint>"
+    assert method.generic_parameters == "<let N:uint>"
     assert method.attributes == [{"name": "BackwardDifferentiable", "arguments": []}]
     assert method.params[0].qualifiers == ["no_diff"]
 
@@ -1402,10 +1402,10 @@ def test_generic_typealias_declaration_from_slang_neural_modules():
 
     assert ast.implementing_modules == ["neural"]
     assert [(node.original_type, node.new_type) for node in ast.typedefs] == [
-        ("Array<uint32_t, Dim>", "uvec<intDim>"),
+        ("Array<uint32_t, Dim>", "uvec<int Dim>"),
         (
             "WaveMatrix<half, linalg.CoopMatMatrixUse.MatrixA, Rows, Cols>",
-            "MatrixA<intRows, intCols>",
+            "MatrixA<int Rows, int Cols>",
         ),
     ]
     assert ast.typedefs[0].qualifiers == ["internal"]

@@ -16,11 +16,16 @@ from ..storage_image_texels import (
 )
 from .float_literals import check_float_literal_range
 from .slang_clock_import import SLANG_CLOCK_IMPORTS
+from .slang_core_function_import import (
+    SLANG_CORE_FUNCTION_IMPORTS,
+    crossgl_half_unpack_call,
+)
 from .slang_matrix_import import SlangMatrixImportMixin
 from .slang_narrow_arithmetic import SlangNarrowArithmeticMixin
 from .slang_specialization_import import (
+    specialization_constant_defaults,
     specialization_ids,
-    specialized_workgroup_sizes,
+    specialized_workgroup_layout,
 )
 from .slang_stage_roles import (
     slang_geometry_primitive,
@@ -606,9 +611,12 @@ class SlangToCrossGLConverter(
         self.vertex_input_structs = set()
 
         self.semantic_map = {
-            # Vertex inputs position
-            "POSITION": "in_Position",
-            "POSITION0": "in_Position0",
+            # Classic vertex semantics, as the HLSL importer maps them: index 0
+            # is the CrossGL name that takes the semantic's fixed location
+            # (stage_io_semantic_locations), and an HLSL semantic without an
+            # index is index 0.
+            "POSITION": "Position",
+            "POSITION0": "Position",
             "POSITION1": "in_Position1",
             "POSITION2": "in_Position2",
             "POSITION3": "in_Position3",
@@ -616,9 +624,8 @@ class SlangToCrossGLConverter(
             "POSITION5": "in_Position5",
             "POSITION6": "in_Position6",
             "POSITION7": "in_Position7",
-            # Vertex inputs normal
-            "NORMAL": "in_Normal",
-            "NORMAL0": "in_Normal0",
+            "NORMAL": "Normal",
+            "NORMAL0": "Normal",
             "NORMAL1": "in_Normal1",
             "NORMAL2": "in_Normal2",
             "NORMAL3": "in_Normal3",
@@ -626,9 +633,8 @@ class SlangToCrossGLConverter(
             "NORMAL5": "in_Normal5",
             "NORMAL6": "in_Normal6",
             "NORMAL7": "in_Normal7",
-            # Vertex inputs tangent
-            "TANGENT": "in_Tangent",
-            "TANGENT0": "in_Tangent0",
+            "TANGENT": "Tangent",
+            "TANGENT0": "Tangent",
             "TANGENT1": "in_Tangent1",
             "TANGENT2": "in_Tangent2",
             "TANGENT3": "in_Tangent3",
@@ -636,9 +642,8 @@ class SlangToCrossGLConverter(
             "TANGENT5": "in_Tangent5",
             "TANGENT6": "in_Tangent6",
             "TANGENT7": "in_Tangent7",
-            # Vertex inputs binormal
-            "BINORMAL": "in_Binormal",
-            "BINORMAL0": "in_Binormal0",
+            "BINORMAL": "Binormal",
+            "BINORMAL0": "Binormal",
             "BINORMAL1": "in_Binormal1",
             "BINORMAL2": "in_Binormal2",
             "BINORMAL3": "in_Binormal3",
@@ -774,6 +779,9 @@ class SlangToCrossGLConverter(
         )
         self.collect_narrow_function_returns(functions)
         self.function_name_map = self.collect_function_name_map(functions)
+        self.struct_name_map = self.collect_struct_name_map(
+            [*ast.structs, *local_structs, *exported_structs]
+        )
         resource_types = self.collect_sampleable_resource_types(ast)
         storage_image_types = self.collect_storage_image_resource_types(ast)
         self.struct_member_types = self.collect_struct_member_types(ast, local_structs)
@@ -798,6 +806,15 @@ class SlangToCrossGLConverter(
                 if isinstance(
                     getattr(exp, "item", None), (VariableNode, AssignmentNode)
                 )
+            ],
+        )
+        self.specialization_constant_defaults = specialization_constant_defaults(
+            ast.global_vars,
+            self.specialization_constant_ids,
+            exported=[
+                exp.item
+                for exp in getattr(ast, "exports", [])
+                if isinstance(getattr(exp, "item", None), AssignmentNode)
             ],
         )
         self.specialization_dependent_names = set()
@@ -1103,6 +1120,39 @@ class SlangToCrossGLConverter(
             used_names.add(safe_name)
         return name_map
 
+    def collect_struct_name_map(self, structs):
+        """The CrossGL name of each struct whose Slang name is a CrossGL keyword, such as ``match``.
+
+        A renamed struct takes a name that no other struct or function of the program has.
+        """
+        names = {getattr(struct, "name", None) for struct in structs}
+        names.discard(None)
+        used_names = {str(name) for name in names}
+        used_names.update(self.function_name_map.values())
+        name_map = {}
+        for name in sorted(names, key=str):
+            if not self.crossgl_identifier_needs_sanitizing(name):
+                continue
+            safe_name = self.sanitize_crossgl_identifier(name, used_names)
+            name_map[str(name)] = safe_name
+            used_names.add(safe_name)
+        return name_map
+
+    def rename_struct_types(self, type_name):
+        """``type_name`` with each struct name of ``struct_name_map`` in it written as its CrossGL name."""
+        name_map = getattr(self, "struct_name_map", None)
+        if not name_map or not isinstance(type_name, str):
+            return type_name
+        # Only the renamed struct names match, longest first, so each match has a CrossGL name.
+        names = "|".join(
+            re.escape(name) for name in sorted(name_map, key=lambda n: (-len(n), n))
+        )
+        return re.sub(
+            rf"(?<![\w.:])(?:{names})(?![\w(])",
+            lambda match: name_map[match.group(0)],
+            type_name,
+        )
+
     def format_function_name(self, name):
         # ``function_name_map`` holds the CrossGL name of every function the program declares, and only declared
         # functions are written or called through it.
@@ -1152,7 +1202,10 @@ class SlangToCrossGLConverter(
         generic_parameters = ""
         if getattr(node, "generic_parameters_from_prefix", False):
             generic_parameters = getattr(node, "generic_parameters", None) or ""
-        return f"{self.format_identifier(node.name)}{generic_parameters}"
+        name = getattr(self, "struct_name_map", {}).get(str(node.name))
+        if name is None:
+            name = self.format_identifier(node.name)
+        return f"{name}{generic_parameters}"
 
     def collect_struct_member_name_maps(self, ast, local_structs=None):
         maps = {}
@@ -1244,14 +1297,18 @@ class SlangToCrossGLConverter(
         if not numthreads:
             return ""
 
-        specialized_workgroup_sizes(
-            numthreads, getattr(self, "specialization_dependent_names", ())
+        constants = {
+            name: (spec_id, self.generate_expression(value, False))
+            for name, (spec_id, value) in getattr(
+                self, "specialization_constant_defaults", {}
+            ).items()
+        }
+        layout = specialized_workgroup_layout(
+            numthreads,
+            getattr(self, "specialization_dependent_names", ()),
+            constants,
         )
-        x, y, z = numthreads
-        return (
-            "        "
-            f"layout(local_size_x = {x}, local_size_y = {y}, local_size_z = {z}) in;\n"
-        )
+        return f"        layout({layout}) in;\n"
 
     def generate_cbuffers(self, ast):
         code = ""
@@ -1349,7 +1406,9 @@ class SlangToCrossGLConverter(
             semantic_suffix += " @ stage_entry"
         code += (
             f"    {self.map_type(func.return_type)} "
-            f"{self.format_function_name(func.name)}({params}){semantic_suffix} {{\n"
+            f"{self.format_function_name(func.name)}"
+            f"{self.format_function_generic_parameters(func)}"
+            f"({params}){semantic_suffix} {{\n"
         )
         code += self.generate_function_body(func.body, indent=indent + 1)
         code += "    }\n\n"
@@ -1358,6 +1417,67 @@ class SlangToCrossGLConverter(
         self.pop_variable_type_scope()
         self.pop_identifier_scope()
         return code
+
+    def format_function_generic_parameters(self, func):
+        """CrossGL's ``<T: IArithmetic, N>`` for the generic parameters of a Slang function, or ``""``.
+
+        A type parameter keeps its interface constraint, which CrossGL reads as a bound that no generator emits, and
+        its default type. A value parameter, Slang's ``let N : int``, is written as its name, which is how CrossGL
+        declares one: each specialization substitutes the value it is called with. CrossGL has no default value of a
+        value parameter and no variadic (``each T``) parameter, so those are refused.
+        """
+        generic_parameters = getattr(func, "generic_parameters", None)
+        if not generic_parameters:
+            return ""
+        written = []
+        for parameter in self.generic_type_arguments(f"_{generic_parameters}"):
+            parameter = parameter.strip()
+            words = parameter.split(None, 1)
+            if words[0] == "each":
+                raise SlangImportRefused(
+                    [
+                        f"variadic generic parameter '{parameter}' of function '{func.name}': CrossGL generic "
+                        "parameters each take one type or value"
+                    ]
+                )
+            if words[0] == "let" and len(words) == 2:
+                declaration, _, default = words[1].partition("=")
+                if default.strip():
+                    raise SlangImportRefused(
+                        [
+                            f"default value of generic parameter '{parameter}' of function '{func.name}': CrossGL "
+                            "generic value parameters have no default"
+                        ]
+                    )
+                written.append(declaration.partition(":")[0].strip())
+                continue
+            declaration, _, default = parameter.partition("=")
+            name, _, constraint = declaration.partition(":")
+            value_declaration = name.split()
+            if len(value_declaration) == 2:
+                # The older value-parameter form, ``int R``, names its type first.
+                if default.strip():
+                    raise SlangImportRefused(
+                        [
+                            f"default value of generic parameter '{parameter}' of function '{func.name}': CrossGL "
+                            "generic value parameters have no default"
+                        ]
+                    )
+                written.append(value_declaration[1])
+                continue
+            text = name.strip()
+            if constraint.strip():
+                # Slang conjoins interfaces with ``&``; CrossGL lists a parameter's bounds with ``+``.
+                bounds = [
+                    self.map_type(bound.strip())
+                    for bound in constraint.split("&")
+                    if bound.strip()
+                ]
+                text += f": {' + '.join(bounds)}"
+            if default.strip():
+                text += f" = {self.map_type(default.strip())}"
+            written.append(text)
+        return f"<{', '.join(written)}>"
 
     def generate_function_attributes(self, func):
         """Carry the function attributes CrossGL keeps on an entry point.
@@ -1827,8 +1947,40 @@ class SlangToCrossGLConverter(
         if clause is None:
             return ""
         if isinstance(clause, list):
-            return ", ".join(self.generate_expression(item, is_main) for item in clause)
+            rendered = [self.generate_expression(item, is_main) for item in clause]
+            return ", ".join(self.for_clause_declarators(clause, rendered))
         return self.generate_expression(clause, is_main)
+
+    def for_clause_declarators(self, clause, rendered):
+        """``rendered`` with the type written once when ``clause`` declares several loop variables.
+
+        Slang, like C, declares them with one type, ``int a = 0, b = n``, and so does CrossGL; a second ``int``
+        in the list is a syntax error there.
+        """
+        declarations = [self.for_clause_declaration(item) for item in clause]
+        first = declarations[0]
+        if first is None:
+            return rendered
+        written = [rendered[0]]
+        for declaration, text in zip(declarations[1:], rendered[1:]):
+            prefix = f"{self.map_type(first.vtype)} "
+            if (
+                declaration is not None
+                and declaration.vtype == first.vtype
+                and text.startswith(prefix)
+            ):
+                text = text[len(prefix) :]
+            written.append(text)
+        return written
+
+    @staticmethod
+    def for_clause_declaration(item):
+        """The declared variable of a for-clause item ``T x`` or ``T x = value``, else ``None``."""
+        if isinstance(item, AssignmentNode):
+            item = item.left
+        if isinstance(item, VariableNode) and item.vtype:
+            return item
+        return None
 
     def generate_while_loop(self, node, indent, is_main, deferred_scopes=None):
         condition = self.generate_expression(node.condition, is_main)
@@ -2508,11 +2660,17 @@ class SlangToCrossGLConverter(
                 # Slang select(cond, t, f) is HLSL's; CrossGL select(f, t, cond) is MSL's.
                 condition, true_value, false_value = rendered_args
                 return f"select({false_value}, {true_value}, {condition})"
+            if is_hlsl_namespace_builtin or expr.name not in self.user_function_names:
+                half_unpack = crossgl_half_unpack_call(function_name, rendered_args)
+                if half_unpack is not None:
+                    return half_unpack
             generic_type_name = self.map_generic_vector_or_matrix_type(function_name)
             if not is_hlsl_namespace_builtin and expr.name in self.user_function_names:
                 name = self.format_function_name(expr.name)
             elif generic_type_name:
                 name = generic_type_name
+            elif function_name in getattr(self, "struct_name_map", {}):
+                name = self.struct_name_map[function_name]
             elif function_name in self.type_map and function_name[:1].islower():
                 name = self.map_type(function_name)
             else:
@@ -2734,6 +2892,7 @@ class SlangToCrossGLConverter(
                 slang_type, self.type_map.get(base_type, slang_type)
             )
             mapped_type = self.sanitize_generic_type_expression_arguments(mapped_type)
+            mapped_type = self.rename_struct_types(mapped_type)
             return f"{mapped_type}{pointer_suffix}"
         return slang_type
 
@@ -2908,6 +3067,8 @@ class SlangToCrossGLConverter(
         """
         if name in self.function_map:
             return self.function_map[name]
+        if name in SLANG_CORE_FUNCTION_IMPORTS:
+            return SLANG_CORE_FUNCTION_IMPORTS[name]
         return name
 
     def map_generic_vector_type(self, slang_type):
