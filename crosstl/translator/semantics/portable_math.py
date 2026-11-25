@@ -115,6 +115,12 @@ _SCALAR_ONLY: dict[str, set[str]] = {
 # sinpi(-0) = +0, sinpi(1) = -0 and cospi(1.5) = -0 on an Apple M2 Max (conformance case x_portable_pi); the nonzero
 # values are within 1 ulp.
 _SIGNED_ZERO: dict[str, frozenset] = {"metal": frozenset({"sinpi", "cospi"})}
+# Target -> functions it declares under CrossGL's name with another definition, whose calls this pass leaves to the
+# target's own refusal. Slang's core module (hlsl.meta.slang, Slang 2026.20) calls Metal's sinpi and cospi on Metal
+# and computes sin(pi * x) and cos(pi * x) everywhere else, which are not exact at integers and half-integers. Its
+# importer reads Slang's sinpi as CrossGL's, so a helper here would give a Slang program's own sinpi other values
+# than slangc computes for it; the call keeps the refusal of lower_metal_math_spellings until the two are told apart.
+_DEFERRED: dict[str, frozenset] = {"slang": frozenset({"sinpi", "cospi"})}
 
 
 def register_native_portable_math(target, functions, scalars=ANY, vectors=True):
@@ -449,6 +455,8 @@ class _Calls(ScopedWalker):
             return
         name = call_name(node)
         if name not in FUNCTIONS or name in self.user_names:
+            return
+        if name in _DEFERRED.get(self.target, ()):
             return
         arguments = list(node.arguments or [])
         if len(arguments) != FUNCTIONS[name]:

@@ -49,7 +49,6 @@ LOWERING_TARGETS = {
     "directx": {"sinpi", "cospi", "fdim", "nextafter", "ilogb"},
     "vulkan": set(P.FUNCTIONS),
     "wgsl": set(P.FUNCTIONS),
-    "slang": {"sinpi", "cospi", "ilogb"},
     "rust": {"sinpi", "cospi", "fdim", "nextafter", "ilogb"},
     "mojo": {"sinpi", "cospi", "fdim", "ilogb"},
 }
@@ -71,6 +70,24 @@ def test_targets_without_the_functions_call_helpers(tmp_path, backend):
     for name in P.FUNCTIONS:
         assert (P.PREFIX + name in code) == (name in lowered), name
     assert f"{P.PREFIX}ilogb_v3" in code
+
+
+def test_slang_lowers_ilogb_and_refuses_its_differently_defined_pi_functions(tmp_path):
+    body = """
+            outp[i] = fdim(x, y) + nextafter(x, y) + copysign(x, y);
+            vec3 c = fdim(a, b) + nextafter(a, b) + copysign(a, b);
+            ivec3 e = ilogb(a);
+            iout[i] = ilogb(x) + e.y;
+            outp[i + 1u] = c.z;
+"""
+    code = _translate(tmp_path, body, "slang")
+    for name in P.FUNCTIONS:
+        assert (P.PREFIX + name in code) == (name == "ilogb"), name
+    # Slang computes its own sinpi and cospi as sin(pi * x) and cos(pi * x) outside Metal, so CrossGL's exact
+    # functions keep their refusal rather than a helper or the native call.
+    for name in ("sinpi", "cospi"):
+        with pytest.raises(Exception, match="exact at integers and half-integers"):
+            _translate(tmp_path, f"outp[i] = {name}(x);", "slang")
 
 
 def test_metal_keeps_the_calls(tmp_path):
