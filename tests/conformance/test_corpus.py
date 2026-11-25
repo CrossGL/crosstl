@@ -43,7 +43,9 @@ def test_manifest_is_complete_and_scoped():
                 and ".." not in Path(unit["path"]).parts
             )
         total += len(paths)
-    assert total == 1667
+    assert total == 1694
+    # Every source language is translated from by its own CrossTL frontend.
+    assert set(run.SOURCE_BACKENDS) == set(manifest.LANGUAGES)
     origin = {unit["path"] for unit in data["slices"]["sascha-glsl"]["units"]}
     assert {
         unit["source"] for unit in data["slices"]["sascha-spirv"]["units"]
@@ -54,9 +56,13 @@ def test_project_files_cover_licences_units_and_support():
     data = load()
     files = project_files(data, "candle")
     assert {"LICENSE-MIT", "LICENSE-APACHE"} <= set(files)
-    units = {unit["path"] for unit in data["slices"]["candle-metal"]["units"]}
-    assert units <= set(files)
-    assert all(files[path] for path in units)
+    for name in ("candle-metal", "candle-cuda"):
+        slice_ = data["slices"][name]
+        units = {unit["path"] for unit in slice_["units"]}
+        assert units <= set(files)
+        assert all(files[path] for path in units)
+        # Support files (the units' include closure) are fetched and verified too.
+        assert all(files[path] == digest for path, digest in slice_["support"].items())
 
 
 def _git(repo, *arguments):

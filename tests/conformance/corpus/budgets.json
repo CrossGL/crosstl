@@ -1,8 +1,8 @@
 {
  "schemaVersion": 1,
  "timeoutSeconds": 300,
- "p50Seconds": {"glsl": 0.5, "hlsl": 0.5, "metal": 2.5, "spirv": 0.5},
- "p95Seconds": {"glsl": 5, "hlsl": 5, "metal": 300, "spirv": 5},
- "maxSeconds": {"glsl": 10, "hlsl": 10, "metal": 300, "spirv": 10},
- "p95CpuSeconds": {"glsl": 1, "hlsl": 1, "metal": 300, "spirv": 1.5}
+ "p50Seconds": {"cuda": 5, "glsl": 0.5, "hlsl": 0.5, "metal": 2.5, "spirv": 0.5},
+ "p95Seconds": {"cuda": 10, "glsl": 5, "hlsl": 5, "metal": 300, "spirv": 5},
+ "maxSeconds": {"cuda": 30, "glsl": 10, "hlsl": 10, "metal": 300, "spirv": 10},
+ "p95CpuSeconds": {"cuda": 5, "glsl": 1, "hlsl": 1, "metal": 300, "spirv": 1.5}
 }

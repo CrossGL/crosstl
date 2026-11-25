@@ -49,6 +49,7 @@ BACKENDS = {
     "spirv": "vulkan",
 }
 SOURCE_BACKENDS = {
+    "cuda": "cuda",
     "glsl": "opengl",
     "hlsl": "directx",
     "metal": "metal",
