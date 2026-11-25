@@ -1241,15 +1241,15 @@ def test_metal_reconstructs_retained_source_union_layout_and_compiles():
         ),
         (
             """
-            @union_layout(4, 4, little_endian, directx)
-            struct ForeignAbi {
-                @union_member_layout(0, 4, 4) uint word;
+            @union_layout(12, 4, little_endian, directx)
+            struct ForeignLayout {
+                @union_member_layout(0, 12, 4) vec3 value;
             }
             """,
-            "source-abi-unsupported",
+            "member-layout-mismatch",
         ),
     ],
-    ids=["missing-member", "nonzero-offset", "foreign-abi"],
+    ids=["missing-member", "nonzero-offset", "foreign-layout"],
 )
 def test_metal_retained_union_layout_rejects_ambiguous_contracts(declaration, reason):
     shader = f"shader InvalidMetalUnion {{ {declaration} }}"
