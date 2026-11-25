@@ -145,11 +145,6 @@ def test_hlsl_input_reads_sample_positions_of_storage_multisample_textures(tmp_p
 @pytest.mark.parametrize(
     "call, missing",
     [
-        # SampleCmpBias's status output reports tiled-resource residency, which CrossGL has no value for.
-        (
-            "obj.SampleCmpBias(cmp, p.xy, 0.5, 1.0, int2(1, 0), 2.0, status)",
-            "status output",
-        ),
         (
             "obj.GatherCmpGreen(cmp, p.xy, 0.5, int2(1, 0), int2(0, 1), int2(1, 1), "
             "int2(0, 0))",

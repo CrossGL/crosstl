@@ -284,35 +284,6 @@ class ResourceMethodMixin:
             values.append(f"{gather}.{component}")
         return f"vec4({', '.join(values)})"
 
-    def refine_texture_load_status_descriptor(self, member, args, descriptor):
-        if (
-            member != "Load"
-            or descriptor.get("diagnostic_kind") != "tiled_resource_status"
-        ):
-            return descriptor
-
-        resource_type = descriptor.get("resource_type")
-        if self.is_rw_texture_type(resource_type):
-            return descriptor
-
-        resource_base = self.raw_type_base(resource_type)
-        if not resource_base.startswith(("Texture", "FeedbackTexture")):
-            return descriptor
-
-        status_arg_count = 3 if self.is_multisample_texture_type(resource_type) else 2
-        if len(args) != status_arg_count:
-            return descriptor
-
-        status_type = self.raw_type_base(self.expression_raw_type(args[-1]))
-        if status_type != "uint":
-            return descriptor
-
-        descriptor = dict(descriptor)
-        descriptor["function"] = descriptor["texture_function"]
-        descriptor["drop_trailing_args"] = 1
-        descriptor["dropped_parameters"] = ["status output"]
-        return descriptor
-
     def texture_load_method_arguments(
         self, obj, rendered_args, descriptor, raw_args, is_main=False
     ):
@@ -329,6 +300,10 @@ class ResourceMethodMixin:
                     self.integer_texel_operand(raw_args[0], rendered_args[0]),
                     *rendered_args[1:],
                 ]
+            if len(raw_args or ()) >= 3 and len(rendered_args) >= 3:
+                rendered_args[2] = self.texel_offset_operand(
+                    raw_args[2], rendered_args[2], resource_base
+                )
             return [obj, *rendered_args]
 
         split_location = None
@@ -340,7 +315,10 @@ class ResourceMethodMixin:
         if split_location:
             coord, lod = split_location
             if descriptor["function"] == "texelFetchOffset" and len(rendered_args) >= 2:
-                return [obj, coord, lod, rendered_args[1]]
+                offset = self.texel_offset_operand(
+                    raw_args[1], rendered_args[1], resource_base
+                )
+                return [obj, coord, lod, offset]
             return [obj, coord, lod]
 
         if descriptor["function"] == "texelFetchOffset":
@@ -348,6 +326,32 @@ class ResourceMethodMixin:
         if descriptor["function"] == "texelFetch" and len(rendered_args) == 1:
             return [obj, rendered_args[0], "0"]
         return [obj, *rendered_args]
+
+    def texel_offset_operand(self, expr, rendered, resource_base):
+        """A ``Load`` offset as the ``int`` vector of the texture's dimension that CrossGL ``texelFetchOffset`` takes.
+
+        HLSL converts the operand implicitly to ``int<N>``, splatting a scalar (``Load(location, 1)`` on a
+        ``Texture2D`` offsets by ``int2(1, 1)``); an operand of unknown type is left as written.
+        """
+        dimension = {
+            "Texture1D": 1,
+            "Texture1DArray": 1,
+            "Texture2D": 2,
+            "Texture2DArray": 2,
+            "Texture2DMS": 2,
+            "Texture2DMSArray": 2,
+            "Texture3D": 3,
+        }.get(resource_base)
+        raw_type = self.expression_value_raw_type(expr)
+        if dimension is None or raw_type is None:
+            return rendered
+        canonical = self.canonical_composite_type(raw_type)
+        width = self.numeric_vector_component_count(canonical) or 1
+        if width == dimension and self.numeric_type_family(canonical) == "int":
+            return rendered
+        if dimension == 1:
+            return f"int({rendered})"
+        return f"ivec{dimension}({rendered})"
 
     def split_texture_load_location(self, location_arg, resource_base, is_main=False):
         coord_components = {

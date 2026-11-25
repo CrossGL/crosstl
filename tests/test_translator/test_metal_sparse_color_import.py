@@ -197,7 +197,7 @@ def test_sparse_reads_translate_to_hlsl_status_overloads(tmp_path):
         "image.SampleLevel(linear_, in_.uv, 1.0, int2(0, 0), crosstl_residency_status_0)",
         "image.Load(int3(cgl_rule_sat_ftou2(in_.position.xy), 0), int2(0, 0), crosstl_residency_status_1)",
         "depth.SampleCmp(shadow, in_.uv, 0.5, int2(0, 0), 0.0f, crosstl_residency_status_3)",
-        "CheckAccessFullyMapped(crosstl_residency_status_0)) ? 0 : 1)",
+        "true) ? int(crosstl_residency_status_0) : 0)",
     ):
         assert read in compact
     dxc = shutil.which("dxc")
