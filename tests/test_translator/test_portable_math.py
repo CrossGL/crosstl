@@ -13,6 +13,8 @@ import numpy as np
 import pytest
 
 import crosstl
+from crosstl.translator.lexer import Lexer
+from crosstl.translator.parser import Parser
 from crosstl.translator.semantics import portable_math as P
 from tests.conformance import portable_math_eval as E
 
@@ -142,6 +144,36 @@ def test_double_fdim_has_a_helper(tmp_path):
         tmp_path, "outp[i] = float(fdim(double(x), double(y)));", "directx"
     )
     assert f"{P.PREFIX}fdim_double" in code
+
+
+def test_source_environment_constants_are_binary32_operands(tmp_path):
+    # INFINITY is a binary32 constant, so nextafter(x, INFINITY) takes the float helper.
+    code = _translate(tmp_path, "outp[i] = nextafter(x, INFINITY);", "opengl")
+    assert re.search(rf"{P.PREFIX}nextafter\w*\(x, ", code)
+    assert "INFINITY" not in code
+
+
+def test_a_native_function_of_any_operand_needs_no_operand_types():
+    # Mojo's std.math nextafter takes every operand type, so an operand CrossGL cannot type is left to it; a target
+    # whose call needs a helper refuses the same call.
+    source = PROBE.replace("BODY", "outp[i] = nextafter(x, unknownOperand);")
+    program = Parser(Lexer(source).get_tokens()).parse()
+    assert P.lower_portable_math(program, "mojo") == 0
+    program = Parser(Lexer(source).get_tokens()).parse()
+    with pytest.raises(P.PortableMathError, match="cannot be determined"):
+        P.lower_portable_math(program, "opengl")
+
+
+def test_types_the_generator_owns_keep_its_refusal(tmp_path):
+    # The HLSL generator writes binary32 copysign and refuses the double one with its own diagnostic.
+    with pytest.raises(Exception) as raised:
+        _translate(
+            tmp_path,
+            "outp[i] = float(copysign(double(x), double(y)));",
+            "directx",
+        )
+    assert not isinstance(raised.value, P.PortableMathError)
+    assert "copysign" in str(raised.value)
 
 
 @pytest.mark.parametrize(

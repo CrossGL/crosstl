@@ -458,10 +458,17 @@ class _Calls(ScopedWalker):
         common = types[0]
         for value in types[1:]:
             common = arithmetic_result(common, value)
+        supported = self.native.get(name, ())
         if common is None or any(value is None for value in types):
+            if (
+                supported is ANY
+                and name not in self.scalar_only
+                and name not in _SIGNED_ZERO.get(self.target, ())
+            ):
+                # The target's own function takes every operand type, so the call stands as written.
+                return
             raise self.error(f"the operand types of {name} cannot be determined")
         scalar = (common.kind, common.bits)
-        supported = self.native.get(name, ())
         if name in self.native and (supported is ANY or scalar in supported):
             if name in _SIGNED_ZERO.get(self.target, ()) and scalar in (_F16, _F32):
                 keys = [("signed", name, scalar)]
@@ -491,6 +498,10 @@ class _Calls(ScopedWalker):
             or (scalar == _F16 and name not in _WIDENED)
             or (scalar == _F64 and f"{name}_double" not in _DEFINITIONS)
         ):
+            if name in self.native:
+                # The target's generator writes this function for some operand types and refuses the others with
+                # its own typed diagnostic (the GLSL and HLSL binary32-only copysign).
+                return
             raise self.error(
                 f"{name} of {common.bits}-bit floating-point operands has no {self.target} function and no "
                 "CrossGL helper"
