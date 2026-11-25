@@ -268,13 +268,22 @@ def declared_surface_texel(node, image_type, attribute_value_to_string):
 _CUDA_VALUE_WIDTH = re.compile(
     r"(?:float|int|uint|half|double|bool|char|uchar|short|ushort|long|ulong|longlong|ulonglong)([1-4])?"
 )
+# The CrossGL spellings the generators' expression types use: ``u32``, ``f16``, ``vec3``, ``uvec2``, ``vec4<f32>``.
+_CROSSGL_SCALAR = re.compile(r"(?:[fiu](?:8|16|32|64))")
+_CROSSGL_VECTOR = re.compile(r"[ibud]?vec([2-4])(?:<[^<>]+>)?")
 
 
 def cuda_value_width(type_name):
-    """Components of a CUDA scalar or vector type: 1 for ``uint``, 2 for ``float2``; ``None`` otherwise."""
+    """Components of a CUDA or CrossGL scalar or vector type: 1 for ``uint`` or ``u32``, 2 for ``float2`` or
+    ``vec2<f32>``; ``None`` otherwise."""
     text = str(type_name or "").strip()
     if text in {"unsigned int", "unsigned", "signed int", "__half"}:
         return 1
+    if _CROSSGL_SCALAR.fullmatch(text):
+        return 1
+    vector = _CROSSGL_VECTOR.fullmatch(text)
+    if vector is not None:
+        return int(vector.group(1))
     match = _CUDA_VALUE_WIDTH.fullmatch(text)
     if match is None:
         return None

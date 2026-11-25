@@ -1,0 +1,1 @@
+CUDA and HIP output store a scalar `imageStore` value whose type is spelled in CrossGL (`u32(x)`, an `f32` sum) as the surface element of an `r32f` or `r32ui` image, instead of passing it to the four-component conversion helper, which nvcc and hipcc rejected. CUDA and HIP surface kernels that write a scalar now translate back to CUDA and HIP.

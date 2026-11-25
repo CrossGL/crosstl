@@ -224,6 +224,13 @@ def test_texel_types_and_widths():
     assert cuda_value_width("float2") == 2
     assert cuda_value_width("int4") == 4
     assert cuda_value_width("MyStruct") is None
+    # The generators' expression types are CrossGL spellings.
+    assert cuda_value_width("u32") == 1
+    assert cuda_value_width("f16") == 1
+    assert cuda_value_width("vec3") == 3
+    assert cuda_value_width("uvec2") == 2
+    assert cuda_value_width("vec4<f32>") == 4
+    assert cuda_value_width("mat4") is None
 
 
 @pytest.mark.parametrize("backend", BACKENDS)
@@ -278,3 +285,38 @@ def test_formats_without_a_surface_element_are_refused(
     )
     with pytest.raises(LoweringRefused, match=reason):
         _translate(tmp_path, backend, declaration, COPY.format(texel=texel))
+
+
+# CUDA input's surface probes as CrossGL: a store of a scalar whose type the generators spell in CrossGL.
+IMPORTED_SCALAR_STORES = """
+@compute
+@host_workgroup_size
+fn probe(
+    @group(0) @binding(0) var<storage, read_write> fin: array<f32>,
+    @group(0) @binding(1) var<storage, read_write> outp: array<f32>,
+    @format(r32f) image2D img,
+    @format(r32ui) uimage2D counts
+) {
+    var i: u32 = gl_GlobalInvocationID.x;
+    var v: f32;
+    v = imageLoad(img, vec2<i32>(0, 0)).x;
+    imageStore(img, vec2<i32>(0, 0), (v + fin[i]));
+    imageStore(counts, vec2<i32>(0, 0), u32(fin[i]));
+    outp[i] = 0.0f;
+}
+"""
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+def test_stored_crossgl_scalar_is_the_element(tmp_path, backend):
+    path = tmp_path / "probe.cgl"
+    path.write_text(IMPORTED_SCALAR_STORES)
+    code = crosstl.translate(str(path), backend=backend, format_output=False)
+    # An f32 or u32 value is the r32f or r32ui element itself; no four-component helper takes it.
+    assert re.search(r"surf2Dwrite\(\(?v \+ fin\[i\]\)?, img,", code), code
+    assert re.search(
+        r"surf2Dwrite\(static_cast<unsigned int>\(fin\[i\]\), counts,", code
+    ), code
+    assert "cgl_r32f_element" not in code
+    assert "cgl_r32ui_element" not in code
+    _compile(tmp_path, code, backend)
