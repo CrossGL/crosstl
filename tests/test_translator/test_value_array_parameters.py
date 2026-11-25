@@ -351,14 +351,14 @@ def test_writes_through_dereference_arrow_and_pointer_arguments(backend):
 def test_pointer_arrays_are_not_copied(backend):
     code = _generate(INDIRECT, backend)
     assert "w_crosstl_input" not in code
+    # Both keep volatile on the pointer elements.
+    assert _signature(code, "volatile_pointers") == "volatile float* w[2]"
     if backend == "hip":
-        # HIP keeps the qualifiers of the pointer elements.
+        # HIP also keeps const.
         assert _signature(code, "pointers") == "const float* w[2]"
-        assert _signature(code, "volatile_pointers") == "volatile float* w[2]"
     else:
-        # CUDA drops them for every pointer array, copied or not, as before.
+        # CUDA drops const for every pointer array, copied or not, as before.
         assert _signature(code, "pointers") == "float* w[2]"
-        assert _signature(code, "volatile_pointers") == "float* w[2]"
 
 
 RESOURCE_NAMED_STRUCTS = """
