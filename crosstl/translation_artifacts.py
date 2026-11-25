@@ -145,9 +145,8 @@ def discovered_repeated_stage_entries(
             defines=defines,
             source_options=source_options,
         )
-    except (
-        Exception
-    ):  # noqa: BLE001 - the whole-file translation reports the source's own error
+    except Exception:  # noqa: BLE001
+        # The whole-file translation reports the source's own error.
         return ()
     if discovery.status != ENTRY_DISCOVERY_AVAILABLE:
         return ()
