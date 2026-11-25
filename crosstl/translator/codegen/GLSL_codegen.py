@@ -112,6 +112,7 @@ from .generic_struct_utils import (
     collect_generic_struct_specializations,
     infer_struct_constructor_type,
 )
+from .glsl_atomic_counters import counter_placements
 from .glsl_call_helpers import emit_glsl_call_helpers
 from .glsl_compute_derivative_groups import compute_derivative_group_layout
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
@@ -3796,6 +3797,7 @@ class GLSLCodeGen(
         self.reserve_explicit_global_resource_bindings(
             resource_declaration_nodes, used_resource_bindings
         )
+        atomic_counters = counter_placements(self, resource_declaration_nodes)
         for index, node in enumerate(resource_declaration_nodes):
             vtype, array_size, array_suffix, resource_count = (
                 self.resource_declaration_shape(node)
@@ -4082,7 +4084,23 @@ class GLSLCodeGen(
                     f"{mapped_type}{array_suffix}",
                 )
                 continue
-            if self.is_opaque_resource_type(mapped_type):
+            if id(node) in atomic_counters:
+                binding, offset = atomic_counters[id(node)]
+                layout = self.glsl_resource_layout_prefix(binding=binding, node=node)
+                if offset:
+                    layout = f"{layout[:-1]}, offset = {offset})"
+                code += f"{layout} uniform {declaration};\n"
+                self.record_glsl_resource_binding(
+                    node,
+                    source_var_name,
+                    var_name,
+                    "atomic-counter",
+                    "atomic counter binding",
+                    binding,
+                    resource_count,
+                    offset=offset,
+                )
+            elif self.is_opaque_resource_type(mapped_type):
                 binding_namespace = (
                     "image binding"
                     if self.is_storage_image_type(vtype)
