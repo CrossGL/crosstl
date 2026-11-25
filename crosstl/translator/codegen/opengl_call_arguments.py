@@ -1008,12 +1008,12 @@ class OpenGLCallArgumentMixin:
         if target_type is None:
             return
         mapped_type = self.map_type(target_type)
-        if mapped_type not in {"int", "uint"}:
+        if mapped_type not in self.GLSL_ATOMIC_MEMORY_ZEROS:
             target_name = expression_debug_name(target)
             raise OpenGLRefusal(
                 f"OpenGL buffer block atomic '{func_name}' requires a scalar "
-                f"int or uint buffer block member for {target_name}: got "
-                f"{mapped_type}"
+                f"int or uint buffer block member, or an int64_t or uint64_t "
+                f"one, for {target_name}: got {mapped_type}"
             )
         self.validate_glsl_buffer_block_atomic_value_arguments(
             func_name,
@@ -1031,6 +1031,12 @@ class OpenGLCallArgumentMixin:
         ):
             value_type = self.glsl_buffer_block_atomic_argument_type(value_arg)
             if value_type is None or value_type == target_type:
+                continue
+            if (
+                target_type in self.GLSL_INT64_SCALAR_TYPES
+                and value_type in self.GLSL_ATOMIC_MEMORY_ZEROS
+            ):
+                # The 64-bit value operand is converted to the memory type.
                 continue
             if self.glsl_unsigned_atomic_literal_is_compatible(
                 value_arg, value_type, target_type
@@ -1212,6 +1218,7 @@ class OpenGLCallArgumentMixin:
         float_atomic = self.float_atomic_storage.atomic(func_name, args)
         if float_atomic is not None:
             return float_atomic
+        self.require_glsl_int64_memory_atomics(args[0])
         word_storage = glsl_word_view_integer_storage(self, args[0])
         if func_name == "atomicCompareExchangeWeak":
             self.validate_glsl_buffer_block_atomic_call(func_name, args)
@@ -1282,12 +1289,13 @@ class OpenGLCallArgumentMixin:
                 if word_storage is not None
                 else self.generate_expression(args[0])
             )
-        if func_name in {"atomicLoad", "atomicStore"} and target_type not in {
-            "int",
-            "uint",
-        }:
+        if (
+            func_name in {"atomicLoad", "atomicStore"}
+            and target_type not in self.GLSL_ATOMIC_MEMORY_ZEROS
+        ):
             raise OpenGLRefusal(
-                f"OpenGL {func_name} requires a scalar int or uint target"
+                f"OpenGL {func_name} requires a scalar int, uint, int64_t or "
+                "uint64_t target"
             )
         rendered_args = [target_expression]
         value_arg_ids = {
@@ -1298,7 +1306,10 @@ class OpenGLCallArgumentMixin:
         }
 
         for arg in args[1:]:
-            if id(arg) in value_arg_ids and target_type in {"int", "uint"}:
+            if (
+                id(arg) in value_arg_ids
+                and target_type in self.GLSL_ATOMIC_MEMORY_ZEROS
+            ):
                 rendered_args.append(
                     self.generate_glsl_memory_atomic_value_argument(arg, target_type)
                 )
@@ -1308,8 +1319,28 @@ class OpenGLCallArgumentMixin:
         native_name = "atomicExchange" if func_name == "atomicStore" else func_name
         if func_name == "atomicLoad":
             native_name = "atomicOr"
-            rendered_args.append("0u" if target_type == "uint" else "0")
+            rendered_args.append(self.GLSL_ATOMIC_MEMORY_ZEROS[target_type])
         return f"{native_name}({', '.join(rendered_args)})"
+
+    def require_glsl_int64_memory_atomics(self, target):
+        """Require the extension of the 64-bit integer atomic overloads when ``target`` is a 64-bit integer.
+
+        GLSL 4.60 declares the buffer and shared-memory atomic functions for 32-bit ``int`` and ``uint`` memory only
+        (section 8.11); GL_NV_shader_atomic_int64 adds their ``int64_t`` and ``uint64_t`` overloads.
+        """
+        info = self.glsl_value_type_info(self.glsl_source_expression_type(target))
+        if (
+            info is None
+            or info["width"] != 1
+            or info["bits"] != 64
+            or info["family"] not in {"int", "uint"}
+        ):
+            return
+        required = getattr(self, "glsl_stage_builtin_extensions", None)
+        if required is None:
+            required = self.glsl_stage_builtin_extensions = []
+        if self.GLSL_INT64_ATOMICS_EXTENSION not in required:
+            required.append(self.GLSL_INT64_ATOMICS_EXTENSION)
 
     def generate_glsl_memory_atomic_value_argument(self, arg, target_type):
         value_type = self.glsl_buffer_block_atomic_argument_type(arg)
@@ -1321,6 +1352,17 @@ class OpenGLCallArgumentMixin:
             literal_value = self.literal_int_value(arg, self.literal_int_constants)
             if literal_value is not None:
                 return f"{literal_value}u"
+        if target_type in self.GLSL_INT64_SCALAR_TYPES:
+            # The 64-bit overloads take operands of the memory type too; widen a
+            # 32-bit operand and reinterpret the other 64-bit signedness.
+            info = self.glsl_value_type_info(self.glsl_source_expression_type(arg))
+            if (
+                info is not None
+                and info["width"] == 1
+                and info["family"] in {"int", "uint"}
+            ):
+                return self.glsl_converted_operand(arg, target_type)
+            return self.generate_expression(arg)
         if self.glsl_atomic_operand_family(arg) in ({"int", "uint"} - {target_type}):
             # GLSL atomics take operands of the memory type; HLSL converts
             # between int and uint implicitly.

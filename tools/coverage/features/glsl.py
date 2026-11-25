@@ -108,12 +108,14 @@ def parse_prototype(text: str) -> tuple[str, Signature] | None:
     return name, signature(concrete_type(result), [_param(p) for p in parts])
 
 
-def _blocks(text: str):
-    """Yield ``(section, subsection, block)`` for every desktop-GLSL source block."""
+def _blocks(text: str, essl_text: bool = False):
+    """Yield ``(section, subsection, block)`` for every desktop-GLSL source block, or with ``essl_text`` for every
+    GLSL ES one: the specification source builds both specifications, and ``ifdef::GLSL[]`` and ``ifdef::ESSL[]``
+    mark the text only one of them has."""
     section = subsection = ""
-    essl: list[bool] = (
-        []
-    )  # one entry per open ifdef/ifndef: whether it holds ES-only text
+    profile = "ESSL" if essl_text else "GLSL"
+    # One entry per open ifdef/ifndef: whether it holds text the other specification has.
+    hidden: list[bool] = []
     in_block = False
     body: list[str] = []
     lines = text.splitlines()
@@ -123,12 +125,14 @@ def _blocks(text: str):
         if directive:
             kind, name = directive.groups()
             if kind == "endif":
-                if essl:
-                    essl.pop()
+                if hidden:
+                    hidden.pop()
+            elif name in ("GLSL", "ESSL"):
+                hidden.append((name == profile) != (kind == "ifdef"))
             else:
-                essl.append((name == "ESSL") == (kind == "ifdef"))
+                hidden.append(False)
             continue
-        if any(essl):
+        if any(hidden):
             continue
         if in_block:
             if stripped == "----":
@@ -150,10 +154,13 @@ def _blocks(text: str):
             in_block, body = True, []
 
 
-def overloads(text: str) -> dict[str, tuple[str, list[Signature]]]:
-    """Every desktop-GLSL prototype, by function name: ``{name: (section, [signature, ...])}``."""
+def overloads(
+    text: str, essl_text: bool = False
+) -> dict[str, tuple[str, list[Signature]]]:
+    """Every desktop-GLSL prototype, or with ``essl_text`` every GLSL ES one, by function name:
+    ``{name: (section, [signature, ...])}``."""
     found: dict[str, tuple[str, list[Signature]]] = {}
-    for section, subsection, block in _blocks(text):
+    for section, subsection, block in _blocks(text, essl_text):
         if "{" in block or section in LEFT_OUT or subsection in LEFT_OUT:
             continue
         for statement in re.split(r"\n(?=\S)", block):
@@ -164,7 +171,7 @@ def overloads(text: str) -> dict[str, tuple[str, list[Signature]]]:
     return found
 
 
-def _stage(name: str, group: str) -> str:
+def stage(name: str, group: str) -> str:
     return "fragment" if name in IMPLICIT_LOD else STAGES.get(group, "compute")
 
 
@@ -177,7 +184,7 @@ def parse(text: str) -> list[Feature]:
             pick(signatures, UNIFORMS["glsl"]),
             group=group,
             crossgl=name,
-            stage=_stage(name, group),
+            stage=stage(name, group),
             target=TARGETS.get(group, ""),
         )
         for name, (group, signatures) in sorted(overloads(text).items())

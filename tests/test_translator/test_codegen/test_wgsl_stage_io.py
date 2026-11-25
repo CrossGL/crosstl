@@ -272,11 +272,12 @@ shader S {
 
 
 def test_unmapped_system_semantic_parameter_is_refused():
-    with pytest.raises(WGSLStageIOUnsupportedError, match="SV_ClipDistance0"):
+    # WGSL has no cull distances (WGSL section 13.3.1.1).
+    with pytest.raises(WGSLStageIOUnsupportedError, match="SV_CullDistance0"):
         generate_wgsl("""
 shader S {
     fragment {
-        vec4 main(vec4 color, float clip @ SV_ClipDistance0) @ gl_FragColor {
+        vec4 main(vec4 color, float cull @ SV_CullDistance0) @ gl_FragColor {
             return color;
         }
     }
@@ -285,18 +286,18 @@ shader S {
 
 
 def test_unmapped_system_semantic_member_is_refused():
-    with pytest.raises(WGSLStageIOUnsupportedError, match="VSOut.clip"):
+    with pytest.raises(WGSLStageIOUnsupportedError, match="VSOut.cull"):
         generate_wgsl("""
 shader S {
     struct VSOut {
         vec4 position @ gl_Position;
-        float clip @ SV_ClipDistance0;
+        float cull @ SV_CullDistance0;
     }
     vertex {
         VSOut main(vec3 p) {
             VSOut o;
             o.position = vec4(p, 1.0);
-            o.clip = p.x;
+            o.cull = p.x;
             return o;
         }
     }

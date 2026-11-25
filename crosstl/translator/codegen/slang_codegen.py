@@ -91,6 +91,7 @@ from .match_utils import infer_match_expression_result_type
 from .relational_builtins import lower_relational_builtins
 from .sampler_pairs import canonicalize_separate_textures
 from .slang_buffer_block_types import SlangBufferBlockTypesMixin
+from .slang_builtin_input_members import lower_slang_builtin_input_members
 from .slang_byte_address_words import SlangThreeComponentAccess
 from .slang_call_expressions import SlangCallExpressionMixin
 from .slang_conservative_depth import slang_conservative_depth_semantic
@@ -144,6 +145,10 @@ from .slang_varying_locations import (
     location_attribute_index,
     struct_member_location_prefix,
     varying_location_semantic,
+)
+from .slang_wave_extensions import (
+    SLANG_EXTENDED_WAVE_OPERATIONS,
+    generate_slang_extended_wave_operation,
 )
 from .slang_wave_mesh_ops import SlangWaveMeshOpsMixin
 from .slang_wave_shuffles import (
@@ -381,6 +386,12 @@ class SlangCodeGen(
             "gl_BaryCoordNoPerspEXT": "SV_Barycentrics",
             "gl_FragDepth": "SV_Depth",
             "gl_FragStencilRefEXT": "SV_StencilRef",
+            # GL_EXT_fragment_shading_rate's rate flags and D3D12_SHADING_RATE encode the same rates; slangc writes
+            # SV_ShadingRate as the SPIR-V ShadingRateKHR input or PrimitiveShadingRateKHR output.
+            "gl_ShadingRateEXT": "SV_ShadingRate",
+            "gl_PrimitiveShadingRateEXT": "SV_ShadingRate",
+            # The view of a multiview render pass: SPIR-V ViewIndex, which slangc writes for SV_ViewID.
+            "gl_ViewIndex": "SV_ViewID",
             "gl_FragColor": "SV_Target",
             "gl_SampleID": "SV_SampleIndex",
             "gl_SampleMask": "SV_Coverage",
@@ -445,6 +456,7 @@ class SlangCodeGen(
         refuse_cooperative_matrices(ast, label="Slang", target="slang")
         self.slang_narrow_scalars_promote = source_promotes_narrow_scalars(ast)
         ast = lower_union_storage(ast, "slang")
+        ast = lower_slang_builtin_input_members(ast)
         # Slang textures are separate objects, as in HLSL: a separate CrossGL texture declares the same Texture2D.
         ast = canonicalize_separate_textures(ast)
         ast = lower_slang_storage_instances(ast)
@@ -1676,6 +1688,8 @@ class SlangCodeGen(
     def generate_slang_wave_op_expression(self, node):
         if node.operation in SLANG_WAVE_SHUFFLE_ARITIES:
             return self.generate_slang_wave_shuffle_expression(node)
+        if node.operation in SLANG_EXTENDED_WAVE_OPERATIONS:
+            return generate_slang_extended_wave_operation(self, node)
         expected_arity = self.SLANG_WAVE_INTRINSIC_ARITIES.get(node.operation)
         if expected_arity is None:
             return self.unsupported_slang_wave_op_expression(

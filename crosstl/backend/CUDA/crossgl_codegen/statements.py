@@ -3,12 +3,7 @@
 import re
 
 from ...assignment_operands import grouped_operand
-from ..CudaAst import (
-    InitializerListNode,
-    MemberAccessNode,
-    UnaryOpNode,
-    VariableNode,
-)
+from ..CudaAst import InitializerListNode, MemberAccessNode, UnaryOpNode, VariableNode
 
 
 class CudaImportStatementMixin:
@@ -178,11 +173,9 @@ class CudaImportStatementMixin:
         crossgl_func = atomic_map[operation]
         expression = f"{crossgl_func}({args_str})"
         if scope == "system":
-            return self.refuse_import(
-                f"CUDA {node.operation}: CrossGL atomics are device-scoped, and a system-scoped atomic is also "
-                "atomic for the host and peer devices",
-                expression,
-            )
+            # A system-scoped atomic is also atomic for the host and peer devices. CrossGL keeps its CUDA name, which
+            # CUDA and HIP output write back and the other generators refuse with a typed diagnostic.
+            return f"{node.operation}({args_str})"
         # A block-scoped atomic is atomic for its block; the device-scoped CrossGL atomic is atomic for every
         # thread on the device, which includes the block.
         return expression

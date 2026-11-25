@@ -12,6 +12,7 @@ METAL_FUNCTION_STATE_ATTRIBUTES = (
     "current_function_return_type",
     "current_function_return_wrapper",
     "current_metal_value_array_locals",
+    "current_metal_value_array_names",
     "current_local_identifier_remaps",
     "local_variable_types",
     "current_address_space_variables",

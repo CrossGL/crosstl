@@ -59,6 +59,11 @@ from .wgsl_buffer_atomics import ATOMIC_NAMES, WGSLBufferAtomicsMixin
 from .wgsl_buffer_resources import WGSLBufferResourceMixin
 from .wgsl_builtin_options import WGSLBuiltinOptionMixin
 from .wgsl_call_lowering import WGSLCallLoweringMixin
+from .wgsl_clip_distances import (
+    CLIP_DISTANCES_SEMANTICS,
+    is_scalar_clip_distance_access,
+    scalar_clip_distance_value,
+)
 from .wgsl_composite_conditionals import WGSLCompositeConditionalMixin
 from .wgsl_conditional_effects import WGSLConditionalEffectsMixin
 from .wgsl_constructors import WGSLConstructorMixin
@@ -295,6 +300,7 @@ class WGSLCodeGen(
         "gl_numsubgroups": "num_subgroups",
         "subgroup_id": "subgroup_id",
         "gl_subgroupid": "subgroup_id",
+        **CLIP_DISTANCES_SEMANTICS,
     }
     BUILTIN_IDENTIFIER_ALIASES = {
         "gl_Position": "position",
@@ -919,6 +925,9 @@ class WGSLCodeGen(
         self._builtin_option_specializations = {}
         self._generic_function_specializer = None
         self._uses_primitive_index = False
+        self._uses_clip_distances = False
+        self._clip_distance_members = set()
+        self._scalar_clip_distance_members = set()
         self._int_builtin_members = {}
         self._enum_type_names = set()
         self._enum_variant_constants = {}
@@ -1363,6 +1372,9 @@ class WGSLCodeGen(
             if is_int_builtin_member(self, expr):
                 access = f"{self.generate_expression(expr.object_expr)}.{member_name}"
                 return f"i32({access})"
+            if is_scalar_clip_distance_access(self, expr):
+                # A float clip distance is the only element of array<f32, 1>.
+                member_name = f"{member_name}[0]"
             if isinstance(
                 expr.object_expr, IdentifierNode
             ) and self.is_pointer_identifier(expr.object_expr.name):
@@ -1607,16 +1619,21 @@ class WGSLCodeGen(
             function_name
         ):
             struct = self._structs_by_name[function_name]
-            member_types = [
-                member.member_type
+            members = [
+                member
                 for member in getattr(struct, "members", None) or []
                 if hasattr(member, "member_type")
             ]
             # Only a call with one argument per member: zip would drop any argument past the last member.
-            if member_types and len(node.arguments) == len(member_types):
+            if members and len(node.arguments) == len(members):
                 args = ", ".join(
-                    self.generate_expression_for_target(arg, member_type)
-                    for arg, member_type in zip(node.arguments, member_types)
+                    scalar_clip_distance_value(
+                        self,
+                        struct.name,
+                        member.name,
+                        self.generate_expression_for_target(arg, member.member_type),
+                    )
+                    for arg, member in zip(node.arguments, members)
                 )
                 return f"{self.type_name_string(function_name)}({args})"
         resolved_function = None

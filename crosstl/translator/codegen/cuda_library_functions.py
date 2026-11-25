@@ -61,6 +61,10 @@ _OTHER_MATH = frozenset(_MATH_FUNCTIONS) | {
     "signbit",
 }
 
+# HIP Math API: the integer powers ``powif`` (single precision) and ``powi`` (double precision), which CUDA lacks and
+# CrossGL spells ``powi`` for both (:mod:`.cuda_integer_powers`).
+_HIP_MATH = frozenset({"powi", "powif"})
+
 # "Half Precision Intrinsics" and "Bfloat16 Precision Intrinsics" that do not start with ``__``.
 _HALF_PRECISION = frozenset(
     {
@@ -165,6 +169,7 @@ _GENERATOR_HELPERS = frozenset({"inverse", "transpose"})
 CUDA_LIBRARY_FUNCTIONS = (
     _SINGLE_PRECISION
     | _OTHER_MATH
+    | _HIP_MATH
     | _HALF_PRECISION
     | _DEVICE_RUNTIME
     | _ATOMICS
