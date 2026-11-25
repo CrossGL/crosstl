@@ -1,4 +1,5 @@
-"""Binary64 exp, exp2, log, log2 and pow on targets whose built-ins take binary32 at most.
+"""Binary64 exponential, logarithmic, inverse trigonometric, hyperbolic and rounding functions on targets whose
+built-ins take binary32 at most.
 
 The OpenGL, Vulkan and DirectX outputs call the CrossGL helpers of crosstl/translator/semantics/libm_binary64 instead
 of the built-ins, which have no binary64 form there; targets with binary64 math libraries keep the call. The helpers'
@@ -22,6 +23,8 @@ TARGETS = ("opengl", "vulkan", "directx")
 CUDA = """extern "C" __global__ void probe(const double* a, const double* b, double* o) {
     unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
     o[i] = exp(a[i]) + exp2(a[i]) + log(b[i]) + log2(b[i]) + pow(a[i], b[i]);
+    o[i] += asin(a[i]) + acos(a[i]) + atan(a[i]) + atan2(a[i], b[i]) + round(b[i]);
+    o[i] += sinh(a[i]) + cosh(a[i]) + tanh(a[i]) + asinh(a[i]) + acosh(b[i]) + atanh(a[i]);
 }
 """
 
@@ -53,13 +56,38 @@ def _bits(values):
 
 
 # Accuracy -------------------------------------------------------------------------------------------------------
+# The largest error each helper may have on its samples, in ulps. CUDA bounds its binary64 functions (CUDA C++
+# Programming Guide, mathematical functions appendix) at one ulp for exp, exp2, log, log2, cosh and tanh, two for
+# pow, sinh, asin, acos, atan, atan2 and atanh, and three for asinh and acosh, and rounds exactly; CUDA is the
+# strictest of the languages whose programs call these functions on double values. The bounds below are that bound
+# or one ulp, whichever is smaller.
+BOUNDS = {
+    "atan2": 2.0,
+    "atanh": 2.0,
+    "asinh": 3.0,
+    "acosh": 3.0,
+}
+EXACT = {"__cgl_round_away"}
+
+
 @pytest.mark.parametrize("function", sorted(FUNCTIONS))
-def test_each_helper_is_within_one_ulp_on_its_samples(function):
-    # fdlibm documents exp, log and pow within one ulp; CUDA's binary64 bounds are one ulp for exp, exp2, log and
-    # log2 and two for pow. The samples cover every exponent, the reduction boundaries and subnormal results.
+def test_each_helper_is_within_its_bound_on_its_samples(function):
+    # The samples cover every exponent, the reduction boundaries and subnormal results.
     operands = libm64_accuracy.samples(function, count=400)
     worst, where = libm64_accuracy.max_error(function, *operands)
-    assert worst < 1.0, (function, worst, where)
+    if function in EXACT:
+        assert worst == 0.0, (function, worst, where)
+    else:
+        assert worst < BOUNDS.get(function, 1.0), (function, worst, where)
+
+
+def test_hyperbolic_helpers_round_once():
+    # sinh, cosh and tanh carry e^x as a double-double (libm_binary64/extended.py) and round once at the end, so
+    # they stay near half an ulp, including near the overflow threshold where e^x itself overflows.
+    for function in ("sinh", "cosh", "tanh"):
+        operands = libm64_accuracy.samples(function, count=400)
+        worst, where = libm64_accuracy.max_error(function, *operands)
+        assert worst < 0.6, (function, worst, where)
 
 
 def test_exact_cases_are_exact():
@@ -117,6 +145,105 @@ UNARY_SPECIAL_VALUES = {
         (INF, INF),
         (1.0, 0.0),
     ],
+    # C99 Annex F.9.1 and F.9.2.
+    "asin": [
+        (NAN, NAN),
+        (0.0, 0.0),
+        (-0.0, -0.0),
+        (1.0, math.pi / 2),
+        (-1.0, -math.pi / 2),
+        (1.0 + 2.0**-52, NAN),
+        (-2.0, NAN),
+        (INF, NAN),
+    ],
+    "acos": [
+        (NAN, NAN),
+        (1.0, 0.0),
+        (-1.0, math.pi),
+        (0.0, math.pi / 2),
+        (-0.0, math.pi / 2),
+        (1.0 + 2.0**-52, NAN),
+        (-INF, NAN),
+    ],
+    "atan": [
+        (NAN, NAN),
+        (0.0, 0.0),
+        (-0.0, -0.0),
+        (INF, math.pi / 2),
+        (-INF, -math.pi / 2),
+        (2.0**70, math.pi / 2),
+    ],
+    "sinh": [
+        (NAN, NAN),
+        (0.0, 0.0),
+        (-0.0, -0.0),
+        (INF, INF),
+        (-INF, -INF),
+        (711.0, INF),
+        (-711.0, -INF),
+        (2.0**-1074, 2.0**-1074),
+    ],
+    "cosh": [
+        (NAN, NAN),
+        (0.0, 1.0),
+        (-0.0, 1.0),
+        (INF, INF),
+        (-INF, INF),
+        (711.0, INF),
+        (-711.0, INF),
+    ],
+    "tanh": [
+        (NAN, NAN),
+        (0.0, 0.0),
+        (-0.0, -0.0),
+        (INF, 1.0),
+        (-INF, -1.0),
+        (30.0, 1.0),
+        (-30.0, -1.0),
+        (-(2.0**-1074), -(2.0**-1074)),
+    ],
+    "asinh": [
+        (NAN, NAN),
+        (0.0, 0.0),
+        (-0.0, -0.0),
+        (INF, INF),
+        (-INF, -INF),
+    ],
+    "acosh": [
+        (NAN, NAN),
+        (1.0, 0.0),
+        (1.0 - 2.0**-53, NAN),
+        (0.0, NAN),
+        (-INF, NAN),
+        (INF, INF),
+    ],
+    "atanh": [
+        (NAN, NAN),
+        (0.0, 0.0),
+        (-0.0, -0.0),
+        (1.0, INF),
+        (-1.0, -INF),
+        (1.0 + 2.0**-52, NAN),
+        (-INF, NAN),
+    ],
+    # C11 7.12.9.6: halfway cases away from zero, the sign of a zero kept.
+    "__cgl_round_away": [
+        (NAN, NAN),
+        (0.0, 0.0),
+        (-0.0, -0.0),
+        (0.49999999999999994, 0.0),
+        (-0.49999999999999994, -0.0),
+        (0.5, 1.0),
+        (-0.5, -1.0),
+        (2.5, 3.0),
+        (-2.5, -3.0),
+        (1048575.5, 1048576.0),
+        (4503599627370495.5, 4503599627370496.0),
+        (4503599627370497.0, 4503599627370497.0),
+        (INF, INF),
+        (-INF, -INF),
+        (2.0**-1074, 0.0),
+    ],
 }
 
 
@@ -172,6 +299,46 @@ POW_SPECIAL_VALUES = [
 ]
 
 
+# C99 Annex F.9.1.4.
+ATAN2_SPECIAL_VALUES = [
+    (0.0, -0.0, math.pi),
+    (-0.0, -0.0, -math.pi),
+    (0.0, 0.0, 0.0),
+    (-0.0, 0.0, -0.0),
+    (0.0, -1.0, math.pi),
+    (-0.0, -1.0, -math.pi),
+    (0.0, 1.0, 0.0),
+    (-0.0, 1.0, -0.0),
+    (-1.0, 0.0, -math.pi / 2),
+    (-1.0, -0.0, -math.pi / 2),
+    (1.0, 0.0, math.pi / 2),
+    (1.0, -0.0, math.pi / 2),
+    (1.0, -INF, math.pi),
+    (-1.0, -INF, -math.pi),
+    (1.0, INF, 0.0),
+    (-1.0, INF, -0.0),
+    (INF, 1.0, math.pi / 2),
+    (-INF, 1.0, -math.pi / 2),
+    (INF, -INF, 3 * math.pi / 4),
+    (-INF, -INF, -3 * math.pi / 4),
+    (INF, INF, math.pi / 4),
+    (-INF, INF, -math.pi / 4),
+    (NAN, 1.0, NAN),
+    (1.0, NAN, NAN),
+]
+
+
+def test_atan2_special_values_follow_c99_annex_f():
+    y = [case[0] for case in ATAN2_SPECIAL_VALUES]
+    x = [case[1] for case in ATAN2_SPECIAL_VALUES]
+    got = libm64_accuracy.evaluate("atan2", y, x)
+    for (ordinate, abscissa, want), result in zip(ATAN2_SPECIAL_VALUES, got):
+        if math.isnan(want):
+            assert math.isnan(result), (ordinate, abscissa, result)
+        else:
+            assert _bits(result) == _bits(want), (ordinate, abscissa, result, want)
+
+
 def test_pow_special_values_follow_c99_annex_f():
     x = [case[0] for case in POW_SPECIAL_VALUES]
     y = [case[1] for case in POW_SPECIAL_VALUES]
@@ -216,7 +383,24 @@ def test_cuda_binary64_math_calls_the_helpers_on_glsl_and_hlsl(tmp_path, backend
 
 def test_cuda_binary64_math_is_valid_spirv(tmp_path):
     code = translate(tmp_path, CUDA, "vulkan", ".cu")
-    for name in ("Exp", "Exp2", "Log", "Log2", "Pow"):
+    for name in (
+        "Exp",
+        "Exp2",
+        "Log",
+        "Log2",
+        "Pow",
+        "Asin",
+        "Acos",
+        "Atan",
+        "Atan2",
+        "Sinh",
+        "Cosh",
+        "Tanh",
+        "Asinh",
+        "Acosh",
+        "Atanh",
+        "Round",
+    ):
         assert f"%1 {name} " not in code
     assert "PackDouble2x32" in code and "UnpackDouble2x32" in code
     if shutil.which("spirv-as") and shutil.which("spirv-val"):
@@ -269,6 +453,16 @@ def test_vector_operands_call_a_per_component_lift(tmp_path, backend):
     assert _calls(code, "cgl_rule_libm64_log_v3")
     assert _calls(code, "cgl_rule_libm64_pow_v3")
     assert not _calls(code, "log") and not _calls(code, "pow")
+
+
+@pytest.mark.parametrize("backend", ["opengl", "directx"])
+def test_two_operand_atan_is_atan2(tmp_path, backend):
+    # GLSL's atan(y, x) is the two-argument arc tangent (GLSL 4.60 section 8.1).
+    code = crossgl(tmp_path, "data[i] = atan(x, x + 1.0) + atan(x);", backend)
+    assert _calls(code, "cgl_rule_libm64_atan2") and _calls(
+        code, "cgl_rule_libm64_atan"
+    )
+    assert not _calls(code, "atan") and not _calls(code, "atan2")
 
 
 @pytest.mark.parametrize("backend", ["opengl", "vulkan"])

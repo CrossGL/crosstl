@@ -111,15 +111,29 @@ def test_opencl_vector_round_uses_the_lane_helper(tmp_path):
     assert "rint(a[i])" in metal
 
 
-def test_a_binary64_operand_without_a_helper_is_refused(tmp_path):
+def test_a_binary64_operand_calls_the_binary64_helper(tmp_path):
+    # GLSL, SPIR-V and HLSL round binary64 values with the word-arithmetic helper of libm_binary64.
     source = """__global__ void k(const double *a, double *o) {
     unsigned int i = threadIdx.x;
     o[i] = round(a[i]);
 }
 """
+    for backend in ("directx", "opengl"):
+        code = translate(tmp_path, source, ".cu", backend)
+        assert "cgl_rule_libm64_round_away(" in code, backend
+        assert HELPER not in code, backend
+    assert "round(a[i])" in translate(tmp_path, source, ".cu", "cuda")
+
+
+def test_a_binary64_operand_without_a_helper_is_refused(tmp_path):
+    source = """__global__ void k(const double *a, double *o) {
+    unsigned int i = threadIdx.x;
+    o[i] = sin(a[i]);
+}
+"""
     with pytest.raises(RuleInexpressibleError, match="binary32"):
         translate(tmp_path, source, ".cu", "directx")
-    assert "round(a[i])" in translate(tmp_path, source, ".cu", "cuda")
+    assert "sin(a[i])" in translate(tmp_path, source, ".cu", "cuda")
 
 
 @pytest.mark.skipif(shutil.which("xcrun") is None, reason="needs the Metal toolchain")

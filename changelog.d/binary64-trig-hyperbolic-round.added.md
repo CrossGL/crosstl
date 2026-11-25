@@ -1,0 +1,1 @@
+GLSL, SPIR-V and HLSL output compute `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `asinh`, `acosh`, `atanh` and `round` of `double` operands with CrossGL helpers in binary64 arithmetic, as CUDA, HIP and OpenCL C programs call them. Before, the translation was refused, since those targets declare the functions for 32-bit floats only.

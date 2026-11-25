@@ -59108,7 +59108,7 @@ def test_translate_project_reports_unrepresentable_inverse_hyperbolic_type(tmp_p
         textwrap.dedent("""
             shader UnsupportedInverseHyperbolic {
                 compute {
-                    double apply(double value) {
+                    int apply(int value) {
                         return acosh(value);
                     }
                 }
@@ -59139,10 +59139,10 @@ def test_translate_project_reports_unrepresentable_inverse_hyperbolic_type(tmp_p
     assert diagnostic["missingCapabilities"] == ["directx.inverse-hyperbolic-lowering"]
     assert diagnostic["details"] == {
         "mathIntrinsic": {
-            "operandType": "double",
+            "operandType": "int",
             "operation": "acosh",
-            "reason": "double-transcendental-contract-unavailable",
-            "resultType": "double",
+            "reason": "unsupported-operand-type",
+            "resultType": "int",
             "targetProfile": "default",
         },
         "sourcePath": "shaders/inverse_hyperbolic.cgl",
