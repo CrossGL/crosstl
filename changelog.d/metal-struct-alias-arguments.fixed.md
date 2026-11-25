@@ -1,0 +1,1 @@
+Metal input: a struct's own type aliases now resolve inside the template arguments of its member types (`vec<scalar_T, 2> w;`), and generic structs spell plain member aliases in terms of their parameters, instead of leaving an undeclared alias name every target refused.
