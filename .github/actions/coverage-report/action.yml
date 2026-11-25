@@ -1,0 +1,79 @@
+name: Merge the coverage reports
+description: >-
+  Merges the leg reports of a Coverage run into coverage.json and uploads it as the `coverage` artifact. On pull
+  requests it also prints the change against the published coverage, and on pull requests and in the merge queue the
+  issue changes the issues job would make on main. The caller checks out the commit first.
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v7
+      with:
+        python-version: "3.13"
+        cache: pip
+
+    - name: Install CrossTL
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e .
+
+    - uses: actions/download-artifact@v8
+      with:
+        pattern: coverage-*
+        merge-multiple: true
+
+    - name: Merge the reports
+      shell: bash
+      run: |
+        set -euo pipefail
+        python -m tools.coverage merge coverage-*.json --output coverage.json | tee summary.txt
+        {
+          echo "### Coverage"
+          echo
+          echo '```'
+          cat summary.txt
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+
+    - uses: actions/upload-artifact@v7
+      with:
+        name: coverage
+        path: coverage.json
+        retention-days: 14
+
+    # The coverage branch is public, so reading it needs no token; naming the pull requests in between reads commits.
+    - name: Compare with the published coverage
+      if: github.event_name == 'pull_request'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      run: |
+        set -euo pipefail
+        published="$RUNNER_TEMP/published"
+        if git fetch --quiet --depth=1 origin coverage && mkdir -p "$published" \
+          && git archive FETCH_HEAD | tar -x -C "$published"; then
+          python -m tools.coverage compare "$published/coverage.json" coverage.json \
+            --repository "$GITHUB_REPOSITORY" --head "$HEAD_SHA" | tee compare.md
+          { echo "### Change against main"; echo; cat compare.md; } >> "$GITHUB_STEP_SUMMARY"
+        else
+          echo "No published coverage to compare with yet."
+        fi
+
+    # Pull requests and the merge queue only print what the issues job would change on main.
+    - name: Plan the issue changes
+      if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        python -m tools.coverage issues coverage.json --dry-run --repository "$GITHUB_REPOSITORY" | tee plan.txt
+        {
+          echo "### Issue changes on main"
+          echo
+          echo '```'
+          cat plan.txt
+          echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
