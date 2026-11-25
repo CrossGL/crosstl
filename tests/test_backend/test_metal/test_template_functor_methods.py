@@ -153,8 +153,12 @@ def test_functor_translates_for_other_targets(tmp_path, backend):
         str(_write(tmp_path, "members-and-chains")), backend=backend
     )
     # GLSL reserves `__` in identifiers, so its output spells the lowered members with one underscore.
-    assert re.search(r"\bLess_float__?operator_call\(op, a, Less_float__?twice\(op, b\)\)", output)
-    assert re.search(r"\bLess_int__?operator_call\(op, a, Less_int__?twice\(op, b\)\)", output)
+    assert re.search(
+        r"\bLess_float__?operator_call\(op, a, Less_float__?twice\(op, b\)\)", output
+    )
+    assert re.search(
+        r"\bLess_int__?operator_call\(op, a, Less_int__?twice\(op, b\)\)", output
+    )
 
 
 def test_functor_spirv_output_validates(tmp_path):

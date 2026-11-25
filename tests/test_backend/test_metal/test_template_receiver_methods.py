@@ -25,7 +25,7 @@ using namespace metal;
 template <typename T, int M, int N>
 struct Tile {
   T v[M * N];
-  METAL_FUNC thread T& frag_at(const short i, const short j) { return v[i * N + j]; }
+  METAL_FUNC thread T& frag_at(const short i, const short j) thread { return v[i * N + j]; }
 };
 template <typename T, int M, int N>
 METAL_FUNC void tile_add(thread Tile<T, M, N>& D, thread Tile<T, M, N>& A) {
@@ -36,9 +36,7 @@ METAL_FUNC void tile_add(thread Tile<T, M, N>& D, thread Tile<T, M, N>& A) {
 """
 
 # The reproducer of #4986 on one word buffer: the call sits in a method of a plain struct.
-PLAIN_STRUCT = (
-    TILE
-    + """struct Block {
+PLAIN_STRUCT = TILE + """struct Block {
   METAL_FUNC int run(int x, int y) thread {
     Tile<int, 1, 2> P, Q;
     P.v[0] = x;
@@ -54,12 +52,9 @@ kernel void run(device int* words [[buffer(0)]], uint gid [[thread_position_in_g
   words[0] = b.run(words[1], words[2]);
 }
 """
-)
 
 # The method belongs to a struct template, used at two element types.
-TEMPLATE_BLOCK = (
-    TILE
-    + """template <typename U>
+TEMPLATE_BLOCK = TILE + """template <typename U>
 struct Block {
   METAL_FUNC U run(U x, U y) thread {
     Tile<U, 1, 2> P, Q;
@@ -78,12 +73,9 @@ kernel void run(device int* words [[buffer(0)]], uint gid [[thread_position_in_g
   words[3] = int(f.run(float(words[5]), 0.5f));
 }
 """
-)
 
 # The tiles are data members of the struct whose method calls the template.
-MEMBER_TILES = (
-    TILE
-    + """struct Block {
+MEMBER_TILES = TILE + """struct Block {
   Tile<int, 1, 2> P, Q;
   METAL_FUNC int run(int x, int y) thread {
     P.v[0] = x;
@@ -99,12 +91,9 @@ kernel void run(device int* words [[buffer(0)]], uint gid [[thread_position_in_g
   words[0] = b.run(words[1], words[2]);
 }
 """
-)
 
 # The method reaches the template through another function template that makes no member call itself.
-CHAINED = (
-    TILE
-    + """template <typename T, int M, int N>
+CHAINED = TILE + """template <typename T, int M, int N>
 METAL_FUNC void tile_add_twice(thread Tile<T, M, N>& D, thread Tile<T, M, N>& A) {
   tile_add(D, A);
   tile_add(D, A);
@@ -125,12 +114,9 @@ kernel void run(device int* words [[buffer(0)]], uint gid [[thread_position_in_g
   words[0] = b.run(words[1], words[2]);
 }
 """
-)
 
 # The same call in a free function, which already translated for HLSL and GLSL.
-FREE_FUNCTION = (
-    TILE
-    + """METAL_FUNC int run_tiles(int x, int y) {
+FREE_FUNCTION = TILE + """METAL_FUNC int run_tiles(int x, int y) {
   Tile<int, 1, 2> P, Q;
   P.v[0] = x;
   P.v[1] = y;
@@ -143,7 +129,6 @@ kernel void run(device int* words [[buffer(0)]], uint gid [[thread_position_in_g
   words[0] = run_tiles(words[1], words[2]);
 }
 """
-)
 
 SOURCES = {
     "plain-struct": PLAIN_STRUCT,

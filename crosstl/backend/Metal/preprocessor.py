@@ -44,10 +44,19 @@ from .integral_constant_tags import (
 )
 from .member_address_types import addressed_member_pointer_type
 from .member_lowering_layers import lower_members_with_late_specializations
+from .method_struct_carriers import (
+    lower_late_member_functions,
+    method_struct_template_names,
+)
 from .namespaced_specializations import place_in_namespace, specialization_reference
 from .narrow_float_constants import metal_predefined_constant_type
 from .operator_argument_types import infer_conditional_type, infer_unary_sign_type
 from .overload_precedence import exact_template_outranks
+from .pending_receiver_structs import (
+    deferred_receiver_structs,
+    final_member_lowering,
+    reset_deferred_receiver_structs,
+)
 from .pointer_conversions import pointer_conversion_type
 from .preprocessing.access_type_inference import MetalAccessTypeInferenceMixin
 from .preprocessing.call_rewriting import MetalCallRewriteMixin
@@ -130,15 +139,6 @@ from .simd_group_template_overloads import (
 )
 from .source_analysis_cache import SourceAnalysisCache
 from .specialized_member_types import specialized_member_type_template_names
-from .method_struct_carriers import (
-    lower_late_member_functions,
-    method_struct_template_names,
-)
-from .pending_receiver_structs import (
-    deferred_receiver_structs,
-    final_member_lowering,
-    reset_deferred_receiver_structs,
-)
 from .static_member_constants import (
     materialized_struct_for_template_id,
     static_member_constant_substituter,
