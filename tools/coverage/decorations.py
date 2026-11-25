@@ -205,10 +205,27 @@ SOURCE = {
 # The built-ins that are constants: GLSL defines ``gl_WorkGroupSize`` as the local size, so a translation may write
 # the value itself, as slangc does for ``WorkgroupSize()``.
 FOLDED = frozenset({"BuiltIn.WorkgroupSize"})
-# The kinds of anchor a language leaves to the host, which a translation imported from it cannot carry: an OpenCL C
-# kernel names no image format, since the host gives each image its ``cl_image_format`` when it creates it, so the
-# HLSL CrossTL writes from an OpenCL C probe is not checked for one.
-HOSTED = {"opencl": frozenset({"ImageFormat"})}
+# The kinds of anchor a language leaves to the host, which a translation imported from it into another language
+# cannot carry. No storage-image probe of these languages names an image format: the host gives an OpenCL C image its
+# ``cl_image_format`` when it creates it, a Metal texture its ``MTLPixelFormat``, a CUDA or HIP surface the channel
+# format of the array it is created on (``cudaCreateSurfaceObject``, ``hipCreateSurfaceObject``), and an HLSL
+# ``RWTexture2D`` the format of the unordered-access view bound to it (``D3D12_UNORDERED_ACCESS_VIEW_DESC``); the
+# kernel declares only the texel type. So the SPIR-V or HLSL CrossTL writes from such a probe is not checked for a
+# format. A translation back into the probe's own language is, since it can spell what the probe spells.
+_FORMAT = frozenset({"ImageFormat"})
+HOSTED = dict.fromkeys(("opencl", "metal", "cuda", "hip", "hlsl"), _FORMAT)
+# The built-ins a language has no variable for, whose probes compute them from the built-ins it has, so no
+# translation imported from them can carry the anchor. CUDA's built-in variables are ``gridDim``, ``blockIdx``,
+# ``blockDim``, ``threadIdx`` and ``warpSize`` (CUDA C++ Programming Guide, "Built-in Variables"), so its probes
+# compute the flattened thread index, the lane and warp indices and the number of warps (:mod:`.templates.subgroups`).
+# HIP has the same variables and ``__lane_id()``, which its lane-index probe reads.
+_FLATTENED = frozenset(
+    {"BuiltIn.LocalInvocationIndex", "BuiltIn.NumSubgroups", "BuiltIn.SubgroupId"}
+)
+COMPUTED = {
+    "cuda": _FLATTENED | {"BuiltIn.SubgroupLocalInvocationId"},
+    "hip": _FLATTENED,
+}
 # How :func:`lost` begins, which the bug issue for a translation that drops an anchor recognizes.
 LOSES = "the translation loses"
 # The anchor of the device-global probe (:mod:`.templates.memory`), whose ``float acc[64]`` every invocation shares.
@@ -295,13 +312,14 @@ def lost(feature: Feature, language: str, source: str, imported: str = "") -> st
 
     Empty when it keeps them all, when ``feature`` has none to check or when ``source`` cannot be compiled here. A
     translation ``imported`` from another language is not checked for the anchors that language leaves to the host
-    (:data:`HOSTED`).
+    (:data:`HOSTED`) or has no built-in for (:data:`COMPUTED`).
     """
-    hosted = HOSTED.get(imported, frozenset())
+    hosted = HOSTED.get(imported, frozenset()) if imported != language else frozenset()
+    computed = COMPUTED.get(imported, frozenset())
     wanted = [
         (anchor, pattern)
         for anchor, pattern in _wanted(feature, language)
-        if anchor.partition(".")[0] not in hosted
+        if anchor.partition(".")[0] not in hosted and anchor not in computed
     ]
     declared = SOURCE.get(language, {})
     missing = [
