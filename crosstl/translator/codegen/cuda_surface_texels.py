@@ -12,8 +12,11 @@ and the x byte offset counts elements of that size. A load widens the element to
 ones reading as 0 and alpha as 1, and maps 8- and 16-bit unorm and snorm components to floats; a store narrows the
 value to the element, converting a normalized component by clamping it and rounding to nearest. A 16-bit float
 channel is stored as the bits of a ``__half`` (cuda_fp16.h, hip_fp16.h) and converted with round to nearest even.
-The 8- and 16-bit integer and packed formats have no conversion here yet and are refused. An image without a
-format or texel type keeps the generator's four-component default.
+An 8- or 16-bit integer channel (``rgba8ui``, ``r16i``) widens to the 32-bit integer of its signedness on a load,
+zero- or sign-extended, and a store keeps its low bits: an integer the format cannot represent is stored as an
+undefined value (Vulkan, "Texel Output Format Conversion"), so truncation is one of the values allowed. The packed
+formats have no conversion here and are refused. An image without a format or texel type keeps the generator's
+four-component default.
 """
 
 import re
@@ -40,6 +43,9 @@ _STORAGE_VECTOR_PREFIXES = {
 TEXEL_VECTOR_TYPES = {"float": "float4", "int": "int4", "uint": "uint4"}
 
 _FILL = {"float": ("0.0f", "1.0f"), "int": ("0", "1"), "uint": ("0u", "1u")}
+
+# The 32-bit CUDA scalar that an 8- or 16-bit integer channel widens to.
+_INTEGER_SCALARS = {"int": "int", "uint": "unsigned int"}
 
 _FORMAT_SHAPE = re.compile(r"(rgba|rg|r)(8|16|32)(f|i|ui|_snorm)?")
 _CHANNEL_COUNTS = {"r": 1, "rg": 2, "rgba": 4}
@@ -143,6 +149,9 @@ class SurfaceTexel:
             return f"fmaxf({component} / {self._normalized_maximum()}, -1.0f)"
         if self.encoding == "half":
             return f"__half2float(__ushort_as_half({component}))"
+        if self.encoding == "integer":
+            # Zero- or sign-extended by the signedness of the storage type.
+            return f"({_INTEGER_SCALARS[self.kind]}){component}"
         return component
 
     def _store_component(self, component):
@@ -158,6 +167,8 @@ class SurfaceTexel:
             )
         if self.encoding == "half":
             return f"__half_as_ushort(__float2half_rn({component}))"
+        if self.encoding == "integer":
+            return f"({self.storage}){component}"
         return component
 
 
@@ -189,9 +200,19 @@ def format_surface_texel(image_format):
     if bits in (8, 16) and suffix == "_snorm":
         storage = "signed char" if bits == 8 else "short"
         return SurfaceTexel(image_format, "float", count, storage, "snorm", bits)
+    if bits in (8, 16) and suffix in {"i", "ui"}:
+        signed = suffix == "i"
+        storage = {
+            (8, True): "signed char",
+            (8, False): "unsigned char",
+            (16, True): "short",
+            (16, False): "unsigned short",
+        }[(bits, signed)]
+        kind = "int" if signed else "uint"
+        return SurfaceTexel(image_format, kind, count, storage, "integer", bits)
     return UnsupportedSurfaceTexel(
-        f"format {image_format} stores {bits}-bit integer channels, and the generator "
-        "has no conversion between them and the four-component value"
+        f"format {image_format} stores {bits}-bit channels without a type, and the "
+        "generator has no conversion between them and the four-component value"
     )
 
 

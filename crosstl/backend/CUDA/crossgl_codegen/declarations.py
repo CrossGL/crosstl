@@ -240,6 +240,14 @@ class CudaImportDeclarationMixin:
 
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, node.vtype)
+        surface = (
+            self.surface_global_declaration(var_type, node.name, output_name)
+            if self.namespace_scope_variable and not node.value
+            else None
+        )
+        if surface is not None:
+            self.emit(surface)
+            return
         if (
             self.namespace_scope_variable
             and is_device_memory(node)
