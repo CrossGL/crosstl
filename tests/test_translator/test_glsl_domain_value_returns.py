@@ -1,8 +1,9 @@
-"""HLSL domain shaders that return a value instead of a structure lower to GLSL and SPIR-V tessellation stages.
+"""HLSL domain shaders that return a value instead of a structure lower to GLSL tessellation evaluation stages.
 
 ``float4 main(...) : SV_Position`` is a domain shader whose result is the vertex position; a value with a user
 semantic is one stage output. The lowered evaluation entry point returns nothing and writes the value to
-``gl_Position`` or to one located ``out`` variable, as it writes the members of a returned structure.
+``gl_Position`` or to one located ``out`` variable, as it writes the members of a returned structure. SPIR-V output
+reads such a domain shader in place, and the hull it travels with keeps it valid.
 """
 
 import re
@@ -133,7 +134,7 @@ def test_domain_value_with_a_user_semantic_is_one_located_output(tmp_path):
     _glslang(tmp_path, domain, "tese")
 
 
-def test_domain_value_lowers_to_spirv(tmp_path):
+def test_domain_value_with_its_hull_is_valid_spirv(tmp_path):
     spirv = _translate(tmp_path, _source("SV_Position"), "vulkan")
     entry = re.search(
         r'OpEntryPoint TessellationEvaluation %\w+ "Domain"([^\n]*)', spirv

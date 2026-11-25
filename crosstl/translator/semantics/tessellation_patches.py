@@ -31,10 +31,11 @@ invocation's element of per-vertex output arrays and ``gl_out[]``, and writes ``
   backend drops it: it is an optimisation hint, and GLSL clamps levels to ``gl_MaxTessGenLevel`` itself;
 * the domain entry point becomes ``<entry>_domain_point``, called by a new entry that rebuilds the patch-constant
   structure from ``gl_TessLevel*`` and the ``patch in`` variables and writes the returned vertex to the stage
-  outputs. A domain entry point that returns a value rather than a structure (``float4 main(...) : SV_Position``)
-  writes it to the built-in or the one located output its semantic names. GLSL declares the spacing and winding on the evaluation shader, HLSL on the hull, so the domain stage
-  takes ``@partitioning`` and ``@outputtopology`` from the program's hull stage. A GLSL domain stage translated
-  without its hull is refused; SPIR-V leaves those execution modes to the control stage, as DXC does;
+  outputs. In GLSL output, a domain entry point that returns a value rather than a structure
+  (``float4 main(...) : SV_Position``) writes it to the built-in or the one located output its semantic names.
+  GLSL declares the spacing and winding on the evaluation shader, HLSL on the hull, so the domain stage takes
+  ``@partitioning`` and ``@outputtopology`` from the program's hull stage. A GLSL domain stage translated without
+  its hull is refused; SPIR-V leaves those execution modes to the control stage, as DXC does;
 * ``patch[i].member`` reads of an ``InputPatch`` or ``OutputPatch`` read the arrayed variables directly; any other use
   of the patch reads a local array copy of it, and helpers that take a patch take that array.
 
@@ -144,8 +145,12 @@ def lower_tessellation_patches(program, target) -> int:
             entry = getattr(stage, "entry_point", None)
             if entry is None:
                 continue
+            # SPIR-V output reads a domain entry point that returns a value in place: its patch-constant
+            # structure parameter takes the leading elements of the level built-ins and a Patch input per member.
             if _returns_struct(program, stage, entry) or (
-                name == "tessellation_evaluation" and _result_semantic(entry)
+                name == "tessellation_evaluation"
+                and target in GLSL_TARGETS
+                and _result_semantic(entry)
             ):
                 found[name] = stage
     if not found:
