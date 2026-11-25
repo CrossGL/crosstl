@@ -9,6 +9,12 @@ The constants are declared once, at module scope, in front of every entry that n
 specialize a dimension the same way share its constant; a different id or default gets a constant of its own, so
 no name is declared twice.
 
+A program may declare the specialization constant of that id itself, ``const int size @constant_id(0) = 64;`` beside
+``local_size_x_id = 0``, as GLSL does with ``layout(constant_id = 0)`` and as the Slang front end writes
+``[numthreads(size, 1, 1)]``. ``numthreads`` then names that constant, as SPIR-V output's ``WorkgroupSize`` composite
+reads it, instead of declaring a second constant of the same id, which slangc reports as an explicit binding
+overlap. Only an ``int`` constant is named: ``WorkgroupSize()`` is an ``int3``.
+
 A Metal kernel whose result depends on its threadgroup size, but whose source gives none, is sized by the host
 when it dispatches it (:mod:`crosstl.translator.host_workgroup_size`). Its ``numthreads`` reads the
 :data:`~.host_workgroup_size_ids.HOST_WORKGROUP_SIZE_MACROS` when the host defines them on the slangc command line
@@ -29,6 +35,8 @@ from .host_workgroup_size_ids import (
     host_workgroup_size_ids,
     is_host_sized_workgroup,
 )
+from .global_specialization_constants import specialization_constant_declarations
+from .specialization_constants import specialization_constant_ids
 from .specialized_workgroup_size import workgroup_size_specialization_ids
 from .stage_utils import compute_local_size
 
@@ -50,6 +58,7 @@ class SlangWorkgroupSizeConstants:
         # name -> (spec_id, default, host-sized); insertion order is generation order, so output is deterministic.
         self.constants: dict[str, tuple[int, str, bool]] = {}
         self._host_ids: tuple[int, int, int] | None = None
+        self._program_constants: dict[int, str] | None = None
 
     def numthreads(self, execution_config: Any = None) -> str:
         """The ``[numthreads]`` attribute of an entry, with any preprocessor lines it needs."""
@@ -58,7 +67,9 @@ class SlangWorkgroupSizeConstants:
         sizes = list(compute_local_size(execution_config))
         ids = workgroup_size_specialization_ids(execution_config, "Slang")
         for index, spec_id in enumerate(ids):
-            if spec_id is not None:
+            if spec_id is not None and spec_id in self.program_constants():
+                sizes[index] = self.program_constants()[spec_id]
+            elif spec_id is not None:
                 sizes[index] = self._constant(
                     f"crossgl_workgroup_size_{_AXES[index]}",
                     spec_id,
@@ -66,6 +77,20 @@ class SlangWorkgroupSizeConstants:
                     host=False,
                 )
         return f"[numthreads({', '.join(map(str, sizes))})]\n"
+
+    def program_constants(self) -> dict[int, str]:
+        """``{id: name}`` of the program's own ``int`` specialization constants, which a dimension of that id names."""
+        if self._program_constants is None:
+            constants = {}
+            if self.program is not None:
+                declarations = specialization_constant_declarations(self.program)
+                ids = specialization_constant_ids(declarations, "Slang", 2**31 - 1)
+                for node in declarations:
+                    name = getattr(node, "name", None)
+                    if name in ids and _is_int(getattr(node, "const_type", None)):
+                        constants[ids[name]] = name
+            self._program_constants = constants
+        return self._program_constants
 
     def _host_numthreads(self) -> str:
         if self._host_ids is None:
@@ -112,3 +137,8 @@ class SlangWorkgroupSizeConstants:
                 + "#endif\n"
             )
         return code + "\n" if code else ""
+
+
+def _is_int(type_node) -> bool:
+    name = getattr(type_node, "name", type_node)
+    return str(name).strip() in {"int", "i32", "int32_t"}

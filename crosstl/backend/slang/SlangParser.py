@@ -1,5 +1,7 @@
 """Parser for Slang source AST construction."""
 
+import re
+
 from crosstl.translator.refusals import SlangSyntaxError
 
 from .SlangAst import *
@@ -893,8 +895,14 @@ class SlangParser:
         return qualifiers
 
     def parse_declaration_prefixes(self):
+        qualifiers, is_generic, _ = self.parse_declaration_prefixes_with_generics()
+        return qualifiers, is_generic
+
+    def parse_declaration_prefixes_with_generics(self):
+        """The qualifiers before a declaration, whether it is generic, and the parameters of its ``__generic<...>``."""
         qualifiers = []
         is_generic = False
+        generic_parameters = None
         while (
             self.current_token[0] == "GENERIC"
             or self.is_layout_qualifier_at(self.pos)
@@ -906,7 +914,7 @@ class SlangParser:
                 is_generic = True
                 self.eat("GENERIC")
                 if self.current_token[0] == "LESS_THAN":
-                    self.parse_generic_type_suffix()
+                    generic_parameters = self.parse_generic_type_suffix()
             elif self.is_declaration_annotation_at(self.pos):
                 self.parse_declaration_annotation()
             elif self.current_token[0] == "LBRACKET":
@@ -916,7 +924,7 @@ class SlangParser:
             else:
                 qualifiers.append(self.current_token[1])
                 self.eat(self.current_token[0])
-        return qualifiers, is_generic
+        return qualifiers, is_generic, generic_parameters
 
     def parse_declaration_annotation(self):
         self.eat("IDENTIFIER")
@@ -1204,6 +1212,11 @@ class SlangParser:
             elif token_type == "COMMA":
                 parts.append(", ")
             else:
+                # Two words in a row, as in ``let N`` or ``each T``, keep a space between them.
+                if re.fullmatch(r"\w+", parts[-1]) and re.fullmatch(
+                    r"\w+", str(token_value)
+                ):
+                    parts.append(" ")
                 parts.append(str(token_value))
             self.eat(token_type)
         return "".join(parts)
@@ -2375,6 +2388,9 @@ class SlangParser:
             original_type += self.parse_pointer_suffix()
             new_type = self.current_token[1]
             self.eat("IDENTIFIER")
+            # C's declarator form, ``typedef float Triple[3];``, names an array type as ``float[3]`` does.
+            if self.current_token[0] == "LBRACKET":
+                original_type += self.parse_type_array_suffixes()
         else:
             self.eat("TYPEALIAS")
             new_type = self.current_token[1]
@@ -2530,11 +2546,12 @@ class SlangParser:
         attributes = attributes or []
         shader_type = shader_type or self.get_shader_attribute(attributes)
         attributes = self.filter_function_attributes(attributes)
-        qualifiers, is_generic = self.parse_declaration_prefixes()
+        qualifiers, is_generic, generic_parameters = (
+            self.parse_declaration_prefixes_with_generics()
+        )
         return_type = self.parse_type_name(allow_array_suffix=True)
         return_type += self.parse_pointer_suffix()
         name = self.parse_function_name()
-        generic_parameters = None
         if self.current_token[0] == "LESS_THAN":
             generic_parameters = self.parse_generic_type_suffix()
             is_generic = True
