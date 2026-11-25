@@ -73,12 +73,22 @@ class UniformReturnAnalysis:
     """
 
     def __init__(
-        self, resolved_calls, pure_builtin_calls, structs=None, storage_loads=()
+        self,
+        resolved_calls,
+        pure_builtin_calls,
+        structs=None,
+        storage_loads=(),
+        *,
+        constants=(),
     ):
         self.resolved_calls = resolved_calls
         self.pure_builtin_calls = pure_builtin_calls
         self.structs = structs or {}
         self.storage_loads = frozenset(storage_loads)
+        # Program-scope names every invocation reads alike, such as constants
+        # and specialization constants. A helper's read of one adds no
+        # dependency unless a parameter or local shadows it.
+        self.constants = frozenset(constants)
         self.summaries = {}
         self.visiting = set()
         self.resource_effects = {}
@@ -458,15 +468,25 @@ class UniformReturnAnalysis:
             )
         ):
             return None
-        names = {
-            parameter.name: frozenset({index})
+        # A constant a parameter or any local shares a name with stays unknown.
+        shadowed = {parameter.name for parameter in function.parameters}
+        bodies = function.body if isinstance(function.body, list) else [function.body]
+        shadowed.update(
+            node.name
+            for body in bodies
+            for node in body.walk()
+            if isinstance(node, VariableNode)
+        )
+        names = {name: frozenset() for name in self.constants - shadowed}
+        names.update(
+            (parameter.name, frozenset({index}))
             for index, parameter in enumerate(function.parameters)
             if self.value_type(
                 parameter.param_type.referenced_type
                 if isinstance(parameter.param_type, ReferenceType)
                 else parameter.param_type
             )
-        }
+        )
         resources = set()
         for index, parameter in enumerate(function.parameters):
             if self.resource_type(parameter.param_type, parameter, read_only=False):

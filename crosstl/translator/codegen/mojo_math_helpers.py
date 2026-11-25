@@ -17,23 +17,6 @@ class MojoMathHelperMixin:
     """Math-helper members of ``MojoCodeGen``."""
 
     def generate_math_helper(self, helper_name):
-        if helper_name == "clamp":
-            return (
-                "def clamp(value: Float32, min_value: Float32, max_value: Float32) -> Float32:\n"
-                "    return min(max(value, min_value), max_value)\n\n"
-                "def clamp(value: SIMD[DType.float32, 2], min_value: Float32, max_value: Float32) -> SIMD[DType.float32, 2]:\n"
-                "    return SIMD[DType.float32, 2](clamp(value[0], min_value, max_value), clamp(value[1], min_value, max_value))\n\n"
-                "def clamp(value: SIMD[DType.float32, 2], min_value: SIMD[DType.float32, 2], max_value: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
-                "    return SIMD[DType.float32, 2](clamp(value[0], min_value[0], max_value[0]), clamp(value[1], min_value[1], max_value[1]))\n\n"
-                "def clamp(value: SIMD[DType.float32, 4], min_value: Float32, max_value: Float32) -> SIMD[DType.float32, 4]:\n"
-                "    return SIMD[DType.float32, 4](clamp(value[0], min_value, max_value), clamp(value[1], min_value, max_value), clamp(value[2], min_value, max_value), clamp(value[3], min_value, max_value))\n\n"
-                "def clamp(value: SIMD[DType.float32, 4], min_value: SIMD[DType.float32, 4], max_value: SIMD[DType.float32, 4]) -> SIMD[DType.float32, 4]:\n"
-                "    return SIMD[DType.float32, 4](clamp(value[0], min_value[0], max_value[0]), clamp(value[1], min_value[1], max_value[1]), clamp(value[2], min_value[2], max_value[2]), clamp(value[3], min_value[3], max_value[3]))\n\n"
-            )
-        if helper_name == "max":
-            return self.generate_min_max_helper("max", ">=")
-        if helper_name == "min":
-            return self.generate_min_max_helper("min", "<=")
         if helper_name == "dot_product":
             return (
                 "def dot_product(a: SIMD[DType.float32, 2], b: SIMD[DType.float32, 2]) -> Float32:\n"
@@ -129,7 +112,7 @@ class MojoMathHelperMixin:
         if helper_name == "smoothstep":
             return (
                 "def smoothstep(edge0: Float32, edge1: Float32, x: Float32) -> Float32:\n"
-                "    var t = clamp((x - edge0) / (edge1 - edge0), 0.0, 1.0)\n"
+                "    var t = min(max((x - edge0) / (edge1 - edge0), Float32(0.0)), Float32(1.0))\n"
                 "    return t * t * (3.0 - 2.0 * t)\n\n"
                 "def smoothstep(edge0: Float32, edge1: Float32, x: SIMD[DType.float32, 2]) -> SIMD[DType.float32, 2]:\n"
                 "    return SIMD[DType.float32, 2](smoothstep(edge0, edge1, x[0]), smoothstep(edge0, edge1, x[1]))\n\n"
@@ -172,59 +155,6 @@ class MojoMathHelperMixin:
                     f"def round_even(v: {vector_type}) -> {vector_type}:\n"
                     f"    return {vector_type}({components})\n\n"
                 )
-        return code
-
-    def generate_min_max_helper(self, helper_name, comparator):
-        selector = f"a if a {comparator} b else b"
-
-        def lane_selector(left, right):
-            return f"{left} if {left} {comparator} {right} else {right}"
-
-        code = (
-            f"def {helper_name}(a: Float32, b: Float32) -> Float32:\n"
-            f"    return {selector}\n\n"
-        )
-        for scalar_type in (
-            "Int8",
-            "Int16",
-            "Int32",
-            "Int64",
-            "UInt8",
-            "UInt16",
-            "UInt32",
-            "UInt64",
-        ):
-            code += (
-                f"def {helper_name}(a: {scalar_type}, b: {scalar_type}) -> "
-                f"{scalar_type}:\n"
-                f"    return {selector}\n\n"
-            )
-        for width in (2, 4):
-            vector_type = f"SIMD[DType.float32, {width}]"
-            components = ", ".join(
-                lane_selector(f"a[{index}]", f"b[{index}]") for index in range(width)
-            )
-            code += (
-                f"def {helper_name}(a: {vector_type}, b: {vector_type}) -> "
-                f"{vector_type}:\n"
-                f"    return {vector_type}({components})\n\n"
-            )
-            components = ", ".join(
-                lane_selector(f"a[{index}]", "b") for index in range(width)
-            )
-            code += (
-                f"def {helper_name}(a: {vector_type}, b: Float32) -> "
-                f"{vector_type}:\n"
-                f"    return {vector_type}({components})\n\n"
-            )
-            components = ", ".join(
-                lane_selector("a", f"b[{index}]") for index in range(width)
-            )
-            code += (
-                f"def {helper_name}(a: Float32, b: {vector_type}) -> "
-                f"{vector_type}:\n"
-                f"    return {vector_type}({components})\n\n"
-            )
         return code
 
     def generate_fract_helper(self, key):

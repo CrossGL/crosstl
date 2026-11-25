@@ -586,6 +586,7 @@ class MetalToCrossGLConverter(
         if stage_entry:
             code += "    " * indent
             code += "@ stage_entry\n"
+        code += self.metal_post_tessellation_function_annotation(func, indent)
         linkage_annotations = []
         if not getattr(func, "qualifier", None):
             qualifiers = set(getattr(func, "declaration_qualifiers", ()) or ())

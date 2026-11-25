@@ -7,7 +7,9 @@ SPIR-V generator refused them. :func:`lower_metal_math_spellings` handles them f
 * ``powr(x, y)`` is ``pow(x, y)``. MSL defines ``powr`` for ``x >= 0`` (MSL 3.2 section 6.5), where ``pow`` of
   GLSL (8.2), HLSL and SPIR-V (GLSL.std.450 ``Pow``) computes the same value.
 * ``exp10(x)`` becomes ``exp2(x * log2(10))``, the form GLSL and HLSL themselves give ``pow`` (GLSL 4.60 section 4.7.1
-  bounds ``pow`` by ``exp2(y * log2(x))``), within MSL's fast-math bound for ``exp10``.
+  bounds ``pow`` by ``exp2(y * log2(x))``), within MSL's fast-math bound for ``exp10``. CUDA and HIP keep ``exp10``:
+  both math libraries declare ``exp10`` for ``double`` and ``exp10f`` for ``float`` (2 ulp in CUDA), closer than the
+  rewrite for large operands.
 * ``sinpi``, ``cospi``, ``tanpi``, ``asinpi``, ``acospi``, ``atanpi`` and ``atan2pi`` are exact at integers and
   half-integers in MSL (``sinpi(1.0)`` is ``0``), which ``sin(x * pi)`` is not. They are refused with
   :class:`MetalMathFunctionUnsupportedError` until an exact range reduction lowers them. CUDA and HIP keep ``sinpi``
@@ -38,10 +40,10 @@ PI_FUNCTIONS = frozenset(
 )
 _ARITY = {"powr": 2, "exp10": 1, **{name: 1 for name in PI_FUNCTIONS}, "atan2pi": 2}
 _CARRYING = frozenset({"metal", "cgl", "crossgl", ""})
-# Pi functions a target's own math library provides, so the call is kept for its generator.
-_NATIVE_PI_FUNCTIONS = {
-    "cuda": frozenset({"sinpi", "cospi"}),
-    "hip": frozenset({"sinpi", "cospi"}),
+# Functions a target's own math library provides, so the call is kept for its generator.
+_NATIVE_FUNCTIONS = {
+    "cuda": frozenset({"sinpi", "cospi", "exp10"}),
+    "hip": frozenset({"sinpi", "cospi", "exp10"}),
 }
 
 
@@ -66,9 +68,9 @@ def _replacement(node, name, target):
     arguments = list(getattr(node, "arguments", None) or [])
     if len(arguments) != _ARITY[name]:
         return node
+    if name in _NATIVE_FUNCTIONS.get(target, ()):
+        return node
     if name in PI_FUNCTIONS:
-        if name in _NATIVE_PI_FUNCTIONS.get(target, ()):
-            return node
         raise MetalMathFunctionUnsupportedError(target, name)
     if name == "powr":
         return A.FunctionCallNode(_identifier("pow"), arguments)

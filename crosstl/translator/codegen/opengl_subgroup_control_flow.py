@@ -537,6 +537,40 @@ class OpenGLSubgroupControlFlowMixin:
             )
         )
 
+    def glsl_software_subgroup_strided_start(
+        self, expression, uniform_names, loop_name
+    ):
+        """Split a strided loop's start into a uniform base and a subgroup index.
+
+        ``simd_gid`` starts from no base; ``lo + simd_gid`` and ``simd_gid +
+        lo`` start from ``lo`` when ``lo`` is uniform across the workgroup
+        where the loop starts. Each subgroup then visits ``lo + k * step +
+        simd_gid``, so a loop over ``lo + k * step`` runs the same trips in
+        every invocation. Returns ``(base, index)``, or ``None`` for any
+        other start.
+        """
+        if self.glsl_software_subgroup_subgroup_id_expression(expression):
+            return None, expression
+        if not isinstance(expression, BinaryOpNode) or (
+            self.map_operator(
+                getattr(expression, "op", getattr(expression, "operator", None))
+            )
+            != "+"
+        ):
+            return None
+        for index, base in (
+            (expression.right, expression.left),
+            (expression.left, expression.right),
+        ):
+            if (
+                self.glsl_software_subgroup_subgroup_id_expression(index)
+                and loop_name
+                not in self.glsl_software_subgroup_expression_identifier_names(base)
+                and self.glsl_software_subgroup_uniform_expression(base, uniform_names)
+            ):
+                return base, index
+        return None
+
     def glsl_software_subgroup_strided_for_plan(
         self,
         node,
@@ -549,11 +583,12 @@ class OpenGLSubgroupControlFlowMixin:
         loop_name = getattr(initializer, "name", None)
         loop_type = self.map_type(getattr(initializer, "var_type", None))
         initial_value = getattr(initializer, "initial_value", None)
-        if (
-            not loop_name
-            or loop_type not in {"int", "uint"}
-            or not self.glsl_software_subgroup_subgroup_id_expression(initial_value)
-        ):
+        if not loop_name or loop_type not in {"int", "uint"}:
+            return None
+        start = self.glsl_software_subgroup_strided_start(
+            initial_value, uniform_names, loop_name
+        )
+        if start is None:
             return None
 
         condition = getattr(node, "condition", None)
@@ -658,6 +693,9 @@ class OpenGLSubgroupControlFlowMixin:
             ),
             "loopType": loop_type,
             "step": step,
+            # The workgroup-uniform part of the start, or None, and the
+            # subgroup index the start adds to it.
+            "start": start,
         }
 
     def prepare_glsl_software_subgroup_masked_if_plans(self, entry_function):
@@ -695,6 +733,7 @@ class OpenGLSubgroupControlFlowMixin:
         uniform_names,
     ):
         self.glsl_software_subgroup_strided_for_plans = {}
+        self.glsl_software_subgroup_deferred_strided_fors = {}
         constants = self.initial_literal_int_constants(entry_function)
         for statement in self.glsl_software_subgroup_statement_list(
             getattr(entry_function, "body", None)
@@ -721,14 +760,47 @@ class OpenGLSubgroupControlFlowMixin:
                 constants,
             )
             if plan is None:
+                # A start or bound that reads locals is planned by the flow
+                # analysis, which knows whether they are uniform there.
+                self.glsl_software_subgroup_deferred_strided_fors[id(statement)] = dict(
+                    constants
+                )
                 continue
-            self.glsl_software_subgroup_strided_for_plans[id(statement)] = plan
-            operation_if = self.glsl_software_subgroup_statement_list(statement.body)[
-                plan["operationIfIndex"]
-            ]
-            self.glsl_software_subgroup_masked_if_plans[id(operation_if)] = plan[
-                "maskedIfPlan"
-            ]
+            self.glsl_software_subgroup_register_strided_for(statement, plan)
+
+    def glsl_software_subgroup_register_strided_for(self, statement, plan):
+        self.glsl_software_subgroup_strided_for_plans[id(statement)] = plan
+        operation_if = self.glsl_software_subgroup_statement_list(statement.body)[
+            plan["operationIfIndex"]
+        ]
+        self.glsl_software_subgroup_masked_if_plans[id(operation_if)] = plan[
+            "maskedIfPlan"
+        ]
+
+    def glsl_software_subgroup_flow_strided_for(self, statement, uniform_names):
+        """Plan a deferred entry-level strided loop with the names uniform at it.
+
+        ``prepare_glsl_software_subgroup_strided_for_plans`` defers each
+        top-level loop of the entry that the entry's seeds alone cannot plan.
+        The flow analysis reaches it with every name uniform where it starts,
+        such as ``lo`` and ``hi`` in ``int lo = 0; int hi = n; if (uniform)
+        { lo = ...; hi = ...; } for (int i = lo + simd_gid; i < hi; i +=
+        S)``.
+        """
+        # Calls prove uniform only once the helper pass has built their
+        # summaries, so each analysis of the entry retries the loop.
+        constants = getattr(
+            self, "glsl_software_subgroup_deferred_strided_fors", {}
+        ).get(id(statement))
+        if constants is None or id(statement) in (
+            self.glsl_software_subgroup_strided_for_plans
+        ):
+            return
+        plan = self.glsl_software_subgroup_strided_for_plan(
+            statement, uniform_names, constants
+        )
+        if plan is not None:
+            self.glsl_software_subgroup_register_strided_for(statement, plan)
 
     def prepare_glsl_software_subgroup_constant_guards(self, ast):
         (
@@ -1223,6 +1295,7 @@ class OpenGLSubgroupControlFlowMixin:
         if isinstance(statement, ForNode):
             if id(statement) in self.glsl_software_subgroup_zero_trip_for_node_ids:
                 return names
+            self.glsl_software_subgroup_flow_strided_for(statement, names)
             is_uniform = self.glsl_software_subgroup_uniform_for(statement, names)
             # Only the entry is analyzed here, so its subgroup index is known.
             trip_uniform = (

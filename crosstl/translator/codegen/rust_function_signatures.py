@@ -18,6 +18,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     PointerAccessNode,
+    RayQueryOpNode,
     ReturnNode,
     SwitchNode,
     TernaryOpNode,
@@ -29,7 +30,9 @@ from ..host_workgroup_size import function_entry_execution_config
 from ..refusals import RustRefusal
 from .host_workgroup_size_ids import is_host_sized_workgroup
 from .rust_exact_lookups import call_names_resolving_to
+from .rust_gpu_images import rust_gpu_image_parameter_type
 from .rust_gpu_math_calls import rust_gpu_math_mutated_roots
+from .rust_gpu_ray_queries import rust_gpu_ray_query_mutated_roots
 from .rust_memory_atomics import rust_memory_atomic_location_roots
 from .specialized_workgroup_size import require_fixed_workgroup_size
 from .stage_utils import compute_local_size
@@ -334,6 +337,12 @@ class RustFunctionSignatureMixin:
                 collect(current.right)
                 return
 
+            if isinstance(current, RayQueryOpNode):
+                names.update(rust_gpu_ray_query_mutated_roots(self, current))
+                collect(current.query_expr)
+                collect(current.arguments)
+                return
+
             if isinstance(current, TernaryOpNode):
                 collect(current.condition)
                 collect(current.true_expr)
@@ -353,6 +362,7 @@ class RustFunctionSignatureMixin:
                 names.update(self.rust_output_argument_roots(func_name, args))
                 names.update(rust_memory_atomic_location_roots(self, func_name, args))
                 names.update(rust_gpu_math_mutated_roots(self, func_name, args))
+                names.update(rust_gpu_ray_query_mutated_roots(self, current))
                 collect(current.function)
                 collect(args)
                 return
@@ -884,6 +894,9 @@ class RustFunctionSignatureMixin:
         )
 
     def map_function_parameter_type(self, param_type):
+        image_type = rust_gpu_image_parameter_type(self, param_type)
+        if image_type is not None:
+            return image_type
         rust_type = self.map_type(param_type)
         if self.callable_signature_parts(rust_type) is None:
             return rust_type

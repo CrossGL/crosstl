@@ -18,7 +18,6 @@ from .mojo_tables import (
     MOJO_FLOAT_DTYPES,
     MOJO_GENERIC_TEXTURE_BUILTINS,
     MOJO_INTEGER_DTYPES,
-    MOJO_MAPPED_INTEGER_TYPES,
     MOJO_MATRIX_TYPES,
     MOJO_SCALAR_ATOMIC_OPS,
     MOJO_SCALAR_ATOMIC_TYPES,
@@ -858,98 +857,6 @@ class MojoBuiltinCallMixin:
         true_value = self.generate_expression(args[1])
         false_value = self.generate_expression(args[0])
         return f"({true_value} if {condition} else {false_value})"
-
-    def generate_min_max_call(self, func_name, args, target_type=None):
-        if len(args) != 2:
-            return None
-
-        left_type = self.expression_result_type(args[0])
-        right_type = self.expression_result_type(args[1])
-        left_info = self.vector_type_info(left_type)
-        right_info = self.vector_type_info(right_type)
-        if left_info is None and right_info is None:
-            return self.generate_scalar_min_max_call(
-                func_name, args, target_type, left_type, right_type
-            )
-        if left_info is not None and left_info[0] != "DType.float32":
-            return None
-        if right_info is not None and right_info[0] != "DType.float32":
-            return None
-
-        self.required_math_helpers.add(func_name)
-        left = self.generate_expression(args[0])
-        right = self.generate_expression(args[1])
-        if left_info is not None and right_info is None:
-            right = f"Float32({right})"
-        elif left_info is None and right_info is not None:
-            left = f"Float32({left})"
-        return f"{func_name}({left}, {right})"
-
-    def generate_scalar_min_max_call(
-        self, func_name, args, target_type, left_type, right_type
-    ):
-        left = self.generate_expression(args[0])
-        right = self.generate_expression(args[1])
-
-        if self.is_scalar_integer_type(target_type) or (
-            self.is_scalar_integer_type(left_type)
-            and self.is_scalar_integer_type(right_type)
-        ):
-            scalar_type = self.scalar_integer_mojo_type(
-                target_type, left_type, right_type
-            )
-            self.required_math_helpers.add(func_name)
-            return f"{func_name}({scalar_type}({left}), {scalar_type}({right}))"
-
-        if (
-            self.is_float_scalar_type(target_type)
-            or self.is_float_scalar_type(left_type)
-            or self.is_float_scalar_type(right_type)
-        ):
-            self.required_math_helpers.add(func_name)
-            return f"{func_name}(Float32({left}), Float32({right}))"
-
-        return None
-
-    def scalar_integer_mojo_type(self, *type_names):
-        for type_name in type_names:
-            if not self.is_scalar_integer_type(type_name):
-                continue
-            mapped_type = self.map_type(type_name)
-            if mapped_type in MOJO_MAPPED_INTEGER_TYPES:
-                return mapped_type
-        return "Int32"
-
-    def generate_clamp_call(self, args):
-        if len(args) != 3:
-            return None
-
-        value_type = self.expression_result_type(args[0])
-        value_info = self.vector_type_info(value_type)
-        if value_info is None:
-            return None
-        if value_info[0] != "DType.float32":
-            return None
-
-        min_type = self.expression_result_type(args[1])
-        max_type = self.expression_result_type(args[2])
-        min_info = self.vector_type_info(min_type)
-        max_info = self.vector_type_info(max_type)
-        if min_info is not None and min_info[:3] != value_info[:3]:
-            return None
-        if max_info is not None and max_info[:3] != value_info[:3]:
-            return None
-        if (min_info is None) != (max_info is None):
-            return None
-
-        self.required_math_helpers.add("clamp")
-        value = self.generate_expression(args[0])
-        min_value = self.generate_expression(args[1])
-        max_value = self.generate_expression(args[2])
-        if min_info is None and max_info is None:
-            min_value = f"Float32({min_value})"
-            max_value = f"Float32({max_value})"
-        return f"clamp({value}, {min_value}, {max_value})"
 
     def generate_smoothstep_call(self, args, target_type=None):
         if len(args) != 3:

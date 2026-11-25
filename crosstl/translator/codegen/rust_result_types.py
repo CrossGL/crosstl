@@ -21,6 +21,10 @@ from ..ast import (
     VariableNode,
     WaveOpNode,
 )
+from .rust_gpu_ray_queries import (
+    rust_gpu_ray_query_constant,
+    rust_gpu_ray_query_result_type,
+)
 
 
 class RustResultTypeMixin:
@@ -93,6 +97,8 @@ class RustResultTypeMixin:
             variable_type = self.variable_types.get(name)
             if variable_type is not None:
                 return variable_type
+            if rust_gpu_ray_query_constant(self, name) is not None:
+                return "uint"
             if isinstance(name, str) and "::" in name:
                 # A unit enum variant, ``Mode::Low``, has its enum's type.
                 enum_type = self.enum_variant_call_result_type(name)
@@ -168,6 +174,9 @@ class RustResultTypeMixin:
             ):
                 return self.texture_gather_result_type(texture_type)
             return self.texture_sample_result_type(texture_type)
+        ray_query_type = rust_gpu_ray_query_result_type(self, expr)
+        if ray_query_type is not None:
+            return ray_query_type
         if isinstance(expr, WaveOpNode):
             return self.wave_op_result_type(
                 getattr(expr, "operation", ""),
