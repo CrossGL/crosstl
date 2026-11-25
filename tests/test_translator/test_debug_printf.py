@@ -21,7 +21,10 @@ from crosstl.translator.codegen.spirv_debug_printf import (
     spirv_string_operand,
 )
 from crosstl.translator.diagnostics import TranslationDiagnostic
-from crosstl.translator.semantics import DebugPrintfUnsupportedError
+from crosstl.translator.semantics import (
+    DebugPrintfUnsupportedError,
+    DebugPrintfValueUnsupportedError,
+)
 
 GLSL_PRINT = """#version 450
 #extension GL_EXT_debug_printf : require
@@ -261,3 +264,48 @@ def test_a_program_function_named_printf_is_an_ordinary_call(tmp_path):
     hlsl = _translate(tmp_path, "print.cgl", source, "directx")
     # HLSL output renames the helper apart from the printf intrinsic.
     assert "printf_fn(v.x)" in hlsl
+
+
+CUDA_PRINT_VALUE = r"""
+__global__ void k(int* out) {
+    int r = printf("v=%d\n", 1);
+    out[threadIdx.x] = r;
+}
+"""
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'int r = printf("%d", 1);',
+        'int r = 0; r = printf("%d", 1) + 1;',
+        'if (printf("%d", 1) > 0) { v.x = 0.0; }',
+    ],
+)
+@pytest.mark.parametrize(
+    "backend", ["directx", "opengl", "vulkan", "metal", "slang", "cuda", "hip"]
+)
+def test_a_debug_print_whose_value_is_read_is_refused(tmp_path, body, backend):
+    # Every target's debug print is a statement, and C's printf value is the source language's own.
+    with pytest.raises(DebugPrintfValueUnsupportedError) as caught:
+        _translate(tmp_path, "print.cgl", _compute(body), backend)
+    assert caught.value.code == (
+        f"project.translate.{backend}-debug-printf-value-unsupported"
+    )
+
+
+def test_a_cuda_print_value_is_kept_only_for_cuda(tmp_path):
+    code = _translate(tmp_path, "print.cu", CUDA_PRINT_VALUE, "cuda")
+    assert 'int r = printf("v=%d\\n", 1);' in code
+    for backend in ("hip", "directx", "opengl", "vulkan"):
+        with pytest.raises(DebugPrintfValueUnsupportedError, match="cannot be carried"):
+            _translate(tmp_path, "print.cu", CUDA_PRINT_VALUE, backend)
+
+
+def test_prints_evaluated_for_their_effects_are_statements(tmp_path):
+    body = 'int i = 0; for (; i < 2; printf("i=%d", i), i++) { printf("%d", i); }'
+    assembly = _translate(tmp_path, "print.cgl", _compute(body), "vulkan")
+    assert assembly.count('OpExtInstImport "NonSemantic.DebugPrintf"') == 1
+    _validate_spirv(tmp_path, assembly)
+    hlsl = _translate(tmp_path, "print.cgl", _compute(body), "directx")
+    assert 'printf("%d", i);' in hlsl

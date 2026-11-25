@@ -1,5 +1,7 @@
 """CrossGL ``powi``: HIP's ``powif``/``powi`` in both directions and CUDA's double-precision ``pow``."""
 
+import re
+
 import pytest
 
 import crosstl
@@ -97,10 +99,14 @@ def test_hip_input_reads_both_precisions_as_powi(tmp_path):
 
 
 @pytest.mark.parametrize("backend", ["metal", "directx", "opengl", "vulkan", "wgsl"])
-def test_targets_without_an_integer_power_refuse_it(tmp_path, backend):
+def test_targets_without_an_integer_power_call_the_crossgl_helper(tmp_path, backend):
+    """The other targets declare no integer power; HIP's powif reaches them through CrossGL's powi helper."""
     path = tmp_path / "powers.hip"
     single = HIP.replace("    dout[i] = powi((double)fin[i], -iin[i]);\n", "")
     path.write_text(single.replace(", double* dout", ""))
-    with pytest.raises(Exception, match="powi") as refusal:
-        crosstl.translate(str(path), backend=backend)
-    assert type(refusal.value).__module__.startswith("crosstl."), "a typed refusal"
+    generated = crosstl.translate(str(path), backend=backend)
+    assert not re.search(r"(?<![\w.])powif?\s*\(", generated)
+    if backend == "vulkan":
+        assert "OpFunctionCall" in generated
+    else:
+        assert "cgl_rule_powi_f32(" in generated
