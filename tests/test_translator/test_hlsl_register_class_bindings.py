@@ -18,7 +18,6 @@ import pytest
 import crosstl
 from crosstl.translator.codegen.cuda_codegen import CudaCodeGen
 from crosstl.translator.codegen.hip_codegen import HipCodeGen
-from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.codegen.mojo_codegen import MojoCodeGen
 from crosstl.translator.codegen.rust_codegen import RustCodeGen
 from crosstl.translator.lexer import Lexer
@@ -70,12 +69,9 @@ def test_hlsl_b0_and_u0_translate(backend_name, tmp_path):
         outp[tid.x] = outp[tid.x] * scale;
     }
     """
-    if backend_name == "rust":
-        _expect_rust_constant_buffer_refusal(
-            lambda: _write_and_translate(tmp_path, hlsl, backend_name)
-        )
-        return
     code = _write_and_translate(tmp_path, hlsl, backend_name)
+    if backend_name == "rust":
+        _assert_rust_uniform_block_binding(code, "params", "Params")
     assert "Params" in code
     assert "outp" in code
 
@@ -110,12 +106,9 @@ def test_hlsl_b0_t0_and_u1_translate(backend_name, tmp_path):
         outp[tid.x] = inp[tid.x] * scale;
     }
     """
-    if backend_name == "rust":
-        _expect_rust_constant_buffer_refusal(
-            lambda: _write_and_translate(tmp_path, hlsl, backend_name)
-        )
-        return
     code = _write_and_translate(tmp_path, hlsl, backend_name)
+    if backend_name == "rust":
+        _assert_rust_uniform_block_binding(code, "params", "Params")
     assert "Params" in code
     assert "inp" in code
     assert "outp" in code
@@ -153,12 +146,9 @@ def test_crossgl_register_class_is_classified(backend_name, codegen_cls):
         }
     }
     """
-    if backend_name == "rust":
-        _expect_rust_constant_buffer_refusal(
-            lambda: _translate_crossgl(source, codegen_cls)
-        )
-        return
     code = _translate_crossgl(source, codegen_cls)
+    if backend_name == "rust":
+        _assert_rust_uniform_block_binding(code, "params", "Params")
     assert "Params" in code
     assert "outp" in code
 
@@ -211,10 +201,14 @@ def _rust_entry_parameter_binding(code, name):
     return int(match.group(1)) if match else None
 
 
-def _expect_rust_constant_buffer_refusal(action):
-    """Rust-gpu does not lower constant buffers to uniform blocks (#4895)."""
-    with pytest.raises(LoweringRefused, match="constant buffers are not lowered"):
-        action()
+def _assert_rust_uniform_block_binding(code, name, block):
+    """The constant buffer is a rust-gpu uniform block whose binding no other resource shares."""
+    assert re.search(
+        rf"#\[spirv\(uniform, descriptor_set = 0, binding = \d+\)\]\s*{name}\s*:\s*&{block}\b",
+        code,
+    ), code
+    pairs = _rust_entry_descriptor_pairs(code)
+    assert len(pairs) == len(set(pairs)), pairs
 
 
 def _rust_entry_descriptor_pairs(code):
