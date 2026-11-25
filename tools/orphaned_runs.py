@@ -53,6 +53,9 @@ PAGE = 100
 # Seconds between sweeps with --watch, and the failed sweeps in a row that end it.
 INTERVAL = 300
 ERRORS = 3
+# Seconds a gh call may take. A call that never returns would hold the sweep, and every sweep queued behind it in
+# the workflow's concurrency group, until the job times out.
+TIMEOUT = 120
 # Job conclusions that fail a gating workflow's result job.
 FAILED = ("failure", "timed_out", "startup_failure")
 # The names of the latest check runs of each workflow run on a commit, listing only the failed ones.
@@ -148,12 +151,29 @@ class GitHub:
         self,
         repository: str,
         run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+        timeout: float = TIMEOUT,
     ):
         self.repository = repository
         self._run = run
+        self.timeout = timeout
+
+    def _call(self, command: list[str]) -> subprocess.CompletedProcess:
+        """Run ``command``; a call that takes longer than ``timeout`` fails like a refused one."""
+        try:
+            return self._run(
+                command,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=self.timeout,
+            )
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"{' '.join(command[:4])}: no answer in {self.timeout:g} s"
+            ) from None
 
     def _gh(self, command: list[str]) -> object:
-        done = self._run(command, capture_output=True, text=True, check=False)
+        done = self._call(command)
         if done.returncode:
             raise RuntimeError(f"{' '.join(command[:4])}: {done.stderr.strip()}")
         return json.loads(done.stdout) if done.stdout.strip() else None
@@ -296,7 +316,7 @@ class GitHub:
             "-H",
             "Accept: application/vnd.github.raw",
         ]
-        done = self._run(command, capture_output=True, text=True, check=False)
+        done = self._call(command)
         if done.returncode:
             raise RuntimeError(f"gh api {path}@{sha[:12]}: {done.stderr.strip()}")
         return {
@@ -477,6 +497,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    # CI captures the output through a pipe; without line buffering a long --watch shows nothing until it ends.
+    sys.stdout.reconfigure(line_buffering=True)
     # A sweep that runs in the merge queue must not cancel itself when its own group is discarded.
     own = os.environ.get("GITHUB_RUN_ID", "")
     keep = {int(own)} if own.isdigit() else set()

@@ -1,3 +1,4 @@
+import io
 import json
 import re
 import subprocess
@@ -236,6 +237,23 @@ def test_cancel_reports_a_run_that_finished_first():
     )
     with pytest.raises(RuntimeError, match="HTTP 403"):
         github.cancel(Run(9, "Lint", GROUP, "1" * 40))
+
+
+def test_a_call_without_an_answer_fails_like_a_refused_one():
+    seen = []
+
+    def hangs(command, **kwargs):
+        seen.append(kwargs["timeout"])
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    github = GitHub("o/r", run=hangs, timeout=5)
+    with pytest.raises(RuntimeError, match="no answer in 5 s"):
+        github.cancel(Run(8, "Lint", GROUP, "1" * 40))
+    with pytest.raises(RuntimeError, match="no answer in 5 s"):
+        github.names(".github/workflows/demo.yml", "2" * 40)
+    assert seen == [5, 5]
+    # Every call has a timeout by default, so no sweep can hang.
+    assert GitHub("o/r").timeout == orphaned_runs.TIMEOUT
 
 
 def _suites(*runs):
@@ -722,6 +740,15 @@ def test_watch_survives_a_few_failed_sweeps(monkeypatch, clock):
     monkeypatch.setattr(orphaned_runs, "Sweeper", sweeper)
     with pytest.raises(RuntimeError):
         orphaned_runs.main([])
+
+
+def test_watch_prints_each_line_as_it_is_written(monkeypatch, clock):
+    # In CI stdout is a pipe; a block-buffered --watch would show nothing until it ends or is cancelled.
+    pipe = io.TextIOWrapper(io.BytesIO(), encoding="utf-8")
+    monkeypatch.setattr(orphaned_runs.sys, "stdout", pipe)
+    monkeypatch.setattr(orphaned_runs, "Sweeper", ScriptedSweeper([False]))
+    orphaned_runs.main([])
+    assert pipe.line_buffering
 
 
 def test_a_sweep_never_cancels_its_own_run(monkeypatch, clock):
