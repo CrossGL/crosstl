@@ -180,6 +180,20 @@ def test_a_translation_from_cuda_or_hip_need_not_keep_a_built_in_they_compute():
         )
 
 
+def test_a_translation_from_cuda_need_not_keep_the_warp_size_it_imports_as_32():
+    # CUDA's warpSize is 32 on every compute capability, so the CUDA frontend imports it as that value; HIP's depends
+    # on the device, so a translation from HIP keeps the subgroup size.
+    size = _compute("subgroup-size", "BuiltIn.SubgroupSize")
+    constant = "%float_32 = OpConstant %float 32\n"
+    assert decorations.lost(size, "spirv", constant, imported="cuda") == ""
+    for imported in ("hip", "metal"):
+        assert decorations.lost(size, "spirv", constant, imported=imported) == (
+            "the translation loses BuiltIn.SubgroupSize"
+        )
+    decorated = "OpDecorate %gl_SubgroupSize BuiltIn SubgroupSize\n"
+    assert decorations.lost(size, "spirv", decorated, imported="hip") == ""
+
+
 def test_a_constant_built_in_may_be_written_as_its_value(monkeypatch):
     size = _compute("workgroup-size", "BuiltIn.WorkgroupSize")
     monkeypatch.setattr(lowering, "can_lower", lambda language: True)
