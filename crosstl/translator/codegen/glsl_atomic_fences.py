@@ -53,7 +53,12 @@ _SINGLE_KIND_BARRIERS = {
 
 
 class GLSLAtomicFenceRefusal(Exception):
-    """The fence has no GLSL barrier; ``reason`` names why."""
+    """The fence has no GLSL barrier; ``reason`` names why.
+
+    The OpenGL generator re-raises it as ``OpenGLAtomicFenceLoweringError``, which carries the same code.
+    """
+
+    project_diagnostic_code = "project.translate.opengl-atomic-fence-unsupported"
 
     def __init__(self, reason):
         self.reason = reason
