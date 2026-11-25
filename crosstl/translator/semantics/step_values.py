@@ -10,8 +10,9 @@ applies unchanged.
 
 Only the targets in ``STEP_HELPER_TARGETS`` emit CrossGL ``inout`` parameters with write-back. The SPIR-V emitter
 inlines a function with an ``inout`` parameter at each call, with the parameter aliasing the argument's pointer, so
-its writes reach the argument in any storage class. The CUDA, HIP and Mojo emitters pass ``inout`` parameters by
-value, so an increment used as a value is still refused for those targets.
+its writes reach the argument in any storage class. The CUDA and HIP emitters write an ``inout`` parameter as a C++
+reference (``int& x0``), which binds to the argument itself. The Mojo emitter passes ``inout`` parameters by value,
+so an increment used as a value is still refused for it.
 """
 
 from __future__ import annotations
@@ -34,6 +35,8 @@ STEP_HELPER_TARGETS = {
     "vulkan": (
         "SPIR-V inlining of functions with inout parameters, which alias the argument's pointer"
     ),
+    "cuda": "C++ reference parameters (T&), which alias the argument",
+    "hip": "C++ reference parameters (T&), which alias the argument",
 }
 _STEP_NAMES = {
     ("__cgl_wrap_add", True): "postinc",
