@@ -31,6 +31,17 @@ _RAY_TRACING = "GL_EXT_ray_tracing applies to desktop GLSL 4.60 and later only (
 _MESH = "GL_EXT_mesh_shader applies to desktop GLSL 4.50 and later only (its Dependencies section)"
 _KEYWORD = "is a keyword GLSL ES 3.20 reserves for future use (Keywords)"
 _DRAW = "GLSL ES 3.20 has no gl_DrawID, gl_BaseVertex or gl_BaseInstance (Vertex Shader Special Variables)"
+# OpenGL ES extensions add clip and cull distances (EXT_clip_cull_distance), viewport indices (OES_viewport_array),
+# fragment shader interlock (NV_fragment_shader_interlock) and 64-bit integers (NV_gpu_shader5), so those probes stay
+# in the row even where glslang does not take the extension for GLSL ES. No OpenGL ES extension adds these two.
+_STENCIL = (
+    "GLSL ES 3.20 has no stencil reference output (Fragment Shader Special Variables), and the Khronos registry "
+    "(xml/gl.xml) lists ARB_shader_stencil_export and AMD_shader_stencil_export for desktop OpenGL only"
+)
+_UNSIZED = (
+    "a user-declared GLSL ES 3.20 array must not remain unsized (Arrays); GL_EXT_nonuniform_qualifier, which declares "
+    "resource arrays of unknown length, requires GL_KHR_vulkan_glsl, which is GLSL for Vulkan, not OpenGL ES"
+)
 
 # What GLSL has and GLSL ES 3.20 does not, with the reason.
 MISSING: dict[str, str] = {
@@ -44,6 +55,8 @@ MISSING: dict[str, str] = {
     "geometry-streams": (
         "GLSL ES 3.20 has no stream layout qualifier (Geometry Outputs)"
     ),
+    "stencil-export": _STENCIL,
+    "unsized-array-of-textures": _UNSIZED,
     **dict.fromkeys(
         (
             "ray-generation",
@@ -90,9 +103,25 @@ def _extended(name: str, extension: str) -> Template:
     return Template(program=f"{version}\n#extension {extension} : require\n{rest}")
 
 
+def _interlocked(name: str) -> Template:
+    """GLSL's interlock probe ``name`` with NV_fragment_shader_interlock, the OpenGL ES extension (OpenGL ES 3.1 and
+    later) that GLSL's ARB_fragment_shader_interlock, which requires GLSL 4.20, is to OpenGL.
+    """
+    text = GLSL[name].program
+    for arb, nv in (
+        ("GL_ARB_fragment_shader_interlock", "GL_NV_fragment_shader_interlock"),
+        ("InvocationInterlockARB(", "InvocationInterlockNV("),
+    ):
+        if arb not in text:
+            raise ValueError(f"the GLSL {name} probe has no {arb}")
+        text = text.replace(arb, nv)
+    return dataclasses.replace(GLSL[name], program=text)
+
+
 # The templates GLSL ES spells otherwise than GLSL. It has no initializer lists, so arrays are initialized with
 # array constructors, and no implicit conversions (Variables and Types), as in WebGL's GLSL ES 3.00 probes. Clip and
-# cull distances, conservative depth, viewport indices and linear interpolation come from GLSL ES extensions.
+# cull distances, conservative depth, viewport indices, linear interpolation and fragment shader interlock come from
+# GLSL ES extensions.
 OWN: dict[str, Template] = {
     **{
         name: WEBGL[name]
@@ -110,6 +139,10 @@ OWN: dict[str, Template] = {
     "noperspective-interpolation": _extended(
         "noperspective-interpolation", "GL_NV_shader_noperspective_interpolation"
     ),
+    **{
+        name: _interlocked(name)
+        for name in ("rasterizer-ordered-buffer", "rasterizer-ordered-image")
+    },
 }
 
 
