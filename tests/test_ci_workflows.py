@@ -191,6 +191,40 @@ def test_the_coverage_comment_runs_only_main_code_on_the_report():
     ]
 
 
+QUEUED_EVENTS = (
+    "github.event_name == 'pull_request' || github.event_name == 'merge_group'"
+)
+
+
+def test_coverage_merges_its_reports_in_the_result_job_outside_pushes():
+    # Every job after the legs waits for a runner of its own, so pull requests and the merge queue, whose result
+    # check gates a merge, merge the leg reports in the result job instead of a report job before it.
+    jobs = _workflows()["coverage.yml"]["jobs"]
+    report = ["./.github/actions/coverage-report"]
+    assert [s["uses"] for s in jobs["report"]["steps"]][1:] == report
+    assert (
+        "github.event_name != 'pull_request' && github.event_name != 'merge_group'"
+        in jobs["report"]["if"]
+    )
+    check, checkout, merge = jobs["result"]["steps"]
+    assert "exit 1" in check["run"] and "if" not in check
+    assert checkout["uses"] == "actions/checkout@v7"
+    assert merge["uses"] == report[0]
+    assert checkout["if"] == merge["if"] == QUEUED_EVENTS
+    assert jobs["result"]["permissions"] == {"contents": "read", "issues": "read"}
+    # Publishing reads the report job's artifact, and the coverage comment reads the one either job uploads.
+    assert jobs["publish"]["needs"] == "report"
+    action = yaml.safe_load(
+        (ACTIONS_DIR / "coverage-report" / "action.yml").read_text(encoding="utf-8")
+    )
+    steps = action["runs"]["steps"]
+    (upload,) = (s for s in steps if s.get("uses") == "actions/upload-artifact@v7")
+    assert upload["with"]["name"] == "coverage"
+    plans = [s for s in steps if s.get("name") == "Plan the issue changes"]
+    assert [s["if"] for s in plans] == [QUEUED_EVENTS]
+    assert all(s["shell"] == "bash" for s in steps if "run" in s)
+
+
 STATUS_FUNCTION = re.compile(r"\b(?:always|cancelled|failure|success)\(\)")
 
 
