@@ -26,10 +26,12 @@ from ..ast import (
     AssignmentNode,
     BlockNode,
     ExpressionStatementNode,
+    FunctionCallNode,
     IdentifierNode,
     IfNode,
     SwizzleNode,
     TernaryOpNode,
+    UnaryOpNode,
     VariableNode,
 )
 from ..refusals import WGSLRefusal
@@ -65,6 +67,7 @@ class WGSLCompositeConditionalMixin:
             stmt = stmt.expression
         if isinstance(stmt, VariableNode):
             value = stmt.initial_value
+            value = self.matrix_select_as_ternary(value)
             if not isinstance(value, TernaryOpNode):
                 return None
             var_type = self.local_variable_declaration_type(stmt)
@@ -87,6 +90,7 @@ class WGSLCompositeConditionalMixin:
             return [declaration, AssignmentNode(IdentifierNode(stmt.name), value)]
         if isinstance(stmt, AssignmentNode):
             value = stmt.value
+            value = self.matrix_select_as_ternary(value)
             if stmt.operator != "=" or not isinstance(value, TernaryOpNode):
                 return None
             if self.is_select_operand_type(self.expression_type(stmt.target)):
@@ -99,6 +103,46 @@ class WGSLCompositeConditionalMixin:
                 )
             ]
         return None
+
+    def matrix_select_as_ternary(self, expression):
+        """Return the conditional represented by a built-in matrix ``select`` call."""
+        if not isinstance(expression, FunctionCallNode):
+            return expression
+        function_name = self.expression_name(expression.function)
+        arguments = expression.arguments
+        if function_name != "select" or len(arguments) != 3:
+            return expression
+        if self.resolve_function_overload(function_name, arguments) is not None:
+            return expression
+        if not all(
+            self.matrix_shape(self.expression_type(argument)) is not None
+            for argument in arguments[:2]
+        ):
+            return expression
+        false_value, true_value, condition = arguments
+        if self.boolean_expression_width(condition) != 1:
+            raise WGSLRefusal("WGSL matrix select condition must be a scalar bool")
+        if any(
+            self.composite_select_value_has_side_effects(value)
+            for value in (false_value, true_value)
+        ):
+            raise WGSLRefusal(
+                "WGSL matrix select evaluates both value arguments, but if/else "
+                "lowering would skip one side-effecting argument"
+            )
+        return TernaryOpNode(condition, true_value, false_value)
+
+    @staticmethod
+    def composite_select_value_has_side_effects(expression):
+        return any(
+            isinstance(node, (FunctionCallNode, AssignmentNode))
+            or (
+                isinstance(node, UnaryOpNode)
+                and str(getattr(node, "operator", getattr(node, "op", "")))
+                in {"++", "--"}
+            )
+            for node in expression.walk()
+        )
 
     def require_select_operands(self, expr):
         """Refuse the conditional ``expr`` when ``select`` cannot take its branches."""

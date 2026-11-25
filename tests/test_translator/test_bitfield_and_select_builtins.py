@@ -22,6 +22,7 @@ from crosstl.translator.codegen.slang_codegen import SlangCodeGen
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.codegen.spirv_refusals import SpirvLoweringRefused
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
+from crosstl.translator.diagnostics import TranslationDiagnostic
 
 BITFIELDS = """shader Bitfields {
     RWStructuredBuffer<uint> words @register(u0);
@@ -49,6 +50,57 @@ SELECTS = """shader Selects {
             vec2 h = mix(vec2(values[i]), vec2(0.0), c);
             float w = mix(values[i], 2.0, 0.25);
             values[i] = f + g.z + h.y + w;
+        }
+    }
+}"""
+
+MATRIX_SELECT = """shader MatrixSelect {
+    compute {
+        @numthreads(1, 1, 1)
+        void main(uvec3 id @gl_GlobalInvocationID) {
+            mat3 m0 = mat3(1.0);
+            mat3 m1 = mat3(2.0);
+            mat3 chosen = select(m1, m0, id.x == 0u);
+        }
+    }
+}"""
+
+MATRIX_SELECT_SIDE_EFFECTS = """shader MatrixSelectEffects {
+    mat3 make_matrix(inout uint calls, float diagonal) {
+        calls++;
+        return mat3(diagonal);
+    }
+    compute {
+        @numthreads(1, 1, 1)
+        void main() {
+            uint calls = 0u;
+            mat3 chosen = select(
+                make_matrix(calls, 1.0),
+                make_matrix(calls, 2.0),
+                true
+            );
+        }
+    }
+}"""
+
+MATRIX_SELECT_VECTOR_CONDITION = """shader MatrixSelectVectorCondition {
+    compute {
+        @numthreads(1, 1, 1)
+        void main() {
+            mat3 m0 = mat3(1.0);
+            mat3 m1 = mat3(2.0);
+            mat3 chosen = select(m1, m0, bvec2(true, false));
+        }
+    }
+}"""
+
+MATRIX_SELECT_MATRIX_COMPARISON = """shader MatrixSelectMatrixComparison {
+    compute {
+        @numthreads(1, 1, 1)
+        void main() {
+            mat2 m0 = mat2(1.0);
+            mat2 m1 = mat2(2.0);
+            mat2 chosen = select(m1, m0, m0 > m1);
         }
     }
 }"""
@@ -269,6 +321,78 @@ def test_wgsl_boolean_mix_is_select(tmp_path):
     assert "select(vec2<f32>(values[i]), vec2<f32>(0.0), c)" in wgsl
     assert "mix(values[i], 2.0, 0.25)" in wgsl
     _naga_validates(wgsl, tmp_path)
+
+
+def test_matrix_select_lowers_to_a_conditional_on_source_backends(tmp_path):
+    glsl = GLSLCodeGen().generate(parse(MATRIX_SELECT))
+    metal = MetalCodeGen().generate(parse(MATRIX_SELECT))
+    slang = SlangCodeGen().generate(parse(MATRIX_SELECT))
+    wgsl = WGSLCodeGen().generate(parse(MATRIX_SELECT))
+
+    assert "((gl_GlobalInvocationID.x == 0u) ? m0 : m1)" in glsl
+    assert "(id.x == 0u ? m0 : m1)" in metal
+    assert "(id.x == 0u ? m0 : m1)" in slang
+    assert "var chosen: mat3x3<f32>;" in wgsl
+    assert "if ((id.x == 0u))" in wgsl
+    assert "chosen = m0;" in wgsl
+    assert "chosen = m1;" in wgsl
+    assert "select(m1, m0" not in glsl + metal + slang + wgsl
+    _metal_compiles(metal, tmp_path)
+    _naga_validates(wgsl, tmp_path)
+
+
+@pytest.mark.parametrize(
+    "generator",
+    [GLSLCodeGen, MetalCodeGen, SlangCodeGen, WGSLCodeGen],
+)
+def test_matrix_select_with_side_effecting_values_is_refused(generator):
+    with pytest.raises(ValueError) as raised:
+        generator().generate(parse(MATRIX_SELECT_SIDE_EFFECTS))
+    assert hasattr(raised.value, "project_diagnostic_code")
+
+
+@pytest.mark.parametrize(
+    "generator",
+    [GLSLCodeGen, MetalCodeGen, SlangCodeGen, WGSLCodeGen],
+)
+@pytest.mark.parametrize(
+    "source", [MATRIX_SELECT_VECTOR_CONDITION, MATRIX_SELECT_MATRIX_COMPARISON]
+)
+def test_matrix_select_requires_a_scalar_bool_condition(generator, source):
+    with pytest.raises(ValueError, match="scalar.bool|scalar-bool") as raised:
+        generator().generate(parse(source))
+    assert hasattr(raised.value, "project_diagnostic_code")
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "vec3 result = select(m1, m0, flag) * vec3(1.0);",
+        "return select(m1, m0, flag);",
+    ],
+)
+def test_wgsl_nested_matrix_select_is_refused(statement):
+    return_type = "mat3" if statement.startswith("return") else "void"
+    source = f"""shader NestedMatrixSelect {{
+        {return_type} choose(mat3 m0, mat3 m1, bool flag) {{
+            {statement}
+        }}
+    }}"""
+
+    with pytest.raises(TranslationDiagnostic, match="matrix.*conditional"):
+        WGSLCodeGen().generate(parse(source))
+
+
+def test_slang_matrix_select_keeps_matrix_type_in_vector_product():
+    source = """shader MatrixSelectProduct {
+        vec3 choose(mat3 m0, mat3 m1, bool flag, vec3 value) {
+            return select(m1, m0, flag) * value;
+        }
+    }"""
+
+    slang = SlangCodeGen().generate(parse(source))
+
+    assert "return (flag ? m0 : m1) * value;" in slang
 
 
 def test_wgsl_boolean_mix_with_an_inline_comparison_selector(tmp_path):
