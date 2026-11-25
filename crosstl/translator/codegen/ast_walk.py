@@ -62,11 +62,18 @@ def walk_ast_values(root: Any) -> Iterator[Any]:
             if kind == _SKIP:
                 continue
             if kind == _MAPPING:
-                stack.append(iter(value.values()))
-                break
+                # An empty container is skipped without a stack entry: no caller code runs between pushing
+                # its iterator and exhausting it, so it could not gain items first. Most nodes carry an empty
+                # ``annotations`` dictionary and several empty lists.
+                if value:
+                    stack.append(iter(value.values()))
+                    break
+                continue
             if kind == _SEQUENCE:
-                stack.append(iter(value))
-                break
+                if value:
+                    stack.append(iter(value))
+                    break
+                continue
             value_id = id(value)
             if value_id in visited:
                 continue

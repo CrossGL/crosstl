@@ -8,6 +8,8 @@ declare. The set is built from families so that every width, component count and
 
 from __future__ import annotations
 
+from .work_graph_nodes import EMPTY_NODE_TYPES
+
 __all__ = ["BUILTIN_TYPE_NAMES", "MOJO_TYPE_NAMES"]
 
 _COUNTS = (2, 3, 4)
@@ -209,6 +211,7 @@ _HLSL_TYPES = (
     "RayDesc",
     "RayQuery",
     "BuiltInTriangleIntersectionAttributes",
+    "BuiltInTrianglePositions",
     "HitObject",
     "InputPatch",
     "OutputPatch",
@@ -367,6 +370,7 @@ def _build():
         "RasterizerOrderedStructuredBuffer",
     ):
         names.add(prefix)
+    names |= EMPTY_NODE_TYPES
     return frozenset(names)
 
 

@@ -11,8 +11,8 @@ Every (unit, target) cell gets one outcome:
 
 A cell is feasible when the target language can express every stage of the unit, partial when it can express
 some, and infeasible otherwise; usable shares are computed over feasible cells. Translation latency is measured
-inside a persistent worker around ``crosstl.translate`` alone, and its p95 per source language is checked
-against ``budgets.json``. The scoreboard records one outcome code per cell; a run fails when a cell in its scope
+inside a persistent worker around ``crosstl.translate`` alone, and its median, p95 and maximum wall time and its
+p95 CPU time per source language are checked against ``budgets.json``. The scoreboard records one outcome code per cell; a run fails when a cell in its scope
 is worse than recorded, a cell cannot be checked, or a latency budget is exceeded.
 """
 
@@ -182,12 +182,18 @@ def translate_all(jobs, workers, timeout, progress=None, journal=None):
     """
     results, lock = load_translations(journal), threading.Lock()
     artifacts = {job["id"]: Path(job["artifact"]) for job in jobs}
-    # A recorded translation counts only while its artifact is still on disk.
+    # A recorded translation counts only while its artifacts are still on disk.
     results = {
         identity: entry
         for identity, entry in results.items()
         if identity in artifacts
-        and (entry.get("status") != "translated" or artifacts[identity].is_file())
+        and (
+            entry.get("status") != "translated"
+            or all(
+                path.is_file()
+                for path in translated_artifacts(entry, artifacts[identity])
+            )
+        )
     }
     pending = queue.Queue()
     for job in sorted(
@@ -234,19 +240,43 @@ def translate_all(jobs, workers, timeout, progress=None, journal=None):
     return results
 
 
+def translated_artifacts(translation, artifact):
+    """The artifacts of a translated cell: one, or one per entry when the target holds one entry per stage."""
+    entries = translation.get("entryArtifacts")
+    if entries:
+        return [Path(entry["artifact"]) for entry in entries]
+    return [Path(artifact)]
+
+
+def check_translation(translation, artifact, target, stages):
+    """The native verdict of a translated cell; an entry-per-artifact cell is accepted only if every entry is."""
+    entries = translation.get("entryArtifacts")
+    if not entries:
+        return checks.check(artifact, target, stages)
+    commands, logs = [], []
+    for entry in entries:
+        verdict = checks.check(entry["artifact"], target, (entry["stage"],))
+        commands.extend(verdict["commands"])
+        if verdict["verdict"] != "accepted":
+            log = f"entry {entry['entry']}: {verdict['log']}"
+            return {**verdict, "commands": commands, "log": log}
+        logs.append(verdict["log"])
+    return {"verdict": "accepted", "commands": commands, "log": "\n".join(logs)}
+
+
 def classify(translation, verdict, artifact, target):
     """Outcome of one cell from its translation result and native verdict."""
     status = translation["status"]
     if status != "translated":
         return status
     if verdict["verdict"] == "accepted":
-        text = Path(artifact).read_text(errors="replace")
-        entries = checks.count_entries(text, target)
-        return (
-            "usable"
-            if translation.get("markers", 0) == 0 and entries > 0
-            else "degraded"
+        paths = translated_artifacts(translation, artifact)
+        # Every artifact must declare its entry point.
+        usable = all(
+            checks.count_entries(path.read_text(errors="replace"), target) > 0
+            for path in paths
         )
+        return "usable" if translation.get("markers", 0) == 0 and usable else "degraded"
     return {
         "rejected": "invalid",
         "timeout": "validator-timeout",
@@ -288,7 +318,7 @@ def measure(units, targets, output, workers, timeout, progress=None, resume=Fals
         unit, target, artifact = cells[identity]
         translation = translations[identity]
         verdict = (
-            checks.check(artifact, target, unit.stages)
+            check_translation(translation, artifact, target, unit.stages)
             if translation["status"] == "translated"
             else {"verdict": None, "commands": [], "log": ""}
         )
@@ -426,21 +456,31 @@ def compare(baseline, records, manifest):
     return failures, better
 
 
+# Each latency budget key with the clock and the statistic it bounds. The median bounds the typical translation and
+# the maximum the worst one; the p95 bounds the tail.
+LATENCY_BUDGETS = (
+    ("p50Seconds", "wall", "p50"),
+    ("p95Seconds", "wall", "p95"),
+    ("maxSeconds", "wall", "max"),
+    ("p95CpuSeconds", "CPU", "p95"),
+)
+
+
 def check_budgets(summary, budgets):
     """Wall-time budgets bound what a user waits; CPU-time budgets catch a slowdown on a loaded runner."""
     failures = []
     for language, measured in summary["latency"].items():
-        for key, kind in (("p95Seconds", "wall"), ("p95CpuSeconds", "CPU")):
+        for key, kind, statistic in LATENCY_BUDGETS:
             if key not in budgets:
                 continue
             limit = budgets[key].get(language)
             if limit is None:
                 failures.append(
-                    f"No {kind} latency budget for source language {language}"
+                    f"No {kind} {statistic} latency budget for source language {language}"
                 )
             elif measured.get(key) is not None and measured[key] > limit:
                 failures.append(
-                    f"Latency budget exceeded for {language}: {kind} p95 {measured[key]} s > {limit} s"
+                    f"Latency budget exceeded for {language}: {kind} {statistic} {measured[key]} s > {limit} s"
                 )
     return failures
 

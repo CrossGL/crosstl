@@ -76,6 +76,8 @@ CAPABILITIES = (
     "SampledCubeArray",
     "Image1D",
     "ImageBuffer",
+    # Storage image formats outside the Shader capability's set (rg32f, r16f, r8, ...); glslang declares it for GLSL.
+    "StorageImageExtendedFormats",
     "ImageQuery",
     "InputAttachment",
     "Geometry",

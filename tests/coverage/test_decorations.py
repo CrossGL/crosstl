@@ -158,6 +158,28 @@ def test_a_compute_translation_must_keep_its_built_in():
     )
 
 
+def test_a_translation_from_cuda_or_hip_need_not_keep_a_built_in_they_compute():
+    # CUDA has no variable for the lane index, so its probe computes it from threadIdx and warpSize; HIP reads
+    # __lane_id(), so its translation keeps the built-in.
+    lane = _compute("subgroup-invocation-id", "BuiltIn.SubgroupLocalInvocationId")
+    computed = "%uint_32 = OpConstant %uint 32\nOpUMod %uint %index %uint_32\n"
+    assert decorations.lost(lane, "spirv", computed, imported="cuda") == ""
+    assert decorations.lost(lane, "spirv", computed, imported="hip") == (
+        "the translation loses BuiltIn.SubgroupLocalInvocationId"
+    )
+    for name, anchor in (
+        ("local-invocation-index", "BuiltIn.LocalInvocationIndex"),
+        ("num-subgroups", "BuiltIn.NumSubgroups"),
+        ("subgroup-id", "BuiltIn.SubgroupId"),
+    ):
+        feature = _compute(name, anchor)
+        for imported in ("cuda", "hip"):
+            assert decorations.lost(feature, "spirv", computed, imported=imported) == ""
+        assert decorations.lost(feature, "spirv", computed, imported="metal") == (
+            f"the translation loses {anchor}"
+        )
+
+
 def test_a_constant_built_in_may_be_written_as_its_value(monkeypatch):
     size = _compute("workgroup-size", "BuiltIn.WorkgroupSize")
     monkeypatch.setattr(lowering, "can_lower", lambda language: True)
@@ -340,3 +362,86 @@ def test_glslang_lowers_a_glsl_es_3_00_vertex_shader():
     assert decorations.lost(
         INVARIANT, "webgl", source.replace("invariant gl_Position;\n", "")
     ) == ("the translation loses Decoration.Invariant")
+
+
+DEVICE_GLOBAL = Feature(
+    "opencl", "type", "device-global", None, group="StorageClass.CrossWorkgroup"
+)
+COPY_LOSS = (
+    "the translation loses StorageClass.CrossWorkgroup: it keeps a copy of the shared array per invocation or "
+    "per workgroup"
+)
+
+
+@pytest.mark.parametrize(
+    "storage, kept",
+    [
+        ("Private", False),
+        ("Function", False),
+        ("Workgroup", False),
+        ("StorageBuffer", True),
+        ("CrossWorkgroup", True),
+    ],
+)
+def test_a_device_global_must_stay_shared_by_every_invocation(storage, kept):
+    # Each invocation of the probe touches only its own element, so a copy per invocation or per workgroup computes
+    # what the probe computes; only the storage of the array shows that it is no longer shared.
+    assembly = f"%acc = OpVariable %_ptr_{storage}__arr_float_uint_64 {storage}\n"
+    assert decorations.lost(DEVICE_GLOBAL, "spirv", assembly) == (
+        "" if kept else COPY_LOSS
+    )
+
+
+def test_a_cuda_or_hip_device_global_must_stay_a_program_scope_device_variable():
+    shared = (
+        "__device__ float acc[64] = {1.0f, 2.0f, 4.0f};\n__global__ void probe() {}"
+    )
+    local = "__global__ void probe(float* outp) {\n    float acc[64] = {1.0f};\n}"
+    for language in ("cuda", "hip"):
+        feature = Feature(
+            language, "type", "device-global", None, group="StorageClass.CrossWorkgroup"
+        )
+        assert decorations.lost(feature, language, shared) == ""
+        assert decorations.lost(feature, language, "static " + shared) == ""
+        assert decorations.lost(feature, language, local) == COPY_LOSS
+        # Without __device__ a program-scope array lives on the host.
+        assert decorations.lost(feature, language, shared[len("__device__ ") :]) == (
+            COPY_LOSS
+        )
+
+
+def test_other_features_are_not_checked_for_a_shared_array():
+    union = Feature("opencl", "type", "union", None, group="OpTypeStruct")
+    assembly = "%acc = OpVariable %_ptr_Private__arr_float_uint_64 Private\n"
+    assert decorations.lost(union, "spirv", assembly) == ""
+
+
+_GLSL_DEVICE_GLOBAL = """#version 450
+layout(local_size_x = 1) in;
+layout(std430, binding = 0) readonly buffer In { float fin[]; };
+layout(std430, binding = 1) buffer Out { float outp[]; };
+{declaration}
+void main() {
+    uint i = gl_GlobalInvocationID.x;
+    acc[i & 63u] = acc[i & 63u] * 2.0 + fin[i];
+    outp[i] = acc[i & 63u];
+}
+"""
+
+
+@pytest.mark.skipif(not lowering.can_lower("glsl"), reason="glslang is not installed")
+@pytest.mark.parametrize(
+    "declaration, kept",
+    [
+        ("float acc[64];", False),
+        ("shared float acc[64];", False),
+        ("layout(std430, binding = 2) buffer Acc { float acc[64]; };", True),
+    ],
+)
+def test_glslang_shows_a_private_or_workgroup_copy_of_a_device_global(
+    declaration, kept
+):
+    source = _GLSL_DEVICE_GLOBAL.replace("{declaration}", declaration)
+    assert decorations.lost(DEVICE_GLOBAL, "glsl", source) == (
+        "" if kept else COPY_LOSS
+    )

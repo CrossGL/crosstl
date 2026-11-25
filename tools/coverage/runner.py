@@ -15,18 +15,22 @@ from pathlib import Path
 from . import (
     decorations,
     execution,
+    metal_reflection,
     placeholders,
     probes,
     rustgpu,
     spirv_input,
+    tint,
     validators,
 )
 from .features.spirv import is_core
-from .model import ROUND_TRIPS, Feature, Result, kept_folder
+from .model import PAIR, ROUND_TRIPS, Feature, Result, kept_folder
 from .semantic import identify, instructions, lower
 
 OUTPUT_BACKENDS = {
     "cuda": "cuda",
+    # GLSL ES 3.x, the opengl backend's gles target.
+    "gles": "gles",
     "glsl": "opengl",
     "hip": "hip",
     "hlsl": "directx",
@@ -52,6 +56,8 @@ INPUT_BACKENDS = {
     "rust": "rust",
     "slang": "slang",
     "spirv": "vulkan",
+    "webgl": "webgl",
+    "wgsl": "wgsl",
 }
 # The target a language's probes fall back to when the reference compiler rejects a native probe for its usual target.
 # slangc writes invalid SPIR-V for some operations its HLSL target compiles, such as an OpAtomicCompareExchange on
@@ -75,6 +81,12 @@ def _first_line(error: BaseException, scratch: str) -> str:
     return f"{type(error).__name__}: {text[0][:300] if text else ''}".rstrip(": ")
 
 
+# How the reference compilers read each native probe, told to the importer that reads it. DXC compiles every HLSL
+# probe with -enable-16bit-types (validators.py and lowering.py), under which ``half`` is binary16; without it the
+# importer reads ``half`` as DXC does by default, as binary32 (crosstl/backend/DirectX/half_width.py).
+SOURCE_OPTIONS = {"directx": {"enable_16bit_types": True}}
+
+
 def translate(source: str, suffix: str, backend: str, source_backend: str) -> str:
     """Translate ``source`` with CrossTL, raising :class:`Refused` or :class:`Broken` on failure.
 
@@ -92,6 +104,7 @@ def translate(source: str, suffix: str, backend: str, source_backend: str) -> st
                 backend=backend,
                 source_backend=source_backend,
                 format_output=False,
+                source_options=SOURCE_OPTIONS.get(source_backend),
             )
         except Exception as error:  # noqa: BLE001 - every failure is classified
             code = getattr(error, "project_diagnostic_code", None)
@@ -132,7 +145,10 @@ def _checker(language: str, target: str) -> str:
     versions = [
         validators.version(tool) for tool in validators.toolchain(language, target)
     ]
-    code = [Path(module.__file__).read_bytes() for module in (validators, rustgpu)]
+    code = [
+        Path(module.__file__).read_bytes() for module in (validators, rustgpu, tint)
+    ]
+    code.append(tint.SCRIPT.read_bytes())
     return "\n".join(versions + [hashlib.sha256(b"\0".join(code)).hexdigest()])
 
 
@@ -252,16 +268,22 @@ def run_output(feature: Feature, language: str) -> Result:
         tool = validators.TOOLS[language] if outcome in ("supported", "wrong") else ""
         return Result(feature, "output", outcome, detail, tool, semantic)
 
+    probe, refusal = None, ""
     try:
         probe = probes.build(feature, CROSSGL_DIALECTS.get(language, "crossgl"))
     except probes.NoSpelling as error:
-        return result("refused", str(error))
+        refusal = str(error)
     except probes.ProbeError as error:
         return result("untested", str(error))
-    _keep(feature, "output", language, "probe" + probe.suffix, probe.source)
+    else:
+        _keep(feature, "output", language, "probe" + probe.suffix, probe.source)
+    # As in the input row, a feature the target's compiler rejects in its own probe is untested, even when CrossGL
+    # has no spelling for it: the target lacks the feature, so a refusal would not be a gap of CrossTL's.
     probed, rejected = _native_rejection(feature, language)
     if rejected:
         return result("untested", f"the probe itself is rejected: {rejected}")
+    if probe is None:
+        return result("refused", refusal)
     # The semantic id stays the one :func:`.semantic.lower` found for the usual target.
     feature = probed
     try:
@@ -299,17 +321,26 @@ def run_output(feature: Feature, language: str) -> Result:
     )
     if ignored:
         return result("wrong", ignored)
-    # The CrossGL probe reads its inputs like the native probe unless it calls a counterpart overload.
-    if _runs(feature, language) and not feature.counterpart:
+    # A graphics probe never runs; its Metal must keep the native probe's interface (tools/coverage/metal_reflection.py).
+    moved = (
+        metal_reflection.output_difference(feature, translated)
+        if language == "metal"
+        else ""
+    )
+    if moved:
+        return result("wrong", moved)
+    if _runs(feature, language):
         try:
             native = (
                 spirv_input.build(feature)
                 if language == "spirv"
                 else probes.build(feature, language)
-            ).source
+            )
         except probes.ProbeError:
             return result("supported")
-        return replace(result("supported"), sources=(native, translated))
+        # A CrossGL probe that calls a counterpart overload runs only if it reads its inputs like the native probe.
+        if not feature.counterpart or native.reads == probe.reads:
+            return replace(result("supported"), sources=(native.source, translated))
     return result("supported")
 
 
@@ -418,19 +449,39 @@ def run_input(feature: Feature, language: str) -> Result:
     lost = decorations.lost(feature, emitted, translated, imported=language)
     if lost:
         return result("wrong", f"after the round trip: {lost}")
+    # A graphics probe never runs, so a Metal round trip that moves a binding, a vertex attribute or a stage value
+    # still validates; its entry points must keep the interface of the probe's (tools/coverage/metal_reflection.py).
+    moved = (
+        metal_reflection.round_trip_difference(probe.source, translated)
+        if language == emitted == "metal"
+        else ""
+    )
+    if moved:
+        return result("wrong", f"after the round trip: {moved}")
     if emitted == language and _runs(feature, language):
         return replace(result("supported"), sources=(probe.source, translated))
     return result("supported")
 
 
-def _job(job: tuple[Feature, str, str]) -> Result:
-    feature, direction, language = job
+def _job(job: tuple) -> Result:
+    feature, direction, language, *partner = job
+    # A cell's files sit under its source language, in the folder of its target (:func:`.pairs.run_pair`).
+    owner, folder = (
+        (feature.language, f"to-{language}")
+        if direction == PAIR
+        else (language, direction)
+    )
     if _kept:
         # Files an earlier run kept for this probe would sit beside this run's as if they belonged to it.
         shutil.rmtree(
-            Path(_kept, kept_folder(language, direction, feature.name)),
+            Path(_kept, kept_folder(owner, folder, feature.name)),
             ignore_errors=True,
         )
+    if direction == PAIR:
+        # Imported here because :mod:`.pairs` builds on this module.
+        from . import pairs
+
+        return pairs.run_pair(feature, feature.language, language, *partner)
     if direction == "input":
         return run_input(feature, language)
     result = run_output(feature, language)
@@ -441,12 +492,14 @@ def _job(job: tuple[Feature, str, str]) -> Result:
 
 
 def run(
-    jobs: list[tuple[Feature, str, str]],
+    jobs: list[tuple],
     workers: int | None = None,
     keep: Path | None = None,
 ) -> list[Result]:
     """Run every ``(feature, direction, language)`` job; results come back in job order.
 
+    A translation matrix job is ``(feature, PAIR, target, partner)``: it translates ``feature``'s native probe into
+    ``target`` and checks it as ``partner``, ``target``'s feature of the same semantic key (:func:`.pairs.run_pair`).
     With ``keep``, each job writes its probe and CrossTL's translations of it to the job's :func:`.model.kept_folder`
     under ``keep``.
     """
@@ -466,7 +519,7 @@ def run(
 
 
 def _run_jobs(
-    jobs: list[tuple[Feature, str, str]], workers: int, verdicts: str, kept: str | None
+    jobs: list[tuple], workers: int, verdicts: str, kept: str | None
 ) -> list[Result]:
     if workers == 1 or len(jobs) < 2:
         _remember(verdicts, kept)

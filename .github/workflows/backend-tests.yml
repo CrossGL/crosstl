@@ -20,14 +20,16 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  python-versions:
-    name: Select Python versions
+  plan:
+    name: Plan
+    # Only a push to main can repeat a commit the merge queue tested. Pull requests and merge groups skip this
+    # job, so their tests start without first waiting for a runner for it.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
       actions: read
     outputs:
-      versions: ${{ steps.select.outputs.versions }}
       tested: ${{ steps.queue.outputs.tested }}
     steps:
       - name: Check whether the merge queue tested this commit
@@ -43,24 +45,9 @@ jobs:
           passed=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/${workflow##*/}/runs?head_sha=$GITHUB_SHA&event=merge_group&status=success" --jq .total_count || echo 0)
           echo "tested=$([ "${passed:-0}" -gt 0 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
-      - name: Select Python versions
-        id: select
-        env:
-          # Pushes to main and pull requests labelled ci:full test every supported
-          # version; other pull requests test the oldest and the newest.
-          FULL_PYTHON_VERSIONS: '["3.11", "3.12", "3.13", "3.14", "3.15"]'
-          PULL_REQUEST_PYTHON_VERSIONS: '["3.11", "3.15"]'
-          FULL: ${{ github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full') }}
-        run: |
-          if [ "$FULL" = "true" ]; then
-            echo "versions=$FULL_PYTHON_VERSIONS" >> "$GITHUB_OUTPUT"
-          else
-            echo "versions=$PULL_REQUEST_PYTHON_VERSIONS" >> "$GITHUB_OUTPUT"
-          fi
-
   test:
-    needs: python-versions
-    if: needs.python-versions.outputs.tested != 'true'
+    needs: plan
+    if: ${{ !cancelled() && needs.plan.outputs.tested != 'true' }}
     # The pinned Xcode 27.1 toolchain the Metal step selects is only on the
     # xcode-27 image; macOS-latest images carry Xcode 26.
     runs-on: ${{ matrix.OS == 'macOS-latest' && 'xcode-27' || matrix.OS }}
@@ -70,23 +57,17 @@ jobs:
       PYTEST_XDIST_AUTO_NUM_WORKERS: ${{ matrix.OS == 'macOS-latest' && '3' || '4' }}
     strategy:
       matrix:
-        backend:
-          [
-            directx,
-            metal,
-            GLSL,
-            "slang",
-            "SPIRV",
-            "mojo",
-            "rust",
-            "CUDA",
-            "HIP",
-          ]
-        python-version: ${{ fromJSON(needs.python-versions.outputs.versions) }}
-        OS: [ubuntu-latest, windows-latest, macOS-latest]
-        exclude:
-          - OS: windows-latest
-          - OS: macOS-latest
+        # One Ubuntu leg runs every backend test. A leg per importer made nine
+        # jobs per Python version, most of them under a minute, and skipped
+        # test_HLSL, test_OpenCL and the modules shared by several importers.
+        backend: [all]
+        # Pushes to main, merge groups and pull requests labelled ci:full test
+        # every supported version; other pull requests test the oldest and the
+        # newest. The
+        # Complete Test Suite runs every backend test on Python 3.12 on
+        # Ubuntu, so a 3.12 leg here would repeat it.
+        python-version: ${{ fromJSON((github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && '["3.11", "3.13", "3.14", "3.15"]' || '["3.11", "3.15"]') }}
+        OS: [ubuntu-latest]
         include:
           - backend: all
             python-version: "3.13"
@@ -151,6 +132,10 @@ jobs:
           python tools/ensure_metal_toolchain.py
           xcrun --sdk macosx metal -std=metal4.1 -x metal -fsyntax-only /dev/null
 
+      - name: Use Visual Studio's Clang
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/windows-clang
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -161,13 +146,8 @@ jobs:
         shell: bash
         run: |
           mkdir -p build/reports
-          if [ "${{ matrix.backend }}" == "all" ]; then
-            python -m pytest tests/test_backend -n auto \
-              --junitxml build/reports/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
-          else
-            python -m pytest tests/test_backend/test_${{ matrix.backend }} -n auto \
-              --junitxml build/reports/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
-          fi
+          python -m pytest tests/test_backend -n auto \
+            --junitxml build/reports/backend-tests-${{ matrix.backend }}-${{ matrix.python-version }}-${{ matrix.OS }}.xml
 
       - name: Write backend test failure summary
         if: failure() && steps.run_backend_tests.outcome == 'failure'
@@ -195,7 +175,7 @@ jobs:
     # The one check per workflow that branch protection and the merge queue require.
     name: Backend Tests result
     if: always()
-    needs: [python-versions, test]
+    needs: [plan, test]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

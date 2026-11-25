@@ -151,6 +151,9 @@ class CodeFormatter:
             "BasedOnStyle": style_map.get(language, "LLVM"),
             "SortIncludes": False,
         }
+        if language == ShaderLanguage.RUST:
+            # Rust has no adjacent string literal concatenation, so a split literal (an asm! line) does not compile.
+            style_config["BreakStringLiterals"] = False
         if (
             "// crosstl-resource-origin:" in code
             or "// crosstl-resource-storage:" in code
@@ -160,9 +163,11 @@ class CodeFormatter:
             or "// crosstl-dispatch-region:" in code
             or "// crosstl-combined-samplers:" in code
             or "// crosstl-fixed-samplers:" in code
+            or "// CrossGL resource metadata:" in code
         ):
-            # Structured provenance must remain a single parseable comment line.
-            style_config["CommentPragmas"] = "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-resource-storage:|crosstl-frozen-specializations:|crosstl-metadata-preconditions:|crosstl-immutable-storage:|crosstl-dispatch-region:|crosstl-combined-samplers:|crosstl-fixed-samplers:)"
+            # Structured provenance and resource metadata must remain single
+            # parseable comment lines; clang-format would otherwise reflow them.
+            style_config["CommentPragmas"] = "^ (IWYU pragma:|crosstl-resource-origin:|crosstl-resource-storage:|crosstl-frozen-specializations:|crosstl-metadata-preconditions:|crosstl-immutable-storage:|crosstl-dispatch-region:|crosstl-combined-samplers:|crosstl-fixed-samplers:|CrossGL resource metadata:)"
         style = json.dumps(style_config)
 
         try:

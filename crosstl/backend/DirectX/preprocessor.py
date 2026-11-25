@@ -23,6 +23,40 @@ PRESERVED_SYSTEM_INCLUDE_SENTINEL = "__CROSSGL_HLSL_PRESERVED_INCLUDE__ "
 IDENTIFIER_CONTINUATION_RE = re.compile(r"\w*")
 
 
+class OutputLines(list):
+    """Lines that one ``_process_lines`` call writes. ``origins[i]`` is where line ``i`` comes from:
+    ``(file, physical_line, include_site)``, where ``include_site`` is the origin of the ``#include`` directive that
+    read ``file``, or ``None`` in the file being preprocessed. ``#line`` directives do not change origins.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.origins: List[Optional[Tuple]] = []
+
+    def emit(self, text: str, origin: Tuple) -> None:
+        self.append(text)
+        self.origins.append(origin)
+
+    def emit_lines(self, lines: List[str]) -> None:
+        self.extend(lines)
+        self.origins.extend(getattr(lines, "origins", None) or [None] * len(lines))
+
+
+def text_line_origins(output: List[str]) -> List[Optional[Tuple]]:
+    """The origin of every line of ``"\\n".join(output)``: a written line that spans several physical lines (a block
+    comment, a macro invocation continued on the next line) gives each of them the next physical line.
+    """
+    origins = getattr(output, "origins", None) or [None] * len(output)
+    expanded: List[Optional[Tuple]] = []
+    for text, origin in zip(output, origins):
+        expanded.append(origin)
+        for step in range(1, text.count("\n") + 1):
+            expanded.append(
+                None if origin is None else (origin[0], origin[1] + step, origin[2])
+            )
+    return expanded
+
+
 @dataclass
 class Macro:
     """Object-like or function-like HLSL preprocessor macro."""
@@ -74,6 +108,10 @@ class HLSLPreprocessor:
         self._base_file: Optional[str] = None
         self._joined_line_numbers: Optional[List[int]] = None
         self._invocation_continues = False
+        # The origin of the #include directive being read, and the origin of every line of the last output
+        # (see OutputLines). ``line_origins`` is a result of ``preprocess``, not an input to it.
+        self._include_site: Optional[Tuple] = None
+        self.line_origins: List[Optional[Tuple]] = []
 
         if defines:
             for name, value in defines.items():
@@ -86,7 +124,9 @@ class HLSLPreprocessor:
         self._include_depth = 0
         self._base_file = file_path
         logical_lines = self._split_logical_lines(code)
+        self._include_site = None
         output_lines = self._process_lines(logical_lines, file_path)
+        self.line_origins = text_line_origins(output_lines)
         return "\n".join(output_lines).replace(
             PRESERVED_SYSTEM_INCLUDE_SENTINEL, "#include "
         )
@@ -173,10 +213,12 @@ class HLSLPreprocessor:
         return balance
 
     def _process_lines(self, lines: List[str], file_path: Optional[str]) -> List[str]:
-        output: List[str] = []
+        output = OutputLines()
         conditional_stack: List[Dict[str, bool]] = []
         current_line = 1
+        physical_line = 1
         current_file = file_path
+        include_site = self._include_site
 
         def is_active() -> bool:
             return all(frame["active"] for frame in conditional_stack)
@@ -189,6 +231,7 @@ class HLSLPreprocessor:
             stripped = line.lstrip()
             active = is_active()
             consumed_lines = 1
+            origin = (file_path, physical_line, include_site)
 
             if self._is_directive_line(stripped):
                 if stripped.startswith("%:"):
@@ -255,21 +298,7 @@ class HLSLPreprocessor:
                     if name in self.macros:
                         del self.macros[name]
                 elif directive == "include":
-                    included = self._handle_include(rest, file_path)
-                    if included is not None:
-                        if isinstance(included, tuple):
-                            included_text, included_path = included
-                        else:
-                            included_text = included
-                            included_path = file_path
-                        nested_lines = self._split_logical_lines(included_text)
-                        self._include_depth += 1
-                        try:
-                            output.extend(
-                                self._process_lines(nested_lines, included_path)
-                            )
-                        finally:
-                            self._include_depth -= 1
+                    output.emit_lines(self._process_include(rest, file_path, origin))
                 elif directive == "line":
                     line_info = self._handle_line_directive(rest)
                     if line_info is not None:
@@ -281,7 +310,7 @@ class HLSLPreprocessor:
                     if active and self._is_pragma_once(rest) and current_file:
                         self.pragma_once_files.add(self._canonical_path(current_file))
                     elif active:
-                        output.append(line)
+                        output.emit(line, origin)
                 elif directive in ("error", "warning"):
                     if directive == "error" or self.strict:
                         raise DirectXSyntaxError(f"#{directive}: {rest.strip()}")
@@ -292,7 +321,7 @@ class HLSLPreprocessor:
                     pass  # the null directive ([cpp.null])
                 else:
                     if active:
-                        output.append(line)
+                        output.emit(line, origin)
             else:
                 if active:
                     line, consumed_lines = self._join_multiline_function_macro_call(
@@ -301,11 +330,13 @@ class HLSLPreprocessor:
                     expanded, consumed_lines = self._expand_text_line(
                         lines, idx, line, consumed_lines, current_line, current_file
                     )
-                    output.append(expanded)
+                    output.emit(expanded, origin)
             if physical is not None:
-                current_line += sum(physical[idx : idx + consumed_lines])
+                step = sum(physical[idx : idx + consumed_lines])
             else:
-                current_line += consumed_lines
+                step = consumed_lines
+            current_line += step
+            physical_line += step
             idx += consumed_lines
 
         if conditional_stack:
@@ -508,6 +539,32 @@ class HLSLPreprocessor:
             params[-1] = params[-1][: -len("...")].strip()
             is_variadic = True
         return params, remainder, is_variadic
+
+    def _process_include(
+        self, rest: str, file_path: Optional[str], origin: Tuple
+    ) -> List[str]:
+        """The output lines of what ``#include rest`` in ``file_path`` reads. Their origins name ``origin``, the
+        directive's own, as the include site. Text that comes from no other file, such as a system include kept
+        for the target, maps to the directive itself."""
+        included = self._handle_include(rest, file_path)
+        if included is None:
+            return []
+        if isinstance(included, tuple):
+            included_text, included_path = included
+        else:
+            included_text = included
+            included_path = file_path
+        nested_lines = self._split_logical_lines(included_text)
+        self._include_depth += 1
+        outer_site, self._include_site = self._include_site, origin
+        try:
+            nested = self._process_lines(nested_lines, included_path)
+        finally:
+            self._include_depth -= 1
+            self._include_site = outer_site
+        if not isinstance(included, tuple) or included_path == file_path:
+            nested.origins = [origin] * len(nested)
+        return nested
 
     def _handle_include(
         self, rest: str, file_path: Optional[str]

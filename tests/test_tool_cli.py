@@ -419,15 +419,19 @@ def test_readme_language_table_matches_the_registered_backends_and_sources():
         re.MULTILINE,
     )
     outputs = {backend for _, backend, output, _ in rows if output != "not offered"}
-    # A row without a backend name is input only; its source key is the language.
+    # A row without a backend name is input only; its source key is the language. A backend name that is a source
+    # alias, as webgl is of opengl, names the source it resolves to.
+    sources = set(crosstl.supported_sources()) - {"cgl"}
+    from crosstl.translator.source_registry import SOURCE_REGISTRY as registry
+
     inputs = {
-        backend or language.split()[0].lower()
+        registry.resolve_name(backend or language.split()[0].lower())
         for language, backend, _, source in rows
         if source != "not offered"
     }
 
     assert outputs == set(crosstl.supported_backends())
-    assert inputs == set(crosstl.supported_sources()) - {"cgl"}
+    assert inputs == sources
 
 
 def test_public_api_docs_include_project_api():

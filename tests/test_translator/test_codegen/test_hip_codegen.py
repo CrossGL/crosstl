@@ -5054,8 +5054,8 @@ class TestHipCodeGen:
         assert ")[1]" not in hip_code
         assert ")[2]" not in hip_code
 
-    def test_compute_builtin_subscripts_refuse_non_constant_index_and_writes(self):
-        non_constant_source = """
+    def test_compute_builtin_subscripts_read_runtime_index_and_refuse_writes(self):
+        runtime_index_source = """
         shader TestShader {
             compute {
                 void main(uint i) {
@@ -5064,8 +5064,16 @@ class TestHipCodeGen:
             }
         }
         """
-        with pytest.raises(HipLoweringRefused, match="non-constant index"):
-            HipCodeGen().generate(Parser(Lexer(non_constant_source).tokens).parse())
+        code = HipCodeGen().generate(Parser(Lexer(runtime_index_source).tokens).parse())
+        assert (
+            "cgl_builtin_component(i, (blockIdx.x * blockDim.x + threadIdx.x), "
+            "(blockIdx.y * blockDim.y + threadIdx.y), "
+            "(blockIdx.z * blockDim.z + threadIdx.z))"
+        ) in code
+
+        out_of_range_source = runtime_index_source.replace("[i]", "[3]")
+        with pytest.raises(HipLoweringRefused, match="with index 3"):
+            HipCodeGen().generate(Parser(Lexer(out_of_range_source).tokens).parse())
 
         write_source = """
         shader TestShader {
@@ -7918,8 +7926,8 @@ class TestHipCodeGen:
         )
         assert "return tex2D<float4>(dynGrid[layer][slot], uv.x, uv.y);" in hip_code
         assert (
-            "float4 color = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "float4 color = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "unsigned int count = cgl_surf2Dread<uint>"
@@ -8050,13 +8058,13 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "float4 dynamicColor = cgl_surf2Dread<float4>"
-            "(dynamicImages[layer][slot], pixel.x * sizeof(float4), pixel.y);"
+            "float4 dynamicColor = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynamicImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
             in hip_code
         )
         assert (
-            "float4 fixedColor = cgl_surf2Dread<float4>"
-            "(fixedImages[slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "float4 fixedColor = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(fixedImages[slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "int2 dynamicSize = cgl_textureSize_sampler2D"
@@ -8249,13 +8257,13 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "float4 dynamicColor = cgl_surf2Dread<float4>"
-            "(dynImageGrid[layer][slot], pixel.x * sizeof(float4), pixel.y);"
+            "float4 dynamicColor = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImageGrid[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
             in hip_code
         )
         assert (
-            "float4 fixedColor = cgl_surf2Dread<float4>"
-            "(fixedImageRow[slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "float4 fixedColor = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(fixedImageRow[slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "int2 dynSize = cgl_textureSize_sampler2D"
@@ -8567,8 +8575,8 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "float4 loaded = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "float4 loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "int2 texSize = cgl_textureSize_sampler2D"
@@ -8587,8 +8595,9 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "accum = cgl_float4_add(accum, cgl_surf2Dread<float4>"
-            "(fixedImages[fixedSlot], pixel.x * sizeof(float4), pixel.y));" in hip_code
+            "accum = cgl_float4_add(accum, cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(fixedImages[fixedSlot], pixel.x * sizeof(ushort4), pixel.y)));"
+            in hip_code
         )
         assert (
             "int2 fixedTexSize = cgl_textureSize_sampler2D"
@@ -8674,12 +8683,12 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "float4 loaded = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "float4 loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
-            "surf2Dwrite(loaded, dynImages[layer][slot], "
-            "pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "surf2Dwrite(cgl_rgba16f_element(loaded), dynImages[layer][slot], "
+            "pixel.x * sizeof(ushort4), pixel.y);" in hip_code
         )
         assert (
             "int2 texSize = cgl_textureSize_sampler2D"
@@ -8824,14 +8833,14 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "float4 dynamicColor = cgl_surf2Dread<float4>"
+            "float4 dynamicColor = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
             "(dynImages[params.layer][params.slot], "
-            "params.pixel.x * sizeof(float4), params.pixel.y);" in hip_code
+            "params.pixel.x * sizeof(ushort4), params.pixel.y));" in hip_code
         )
         assert (
-            "float4 fixedColor = cgl_surf2Dread<float4>"
-            "(fixedImages[params.slot], params.pixel.x * sizeof(float4), "
-            "params.pixel.y);" in hip_code
+            "float4 fixedColor = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(fixedImages[params.slot], params.pixel.x * sizeof(ushort4), "
+            "params.pixel.y));" in hip_code
         )
         assert (
             "int2 dynSize = cgl_textureSize_sampler2D"
@@ -8973,8 +8982,8 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "result.loaded = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "result.loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "result.texSize = cgl_textureSize_sampler2D"
@@ -8986,8 +8995,8 @@ class TestHipCodeGen:
         )
         assert (
             "return SampleResult{tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
-            "cgl_surf2Dread<float4>(dynImages[layer][slot], "
-            "pixel.x * sizeof(float4), pixel.y), "
+            "cgl_rgba16f_texel(cgl_surf2Dread<ushort4>(dynImages[layer][slot], "
+            "pixel.x * sizeof(ushort4), pixel.y)), "
             "cgl_textureSize_sampler2D(dynTex_metadata[layer][slot], 0), "
             "cgl_imageSize_image2D(dynImages_metadata[layer][slot])};" in hip_code
         )
@@ -9094,8 +9103,8 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "envelope.result.loaded = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "envelope.result.loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "envelope.result.texSize = cgl_textureSize_sampler2D"
@@ -9111,8 +9120,8 @@ class TestHipCodeGen:
         )
         assert (
             "envelope.bias = cgl_float4_add(tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
-            "cgl_surf2Dread<float4>(dynImages[layer][slot], "
-            "pixel.x * sizeof(float4), pixel.y));" in hip_code
+            "cgl_rgba16f_texel(cgl_surf2Dread<ushort4>(dynImages[layer][slot], "
+            "pixel.x * sizeof(ushort4), pixel.y)));" in hip_code
         )
         assert (
             "SampleEnvelope envelope = buildNestedAssigned("
@@ -9222,8 +9231,8 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "envelope.results[slot].loaded = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "envelope.results[slot].loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "envelope.results[slot].texSize = cgl_textureSize_sampler2D"
@@ -9368,16 +9377,16 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "envelope.result.loaded = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "envelope.result.loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "envelope.result.sampled = tex2D<float4>(dynTex[fallback][slot], uv.x, uv.y);"
             in hip_code
         )
         assert (
-            "envelope.result.loaded = cgl_surf2Dread<float4>"
-            "(dynImages[fallback][slot], pixel.x * sizeof(float4), pixel.y);"
+            "envelope.result.loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[fallback][slot], pixel.x * sizeof(ushort4), pixel.y));"
             in hip_code
         )
         assert (
@@ -13347,7 +13356,9 @@ class TestHipCodeGen:
         assert "WaveOpNode(" not in hip_code
         assert "Unsupported HIP wave intrinsic" not in hip_code
 
-    def test_direct_shfl_down_sync_lowers_to_guarded_hip_helper(self):
+    def test_direct_shfl_down_sync_lowers_to_a_32_lane_hip_shuffle(self):
+        # CUDA warps are 32 lanes; hipcc 5.7 declares no __shfl_down_sync, and HIP's __shfl_down with width 32
+        # keeps the source lane inside the caller's 32-lane segment of a 32- or 64-lane wavefront.
         source_code = """
         shader HipDirectShuffle {
             compute {
@@ -13362,28 +13373,24 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
         assert (
-            "__device__ inline float "
-            "cgl_hip_shfl_down_sync_float(unsigned long long mask, float value, "
-            "int offset)" in hip_code
+            "__device__ inline T cgl_cuda_shfl_down_sync(unsigned int mask, T value, "
+            "unsigned int lane, int width = 32) {" in hip_code
         )
+        assert "    return __shfl_down(value, lane & 31u, width);" in hip_code
         assert (
-            "#if defined(__HIP_DEVICE_COMPILE__) && "
-            "defined(HIP_ENABLE_WARP_SYNC_BUILTINS)" in hip_code
+            "float reduced = cgl_cuda_shfl_down_sync(4294967295u, partial, 16);"
+            in hip_code
         )
-        assert (
-            "float reduced = cgl_hip_shfl_down_sync_float"
-            "(4294967295u, partial, 16);" in hip_code
-        )
+        assert "HIP_ENABLE_WARP_SYNC_BUILTINS" not in hip_code
+        assert "return value;" not in hip_code
 
-    def test_direct_shfl_down_sync_width_lowers_to_guarded_hip_helper(self):
-        # ROCm HIP documents __shfl_down_sync with optional width=warpSize.
-        # Source: https://rocm.docs.amd.com/projects/HIP/en/docs-7.0.1/reference/kernel_language.html#warp-shuffle-functions
+    def test_direct_shfl_down_sync_width_lowers_to_a_32_lane_hip_shuffle(self):
         source_code = """
         shader HipDirectShuffleWidth {
             compute {
                 void main() {
                     uint partial = 7u;
-                    uint reduced = __shfl_down_sync(0xffffffffffffffff, partial, 1, 32);
+                    uint reduced = __shfl_down_sync(0xffffffffu, partial, 1, 16);
                 }
             }
         }
@@ -13392,16 +13399,10 @@ class TestHipCodeGen:
         hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
         assert (
-            "__device__ inline unsigned int "
-            "cgl_hip_shfl_down_sync_width_uint(unsigned long long mask, "
-            "unsigned int value, int offset, int width)" in hip_code
+            "unsigned int reduced = cgl_cuda_shfl_down_sync(4294967295u, partial, 1, 16);"
+            in hip_code
         )
-        assert "return __shfl_down_sync(mask, value, offset, width);" in hip_code
-        assert "(void)width;" in hip_code
-        assert (
-            "unsigned int reduced = cgl_hip_shfl_down_sync_width_uint"
-            "(18446744073709551615, partial, 1, 32);" in hip_code
-        )
+        assert hip_code.count("cgl_cuda_shfl_down_sync(unsigned int mask") == 1
 
     def test_direct_shfl_down_sync_rejects_invalid_arity(self):
         source_code = """
@@ -13418,7 +13419,7 @@ class TestHipCodeGen:
 
         with pytest.raises(
             ValueError,
-            match=r"HIP warp sync builtin __shfl_down_sync requires 3 or 4 "
+            match=r"CUDA warp intrinsic __shfl_down_sync takes 3 or 4 "
             r"arguments, got 2",
         ):
             HipCodeGen().generate(ast)
@@ -14885,3 +14886,32 @@ def test_hip_const_match_expression_local_stays_assignable():
     assert "int value;" in hip_code
     assert "value = 10;" in hip_code
     assert "value = -1;" in hip_code
+
+
+def test_hip_cbuffer_vector_member_uses_vector_helpers(tmp_path):
+    source_code = """
+    shader P {
+        buffer float* outp;
+        cbuffer Params {
+            vec3 scale;
+        };
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec3 v = vec3(outp[i]);
+                vec3 a = v - scale / 2.0;
+                outp[i] = a.x + dot(scale, v);
+            }
+        }
+    }
+    """
+
+    ast = Parser(Lexer(source_code).tokens).parse()
+    hip_code = HipCodeGen().generate(ast)
+
+    assert "__constant__ float3 scale;" in hip_code
+    assert "cgl_float3_sub(v, cgl_float3_div_scalar(scale, 2.0f))" in hip_code
+    assert "cgl_float3_sub_scalar" not in hip_code
+    assert "cgl_float3_dot(scale, v)" in hip_code
+    compile_hip_if_hipcc_available(hip_code, tmp_path)

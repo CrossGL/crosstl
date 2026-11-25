@@ -17,9 +17,9 @@ DXC lays a shader record out with its storage-buffer rule, the relaxed std430 ru
 components is aligned to its component size unless it would straddle a 16-byte boundary, while arrays and structs
 keep their std430 alignment. CrossGL records take ``std430``, ``std140`` or ``scalar`` layouts, so the importer names
 the one whose offsets equal DXC's (``std430`` first, then ``scalar``) and refuses a record that matches neither, one
-whose members have no fixed 32- or 64-bit layout here (matrices, 16-bit and minimum-precision types, ``half``,
-whose width depends on ``-enable-16bit-types``), and the ``cbuffer`` form, whose members CrossGL would reach as
-globals of a block it cannot name.
+whose members have no fixed 32- or 64-bit layout here (matrices, and 16-bit and minimum-precision types, which
+include ``half`` when the program has native 16-bit types: :mod:`.half_width`), and the ``cbuffer`` form, whose
+members CrossGL would reach as globals of a block it cannot name.
 """
 
 from __future__ import annotations

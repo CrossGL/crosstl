@@ -6,12 +6,12 @@ Template materialization must resolve such an alias exactly once.
 
 import pytest
 
-import crosstl
 from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 from crosstl.project.pipeline import (
     _metal_resolve_type_identifiers,
     _metal_rewrite_embedded_identifier_parts,
 )
+from tests.stage_entry_helpers import joined_entries
 
 SELF_NAMED_ALIAS_TEMPLATE = """
 #include <metal_stdlib>
@@ -61,7 +61,7 @@ def test_self_named_local_alias_specializes_the_template_once(
         SELF_NAMED_ALIAS_TEMPLATE.replace("DECLARATION", DECLARATIONS[declaration])
     )
 
-    output = crosstl.translate(str(source), backend=backend, format_output=False)
+    output = joined_entries(source, backend, format_output=False)
 
     assert "SumOp_float_float" not in output
     assert "SumOp_int_int" not in output

@@ -72,7 +72,9 @@ class HLSLResourceAccessVariantsMixin:
                 ast, target_stage
             )
 
-        pristine = deepcopy(ast)
+        # A pass renders ``program`` in place unless the narrow pointer layout passes render copies of it (their
+        # docstring); an unrendered copy is kept for the next pass only when one does not.
+        pristine = None
         variants = {}
         program = ast
         try:
@@ -82,8 +84,12 @@ class HLSLResourceAccessVariantsMixin:
                     for name, combinations in variants.items()
                 }
                 self.hlsl_resource_access_calls = {}
+                self.hlsl_widened_narrow_pointer_parameters = frozenset()
+                narrow = self.hlsl_ast_has_narrow_storage_pointer_parameters(program)
+                if pristine is None and not narrow:
+                    pristine = deepcopy(program)
                 code = self.generate_hlsl_program_with_narrow_pointer_layouts(
-                    program, target_stage
+                    program, target_stage, narrow_parameters=narrow
                 )
                 merged = {
                     name: set(combinations) for name, combinations in variants.items()
@@ -94,7 +100,8 @@ class HLSLResourceAccessVariantsMixin:
                     return code
                 self.hlsl_check_resource_access_variant_limit(merged)
                 variants = merged
-                program = deepcopy(pristine)
+                if pristine is not None:
+                    program = deepcopy(pristine)
         finally:
             self.hlsl_resource_access_calls = None
         raise self.hlsl_resource_access_variant_error(

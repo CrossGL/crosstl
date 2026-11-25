@@ -40,6 +40,7 @@ from . import (
     pointers,
     portability,
     primitives,
+    promotion,
     qualifiers,
     rasterization,
     rays,
@@ -55,6 +56,7 @@ from . import (
     tasks,
     tessellation,
     textures,
+    unions,
     values,
     vectors,
     vertices,
@@ -66,6 +68,15 @@ from .family import C_FAMILY
 _HLSL_PATCH = (
     "struct ControlPoint {\n    float4 position : POSITION;\n};\n\nstruct PatchConstants {\n"
     "    float edges[3] : SV_TessFactor;\n    float inside : SV_InsideTessFactor;\n};\n\n"
+)
+# HLSL's half is binary16 only under DXC's -enable-16bit-types. The coverage validators pass it to every HLSL probe,
+# and the Direct3D 12 harness to a program that spells a native 16-bit type (tests/conformance/validators.py), so the
+# probe keeps the product in a float16_t, which makes the native probe binary16 on every tool, as CrossGL's half is.
+# Direct3D rounds a float converted to a 16-bit float toward zero (D3D11.3 functional specification, section 3.2.2)
+# where CrossGL rounds it to nearest, so the probe converts a value on a grid of 2^-8, which binary16 holds exactly
+# below 4, and the product still rounds in binary16 (:data:`..crossgl.templates.FOR_LANGUAGE` has CrossGL's probe).
+HALF = Template(
+    "half v = half((float)(int)(fin[i] * 256.0) * 0.00390625);\nfloat16_t w = v * v;\noutp[i] = float(w);"
 )
 
 HLSL = {
@@ -131,6 +142,8 @@ HLSL = {
     **components.ELSEWHERE,
     **pointers.ELSEWHERE,
     **memory.ELSEWHERE,
+    **unions.ELSEWHERE,
+    **promotion.ELSEWHERE,
     **subgroups.HLSL,
     **specializations.HLSL,
     **qualifiers.HLSL,
@@ -139,7 +152,7 @@ HLSL = {
     **formats.HLSL,
     **storage.HLSL,
     **samplers.HLSL,
-    "half": scalar("half", "fin"),
+    "half": HALF,
     "double": scalar("double", "fin"),
     "int8": ABSENT,
     "uint8": ABSENT,
@@ -209,13 +222,7 @@ HLSL = {
         "    ControlPoint output;\n    output.position = patch[id].position * 2.0;\n    return output;\n}\n",
         entry="main",
     ),
-    "tessellation-evaluation": Template(
-        program=_HLSL_PATCH
-        + '[domain("tri")]\nfloat4 main(PatchConstants constants, float3 coord : SV_DomainLocation,\n'
-        "            const OutputPatch<ControlPoint, 3> patch) : SV_Position {\n"
-        "    return patch[0].position * coord.x + patch[1].position * coord.y + patch[2].position * coord.z;\n}\n",
-        entry="main",
-    ),
+    "tessellation-evaluation": tessellation.hlsl_domain_stage(slang=False),
     "mesh": Template(
         program="struct Vertex {\n    float4 position : SV_Position;\n};\n\n"
         '[numthreads(1, 1, 1)]\n[outputtopology("triangle")]\n'

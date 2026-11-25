@@ -4,7 +4,9 @@ from dataclasses import replace
 
 import pytest
 
-from tools.coverage import probes, validators
+from crosstl.translator import parse
+from crosstl.translator.ast import ShaderStage
+from tools.coverage import probes, runner, validators
 from tools.coverage.model import VOID, Feature, Param, Signature, Type
 
 from .glsl_features import VEC3, feature
@@ -15,7 +17,7 @@ DFDX = feature("dFdx", VEC3, VEC3, stage="fragment")
 @pytest.mark.parametrize(
     ("language", "entry"),
     [
-        ("crossgl", "FragmentOutput main(FragmentInput input) {"),
+        ("crossgl", "FragmentOutput main() {"),
         ("glsl", "layout(location = 0) out vec4 color;"),
         ("hlsl", "float4 main() : SV_Target {"),
         ("metal", "fragment float4 probe(device float* fin [[buffer(0)]]"),
@@ -30,6 +32,24 @@ def test_fragment_features_get_a_fragment_shader(language, entry):
     assert "compute" not in probe.source and "numthreads" not in probe.source
     assert probe.suffix == (
         ".frag" if language == "glsl" else probes.DIALECTS[language].suffix
+    )
+
+
+def test_a_crossgl_fragment_probe_has_the_host_interface_of_the_native_probes():
+    """No native fragment probe has a stage input the feature does not need, so neither has the CrossGL one: Metal
+    reflects an entry's stage-in members, and a translation with one more measures another interface.
+    """
+    crossgl = probes.build(DFDX, "crossgl").source
+    assert "FragmentInput" not in crossgl and "uv" not in crossgl
+    assert "output.color = vec4(0.0);" in crossgl
+    metal = runner.translate(crossgl, ".cgl", "metal", "cgl")
+    (entry,) = (line for line in metal.splitlines() if line.startswith("fragment "))
+    assert "[[stage_in]]" not in entry
+    assert (
+        "(device float* fin [[buffer(0)]], device float3* outp [[buffer(1)]])" in entry
+    )
+    assert "(device float* fin [[buffer(0)]], device float3* outp [[buffer(1)]])" in (
+        probes.build(replace(DFDX, language="metal", name="dfdx"), "metal").source
     )
 
 
@@ -109,12 +129,19 @@ def test_raytracing_probes_are_valid(language):
 REMAINING_RECURSION = feature("GetRemainingRecursionLevels", Type("uint"), stage="node")
 
 
-def test_node_features_get_a_broadcasting_node_shader_crossgl_cannot_spell():
+def test_node_features_get_a_broadcasting_node_shader_in_hlsl_and_crossgl():
     source = probes.build(REMAINING_RECURSION, "hlsl").source
     assert '[Shader("node")]\n[NodeLaunch("broadcasting")]' in source
     assert "    uint r = GetRemainingRecursionLevels();" in source
-    with pytest.raises(probes.NoSpelling, match="no work-graph node stage"):
-        probes.build(REMAINING_RECURSION, "crossgl")
+    crossgl = probes.build(REMAINING_RECURSION, "crossgl").source
+    assert "    node {\n" in crossgl
+    assert (
+        "        void main()\n"
+        "            @node_launch(broadcasting)\n"
+        "            @node_dispatch_grid(1, 1, 1)\n"
+        "            @numthreads(1, 1, 1) {\n"
+    ) in crossgl
+    assert "            uint r = GetRemainingRecursionLevels();" in crossgl
     with pytest.raises(probes.ProbeError, match="no node-stage probe for glsl"):
         probes.build(REMAINING_RECURSION, "glsl")
 
@@ -204,9 +231,27 @@ def test_node_objects_are_entry_parameters_of_their_kind_of_node():
         "    ThreadNodeOutputRecords<Record> obj = output.GetThreadNodeOutputRecords(1);"
         in (complete)
     )
+    # CrossGL writes the same node with its own attribute spellings, and its parser reads it as a node stage.
+    is_valid, records, _, empty_input, _, shared, complete = (
+        probes.build(f, "crossgl").source for f in NODE_METHODS
+    )
+    assert "void main(@max_records(1) NodeOutput<Record> obj)" in is_valid
+    assert (
+        "ThreadNodeOutputRecords<Record> r = obj.GetThreadNodeOutputRecords(a0);"
+        in records
+    )
+    assert "@node_launch(coalescing)\n            @numthreads(1, 1, 1) {" in empty_input
+    assert "    @node_track_rw_input_sharing\n    struct Record {" in shared
+    assert (
+        "void main(@globallycoherent RWDispatchNodeInputRecord<Record> obj)" in shared
+    )
+    assert (
+        "ThreadNodeOutputRecords<Record> obj = output.GetThreadNodeOutputRecords(1u);"
+        in complete
+    )
     for method in NODE_METHODS:
-        with pytest.raises(probes.NoSpelling, match="no work-graph node stage"):
-            probes.build(method, "crossgl")
+        program = parse(probes.build(method, "crossgl").source)
+        assert [stage.stage for stage in program.stages.values()] == [ShaderStage.NODE]
 
 
 @pytest.mark.skipif(not validators.available("hlsl"), reason="dxc is not installed")

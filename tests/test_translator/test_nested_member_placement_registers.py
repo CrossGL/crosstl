@@ -215,10 +215,22 @@ def _dispatch(tmp_path, env, binary, entry, uniform_binding, output_binding, val
     return value
 
 
-def _glsl_bindings(glsl):
-    uniform = re.search(r"layout\(std140, binding = (\d+)\) uniform", glsl).group(1)
-    output = re.search(r"layout\(std430, binding = (\d+)\) buffer", glsl).group(1)
-    return int(uniform), int(output)
+def _glsl_bindings(glsl, api):
+    """The uniform and output bindings GLSL output declares for ``api`` (``vulkan`` or ``opengl``).
+
+    A binding that two Vulkan descriptor types share in OpenGL is written ``CROSSGL_BINDING(set, vulkan, opengl)``.
+    """
+
+    def binding(block):
+        found = re.search(
+            rf"layout\({block}, (?:binding = (\d+)|CROSSGL_BINDING\(\d+, (\d+), (\d+)\))\)",
+            glsl,
+        )
+        if found.group(1) is not None:
+            return int(found.group(1))
+        return int(found.group(2) if api == "vulkan" else found.group(3))
+
+    return binding("std140"), binding("std430")
 
 
 def _run_glsl_on_vulkan(tmp_path, glsl, values):
@@ -228,22 +240,22 @@ def _run_glsl_on_vulkan(tmp_path, glsl, values):
     source = tmp_path / "probe.comp"
     binary = tmp_path / "probe-glsl.spv"
     source.write_text(glsl)
-    # OpenGL numbers uniform and storage blocks apart; Vulkan gives them one namespace, so storage moves to 16 + N.
+    # OpenGL numbers uniform and storage blocks apart; Vulkan gives them one namespace, so GLSL output gives the
+    # uniform block its own Vulkan binding.
     _run(
         [
             "glslangValidator",
             "-V",
             "--target-env",
             "vulkan1.1",
-            "--shift-ssbo-binding",
-            "16",
             str(source),
             "-o",
             str(binary),
         ]
     )
-    uniform, output = _glsl_bindings(glsl)
-    return _dispatch(tmp_path, env, binary, "main", uniform, 16 + output, values)
+    uniform, output = _glsl_bindings(glsl, "vulkan")
+    assert uniform != output, glsl
+    return _dispatch(tmp_path, env, binary, "main", uniform, output, values)
 
 
 def _hlsl_entry(hlsl):
@@ -301,7 +313,7 @@ def _run_glsl_on_opengl(glsl, values):
         )
     import moderngl
 
-    uniform, output = _glsl_bindings(glsl)
+    uniform, output = _glsl_bindings(glsl, "opengl")
     context = moderngl.create_standalone_context(require=430, backend="egl")
     buffers = []
     try:

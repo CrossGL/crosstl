@@ -38,20 +38,33 @@ the start of the entry point; a ``uint`` input the entry point already declares 
 read. The generators spell the draw
 parameters from the parameter's built-in and refuse the ones a target lacks: HLSL, MSL and WGSL have no draw index,
 WGSL has no base vertex or base instance, and HLSL has them only from Shader Model 6.8.
+
+A fragment shader's ``gl_Layer``, ``gl_ViewportIndex``, ``gl_ViewIndex`` and ``gl_SampleMaskIn`` (GLSL 4.60 section
+7.1.5, ``GL_EXT_multiview``) are bound by no generator, so every read of them is passed. They arrive as ``uint``
+(``SV_RenderTargetArrayIndex``, ``SV_ViewportArrayIndex``, ``SV_ViewID``, ``SV_Coverage`` and their MSL attributes).
+``gl_SampleMaskIn`` is an array of 32-bit words, and these targets deliver one word, so a read of
+``gl_SampleMaskIn[0]`` becomes the scalar input and any other read is refused.
+
+SPIR-V and HIP input declare a compute built-in as a stage variable (``uint3 gl_GlobalInvocationID @input
+@gl_GlobalInvocationID;``) that module-scope helpers read by name. The generators bind it in the entry point only,
+so a helper that reads it takes it as a trailing parameter, and the entry point passes the variable by its own name.
 """
 
 from __future__ import annotations
 
+import copy
+
 from .. import ast as A
-from .builtin_values import glsl_builtin_name
+from .builtin_values import BuiltinValueUnsupportedError, glsl_builtin_name
 from .hub_types import call_name
 from .rewrite import child_slots, get_child, set_child
 
 __all__ = ["pass_builtin_inputs"]
 
 _HLSL_TARGETS = frozenset({"directx", "hlsl", "dx11", "dx12", "d3d11", "d3d12"})
-# Targets whose fragment generators bind only gl_FragCoord, so every other fragment input is passed here.
-_FRAGMENT_BINDING_TARGETS = _HLSL_TARGETS | {"metal"}
+# Targets whose fragment generators bind only gl_FragCoord (HLSL, Metal) or no built-in read by name (the rust-gpu
+# output), so every other fragment input is passed here.
+_FRAGMENT_BINDING_TARGETS = _HLSL_TARGETS | {"metal", "rust"}
 TARGETS = _FRAGMENT_BINDING_TARGETS | {"slang", "wgsl"}
 _FRAGMENT_INPUTS = {
     "gl_FragCoord": "vec4",
@@ -65,7 +78,17 @@ _FRAGMENT_INPUTS = {
     "gl_BaryCoordNV": "vec3",
     "gl_BaryCoordNoPerspNV": "vec3",
     "gl_ShadingRateEXT": "int",
+    # GLSL 4.60 section 7.1.5 (gl_Layer, gl_ViewportIndex) and GL_EXT_multiview (gl_ViewIndex). gl_SampleMaskIn is an
+    # array of 32-bit words; HLSL, MSL, Slang and WGSL deliver one word (at most 32 samples), so only word 0 is read.
+    "gl_Layer": "int",
+    "gl_ViewportIndex": "int",
+    "gl_ViewIndex": "int",
+    "gl_SampleMaskIn": "int",
 }
+# No generator binds an entry point's read of these by name, so every read is passed, on every target.
+_UNBOUND_FRAGMENT_INPUTS = frozenset(
+    {"gl_Layer", "gl_ViewportIndex", "gl_ViewIndex", "gl_SampleMaskIn"}
+)
 _COMPUTE_INPUTS = {
     "gl_GlobalInvocationID": "uvec3",
     "gl_LocalInvocationID": "uvec3",
@@ -99,6 +122,11 @@ _UNSIGNED = frozenset(
         "gl_BaseInstance",
         "gl_DrawID",
         "gl_ShadingRateEXT",
+        # SV_RenderTargetArrayIndex, SV_ViewportArrayIndex, SV_ViewID, SV_Coverage and their MSL attributes.
+        "gl_Layer",
+        "gl_ViewportIndex",
+        "gl_ViewIndex",
+        "gl_SampleMaskIn",
     }
 )
 
@@ -271,7 +299,67 @@ def _copy(expression):
     return A.IdentifierNode(expression.name)
 
 
+def _declared_inputs(stage, inputs):
+    """The stage's variables that declare one of its built-in inputs, by name."""
+    declared = {}
+    for variable in getattr(stage, "local_variables", None) or []:
+        attributes = {
+            str(getattr(attribute, "name", "") or "").lower()
+            for attribute in getattr(variable, "attributes", None) or []
+        }
+        builtin = _builtin_of(variable)
+        if builtin is not None and (builtin in inputs or "input" in attributes):
+            declared[variable.name] = variable
+    return declared
+
+
+def _is_word_zero(index):
+    value = getattr(index, "value", None)
+    if isinstance(index, A.LiteralNode) and not isinstance(value, bool):
+        return str(value).lower().rstrip("u") in {"0", "0x0"}
+    return False
+
+
+def _read_sample_mask_word(functions, index, target, program_names):
+    """Read ``gl_SampleMaskIn[0]`` as the one coverage word the target delivers; refuse any other use.
+
+    HLSL ``SV_Coverage``, MSL ``[[sample_mask]]``, Slang and WGSL ``@builtin(sample_mask)`` are one ``uint``: no
+    target expresses more than 32 samples, so the array has one word.
+    """
+
+    def visit(node, function):
+        for field, key in list(child_slots(node)):
+            child = get_child(node, field, key)
+            if (
+                isinstance(child, A.ArrayAccessNode)
+                and isinstance(child.array_expr, A.IdentifierNode)
+                and child.array_expr.name == "gl_SampleMaskIn"
+                and _is_word_zero(child.index_expr)
+            ):
+                set_child(node, field, key, A.IdentifierNode("gl_SampleMaskIn"))
+            elif (
+                isinstance(child, A.IdentifierNode) and child.name == "gl_SampleMaskIn"
+            ):
+                raise BuiltinValueUnsupportedError(
+                    f"'{getattr(function, 'name', 'function')}' reads gl_SampleMaskIn other than as "
+                    "gl_SampleMaskIn[0]: the target delivers one 32-bit coverage word, so only word 0 has a "
+                    "value",
+                    target,
+                )
+            elif isinstance(child, A.ASTNode):
+                visit(child, function)
+
+    for function in functions:
+        if "gl_SampleMaskIn" in program_names or not index.reads(
+            function, {"gl_SampleMaskIn"} - index.declared(function)
+        ):
+            continue
+        visit(function.body, function)
+
+
 def _passes(target, kind, builtin, helper_reads):
+    if builtin in _UNBOUND_FRAGMENT_INPUTS:
+        return True
     if kind == "vertex" and target in _FRAGMENT_BINDING_TARGETS:
         # The HLSL and Metal vertex generators bind none of the OpenGL vertex inputs.
         return True
@@ -310,6 +398,10 @@ def pass_builtin_inputs(program, target) -> int:
             if function is not entry and getattr(function, "body", None) is not None
         ]
         candidates = set(inputs) - program_names
+        if "gl_SampleMaskIn" in candidates:
+            _read_sample_mask_word([entry, *helpers], index, target, program_names)
+        # gather_stage_interface_variables turns a vertex or fragment stage's declared inputs into parameters.
+        declared_inputs = _declared_inputs(stage, inputs) if kind == "compute" else {}
         direct = {
             function.name: (
                 index.reads(function, candidates - index.declared(function))
@@ -327,10 +419,28 @@ def pass_builtin_inputs(program, target) -> int:
             for builtin in set().union(*direct.values())
             if _passes(target, kind, builtin, helper_reads)
         )
-        if not builtins:
+        # A stage input the stage declares (``uint3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;``) is bound
+        # by the generator in the entry point only, so a helper that reads it takes it as a parameter.
+        for helper in helpers:
+            direct[helper.name] |= index.reads(
+                helper, set(declared_inputs) - index.declared(helper)
+            ) | (set(threaded.get(id(helper), ())) & set(declared_inputs))
+        declared = sorted(
+            set().union(*(direct[helper.name] for helper in helpers))
+            & set(declared_inputs)
+            if helpers
+            else ()
+        )
+        if not builtins and not declared:
             continue
         _thread(
-            program, entry, helpers, direct, builtins, _all_names(program), threaded
+            program,
+            entry,
+            helpers,
+            direct,
+            (builtins, {name: declared_inputs[name] for name in declared}),
+            _all_names(program),
+            threaded,
         )
         # Threading adds parameters and replaces reads, so later stages see the functions afresh.
         index.clear()
@@ -338,7 +448,9 @@ def pass_builtin_inputs(program, target) -> int:
     return changed
 
 
-def _thread(program, entry, helpers, direct, builtins, taken, threaded):
+def _thread(program, entry, helpers, direct, inputs, taken, threaded):
+    """Pass ``inputs``, the built-ins and the declared stage inputs ``(builtins, {name: variable})``, as parameters."""
+    builtins, declared = inputs
     earlier = set(threaded)
     sources, conversions = {}, []
     for builtin in builtins:
@@ -369,6 +481,15 @@ def _thread(program, entry, helpers, direct, builtins, taken, threaded):
             ]
         sources[builtin] = A.IdentifierNode(name)
     entry.body.statements[0:0] = conversions
+    types = {builtin: _type_node(_INPUT_TYPES[builtin]) for builtin in builtins}
+    prefixes = {builtin: f"cgl_{builtin[3:]}" for builtin in builtins}
+    for name, variable in declared.items():
+        # The generator binds the declared input in the entry point, which passes it on by name.
+        sources[name] = A.IdentifierNode(name)
+        types[name] = variable.var_type
+        prefixes[name] = f"cgl_{name[3:] if name.startswith('gl_') else name}"
+    keys = [*builtins, *declared]
+    local_sources = {builtin: sources[builtin] for builtin in builtins}
 
     # The built-ins each helper needs: the ones it reads, and the ones the helpers it calls need.
     calls = {
@@ -379,9 +500,7 @@ def _thread(program, entry, helpers, direct, builtins, taken, threaded):
         }
         for function in [entry, *helpers]
     }
-    needs = {
-        helper.name: set(direct[helper.name]) & set(builtins) for helper in helpers
-    }
+    needs = {helper.name: set(direct[helper.name]) & set(keys) for helper in helpers}
     changed = True
     while changed:
         changed = False
@@ -399,11 +518,11 @@ def _thread(program, entry, helpers, direct, builtins, taken, threaded):
             parameter_names[helper.name] = threaded[id(helper)]
             continue
         names = {}
-        for builtin in builtins:
-            if builtin in needs[helper.name]:
-                names[builtin] = _fresh(f"cgl_{builtin[3:]}", taken)
+        for key in keys:
+            if key in needs[helper.name]:
+                names[key] = _fresh(prefixes[key], taken)
                 helper.parameters = list(helper.parameters or []) + [
-                    A.ParameterNode(names[builtin], _type_node(_INPUT_TYPES[builtin]))
+                    A.ParameterNode(names[key], copy.deepcopy(types[key]))
                 ]
         parameter_names[helper.name] = names
         if names:
@@ -413,14 +532,15 @@ def _thread(program, entry, helpers, direct, builtins, taken, threaded):
         if id(function) in earlier:
             # An earlier stage already passes the built-ins through this helper's body and calls.
             continue
-        local = (
-            sources
-            if function is entry
-            else {
-                builtin: A.IdentifierNode(name)
-                for builtin, name in parameter_names[function.name].items()
+        if function is entry:
+            # The entry point reads a declared stage input by its own name, which the generator binds.
+            local, replaced = sources, local_sources
+        else:
+            local = {
+                key: A.IdentifierNode(name)
+                for key, name in parameter_names[function.name].items()
             }
-        )
+            replaced = local
         for call in [
             node
             for node in _walk(function.body)
@@ -429,8 +549,8 @@ def _thread(program, entry, helpers, direct, builtins, taken, threaded):
             needed = needs.get(call_name(call))
             if needed:
                 arguments = list(call.arguments or []) + [
-                    _copy(local[builtin]) for builtin in builtins if builtin in needed
+                    _copy(local[key]) for key in keys if key in needed
                 ]
                 # ``args`` aliases ``arguments`` on call nodes.
                 call.arguments = call.args = arguments
-        _replace_reads(function, local)
+        _replace_reads(function, replaced)

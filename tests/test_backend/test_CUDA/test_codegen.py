@@ -6,6 +6,7 @@ from crosstl.backend.CUDA.CudaLexer import CudaLexer
 from crosstl.backend.CUDA.CudaParser import CudaParser
 from crosstl.backend.CUDA.local_memory_spaces import crossgl_zero_value
 from crosstl.backend.import_refusals import CudaImportRefused
+from crosstl.translator.codegen.rust_refusals import RustLoweringRefused
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
 from crosstl.translator.semantics.declared_functions import UndeclaredFunctionError
@@ -282,11 +283,13 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         # An initialized __device__ variable is device memory the module load fills, which no buffer the host
-        # binds carries; it used to import as a per-invocation private variable.
-        with pytest.raises(CudaImportRefused) as raised:
-            CudaToCrossGLConverter().generate(ast)
-        assert "'g_uids' has an initializer" in str(raised.value)
-        assert "'grid_dot_result' has an initializer" in str(raised.value)
+        # binds carries: it imports as one initialized object in the CrossGL device address space, not as a
+        # storage buffer or a per-invocation private variable.
+        result = CudaToCrossGLConverter().generate(ast)
+        assert "var<device> g_uids: i32 = 0;" in result
+        assert "var<device> grid_dot_result: f64 = 0.0;" in result
+        assert "@binding" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_cuda_constant_memory_globals_use_distinct_crossgl_bindings(self):
         code = """
@@ -313,8 +316,7 @@ class TestCudaCodeGen:
         assert "@group(0) @binding(0) var<uniform> stencil: array<f32, 4>;" in result
         assert "@group(0) @binding(1) var<uniform> offsets: array<i32, 4>;" in result
         assert (
-            "@group(0) @binding(2) var<uniform> c_Kernel: "
-            "array<f32, cuda_array_extent_2_mul_8_plus_1>;"
+            "@group(0) @binding(2) var<uniform> c_Kernel: " "array<f32, 17>;"
         ) in result
         assert (
             "@group(0) @binding(3) var<storage, read_write> out: array<f32>" in result
@@ -592,9 +594,7 @@ class TestCudaCodeGen:
         result = CudaToCrossGLConverter().generate(ast)
 
         assert "u32 scan1Inclusive(u32 idata, ptr<u32> s_Data, u32 size)" in result
-        assert (
-            "var<workgroup> s_Data: array<u32, cuda_array_extent_2_mul_256>;" in result
-        )
+        assert "var<workgroup> s_Data: array<u32, 512>;" in result
         expected_pos = "var pos: u32 = gl_GlobalInvocationID.x;"
         assert expected_pos in result
         assert "for (var offset: u32 = 1; (offset < size); offset <<= 1)" in result
@@ -1136,7 +1136,7 @@ class TestCudaCodeGen:
         assert "cuda::thread_scope" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
-    def test_syncwarp_mask_emits_explicit_diagnostic(self):
+    def test_syncwarp_mask_stays_a_cuda_call(self):
         code = """
         __global__ void sync(unsigned int mask) {
             __syncwarp(mask);
@@ -1148,17 +1148,30 @@ class TestCudaCodeGen:
         parser = CudaParser(tokens)
         ast = parser.parse()
 
-        codegen = CudaToCrossGLConverter()
-        result, message = cuda_import_partial_output(codegen.generate, ast)
+        result = CudaToCrossGLConverter().generate(ast)
 
-        # The full warp is the subgroup; a mask that may name fewer lanes has no CrossGL barrier.
-        assert "subgroupBarrier();" in result
-        assert (
-            "CUDA __syncwarp(mask): CrossGL has no barrier over a subset of the subgroup"
-            in message
+        # Both forms stay CUDA calls: a subgroup barrier waits for a subgroup of another size on most targets, and
+        # a mask may name only some lanes. CUDA and HIP output write them back; crosstl.translator.semantics.warp
+        # emulates the full-warp form and refuses a mask it cannot show to name the whole warp.
+        assert "__syncwarp(mask);" in result
+        assert "__syncwarp();" in result
+        assert "subgroupBarrier" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_syncwarp_mask_with_too_many_arguments_is_refused(self):
+        code = """
+        __global__ void sync(unsigned int mask) {
+            __syncwarp(mask, 1);
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+
+        result, message = cuda_import_partial_output(
+            CudaToCrossGLConverter().generate, ast
         )
-        assert "__syncwarp" not in result
-        assert "None" not in result
+
+        assert "CUDA __syncwarp(mask, 1) takes one mask" in message
+        assert "__syncwarp(mask" not in result
 
     def test_nvidia_cuda_shfl_sync_full_width_argument_converts(self):
         code = """
@@ -1173,8 +1186,9 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "return WaveReadLaneAt(value, lane);" in result
-        assert "cuda warp intrinsic __shfl_sync" not in result
+        # A shuffle keeps CUDA's 32-lane warp semantics in CrossGL; wave operations act on subgroups of another size.
+        assert "return __shfl_sync(0xffffffff, value, lane, 32);" in result
+        assert "WaveReadLaneAt" not in result
 
     def test_warp_vote_and_shuffle_intrinsics_do_not_leak_raw_cuda_calls(self):
         code = """
@@ -1195,20 +1209,16 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "WaveActiveBallot(true).x" in result
-        assert "WaveActiveBallot((pred != 0)).x" in result
-        assert "(WaveActiveAnyTrue((pred != 0)) ? 1 : 0)" in result
-        assert "WaveReadLaneAt(value, lane)" in result
+        # Warp intrinsics stay CUDA calls, which crosstl.translator.semantics.warp emulates or refuses per target:
+        # wave operations act on subgroups whose size is not the warp's 32 lanes on most targets.
+        assert "__activemask()" in result
+        assert "__ballot_sync(0xffffffff, pred)" in result
+        assert "__any_sync(0xffffffff, pred)" in result
         assert "__ballot_sync(mask, pred)" in result
         assert "not directly supported" not in result
-        assert (
-            "(((WaveGetLaneIndex() + (1)) < 32) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (1))) : value)"
-        ) in result
-        assert "__activemask()" not in result
-        assert "__ballot_sync(0xffffffff, pred)" not in result
-        assert "__shfl_sync(0xffffffff, value, lane)" not in result
-        assert "__shfl_down_sync(0xffffffff, value, 1)" not in result
+        assert "__shfl_sync(0xffffffff, value, lane)" in result
+        assert "__shfl_down_sync(0xffffffff, value, 1)" in result
+        assert "Wave" not in result
 
     def test_cuda_full_warp_mask_variable_reassignment_clears_vote_lowering(self):
         code = """
@@ -1227,7 +1237,8 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "result[tx] = (WaveActiveAnyTrue((input[tx] != 0)) ? 1 : 0);" in result
+        # The mask variable holds the full-warp literal at the first vote only.
+        assert "result[tx] = __any_sync(0xFFFFFFFFu, input[tx]);" in result
         assert "result[(tx + 1)] = __any_sync(mask, input[tx]);" in result
         assert "not directly supported" not in result
 
@@ -1249,18 +1260,11 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "WaveReadLaneAt(value, lane)" in result
-        assert (
-            "(WaveGetLaneIndex() >= (delta)) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() - (delta))) : value"
-        ) in result
-        assert (
-            "((WaveGetLaneIndex() + (delta)) < 32) ? "
-            "WaveReadLaneAt(value, (WaveGetLaneIndex() + (delta))) : value"
-        ) in result
-        assert "WaveReadLaneAt(value, (WaveGetLaneIndex() ^ (mask)))" in result
-        assert "cuda warp intrinsic __shfl" not in result
-        assert "__shfl_" not in result
+        assert "__shfl_sync(0xffffffff, value, lane)" in result
+        assert "__shfl_up_sync(0xffffffff, value, delta)" in result
+        assert "__shfl_down_sync(0xffffffff, value, delta, 32)" in result
+        assert "__shfl_xor_sync(0xffffffff, value, mask, 32)" in result
+        assert "WaveReadLaneAt" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_cuda_docs_full_warp_reduce_sync_variants_convert(self):
@@ -1284,18 +1288,13 @@ class TestCudaCodeGen:
 
         result = CudaToCrossGLConverter().generate(ast)
 
-        assert "WaveActiveSum(value)" in result
-        assert "WaveActiveMin(value)" in result
-        assert "WaveActiveMax(value)" in result
-        assert "WaveActiveBitAnd(value)" in result
-        assert "WaveActiveBitOr(value)" in result
-        assert "WaveActiveBitXor(value)" in result
-        # A partial-mask reduction has no wave equivalent; it stays a CUDA call, never a constant.
+        # Reductions stay CUDA calls, which crosstl.translator.semantics.warp emulates per 32-lane warp or refuses;
+        # a partial-mask reduction is kept too, never replaced by a constant.
+        for name in ("add", "min", "max", "and", "or", "xor"):
+            assert f"__reduce_{name}_sync(0xffffffffu, value)" in result
         assert "__reduce_max_sync(mask, value)" in result
         assert "not directly supported" not in result
-        assert "__reduce_add_sync(0xffffffffu, value)" not in result
-        assert "__reduce_min_sync(0xffffffffu, value)" not in result
-        assert "__reduce_max_sync(0xffffffffu, value)" not in result
+        assert "Wave" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_cooperative_groups_thread_block_sync_converts(self):
@@ -2603,7 +2602,9 @@ class TestCudaCodeGen:
         ]:
             assert f"{function_name}(" not in result
 
-    def test_cuda_device_graph_launch_runtime_conversion(self):
+    def test_cuda_device_graph_launch_is_refused(self):
+        # A kernel cannot launch a graph on any CrossGL target, so the launch and its status must not become a
+        # comment and cudaSuccess.
         code = """
         __global__ void launchDeviceGraphs(cudaGraphExec_t child) {
             cudaGraphExec_t current = cudaGetCurrentGraphExec();
@@ -2615,38 +2616,16 @@ class TestCudaCodeGen:
             );
             tail = cudaGetCurrentGraphExec();
             err = cudaGraphLaunch(tail, cudaStreamGraphTailLaunch);
-            err = cudaGraphLaunch(
-                cudaGetCurrentGraphExec(),
-                cudaStreamGraphFireAndForgetAsSibling
-            );
         }
         """
-        lexer = CudaLexer(code)
-        tokens = lexer.tokenize()
-        parser = CudaParser(tokens)
-        ast = parser.parse()
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
 
-        codegen = CudaToCrossGLConverter()
-        result = codegen.generate(ast)
+        message = refused_cuda_import(CudaToCrossGLConverter().generate, ast)
 
-        assert "// CUDA device graph get current exec" in result
-        assert "var current: cudaGraphExec_t = 0;" in result
-        assert "tail = 0;" in result
-        assert (
-            "// CUDA graph device launch: exec: child, mode: fire-and-forget" in result
-        )
-        assert "// CUDA graph device launch: exec: tail, mode: tail" in result
-        assert (
-            "// CUDA graph device launch: "
-            "exec: (/* CUDA device graph get current exec */ 0), "
-            "mode: fire-and-forget sibling"
-        ) in result
-        assert "var err: cudaError_t = cudaSuccess;" in result
-        assert "err = cudaSuccess;" in result
-        assert "cudaGetCurrentGraphExec(" not in result
-        assert "cudaGraphLaunch(" not in result
+        assert "runtime call cudaGetCurrentGraphExec() in device code" in message
+        assert "runtime call cudaGraphLaunch() in device code" in message
 
-    def test_cuda_device_graph_kernel_node_update_runtime_conversion(self):
+    def test_cuda_device_graph_kernel_node_update_is_refused(self):
         code = """
         __device__ void updateDeviceGraphKernelNode(
             cudaGraphDeviceNode_t node,
@@ -2659,40 +2638,19 @@ class TestCudaCodeGen:
             err = cudaGraphKernelNodeUpdatesApply(updates, 2);
         }
         """
-        lexer = CudaLexer(code)
-        tokens = lexer.tokenize()
-        parser = CudaParser(tokens)
-        ast = parser.parse()
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
 
-        codegen = CudaToCrossGLConverter()
-        result = codegen.generate(ast)
+        message = refused_cuda_import(CudaToCrossGLConverter().generate, ast)
 
-        assert (
-            "// CUDA device graph kernel node set enabled: " "node: node, enabled: true"
-        ) in result
-        assert (
-            "// CUDA device graph kernel node set grid dim: "
-            "node: node, grid dim: vec3<u32>(2, 3, 4)"
-        ) in result
-        assert (
-            "// CUDA device graph kernel node set param: "
-            "node: node, offset: 16, value: (&value), bytes: sizeof(value)"
-        ) in result
-        assert (
-            "// CUDA device graph kernel node updates apply: "
-            "updates: updates, count: 2"
-        ) in result
-        assert "var err: cudaError_t = cudaSuccess;" in result
-        assert "err = cudaSuccess;" in result
         for function_name in [
             "cudaGraphKernelNodeSetEnabled",
             "cudaGraphKernelNodeSetGridDim",
             "cudaGraphKernelNodeSetParam",
             "cudaGraphKernelNodeUpdatesApply",
         ]:
-            assert f"{function_name}(" not in result
+            assert f"runtime call {function_name}() in device code" in message
 
-    def test_cuda_graph_conditional_runtime_conversion(self):
+    def test_cuda_device_graph_set_conditional_is_refused(self):
         code = """
         __device__ void setConditional(
             cudaGraphConditionalHandle handle,
@@ -2700,7 +2658,15 @@ class TestCudaCodeGen:
         ) {
             cudaGraphSetConditional(handle, value);
         }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
 
+        message = refused_cuda_import(CudaToCrossGLConverter().generate, ast)
+
+        assert "runtime call cudaGraphSetConditional() in device code" in message
+
+    def test_cuda_graph_conditional_runtime_conversion(self):
+        code = """
         void buildConditionalGraph(
             cudaGraph_t graph,
             cudaGraphNode_t* deps,
@@ -2756,7 +2722,6 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
-        assert "// CUDA graph set conditional: handle: handle, value: value" in result
         assert (
             "// CUDA graph conditional handle create: output: handle, "
             "graph: graph, default launch value: 1u, "
@@ -2779,7 +2744,6 @@ class TestCudaCodeGen:
         assert "var err: cudaError_t = cudaSuccess;" in result
         assert "err = cudaSuccess;" in result
         for function_name in [
-            "cudaGraphSetConditional",
             "cudaGraphConditionalHandleCreate",
             "cudaGraphConditionalHandleCreate_v2",
             "cudaGraphAddNode",
@@ -8430,6 +8394,71 @@ class TestCudaCodeGen:
         assert "CUDA delete q: CrossGL has no device heap" in message
         assert "delete" not in result
 
+    def test_device_new_malloc_free_are_refused(self):
+        # Device-side heap allocation has no CrossGL form, so it is refused
+        # with the same typed diagnostic as `delete` (#4684) instead of
+        # being written as calls CrossGL does not define.
+        code = """
+        struct P { float x; __device__ P(float v) : x(v) {} };
+        __global__ void k(float* o) {
+            P* p = new P(o[0]);
+            float* a = new float(o[0]);
+            float* b = new float[4];
+            float* c = (float*)malloc(16);
+            free(c);
+            auto q = std::make_unique<float>(o[0]);
+            o[0] = p->x + a[0] + b[0] + *q;
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+
+        message = refused_cuda_import(CudaToCrossGLConverter().generate, ast)
+
+        assert "CUDA new P(o[0]): CrossGL has no device heap" in message
+        assert "CUDA new f32(o[0]): CrossGL has no device heap" in message
+        assert "CUDA new[] f32(4): CrossGL has no device heap" in message
+        assert "CUDA malloc(16): CrossGL has no device heap" in message
+        assert "CUDA free(c): CrossGL has no device heap" in message
+        assert (
+            "CUDA std::make_unique<float>(o[0]): CrossGL has no device heap" in message
+        )
+
+    def test_device_new_is_refused_through_translate(self, tmp_path):
+        # The import refusal fires before any target runs, so `--backend cgl`
+        # fails closed instead of emitting `new<P>(...)` (#4684).
+        source = tmp_path / "new.cu"
+        source.write_text(
+            "struct P { float x; __device__ P(float v) : x(v) {} };\n"
+            "__global__ void k(float* o) {\n"
+            "    P* p = new P(o[0]);\n"
+            "    o[1] = p->x;\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        for backend in ("cgl", "metal"):
+            with pytest.raises(CudaImportRefused) as refusal:
+                translate(str(source), backend=backend)
+            assert refusal.value.code == CudaImportRefused.code
+            assert "CUDA new P(o[0]): CrossGL has no device heap" in str(refusal.value)
+
+    def test_user_defined_device_malloc_and_free_are_not_refused(self):
+        # A program's own __device__ malloc and free are ordinary calls, not
+        # device heap calls, so they translate (#4684).
+        code = """
+        __device__ float free(float v) { return v * 2.0f; }
+        __device__ float malloc(float v) { return v + 1.0f; }
+        __global__ void k(float* o) {
+            o[0] = free(o[0]) + malloc(o[1]);
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+
+        result = CudaToCrossGLConverter().generate(ast)
+
+        assert "f32 free(f32 v) {" in result
+        assert "f32 malloc(f32 v) {" in result
+        assert "o[0] = (free(o[0]) + malloc(o[1]));" in result
+
     def test_unique_ptr_host_allocation_conversion(self):
         code = """
         void host(int n) {
@@ -8914,11 +8943,12 @@ class TestCudaCodeGen:
         result = CudaToCrossGLConverter().generate(ast)
 
         assert "var texRef: sampler2D;" in result
-        assert "var surfaceRef: image2D;" in result
+        # Each surface takes the format of the float4 texels it reads and writes.
+        assert "@format(rgba32f) var surfaceRef: image2D;" in result
         assert (
             "void resourcePointerOps("
             "ptr<sampler2D> textureObjects, ptr<image2D> surfaceObjects, "
-            "sampler2D legacyTex, image2D legacySurface, i32 index"
+            "sampler2D legacyTex, @format(rgba32f) image2D legacySurface, i32 index"
         ) in result
         assert (
             "var fromPointer: vec4<f32> = texture("
@@ -8997,9 +9027,17 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
+        # Every surface is read as float: one r32f channel, the .x of the texel imageLoad returns.
+        for declaration in (
+            "@format(r32f) image2D img,",
+            "@format(r32f) image1D line,",
+            "@format(r32f) image3D vol,",
+            "@format(r32f) imageCube cube,",
+        ):
+            assert declaration in result
         assert (
             "var clamped: f32 = imageLoad(img, clamp(vec2<i32>(x, y), "
-            "vec2<i32>(0, 0), imageSize(img) - vec2<i32>(1, 1)));" in result
+            "vec2<i32>(0, 0), imageSize(img) - vec2<i32>(1, 1))).x;" in result
         )
         # cudaBoundaryModeZero and a mode that is not a constant keep the CUDA call, which every target refuses.
         assert (
@@ -9007,20 +9045,20 @@ class TestCudaCodeGen:
             in result
         )
         assert "imageStore(img" not in result
-        assert "var trapped: f32 = imageLoad(img, vec2<i32>(x, y));" in result
-        assert "var plain: f32 = imageLoad(img, vec2<i32>(x, y));" in result
+        assert "var trapped: f32 = imageLoad(img, vec2<i32>(x, y)).x;" in result
+        assert "var plain: f32 = imageLoad(img, vec2<i32>(x, y)).x;" in result
         assert (
             "var lineClamped: f32 = imageLoad(line, "
-            "clamp(x, 0, imageSize(line) - 1));" in result
+            "clamp(x, 0, imageSize(line) - 1)).x;" in result
         )
         assert (
             "var voxelClamped: f32 = imageLoad(vol, clamp(vec3<i32>(x, y, z), "
-            "vec3<i32>(0, 0, 0), imageSize(vol) - vec3<i32>(1, 1, 1)));" in result
+            "vec3<i32>(0, 0, 0), imageSize(vol) - vec3<i32>(1, 1, 1))).x;" in result
         )
         assert (
             "var faceClamped: f32 = imageLoad(cube, vec3<i32>("
             "clamp(x, 0, imageSize(cube).x - 1), "
-            "clamp(y, 0, imageSize(cube).y - 1), z));" in result
+            "clamp(y, 0, imageSize(cube).y - 1), z)).x;" in result
         )
         assert (
             "var unknown: f32 = surf2Dread<float>(img, (x * sizeof(float)), y, "
@@ -9059,11 +9097,11 @@ class TestCudaCodeGen:
         assert (
             "var a: f32 = imageLoad(layers, vec3<i32>("
             "clamp(x, 0, imageSize(layers).x - 1), "
-            "clamp(y, 0, imageSize(layers).y - 1), layer));" in result
+            "clamp(y, 0, imageSize(layers).y - 1), layer)).x;" in result
         )
         assert (
             "var b: f32 = imageLoad(lines, vec2<i32>("
-            "clamp(x, 0, imageSize(lines).x - 1), layer));" in result
+            "clamp(x, 0, imageSize(lines).x - 1), layer)).x;" in result
         )
         assert (
             "imageStore(cubes, vec3<i32>(clamp(x, 0, imageSize(cubes).x - 1), "
@@ -10060,12 +10098,25 @@ class TestCudaCodeGen:
         source_path = tmp_path / "kernel.cu"
         source_path.write_text(code)
 
+        # rust-gpu has no binding for the plain-value parameter yet, so it is refused by name.
+        with pytest.raises(
+            RustLoweringRefused,
+            match="compute entry parameter 'value' is not a compute built-in input",
+        ):
+            translate(str(source_path), backend="rust", format_output=False)
+
+        source_path.write_text(
+            code.replace(", float value)", ")").replace("= value;", "= 1.0f;")
+        )
         result = translate(str(source_path), backend="rust", format_output=False)
 
+        # The pointer parameters are rust-gpu storage-buffer slices of the compute entry point.
         assert (
-            "pub fn kernel(mut data: Vec<f32>, indices: Vec<i32>, value: f32)" in result
+            "pub fn kernel(#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] data: &mut [f32], "
+            "#[spirv(storage_buffer, descriptor_set = 0, binding = 1)] indices: &mut [i32])"
+            in result
         )
-        assert "data[indices[0] as usize] = value;" in result
+        assert "data[indices[0] as usize] = 1.0;" in result
 
     def test_cuda_load_cache_intrinsics_from_programming_guide_pointer_address_conversion(
         self,
@@ -10454,3 +10505,47 @@ class TestCudaCodeGen:
         assert "struct SharedMemory {" in result
         assert "// Kernel: use_shared" in result
         assert "fn use_shared(" in result
+
+    def test_elaborated_struct_array_types(self):
+        code = """
+        struct Pair {
+            float a;
+            int b;
+        };
+        struct Holder {
+            struct Pair ps[2];
+        };
+        __global__ void probe(float* outp) {
+            struct Pair local[2];
+            local[0].a = 1.0f;
+            local[1].b = 2;
+            struct Holder h;
+            h.ps[1].a = 3.0f;
+            struct Pair* ptrs[2];
+            ptrs[0] = &local[0];
+            outp[0] = local[0].a + (float)local[1].b + h.ps[1].a + ptrs[0]->a;
+        }
+        """
+        lexer = CudaLexer(code, preprocess=False)
+        tokens = lexer.tokenize()
+        parser = CudaParser(tokens)
+        ast = parser.parse()
+
+        codegen = CudaToCrossGLConverter()
+        result = codegen.generate(ast)
+
+        assert "array<Pair, 2> ps;" in result
+        assert "var local: array<Pair, 2>;" in result
+        assert "Pair_2" not in result
+        assert "var ptrs: array<ptr<Pair>, 2>;" in result
+        assert (
+            codegen.convert_cuda_type_to_crossgl("struct Pair[2]") == "array<Pair, 2>"
+        )
+        assert (
+            codegen.convert_cuda_type_to_crossgl("const struct Pair[2]")
+            == "array<Pair, 2>"
+        )
+        assert codegen.convert_cuda_type_to_crossgl("class Pair[2]") == "array<Pair, 2>"
+        assert (
+            codegen.convert_cuda_type_to_crossgl("struct Pair[N]") == "array<Pair, N>"
+        )

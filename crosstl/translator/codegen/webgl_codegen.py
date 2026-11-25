@@ -100,10 +100,14 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     GLSL_UNAVAILABLE_BUILTINS = WEBGL_UNAVAILABLE_BUILTINS
     GLSL_UNAVAILABLE_FUNCTION_PATTERNS = WEBGL_UNAVAILABLE_FUNCTION_PATTERNS
     webgl_program_identifier_names = frozenset()
+    webgl_subgroup_barrier_helpers = {}
     # WebGL 2 exposes no GL_EXT_texture_shadow_lod.
     GLSL_SHADOW_LOD_EXTENSION_SUPPORTED = False
+    # WebGL has no Vulkan compilation.
+    GLSL_VULKAN_RESOURCE_FORMS = False
     LOWERING_REFUSAL_TYPE = WebGLLoweringRefused
     GLSL_ARITHMETIC_CONVERSION_ERROR = WebGLArithmeticConversionError
+    GLSL_ES_OUTPUT = True
     GLSL_BOOLEAN_COMPOUND_ASSIGNMENT_ERROR = WebGLBooleanCompoundAssignmentError
     GLSL_BOOLEAN_ORDERED_INTRINSIC_ERROR = WebGLBooleanOrderedIntrinsicError
     GLSL_STRUCT_CONSTRUCTION_ERROR = WebGLStructConstructionError
@@ -118,6 +122,7 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
     GLSL_SUPPORTED_ARITHMETIC_FLOATING_WIDTHS = frozenset({32})
     BUILTIN_INTERFACE_BLOCK_NAMES = {"gl_PerVertex"}
     GLSL_RESERVED_IDENTIFIER_PREFIXES = ("gl_", "webgl_", "_webgl_")
+    GLSL_RESERVES_BUILTIN_FUNCTION_NAMES = True
     UNSUPPORTED_VERTEX_OUTPUT_BUILTINS = {"gl_ClipDistance", "gl_CullDistance"}
     UNSUPPORTED_STAGE_NAMES = (
         {
@@ -207,6 +212,33 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
 
     def default_glsl_version_line(self, ast, target_stage=None):
         return "#version 300 es"
+
+    def glsl_wave_operations(self, ast, target_stage=None):
+        # Reuse the GLSL prepass once function declarations are known, so a
+        # user function can still shadow a plain Metal SIMD alias.
+        operations = super().glsl_wave_operations(ast, target_stage)
+        unsupported = operations & self.GLSL_WAVE_INTRINSIC_ARITIES.keys()
+        if unsupported:
+            raise webgl_refusal(
+                "WebGL 2 (GLSL ES 3.00) does not support "
+                f"subgroup intrinsic '{min(unsupported)}'"
+            )
+        return operations
+
+    def synchronization_function_call(self, func_name, args, *, source_location=None):
+        if func_name in self.GLSL_SUBGROUP_BARRIER_FUNCTIONS:
+            stage = self.current_stage_entry_type
+            helpers = self.webgl_subgroup_barrier_helpers
+            if func_name not in helpers.get(None, ()) and func_name not in helpers.get(
+                stage, ()
+            ):
+                raise webgl_refusal(
+                    "WebGL 2 (GLSL ES 3.00) does not support "
+                    f"subgroup barrier '{func_name}'"
+                )
+        return super().synchronization_function_call(
+            func_name, args, source_location=source_location
+        )
 
     def map_type(self, vtype):
         mapped_type = super().map_type(vtype)
@@ -698,6 +730,9 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
         self.webgl_program_identifier_names = program_identifier_names(ast)
         self.validate_webgl_stage_support(ast, target_stage)
         supported_ast = self.webgl_supported_stage_ast(ast, target_stage)
+        self.webgl_subgroup_barrier_helpers = (
+            self.collect_webgl_subgroup_barrier_helpers(supported_ast)
+        )
         self.validate_webgl_builtin_support(supported_ast)
         self.validate_webgl_resource_support(supported_ast)
         codegen_ast = ast if target_stage is not None else supported_ast
@@ -706,6 +741,28 @@ class WebGLCodeGen(GLSLESExpressionFormsMixin, GLSLCodeGen):
             target_stage=target_stage,
         )
         return self._with_default_precision(code)
+
+    def collect_webgl_subgroup_barrier_helpers(self, ast):
+        # A function local to one stage cannot shadow a barrier in another
+        # stage. The shared GLSL return-type table includes both stages.
+        barrier_names = self.GLSL_SUBGROUP_BARRIER_FUNCTIONS
+        helpers = {
+            None: {
+                function.name
+                for function in ast.functions
+                if function.name in barrier_names
+                and not self.webgl_function_stage_name(function)
+            }
+        }
+        for stage_type, stage in ast.stages.items():
+            names = barrier_names.intersection(
+                function.name for function in stage.local_functions
+            )
+            if names:
+                helpers.setdefault(normalize_stage_name(stage_type), set()).update(
+                    names
+                )
+        return helpers
 
     def combined_fragment_input_member_name(self, input_name):
         # Guarded WebGL sections are compiled per stage, so varyings must link by name.

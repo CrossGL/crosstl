@@ -19,7 +19,10 @@ every narrow register a 32-bit ``int`` and keeps the invariant that it holds a v
 
 Registers, private and workgroup arrays and struct members become 32-bit; narrow pointees in device, constant or
 unqualified memory are left to the emitters, which lay that storage out one 32-bit word per element as they do for
-every target (a layout change for the host that the reflection metadata does not report yet). A narrow increment
+every target (a layout change for the host that the reflection metadata does not report yet). Members of a
+``@union_layout`` struct keep their narrow types too: they overlap the other members' bytes, so a 32-bit element
+would change the union's size and member offsets, and the emitters' union-storage lowering reads or refuses each
+byte view. A narrow increment
 used as a value and a compound assignment to an lvalue with side effects are refused with
 :class:`NarrowIntegerUnsupportedError`. ``min16int`` and ``min16uint`` are
 minimum-precision types that may compute in 32 bits, and are not narrow here.
@@ -57,7 +60,14 @@ NARROW_TARGETS = {
 # Sources whose scalar narrow operands are promoted to int before arithmetic (C++ [conv.prom], C99 6.3.1.1).
 PROMOTING_SOURCES = frozenset({"metal", "cuda", "hip", "opencl", "cgl"})
 # Sources where an int literal adopts the narrow type of the other operand (HLSL literal int, MSL vector operands).
-_LITERAL_ADOPTING = frozenset({"directx", "metal", "opencl", "slang"})
+# A suffixed ``2u`` is a ``uint`` in HLSL, not a literal int, and a floating-point literal never adopts an integer
+# type: ``int16_t a; a * 1.5`` is a ``float`` operation in every source.
+_LITERAL_ADOPTING = frozenset({"directx", "metal", "opencl"})
+# Sources that compute a narrow operand with an int literal in ``int``, scalar and vector alike, because an int
+# never converts implicitly to a narrower type there: glslc writes ``i8vec2 v; v * 2`` as ``OpIMul %v2int``
+# (GL_EXT_shader_explicit_arithmetic_types), and slangc writes ``int8_t a; a * 2`` as ``OpIMul %int`` and
+# ``vector<int8_t, 2> v; v * 2`` as ``OpIMul %v2int``.
+_LITERAL_WIDENING = frozenset({"opengl", "slang"})
 
 _SCALARS = {
     "i8": HubType("i", 8),
@@ -172,6 +182,14 @@ def narrow_of(node) -> HubType | None:
         return narrow_from_name(node.name)
     if isinstance(node, A.NamedType) and not node.generic_args:
         return narrow_from_name(node.name)
+    if isinstance(node, A.NamedType) and node.name == "vector":
+        # ``vector<int8_t, 2>``, the HLSL and Slang template spelling.
+        arguments = list(node.generic_args)
+        element = narrow_of(arguments[0]) if len(arguments) == 2 else None
+        size = getattr(arguments[-1], "value", arguments[-1])
+        if element is not None and element.lanes == 1 and str(size).isdigit():
+            return element.with_lanes(int(size))
+        return None
     if isinstance(node, A.VectorType):
         element = narrow_of(node.element_type)
         if element is not None and str(node.size).isdigit():
@@ -182,9 +200,24 @@ def narrow_of(node) -> HubType | None:
     return None
 
 
+def _is_union_layout(struct) -> bool:
+    return any(
+        str(getattr(attribute, "name", "")).lower() == "union_layout"
+        for attribute in getattr(struct, "attributes", None) or []
+    )
+
+
 def _int_type(lanes):
     scalar = A.PrimitiveType("int")
     return scalar if lanes == 1 else A.VectorType(scalar, lanes)
+
+
+def integer_literal_type(expr) -> str | None:
+    """``"int"`` or ``"uint"`` for an unsuffixed or ``u``-suffixed integer literal, ``None`` for anything else."""
+    if not isinstance(expr, A.LiteralNode) or isinstance(expr.value, (bool, float)):
+        return None
+    name = getattr(expr.literal_type, "name", None)
+    return name if name in ("int", "uint") else None
 
 
 def _into_registers(node) -> bool:
@@ -295,11 +328,18 @@ class NarrowLegalizer:
         self.target = target
         self.promotes = source in PROMOTING_SOURCES
         self.literal_adopts = source in _LITERAL_ADOPTING
+        self.literal_widens = source in _LITERAL_WIDENING
         self.scope = TypeScope(program)
         self.structs = {
             struct.name: struct
             for struct in iter_structs(program)
             if getattr(struct, "name", None)
+        }
+        self.union_members = {
+            id(member)
+            for struct in iter_structs(program)
+            if _is_union_layout(struct)
+            for member in getattr(struct, "members", None) or []
         }
         self.functions = {}
         for function in self._functions():
@@ -702,10 +742,15 @@ class NarrowLegalizer:
         if left is None or right is None:
             other = node.left if left is None else node.right
             known = left or right
-            if not (
-                isinstance(other, A.LiteralNode)
-                and (self.literal_adopts or known.lanes > 1)
-            ):
+            literal = integer_literal_type(other)
+            if self.literal_widens or literal is None:
+                return None
+            if literal == "int":
+                adopts = known.lanes > 1 or self.literal_adopts
+            else:
+                # HLSL ``2u`` is a ``uint`` operand of higher rank; C-family vector operands take the constant.
+                adopts = known.lanes > 1 and self.source != "directx"
+            if not adopts:
                 return None
             left = right = known
         if left != right and not (
@@ -717,6 +762,8 @@ class NarrowLegalizer:
     # Retyping ---------------------------------------------------------------------------------------------------
     def retype(self):
         for node in self.program.walk():
+            if id(node) in self.union_members:
+                continue
             for field in (
                 "var_type",
                 "param_type",
@@ -736,6 +783,8 @@ class NarrowLegalizer:
     def verify(self):
         """No narrow register type is left; one that remains sits where the pass does not reach, so it is refused."""
         for node in self.program.walk():
+            if id(node) in self.union_members:
+                continue
             left = [
                 field
                 for field in (

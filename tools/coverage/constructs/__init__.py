@@ -19,7 +19,7 @@ import json
 import re
 from string import Template as _Text
 
-from .. import crossgl, templates
+from .. import crossgl, execution, templates
 from ..dialect import ProbeError
 from ..model import Feature, Type
 from ..templates import ABSENT, Template
@@ -111,11 +111,13 @@ def universe(grammar_text: str) -> list[Construct]:
     return constructs
 
 
-def _template(name: str, language: str) -> Template | None:
-    table = (
-        crossgl.CONSTRUCTS if language == "crossgl" else templates.TEMPLATES[language]
-    )
-    return table.get(name)
+def _template(name: str, language: str, origin: str = "") -> Template | None:
+    """``language``'s template of the construct ``name``; for CrossGL, the one the probe of ``origin``'s construct
+    uses."""
+    if language == "crossgl":
+        override = crossgl.FOR_LANGUAGE.get(origin, {}).get(name)
+        return override or crossgl.CONSTRUCTS.get(name)
+    return templates.TEMPLATES[language].get(name)
 
 
 def features(language: str, grammar_text: str) -> list[Feature]:
@@ -194,14 +196,14 @@ def _lines(text: str, spelled: dict[str, str]) -> list[str]:
 # GLSL tools tell a program's stage from its file suffix.
 _PROGRAM_SUFFIX = {
     language: {stage: f".{suffix}" for stage, suffix in GLSL_STAGES.items()}
-    for language in ("glsl", "webgl")
+    for language in ("gles", "glsl", "webgl")
 }
 
 
 def build(feature: Feature, dialect):
     """The probe of a language-level feature in ``dialect``'s language, as ``(source, entry, suffix)``."""
     language = dialect.language
-    template = _template(feature.name, language)
+    template = _template(feature.name, language, feature.language)
     if template is ABSENT:
         raise ProbeError(f"{language} has no spelling for {feature.name}")
     if template is None:
@@ -213,6 +215,10 @@ def build(feature: Feature, dialect):
         return source, template.entry or dialect.entry, suffix
     parts = (template.body, template.prelude, template.declarations, template.params)
     read = set(_INPUTS.findall("\n".join(parts)))
+    # As a function probe does (:func:`..probes.build`), a compute probe that reads no input still declares one,
+    # unread, so that the conformance harness, which binds an input at slot 0 and the output at 1, can run it.
+    if not read and feature.stage == "compute" and execution.runs(feature.language):
+        read = {"fin"}
     buffers = [
         (dialect.type(Type(scalar)), name)
         for scalar, name in _BUFFERS

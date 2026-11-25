@@ -1,8 +1,9 @@
 """Metal refuses the stages it cannot write as entry points, with a typed diagnostic.
 
-Metal has no geometry stage, and its tessellation pipeline (a compute kernel writing tessellation factors and a
-``[[patch]]`` post-tessellation vertex function) is not lowered yet, so these stages must not come out as plain
-functions that no Metal pipeline can call.
+Metal has no geometry stage, and the compute kernel that writes Metal's tessellation factors is not lowered from a
+hull stage yet, so these stages must not come out as plain functions that no Metal pipeline can call. A domain stage
+becomes a ``[[patch]]`` post-tessellation vertex function (``test_metal_post_tessellation.py`` and
+``test_metal_glsl_tessellation.py``).
 """
 
 import pytest
@@ -76,19 +77,6 @@ shader TessControl {
 }
 """
 
-TESSELLATION_EVALUATION = """
-shader TessEval {
-    struct DomainInput { vec3 position @ POSITION; };
-
-    tessellation_evaluation {
-        vec4 main(OutputPatch<DomainInput, 3> patch, vec3 uvw @ SV_DomainLocation) @domain(tri) {
-            vec3 p = patch[0].position * uvw.x + patch[1].position * uvw.y + patch[2].position * uvw.z;
-            return vec4(p, 1.0);
-        }
-    }
-}
-"""
-
 HLSL_GEOMETRY = """
 struct VSOut { float4 pos : SV_Position; float3 color : COLOR0; };
 
@@ -111,7 +99,6 @@ def parse(code):
     [
         (GEOMETRY, "geometry", "Metal has no geometry stage"),
         (TESSELLATION_CONTROL, "tessellation_control", "compute kernel"),
-        (TESSELLATION_EVALUATION, "tessellation_evaluation", "[[patch]]"),
     ],
 )
 def test_metal_refuses_stage_without_metal_entry_point(code, stage, phrase):
@@ -154,20 +141,11 @@ void main() {
 }
 """
 
-GLSL_TESSELLATION_EVALUATION = """#version 450
-layout(triangles, equal_spacing, cw) in;
-void main() {
-    gl_Position = gl_TessCoord.x * gl_in[0].gl_Position + gl_TessCoord.y * gl_in[1].gl_Position
-        + gl_TessCoord.z * gl_in[2].gl_Position;
-}
-"""
-
 
 @pytest.mark.parametrize(
     ("name", "source", "stage"),
     [
         ("points.geom", GLSL_GEOMETRY, "geometry"),
-        ("triangles.tese", GLSL_TESSELLATION_EVALUATION, "tessellation_evaluation"),
     ],
 )
 def test_glsl_stage_to_metal_is_a_typed_refusal(tmp_path, name, source, stage):

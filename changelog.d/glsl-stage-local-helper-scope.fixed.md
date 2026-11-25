@@ -1,0 +1,1 @@
+GLSL output keeps a call to a built-in such as `subgroupBarrier()` in a stage when only another stage declares a helper of that name. It used to rename the call to the other stage's helper, which the stage never declares, and glslang rejected it (#5026).

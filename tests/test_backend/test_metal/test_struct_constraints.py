@@ -152,7 +152,8 @@ def test_false_constraint_does_not_evaluate_ill_formed_result():
 
 
 @pytest.mark.parametrize("qualified_alias", [False, True])
-def test_multiple_viable_partials_cannot_fall_back_to_primary(qualified_alias):
+def test_most_specialized_of_multiple_viable_partials_is_selected(qualified_alias):
+    # Cell<T, uint, void> is more specialized than Cell<T, U, enable_if_t<true>> (#1987).
     source = """
     template <typename T, typename U, typename = void> struct Cell { uint value; using type = uint; };
     template <typename T, typename U> struct Cell<T, U, enable_if_t<true>> { int value; using type = int; };
@@ -163,6 +164,23 @@ def test_multiple_viable_partials_cannot_fall_back_to_primary(qualified_alias):
         "TYPE",
         "Buffer<Cell<float, uint>::type>" if qualified_alias else "Cell<float, uint>",
     )
+    materialized = materialize(source)
+    if qualified_alias:
+        assert "struct Buffer_float { float value; }" in materialized
+    else:
+        assert (
+            "struct Cell_float_uint_void { float value; using type = float; }"
+            in materialized
+        )
+
+
+def test_multiple_viable_partials_with_dependent_constraint_are_refused():
+    source = """
+    template <typename T, typename U, typename = void> struct Cell { uint value; };
+    template <typename T, typename U> struct Cell<T, U, enable_if_t<is_same_v<T, float>>> { int value; };
+    template <typename T> struct Cell<T, uint, void> { float value; };
+    kernel void write_value(device Cell<float, uint>* out [[buffer(0)]]) {}
+    """
     with pytest.raises(
         MetalTemplateSpecializationError, match="ordering is not supported"
     ):

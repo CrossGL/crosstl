@@ -234,7 +234,7 @@ EXTERNAL_FIXTURES = [
         ),
         "crossgl": True,
         "contains": [
-            "T genericCalc(T val, T x)",
+            "T genericCalc<T: IDifferentiable + IFloat>(T val, T x)",
             "let result = fwd_diff(genericCalc<float>)",
             'printf("%f\\n", result.d);',
         ],
@@ -1364,18 +1364,9 @@ EXTERNAL_FIXTURES = [
             }
         """
         ),
-        "crossgl": True,
-        "contains": [
-            "int sumInts(T terms)",
-            "sumHelper(acc, terms);",
-            "outputBuffer[0] = sumInts(1, 2, 3);",
-        ],
-        "not_contains": [
-            "where T == int",
-            "expand sumHelper",
-            "each terms",
-            "Expected SEMICOLON",
-        ],
+        # CrossGL generic parameters each take one type or value, so a type pack is refused rather than
+        # imported as one parameter that the call passes three arguments to.
+        "refused": "variadic generic parameter 'each T' of function 'sumInts'",
     },
     {
         "id": "slang_generated_interface_constructor_requirement_codegen",
@@ -1809,7 +1800,7 @@ EXTERNAL_FIXTURES = [
         ),
         "contains": [
             "struct Vertex {",
-            "vec3 position @ in_Position;",
+            "vec3 position @ Position;",
             "vec4 svPosition @ gl_Position;",
             "vec3 barycentrics @ gl_BaryCoordEXT",
             "bool sierpinski = (xy.x & xy.y) == 0;",

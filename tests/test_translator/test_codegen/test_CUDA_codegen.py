@@ -1136,7 +1136,9 @@ class TestCudaCodeGen:
         assert "__syncthreads();" in cuda_code
         assert cuda_code.count("__syncthreads();") == 2
         assert cuda_code.count("__threadfence();") == 5
-        assert cuda_code.count("__threadfence_block();") == 2
+        # The groupMemoryBarrier right after barrier() merges into its __syncthreads(), which already orders all
+        # memory for the block; the memoryBarrierShared between device fences stays a block fence.
+        assert cuda_code.count("__threadfence_block();") == 1
         assert "barrier();" not in cuda_code
         assert "groupMemoryBarrier();" not in cuda_code
         assert "memoryBarrier();" not in cuda_code
@@ -1595,8 +1597,9 @@ class TestCudaCodeGen:
         assert cuda_code.index(helper_signature) < cuda_code.index(kernel_signature)
         assert "__shared__ float tile[32];" in cuda_code
         assert "tile[threadIdx.x] = 0.0f;" in cuda_code
-        assert "__syncthreads();" in cuda_code
-        assert "__threadfence_block();" in cuda_code
+        # memoryBarrierShared right after barrier() adds nothing to __syncthreads() and merges into it.
+        assert cuda_code.count("__syncthreads();") == 1
+        assert "__threadfence_block();" not in cuda_code
         assert "synchronizeTile();" in cuda_code
         assert "__syncthreads(1)" not in cuda_code
         assert "memoryBarrierShared();" not in cuda_code
@@ -1796,8 +1799,8 @@ class TestCudaCodeGen:
         assert ")[1]" not in cuda_code
         assert ")[2]" not in cuda_code
 
-    def test_compute_builtin_subscripts_refuse_non_constant_index_and_writes(self):
-        non_constant_source = """
+    def test_compute_builtin_subscripts_read_runtime_index_and_refuse_writes(self):
+        runtime_index_source = """
         shader TestShader {
             compute {
                 void main(uint i) {
@@ -1806,8 +1809,18 @@ class TestCudaCodeGen:
             }
         }
         """
-        with pytest.raises(CudaLoweringRefused, match="non-constant index"):
-            CudaCodeGen().generate(Parser(Lexer(non_constant_source).tokens).parse())
+        code = CudaCodeGen().generate(
+            Parser(Lexer(runtime_index_source).tokens).parse()
+        )
+        assert (
+            "cgl_builtin_component(i, (blockIdx.x * blockDim.x + threadIdx.x), "
+            "(blockIdx.y * blockDim.y + threadIdx.y), "
+            "(blockIdx.z * blockDim.z + threadIdx.z))"
+        ) in code
+
+        out_of_range_source = runtime_index_source.replace("[i]", "[3]")
+        with pytest.raises(CudaLoweringRefused, match="with index 3"):
+            CudaCodeGen().generate(Parser(Lexer(out_of_range_source).tokens).parse())
 
         write_source = """
         shader TestShader {
@@ -10770,12 +10783,12 @@ class TestCudaCodeGen:
             "on uimage2D */ 0u;" in cuda_code
         )
         assert (
-            "float4 allowedRead = surf2Dread<float4>"
-            "(readOnlyImage, pixel.x * sizeof(float4), pixel.y);" in cuda_code
+            "float4 allowedRead = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(readOnlyImage, pixel.x * sizeof(ushort4), pixel.y));" in cuda_code
         )
         assert (
-            "surf2Dwrite(allowedRead, writeOnlyImage, "
-            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+            "surf2Dwrite(cgl_rgba16f_element(allowedRead), writeOnlyImage, "
+            "pixel.x * sizeof(ushort4), pixel.y);" in cuda_code
         )
         assert (
             "float4 attrReadWriteValue = surf2Dread<float4>"
@@ -10857,7 +10870,7 @@ class TestCudaCodeGen:
         assert "cudaSurfaceObject_t target;" in cuda_code
         assert "cudaSurfaceObject_t syncImage;" in cuda_code
         assert "cudaSurfaceObject_t scopeImage;" in cuda_code
-        assert "int* orderedValues;" in cuda_code
+        assert "__device__ volatile int* orderedValues;" in cuda_code
         assert "unsigned char* __restrict__ linearRaw;" in cuda_code
         assert "int value = readOnlyValues[index];" in cuda_code
         assert "int attrValue = attrReadValues[index];" in cuda_code
@@ -10926,7 +10939,8 @@ class TestCudaCodeGen:
         assert "readwrite StructuredBuffer" not in cuda_code
         assert "coherent" not in cuda_code
         assert "globallycoherent" not in cuda_code
-        assert "volatile" not in cuda_code
+        # @volatile is the only buffer written volatile.
+        assert cuda_code.count("volatile") == 1
         assert "restrict" not in cuda_code.replace("__restrict__", "")
         assert "access(" not in cuda_code
 
@@ -14157,8 +14171,9 @@ class TestCudaCodeGen:
         )
         assert "return tex2D<float4>(dynGrid[layer][slot], uv.x, uv.y);" in cuda_code
         assert (
-            "float4 color = surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
+            "float4 color = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
             "uint count = surf2Dread<uint>"
@@ -14289,13 +14304,13 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "float4 dynamicColor = surf2Dread<float4>"
-            "(dynamicImages[layer][slot], pixel.x * sizeof(float4), pixel.y);"
+            "float4 dynamicColor = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(dynamicImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
             in cuda_code
         )
         assert (
-            "float4 fixedColor = surf2Dread<float4>"
-            "(fixedImages[slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
+            "float4 fixedColor = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(fixedImages[slot], pixel.x * sizeof(ushort4), pixel.y));" in cuda_code
         )
         assert (
             "int2 dynamicSize = cgl_textureSize_sampler2D"
@@ -14488,13 +14503,13 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "float4 dynamicColor = surf2Dread<float4>"
-            "(dynImageGrid[layer][slot], pixel.x * sizeof(float4), pixel.y);"
+            "float4 dynamicColor = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(dynImageGrid[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
             in cuda_code
         )
         assert (
-            "float4 fixedColor = surf2Dread<float4>"
-            "(fixedImageRow[slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
+            "float4 fixedColor = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(fixedImageRow[slot], pixel.x * sizeof(ushort4), pixel.y));" in cuda_code
         )
         assert (
             "int2 dynSize = cgl_textureSize_sampler2D"
@@ -14806,8 +14821,9 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "float4 loaded = surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
+            "float4 loaded = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
             "int2 texSize = cgl_textureSize_sampler2D"
@@ -14826,8 +14842,9 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "accum = cgl_float4_add(accum, surf2Dread<float4>"
-            "(fixedImages[fixedSlot], pixel.x * sizeof(float4), pixel.y));" in cuda_code
+            "accum = cgl_float4_add(accum, cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(fixedImages[fixedSlot], pixel.x * sizeof(ushort4), pixel.y)));"
+            in cuda_code
         )
         assert (
             "int2 fixedTexSize = cgl_textureSize_sampler2D"
@@ -14913,12 +14930,13 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "float4 loaded = surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
+            "float4 loaded = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
-            "surf2Dwrite(loaded, dynImages[layer][slot], "
-            "pixel.x * sizeof(float4), pixel.y);" in cuda_code
+            "surf2Dwrite(cgl_rgba16f_element(loaded), dynImages[layer][slot], "
+            "pixel.x * sizeof(ushort4), pixel.y);" in cuda_code
         )
         assert (
             "int2 texSize = cgl_textureSize_sampler2D"
@@ -15064,14 +15082,14 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "float4 dynamicColor = surf2Dread<float4>"
+            "float4 dynamicColor = cgl_rgba16f_texel(surf2Dread<ushort4>"
             "(dynImages[params.layer][params.slot], "
-            "params.pixel.x * sizeof(float4), params.pixel.y);" in cuda_code
+            "params.pixel.x * sizeof(ushort4), params.pixel.y));" in cuda_code
         )
         assert (
-            "float4 fixedColor = surf2Dread<float4>"
-            "(fixedImages[params.slot], params.pixel.x * sizeof(float4), "
-            "params.pixel.y);" in cuda_code
+            "float4 fixedColor = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(fixedImages[params.slot], params.pixel.x * sizeof(ushort4), "
+            "params.pixel.y));" in cuda_code
         )
         assert (
             "int2 dynSize = cgl_textureSize_sampler2D"
@@ -15213,8 +15231,9 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "result.loaded = surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
+            "result.loaded = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
             "result.texSize = cgl_textureSize_sampler2D"
@@ -15226,8 +15245,8 @@ class TestCudaCodeGen:
         )
         assert (
             "return SampleResult{tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
-            "surf2Dread<float4>(dynImages[layer][slot], "
-            "pixel.x * sizeof(float4), pixel.y), "
+            "cgl_rgba16f_texel(surf2Dread<ushort4>(dynImages[layer][slot], "
+            "pixel.x * sizeof(ushort4), pixel.y)), "
             "cgl_textureSize_sampler2D(dynTex_metadata[layer][slot], 0), "
             "cgl_imageSize_image2D(dynImages_metadata[layer][slot])};" in cuda_code
         )
@@ -15334,8 +15353,9 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "envelope.result.loaded = surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
+            "envelope.result.loaded = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
             "envelope.result.texSize = cgl_textureSize_sampler2D"
@@ -15351,8 +15371,8 @@ class TestCudaCodeGen:
         )
         assert (
             "envelope.bias = cgl_float4_add(tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
-            "surf2Dread<float4>(dynImages[layer][slot], "
-            "pixel.x * sizeof(float4), pixel.y));" in cuda_code
+            "cgl_rgba16f_texel(surf2Dread<ushort4>(dynImages[layer][slot], "
+            "pixel.x * sizeof(ushort4), pixel.y)));" in cuda_code
         )
         assert (
             "SampleEnvelope envelope = buildNestedAssigned("
@@ -15465,8 +15485,9 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "envelope.results[slot].loaded = surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
+            "envelope.results[slot].loaded = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
             "envelope.results[slot].texSize = cgl_textureSize_sampler2D"
@@ -15614,16 +15635,17 @@ class TestCudaCodeGen:
             in cuda_code
         )
         assert (
-            "envelope.result.loaded = surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in cuda_code
+            "envelope.result.loaded = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
+            in cuda_code
         )
         assert (
             "envelope.result.sampled = tex2D<float4>(dynTex[fallback][slot], uv.x, uv.y);"
             in cuda_code
         )
         assert (
-            "envelope.result.loaded = surf2Dread<float4>"
-            "(dynImages[fallback][slot], pixel.x * sizeof(float4), pixel.y);"
+            "envelope.result.loaded = cgl_rgba16f_texel(surf2Dread<ushort4>"
+            "(dynImages[fallback][slot], pixel.x * sizeof(ushort4), pixel.y));"
             in cuda_code
         )
         assert (
@@ -20864,4 +20886,35 @@ def test_fixed_width_integers_include_cstdint(tmp_path):
     assert "uint64_t" in cuda_code
     assert "uint16_t" in cuda_code
     assert "uint8_t" in cuda_code
+    compile_cuda_if_nvcc_available(cuda_code, tmp_path)
+
+
+def test_cbuffer_vector_member_arithmetic_uses_vector_helpers(tmp_path):
+    source_code = """
+    shader P {
+        buffer float* outp;
+        cbuffer Params {
+            vec2 offset;
+        };
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                vec2 a = vec2(outp[i], 1.0);
+                vec2 b = a + a;
+                vec2 r = offset + offset;
+                vec2 s = offset * 2.0;
+                outp[i] = b.x + r.x + s.y;
+            }
+        }
+    }
+    """
+
+    ast = Parser(Lexer(source_code).tokens).parse()
+    cuda_code = CudaCodeGen().generate(ast)
+
+    assert "__constant__ float2 offset;" in cuda_code
+    assert "float2 r = cgl_float2_add(offset, offset);" in cuda_code
+    assert "(offset + offset)" not in cuda_code
+    assert "(offset * 2.0" not in cuda_code
     compile_cuda_if_nvcc_available(cuda_code, tmp_path)

@@ -8,6 +8,10 @@ plain type names, so such a receiver would not resolve.  This pass rewrites a
 qualified name to the concrete struct it denotes when, and only when, every
 component resolves through visible aliases and struct-scoped type aliases.
 Anything else is left untouched for the existing diagnostics.
+
+The same holds for the owner of a static member call: in
+``CTile::frag_t::mma(c, a)`` the prefix ``CTile::frag_t`` names a struct, so
+the call becomes ``Frag::mma(c, a)``, which the static-member lowering reads.
 """
 
 from __future__ import annotations
@@ -18,6 +22,12 @@ from typing import Any, Sequence
 _QUALIFIED_NAME_RE = re.compile(
     r"(?<![A-Za-z0-9_:])(?:typename\s+)?(?:::)?[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)+"
     r"(?![\w:<(])"
+)
+# The owner of a qualified call such as ``S::alias_t::f(`` or
+# ``S::alias_t::template f<`` (the final component is the member name).
+_QUALIFIED_CALL_OWNER_RE = re.compile(
+    r"(?<![A-Za-z0-9_:])(?:typename\s+)?(?:::)?[A-Za-z_]\w*(?:\s*::\s*[A-Za-z_]\w*)+"
+    r"(?=\s*::\s*(?:template\s+)?[A-Za-z_]\w*\s*[(<])"
 )
 _ALIAS_DECLARATION_RE = re.compile(
     r"\b(?:using\s+[A-Za-z_]\w*\s*=|typedef\b)[^;{}]*;", re.DOTALL
@@ -37,7 +47,8 @@ def resolve_qualified_struct_member_types(
     literals and local ``using``/``typedef`` alias declarations (which the
     alias bindings already resolve) are skipped, and a replacement is made only
     when the qualified name resolves to the name of one of ``structs``.  A qualified name followed
-    by ``(`` or ``<`` is a call or template-id and is never rewritten.
+    by ``(`` or ``<`` is a call or template-id and is never rewritten; only the
+    owner of a qualified call (everything before its last ``::``) is.
     """
     if "::" not in code or not structs:
         return code
@@ -54,7 +65,28 @@ def resolve_qualified_struct_member_types(
             alias.span()
             for alias in _ALIAS_DECLARATION_RE.finditer(code, body_start, body_end)
         ]
-        for match in _QUALIFIED_NAME_RE.finditer(code, body_start, body_end):
+        # A call owner wins over a name that starts at the same offset, such
+        # as ``S::alias_t::template`` before ``f<T>(``.
+        matches = sorted(
+            [
+                *(
+                    (match.start(), 0, match)
+                    for match in _QUALIFIED_CALL_OWNER_RE.finditer(
+                        code, body_start, body_end
+                    )
+                ),
+                *(
+                    (match.start(), 1, match)
+                    for match in _QUALIFIED_NAME_RE.finditer(code, body_start, body_end)
+                ),
+            ],
+            key=lambda item: item[:2],
+        )
+        covered_end = -1
+        for _start, _kind, match in matches:
+            if match.start() < covered_end:
+                continue
+            covered_end = match.end()
             if preprocessor._containing_span(match.start(), ignored) is not None:
                 continue
             if preprocessor._containing_span(match.start(), alias_spans) is not None:

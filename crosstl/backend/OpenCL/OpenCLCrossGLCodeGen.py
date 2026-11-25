@@ -23,17 +23,73 @@ from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.translator.diagnostics import CODE_PREFIX, TranslationDiagnostic
 
 from ..assignment_operands import grouped_operand
+from ..import_refusals import OpenCLImportRefused
 from ..no_contraction import (
     PRECISE_FUNCTION_ATTRIBUTE,
     FpContractState,
     function_requires_no_contraction,
 )
 from ..thread_hierarchy import kernel_workgroup_size_attribute
+from .array_extents import format_opencl_array_extent
+from .compare_exchange import OpenCLCompareExchangeMixin, is_compare_exchange
 from .conversions import format_conversion, is_conversion_name
+from .enumerations import OpenCLEnumerationMixin
+from .global_variables import refuse_writable_global_variable
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
+from .pointer_qualifiers import (
+    opencl_pointee_qualifiers,
+    opencl_pointer_memory_attributes,
+)
+from .pointer_results import OpenCLPointerResultMixin
 from .sizeof_scopes import OpenCLSizeofScopeMixin
+from .vector_components import (  # noqa: F401 - re-exported diagnostic
+    OpenCLVectorComponentMixin,
+    OpenCLVectorComponentUnsupportedError,
+)
+from .work_items import format_work_item_query
 
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
+_OPENCL_ARITHMETIC_OPERATORS = frozenset({"+", "-", "*", "/"})
+# Built-in functions whose result has the type of their vector arguments
+# (OpenCL C 3.0, sections 6.15.2, 6.15.4 and 6.15.5).
+_OPENCL_ARGUMENT_TYPE_BUILTINS = frozenset(
+    {
+        "ceil",
+        "clamp",
+        "copysign",
+        "cos",
+        "cross",
+        "degrees",
+        "exp",
+        "exp2",
+        "fabs",
+        "fast_normalize",
+        "floor",
+        "fma",
+        "fmax",
+        "fmin",
+        "fmod",
+        "log",
+        "log2",
+        "mad",
+        "max",
+        "min",
+        "mix",
+        "normalize",
+        "pow",
+        "radians",
+        "rint",
+        "round",
+        "rsqrt",
+        "sign",
+        "sin",
+        "smoothstep",
+        "sqrt",
+        "step",
+        "tan",
+        "trunc",
+    }
+)
 _OPENCL_WORK_ITEM_QUERIES = frozenset(
     {
         "get_enqueued_local_size",
@@ -49,6 +105,18 @@ _OPENCL_WORK_ITEM_QUERIES = frozenset(
         "get_work_dim",
     }
 )
+
+
+def _is_enclosed_in_parentheses(text):
+    """Whether ``text`` is one parenthesized group, such as ``(a + b)`` but not ``(a) + (b)``."""
+    if not text.startswith("(") or not text.endswith(")"):
+        return False
+    depth = 0
+    for index, character in enumerate(text):
+        depth += {"(": 1, ")": -1}.get(character, 0)
+        if depth == 0:
+            return index == len(text) - 1
+    return False
 
 
 class OpenCLRecordSemanticError(ValueError):
@@ -108,10 +176,28 @@ class OpenCLImageReadUnsupportedError(TranslationDiagnostic):
     code = CODE_PREFIX + "opencl-image-read-unsupported"
 
 
-class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
+class OpenCLPrintfValueUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C ``printf`` whose result is read.
+
+    OpenCL C ``printf`` returns an ``int``, 0 when it ran and -1 otherwise (OpenCL C 3.0 section 6.15.14). CrossGL
+    ``printf`` is the Vulkan debug print, which returns nothing, so only a ``printf`` statement is imported.
+    """
+
+    code = CODE_PREFIX + "opencl-printf-value-unsupported"
+
+
+class OpenCLToCrossGLConverter(
+    OpenCLVectorComponentMixin,
+    OpenCLEnumerationMixin,
+    OpenCLSizeofScopeMixin,
+    OpenCLPointerResultMixin,
+    OpenCLCompareExchangeMixin,
+    HipToCrossGLConverter,
+):
     """Serialize OpenCL backend AST nodes into CrossGL source."""
 
     SOURCE_LANGUAGE_NAME = "OpenCL"
+    IMPORT_REFUSAL_TYPE = OpenCLImportRefused
     ERASE_CONCRETE_TYPE_ALIASES = False
     RECORD_SEMANTIC_ERROR = OpenCLRecordSemanticError
 
@@ -374,8 +460,10 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
         self.normalize_target_safe_cgl = normalize_target_safe_cgl
         self.opencl_image_access = {}
         self.opencl_sampler_states = {}
+        self.opencl_printf_statements = set()
 
     def generate(self, ast_node):
+        self.opencl_printf_statements = set()
         self.opencl_sizeof_symbols = {}
         self.opencl_current_function_name = None
         self.opencl_event_tokens = set()
@@ -383,7 +471,19 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
         self.opencl_sdk_reduce_materialize_op = False
         self.opencl_image_access = {}
         self.opencl_sampler_states = {}
-        return super().generate(ast_node)
+        self.reset_opencl_pointer_results()
+        self.reset_opencl_compare_exchanges()
+        text = super().generate(ast_node)
+        helpers = self.opencl_pointer_result_helper_text()
+        if helpers:
+            # The helpers use only scalar and vector types, so they can precede every declaration.
+            marker = "// OpenCL to CrossGL conversion\n"
+            text = (
+                text.replace(marker, marker + helpers + "\n", 1)
+                if marker in text
+                else helpers + text
+            )
+        return text
 
     def generic_visit(self, node):
         if isinstance(node, str):
@@ -462,7 +562,17 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
                 self.emit(f"// Function: {stmt.name}")
                 self.visit(stmt)
                 self.emit("")
-            elif isinstance(stmt, (StructNode, VariableNode, TypeAliasNode, EnumNode)):
+            elif isinstance(stmt, VariableNode):
+                # A program-scope `const` variable with a constant initializer
+                # imports as a CrossGL constant, as a C++ namespace-scope one
+                # does, so device code on every target reads its value.
+                self.namespace_scope_variable = True
+                try:
+                    self.visit(stmt)
+                finally:
+                    self.namespace_scope_variable = False
+                self.emit("")
+            elif isinstance(stmt, (StructNode, TypeAliasNode, EnumNode)):
                 self.visit(stmt)
                 self.emit("")
             elif isinstance(stmt, OpenCLMacroBlockNode):
@@ -737,6 +847,7 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
 
         access = self.opencl_kernel_pointer_access(raw_type)
         return (
+            f"{opencl_pointer_memory_attributes(raw_type)}"
             "@group(0) "
             f"@binding({binding}) "
             f"var<storage, {access}> "
@@ -748,7 +859,8 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
         return bool(qualifiers & self.OPENCL_LOCAL_QUALIFIERS)
 
     def opencl_kernel_pointer_access(self, raw_type):
-        qualifiers = set(str(raw_type).split())
+        # A ``const`` after the ``*`` makes the address constant, not the memory (``float* const p``).
+        qualifiers = opencl_pointee_qualifiers(raw_type)
         if qualifiers & {"read_write"}:
             return "read_write"
         if qualifiers & {"write_only"}:
@@ -771,37 +883,6 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
             self.emit(f"// {node.directive} {content}")
         else:
             self.emit(f"// {node.directive}")
-
-    def visit_EnumNode(self, node):
-        if getattr(node, "name", None):
-            enum_type = getattr(node, "underlying_type", None) or "uint"
-            self.register_type_alias(
-                node.name, self.convert_hip_type_to_crossgl(enum_type)
-            )
-            return super().visit_EnumNode(node)
-
-        next_value = 0
-        members = getattr(node, "members", None) or getattr(node, "variants", [])
-        for member in members:
-            if isinstance(member, tuple):
-                member_name, member_value = member
-            else:
-                member_name = getattr(member, "name", str(member))
-                member_value = getattr(member, "value", None)
-
-            if member_value is None:
-                value = str(next_value if next_value is not None else 0)
-            else:
-                value = self.visit(member_value)
-
-            self.emit(f"const i32 {member_name} = {value};")
-            next_value = self.next_anonymous_enum_value(value)
-
-    def next_anonymous_enum_value(self, value):
-        try:
-            return int(str(value), 0) + 1
-        except ValueError:
-            return None
 
     def visit_SyncNode(self, node):
         if node.sync_type == "barrier":
@@ -841,6 +922,7 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
                 self.opencl_sampler_states[name] = state
             self.emit(f"const sampler {output_name} = {state};")
             return
+        refuse_writable_global_variable(node, program_scope=self.indent_level == 0)
         if self.is_opencl_function_scope_constant(node):
             # In `__constant float *p = table;` __constant is the address space
             # p points into. p itself is a private local, like a `__global
@@ -979,6 +1061,15 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
         func_name = getattr(node, "name", None)
         if isinstance(func_name, str):
             raw_args = getattr(node, "args", []) or []
+            if (
+                func_name == "printf"
+                and id(node) not in self.opencl_printf_statements
+                and not self.is_user_defined_function(func_name)
+            ):
+                raise OpenCLPrintfValueUnsupportedError(
+                    "OpenCL C printf returns an int (0, or -1 on failure), and CrossGL printf, the Vulkan "
+                    "debug print, returns nothing, so its result cannot be read"
+                )
             image_write = self.format_opencl_image_write(func_name, raw_args)
             if image_write is not None:
                 return image_write
@@ -994,13 +1085,113 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
                 if sizeof_value is not None:
                     return str(sizeof_value)
                 self.refuse_opencl_sizeof_expression(raw_args)
+            cross = self.format_opencl_four_component_cross(func_name, raw_args)
+            if cross is not None:
+                return cross
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
+            pointer_result = self.format_opencl_pointer_result_call(func_name, raw_args)
+            if pointer_result is not None:
+                return pointer_result
             fence = self.format_opencl_fence_call(func_name, raw_args)
             if fence is not None:
                 return fence
         return super().visit_FunctionCallNode(node)
+
+    def format_opencl_four_component_cross(self, func_name, args):
+        """Write OpenCL's four-component ``cross`` with the three-component form CrossGL has.
+
+        OpenCL defines ``cross`` for ``float4`` and ``double4`` as the cross product of the first three
+        components with a ``w`` of zero (OpenCL C 3.0, section 6.15.5). CrossGL's ``cross`` takes three
+        components only.
+        """
+        if (
+            func_name != "cross"
+            or len(args) != 2
+            or self.is_user_defined_function(func_name)
+        ):
+            return None
+        vector_types = {self.opencl_four_component_vector_type(arg) for arg in args}
+        vector_types.discard(None)
+        if len(vector_types) != 1:
+            return None
+        operands = []
+        for arg in args:
+            text = self.visit(arg)
+            if not re.fullmatch(
+                r"[A-Za-z_]\w*(?:\.\w+|\[[^\[\]]*\])*", text
+            ) and not _is_enclosed_in_parentheses(text):
+                text = f"({text})"
+            operands.append(f"{text}.xyz")
+        return f"{vector_types.pop()}(cross({operands[0]}, {operands[1]}), 0.0)"
+
+    def opencl_four_component_vector_type(self, expression):
+        """The CrossGL type of a four-component vector ``expression``, or ``None``."""
+        type_name = self.opencl_expression_vector_type(expression)
+        return type_name if re.fullmatch(r"vec4<\w+>", type_name or "") else None
+
+    def opencl_expression_vector_type(self, expression):
+        """The CrossGL type of a scalar or vector ``expression``, or ``None`` when it is not known."""
+        type_name = self.expression_declared_type(expression)
+        if type_name is not None:
+            return self.convert_hip_type_to_crossgl(str(type_name))
+        if (
+            isinstance(expression, BinaryOpNode)
+            and expression.op in _OPENCL_ARITHMETIC_OPERATORS
+        ):
+            return self.opencl_operands_vector_type((expression.left, expression.right))
+        if isinstance(expression, UnaryOpNode) and expression.op in {"+", "-"}:
+            return self.opencl_expression_vector_type(expression.operand)
+        if isinstance(expression, MemberAccessNode):
+            return self.opencl_swizzle_type(expression)
+        if not isinstance(expression, FunctionCallNode):
+            return None
+        name = str(expression.name)
+        if (
+            name in _OPENCL_ARGUMENT_TYPE_BUILTINS
+            and not self.is_user_defined_function(name)
+        ):
+            return self.opencl_operands_vector_type(expression.args or [])
+        # (float4)(x, y, z, w) is a call named after its type, as are
+        # convert_float4 and as_float4.
+        name = re.sub(r"^(?:convert|as)_", "", name).split("_")[0]
+        if name in self.OPENCL_VECTOR_TYPE_MAPPING:
+            return self.convert_hip_type_to_crossgl(name)
+        return None
+
+    def opencl_operands_vector_type(self, operands):
+        """The vector type of arithmetic or a built-in call on ``operands``.
+
+        A scalar operand is widened to the vector operand's type, and vector operands must have the same type
+        (OpenCL C 3.0, sections 6.4.2 and 6.15), so the result has the one vector type among the operands.
+        """
+        types = {self.opencl_expression_vector_type(operand) for operand in operands}
+        vector_types = {
+            name for name in types if re.fullmatch(r"vec\d<\w+>", name or "")
+        }
+        return vector_types.pop() if len(vector_types) == 1 else None
+
+    def opencl_swizzle_type(self, expression):
+        """The CrossGL type of a ``.xyzw``, ``.rgba`` or ``.s0123`` swizzle of a vector, or ``None``."""
+        vector = re.fullmatch(
+            r"vec(\d)<(\w+)>",
+            self.opencl_expression_vector_type(expression.object) or "",
+        )
+        if vector is None:
+            return None
+        width, element = int(vector.group(1)), vector.group(2)
+        member = str(expression.member)
+        if re.fullmatch(r"[sS][0-9a-fA-F]+", member):
+            indices = [int(digit, 16) for digit in member[1:]]
+        elif re.fullmatch(r"[xyzw]+|[rgba]+", member):
+            letters = "xyzw" if member[0] in "xyzw" else "rgba"
+            indices = [letters.index(letter) for letter in member]
+        else:
+            return None
+        if max(indices) >= width or len(indices) > 4:
+            return None
+        return element if len(indices) == 1 else f"vec{len(indices)}<{element}>"
 
     def format_opencl_fence_call(self, func_name, args):
         if func_name == "sub_group_barrier" and args:
@@ -1349,7 +1540,43 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
             return "int"
         return None
 
+    def expression_declared_type(self, expression):
+        declared = super().expression_declared_type(expression)
+        if declared is not None or not isinstance(expression, BinaryOpNode):
+            return declared
+        if expression.op not in {"+", "-", "*", "/", "%"}:
+            return None
+
+        left = self.expression_declared_type(expression.left)
+        right = self.expression_declared_type(expression.right)
+        left_width = self.opencl_vector_type_width(left)
+        right_width = self.opencl_vector_type_width(right)
+        if left_width is not None and right_width is None:
+            return left
+        if right_width is not None and left_width is None:
+            return right
+        if left_width is not None and left_width == right_width:
+            return left
+        return None
+
+    def opencl_vector_type_width(self, type_name):
+        if not type_name:
+            return None
+        converted = self.convert_hip_type_to_crossgl(str(type_name))
+        match = re.fullmatch(
+            r"vec(\d+)(?:<[^>]+>)?|(?:char|short|int|long|half|float|double)(\d+)",
+            converted.strip(),
+        )
+        if match is None:
+            return None
+        return int(match.group(1) or match.group(2))
+
     def emit_statement(self, stmt):
+        if isinstance(stmt, FunctionCallNode) and stmt.name == "printf":
+            # A printf statement discards the result CrossGL's printf does not have.
+            self.opencl_printf_statements.add(id(stmt))
+        if self.emit_opencl_compare_exchanges(stmt):
+            return
         if self.is_opencl_prefetch_call(stmt):
             for arg in stmt.args:
                 self.emit_opencl_discarded_expression_effects(arg)
@@ -1724,6 +1951,8 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
     )
 
     def visit_AtomicOperationNode(self, node):
+        if is_compare_exchange(node):
+            return self.format_opencl_compare_exchange_value(node)
         node_args = list(node.args)
         if node.operation.endswith("_explicit"):
             node_args = self.opencl_relaxed_atomic_arguments(node.operation, node_args)
@@ -1809,22 +2038,108 @@ class OpenCLToCrossGLConverter(OpenCLSizeofScopeMixin, HipToCrossGLConverter):
         if func_name in self.OPENCL_LINEAR_ID_MAP and not args:
             return self.OPENCL_LINEAR_ID_MAP[func_name]
         base = self.OPENCL_BUILTIN_ID_MAP.get(func_name)
-        if base is None or len(args) != 1:
-            return None
-        component = self.opencl_dimension_component(args[0])
-        if component is None:
-            rendered = self.visit(args[0])
-            return f"{func_name}({rendered})"
-        return f"{base}.{component}"
+        if base is not None and len(args) == 1:
+            component = self.opencl_dimension_component(args[0])
+            if component is not None:
+                return f"{base}.{component}"
+        return format_work_item_query(self, func_name, args)
+
+    # The OpenCL C integer scalar types a dimension cast may name. A cast
+    # to any other type keeps the current behaviour.
+    OPENCL_INTEGER_CAST_TYPES = frozenset(
+        {
+            "char",
+            "uchar",
+            "short",
+            "ushort",
+            "int",
+            "uint",
+            "long",
+            "ulong",
+            "size_t",
+            "signed char",
+            "unsigned char",
+            "signed short",
+            "unsigned short",
+            "signed int",
+            "unsigned int",
+            "signed long",
+            "unsigned long",
+            "signed long long",
+            "unsigned long long",
+        }
+    )
 
     def opencl_dimension_component(self, arg):
-        if isinstance(arg, int):
-            value = arg
-        elif isinstance(arg, str) and arg.isdigit():
-            value = int(arg)
-        else:
+        value = self.opencl_constant_dimension(arg)
+        if value is None:
             return None
         return ("x", "y", "z")[value] if value in {0, 1, 2} else None
+
+    def opencl_constant_dimension(self, arg):
+        """The constant dimension an argument spells, or ``None``.
+
+        A plain ``0``, ``1`` or ``2`` maps to ``.x``, ``.y`` or ``.z``; so
+        does the same value with an integer suffix (``1u``, ``2U``, ``1ul``),
+        as a hex literal (``0x1``) or behind an integer cast
+        (``(uint)1``, ``(unsigned int)2``). A cast to a narrow integer type
+        applies that type's width first, so ``(uchar)256`` is 0 and
+        ``(ushort)65537`` is 1; a signed narrow type whose value does not
+        fit returns ``None``. Anything else -- a runtime value, a float
+        cast, a dimension of 3 or more -- returns ``None`` so the caller
+        keeps its current behaviour.
+        """
+        if isinstance(arg, bool):
+            return None
+        if isinstance(arg, int):
+            return arg
+        if isinstance(arg, str):
+            digits = arg.rstrip("uUlL")
+            if digits.isdigit():
+                return int(digits)
+            if digits[:2].lower() == "0x" and digits[2:]:
+                try:
+                    return int(digits, 16)
+                except ValueError:
+                    return None
+            return None
+        if isinstance(arg, CastNode):
+            target = " ".join(str(arg.target_type).split())
+            if target not in self.OPENCL_INTEGER_CAST_TYPES:
+                return None
+            value = self.opencl_constant_dimension(arg.expression)
+            if value is None:
+                return None
+            # Bit widths of the narrow integer types a dimension cast may
+            # name, as (bits, signed). A cast applies its type's width
+            # first: in C, (uchar)256 is 0 and (ushort)65537 is 1.
+            widths = {
+                "char": (8, True),
+                "signed char": (8, True),
+                "uchar": (8, False),
+                "unsigned char": (8, False),
+                "short": (16, True),
+                "signed short": (16, True),
+                "ushort": (16, False),
+                "unsigned short": (16, False),
+                "int": (32, True),
+                "signed int": (32, True),
+                "uint": (32, False),
+                "unsigned int": (32, False),
+            }
+            width = widths.get(target)
+            if width is None:
+                return value
+            bits, signed = width
+            if signed:
+                if value < -(1 << (bits - 1)) or value > (1 << (bits - 1)) - 1:
+                    return None
+                return value
+            return value % (1 << bits)
+        return None
+
+    def format_crossgl_array_extent(self, size):
+        return format_opencl_array_extent(size, super().format_crossgl_array_extent)
 
     def convert_hip_type_to_crossgl(self, hip_type):
         if hip_type is None:

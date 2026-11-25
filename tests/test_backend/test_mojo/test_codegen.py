@@ -75,9 +75,11 @@ def test_struct_codegen():
         pytest.fail("Struct parsing or code generation not implemented.")
 
 
-def test_crossgl_scalar_min_max_calls_disambiguate_mojo_helper_overloads():
+def test_crossgl_scalar_min_max_calls_use_mojo_std_max():
     # Reduced from examples/graphics/ComplexShader.cgl, whose generated Mojo
     # package hit ambiguous scalar max calls against vector overload helpers.
+    # std.math.max takes two values of one type, so each operand has the
+    # result's type and no module-level overload hides the standard ones.
     code = """
     shader ScalarMinMax {
         float shade(vec3 n, vec3 l, float denom, float eps) {
@@ -91,9 +93,9 @@ def test_crossgl_scalar_min_max_calls_disambiguate_mojo_helper_overloads():
 
     generated_code = MojoCodeGen().generate(parse_crossgl(code))
 
-    assert "max(Float32(dot_product(n, l)), Float32(0.0))" in generated_code
-    assert "max(Float32(denom), Float32(eps))" in generated_code
-    assert "fn max(a: Int32, b: Int32) -> Int32:" in generated_code
+    assert "max(dot_product(n, l), Float32(0.0))" in generated_code
+    assert "(1.0 / max(denom, eps))" in generated_code
+    assert "def max(" not in generated_code
     assert "var bucket: Int32 = max(Int32(1), Int32(2))" in generated_code
 
 
@@ -134,8 +136,11 @@ def test_crossgl_compute_builtin_aliases_emit_mojo_parameters():
 
     assert "# CrossGL GPU builtin placeholders" not in generated_code
     assert "struct _CrossGLGpuBuiltinU32Vec3" not in generated_code
+    # Mojo reads the invocation index from global_idx, so the kernel declares the alias instead of taking it.
+    assert "def compute_main() -> None:" in generated_code
     assert (
-        "fn compute_main(global_idx_uint: SIMD[DType.uint32, 4]) -> None:"
+        "    var global_idx_uint = SIMD[DType.uint32, 4](UInt32(global_idx.x), "
+        "UInt32(global_idx.y), UInt32(global_idx.z), UInt32(0))"
     ) in generated_code
     assert "global_idx_uint[0]" in generated_code
     assert "global_idx_uint[1]" in generated_code
