@@ -2016,7 +2016,9 @@ def test_codegen_type_only_atomic_uint_layout_default_from_glslang_spec_examples
 
     crossgl = generate_crossgl(code, "vertex")
 
-    assert "layout(binding = 2, offset = 4) uniform atomic_uint;" in crossgl
+    # The default moves the next offset of binding 2 to 4, so bar carries it and the default is applied.
+    assert "atomic_uint bar @binding(2) @offset(4);" in crossgl
+    assert "uniform atomic_uint;" not in crossgl
 
 
 def test_codegen_for_condition_declaration_from_glslang_debuginfo_declaration():

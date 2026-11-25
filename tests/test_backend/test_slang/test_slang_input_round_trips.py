@@ -240,8 +240,36 @@ void main(uint3 id : SV_DispatchThreadID) {
 """
     crossgl = to_crossgl(tmp_path, source)
     assert "float scale @offset(16);" in crossgl
-    # Slang output refuses a placed push-constant member instead of dropping the placement.
-    with pytest.raises(MemberPlacementError):
+    # Slang output writes the placement back on the struct the push-constant block holds.
+    slang = to_slang(tmp_path, crossgl)
+    assert "[[vk::offset(16)]] float scale;" in slang
+    compile_slang(tmp_path, slang)
+
+
+@pytest.mark.parametrize(
+    "members,reason",
+    [
+        (
+            "[[vk::offset(18)]] float scale;\n    float bias;",
+            "not a multiple of its std430 alignment",
+        ),
+        ("float scale;\n    [[vk::offset(20)]] float4 bias;", "std430 alignment 16"),
+    ],
+)
+def test_misaligned_vk_offset_members_are_refused(tmp_path, members, reason):
+    # slangc moves a [[vk::offset]] that is not a multiple of the member's std430 alignment.
+    source = COMPUTE + f"""struct Constants {{
+    {members}
+}};
+[[vk::push_constant]] ConstantBuffer<Constants> pc;
+[shader("compute")]
+[numthreads(1, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {{
+    outp[id.x] = fin[id.x] * pc.scale;
+}}
+"""
+    crossgl = to_crossgl(tmp_path, source)
+    with pytest.raises(MemberPlacementError, match=reason):
         to_slang(tmp_path, crossgl)
 
 

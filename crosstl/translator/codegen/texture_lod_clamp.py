@@ -147,7 +147,9 @@ _HLSL_METHODS = {
     ("textureGrad", False): "SampleGrad",
     ("textureGradOffset", False): "SampleGrad",
     ("textureCompare", False): "SampleCmp",
+    ("textureCompare", True): "SampleCmpBias",
     ("textureCompareOffset", False): "SampleCmp",
+    ("textureCompareOffset", True): "SampleCmpBias",
     ("textureCompareGrad", False): "SampleCmpGrad",
     ("textureCompareGradOffset", False): "SampleCmpGrad",
 }

@@ -63,6 +63,24 @@ def test_initializer_scope_walk_follows_each_child_once():
     assert len({id(c) for c in children}) == len(children)
 
 
+def test_initializer_hazard_check_visits_each_call_once(monkeypatch):
+    # The check that lets the pass skip the renamer followed both ``arguments`` and ``args`` of each call, so it
+    # visited the innermost call 2**depth times.
+    entry = next(iter(_parse(_program(6)).stages.values())).entry_point
+    calls = [n for n in _walk(entry) if isinstance(n, A.FunctionCallNode)]
+    assert len(calls) == 12
+    visits = {}
+    children = declaration_scopes._children
+
+    def counting(node):
+        visits[id(node)] = visits.get(id(node), 0) + 1
+        return children(node)
+
+    monkeypatch.setattr(declaration_scopes, "_children", counting)
+    assert not declaration_scopes._has_hazard([entry.body.statements])
+    assert [visits.get(id(call)) for call in calls] == [1] * len(calls)
+
+
 def _bitcast_queries(monkeypatch, tmp_path, depth):
     count = [0]
     original = directx_codegen.HLSLCodeGen.hlsl_bitcast_result_type

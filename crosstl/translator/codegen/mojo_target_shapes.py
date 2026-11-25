@@ -572,6 +572,9 @@ class MojoTargetShapeMixin:
         return None
 
     def buffer_result_expression_info(self, expr):
+        buffer_object_info = self.mojo_buffer_object_result_info(expr)
+        if buffer_object_info is not None:
+            return buffer_object_info
         if isinstance(expr, FunctionCallNode):
             func_expr = getattr(expr, "function", None)
             if func_expr is None:

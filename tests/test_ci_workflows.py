@@ -36,8 +36,8 @@ GATING_WORKFLOWS = {
 # The job that decides whether a push to main repeats a commit the merge queue
 # already tested, per workflow.
 QUEUE_TESTED_WORKFLOWS = {
-    "backend-tests.yml": "python-versions",
-    "translator-tests.yml": "python-versions",
+    "backend-tests.yml": "plan",
+    "translator-tests.yml": "plan",
     "full-tests.yml": "plan",
     "examples-test.yml": "python-versions",
 }
@@ -262,14 +262,22 @@ def test_pushes_to_main_skip_a_commit_the_merge_queue_already_passed(filename, p
     assert "head_sha=$GITHUB_SHA&event=merge_group&status=success" in step["run"]
     reference = yaml.safe_load(
         (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
-    )["jobs"]["python-versions"]["steps"][0]
+    )["jobs"]["plan"]["steps"][0]
     assert step == reference
+    # A planner that only looks the commit up runs on pushes alone, so pull requests and merge groups do not wait
+    # for a runner for it; its jobs then run unless the run is cancelled. The examples planner also picks the
+    # legs, so it runs on every event.
+    only_pushes = list(planner["steps"]) == [step]
+    assert planner.get("if") == ("github.event_name == 'push'" if only_pushes else None)
+    condition = f"needs.{plan}.outputs.tested != 'true'"
+    if only_pushes:
+        condition = "${{ !cancelled() && " + condition + " }}"
     for name, job in jobs.items():
         if name in {plan, "result"}:
             continue
         needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
         assert plan in needs, (filename, name)
-        assert job["if"] == f"needs.{plan}.outputs.tested != 'true'", (filename, name)
+        assert job["if"] == condition, (filename, name)
 
 
 @pytest.mark.skipif(
@@ -297,7 +305,7 @@ def test_queue_lookup_skips_a_push_only_when_a_merge_group_run_passed(
     # translator-tests.yml holds the step every other queue-tested workflow copies.
     step = yaml.safe_load(
         (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
-    )["jobs"]["python-versions"]["steps"][0]
+    )["jobs"]["plan"]["steps"][0]
     output = tmp_path / "output"
     args = tmp_path / "args"
     # Run the actual workflow shell with a local API substitute, without network access.

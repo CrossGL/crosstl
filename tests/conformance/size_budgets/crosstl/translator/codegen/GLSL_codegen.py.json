@@ -1,7 +1,7 @@
 {
  "functions": {
   "GLSLCodeGen.__init__": 770,
-  "GLSLCodeGen._generate_program_attempt": 1805,
+  "GLSLCodeGen._generate_program_attempt": 1807,
   "GLSLCodeGen.annotate_glsl_control_flow_intervals": 1660,
   "GLSLCodeGen.annotate_glsl_control_flow_intervals.<locals>.visit": 682,
   "GLSLCodeGen.collect_private_pointer_array_size_hints": 420,

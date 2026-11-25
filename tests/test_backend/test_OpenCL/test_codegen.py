@@ -1765,12 +1765,13 @@ def test_opencl_function_parameter_qualifier_split_across_lines():
         (
             "__global const float*",
             "restrict in",
-            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+            "@restrict @group(0) @binding(0) var<storage, read> in_: array<f32>",
         ),
+        # ``float* restrict const``: a constant restrict address of writable memory.
         (
             "__global float* restrict",
             "const in",
-            "@group(0) @binding(0) var<storage, read> in_: array<f32>",
+            "@restrict @group(0) @binding(0) var<storage, read_write> in_: array<f32>",
         ),
     ],
 )

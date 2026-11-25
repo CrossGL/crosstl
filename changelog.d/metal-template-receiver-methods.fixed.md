@@ -1,0 +1,1 @@
+Metal input keeps the methods of a concrete struct specialization (`Tile<float, 1, 1>`) that a function template instantiated from a struct method calls (`D.frag_at(m, n)` inside `tile_add`), so such a program translates to every target instead of failing with "member 'frag_at' is not declared" (#4986).

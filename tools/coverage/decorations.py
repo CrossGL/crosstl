@@ -142,15 +142,17 @@ AIR_INPUTS = {"BuiltIn.SampleMask": "air.sample_mask_in"}
 # The anchors that AIR carries otherwise than as an attribute, as patterns of its text: ``simd_is_helper_thread()``
 # calls ``@air.simd_is_helper_thread``, each function constant is an entry of ``!air.function_constants``, a
 # ``__restrict`` pointer is a ``noalias`` kernel argument, a ``volatile`` one is read and written with volatile loads
-# and stores, a ``coherent(device)`` one through the ``device_coherent`` intrinsics, a quad patch is named in the
-# ``!"air.patch"`` metadata of its post-tessellation vertex function, and a mesh function's topology in its
-# ``!"air.mesh_type_info"``. An array of textures of unknown length is an argument buffer: a structure type with a
+# and stores (``@air.store.device_coherent.volatile`` when it is also coherent), a ``coherent(device)`` one through
+# the ``device_coherent`` intrinsics, a quad patch is named in the ``!"air.patch"`` metadata of its
+# post-tessellation vertex function, and a mesh function's topology in its ``!"air.mesh_type_info"``. An array of textures of unknown length is an argument buffer: a structure type with a
 # ``%"struct.metal::texture2d"`` member.
 AIR_PATTERNS = {
     "BuiltIn.HelperInvocation": r"@air\.simd_is_helper_thread\(",
     "Decoration.SpecId": r"^!air\.function_constants = ",
     "Decoration.Restrict": r"^define [^\n]*\bnoalias\b",
-    "Decoration.Volatile": r"\b(?:load|store) volatile\b",
+    "Decoration.Volatile": (
+        r"\b(?:load|store) volatile\b|@air\.(?:load|store)\.\w+\.volatile\."
+    ),
     "Decoration.Coherent": r"@air\.\w+\.device_coherent\.",
     "ExecutionMode.Quads": r'!"air\.patch", !"quad"',
     "ExecutionMode.OutputPoints": r'!"air\.mesh_type_info",[^\n]*!"air\.point"\}',
