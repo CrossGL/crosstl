@@ -554,6 +554,92 @@ def test_metal_artifacts_every_version_rejects_report_the_newest_compiler(
     assert len(commands) == len(native.METAL_LANGUAGE_VERSIONS)
 
 
+def _dxc_accepting(monkeypatch, tmp_path, accepted, log):
+    """DXC that accepts a kernel under the profiles ``accepted`` and rejects it with ``log`` under any other."""
+    commands = []
+
+    def compile_under(command, **_):
+        commands.append([str(word) for word in command])
+        if command[1] == "-dumpbin":
+            return CommandResult(tuple(map(str, command)), "accepted", 0, "")
+        profile = command[command.index("-T") + 1]
+        status = "accepted" if profile in accepted else "rejected"
+        if status == "accepted":
+            (tmp_path / "binary").write_bytes(b"DXBC" + bytes(range(1, 17)) + bytes(8))
+        return CommandResult(
+            tuple(map(str, command)),
+            status,
+            int(status != "accepted"),
+            "" if status == "accepted" else log,
+        )
+
+    monkeypatch.setattr(validators, "run", compile_under)
+    monkeypatch.setattr(
+        validators, "tool", lambda name: toolchains.Tool(name, (name,), "test")
+    )
+    return commands
+
+
+def _profiles(commands):
+    return [command[command.index("-T") + 1] for command in commands if "-T" in command]
+
+
+@pytest.mark.parametrize(
+    "log, accepted, expected",
+    [
+        (
+            "error: Opcode SampleCmpLevel not valid in shader model cs_6_6.",
+            {"cs_6_7", "cs_6_8"},
+            ["cs_6_6", "cs_6_7"],
+        ),
+        (
+            "error: Opcode SampleCmpGrad not valid in shader model cs_6_7.",
+            {"cs_6_8"},
+            ["cs_6_6", "cs_6_7", "cs_6_8"],
+        ),
+        (
+            "error: intrinsic Barrier potentially used by 'main' requires shader model 6.8 or greater",
+            {"cs_6_8"},
+            ["cs_6_6", "cs_6_7", "cs_6_8"],
+        ),
+    ],
+)
+def test_hlsl_kernels_compile_under_the_oldest_later_profile_dxc_accepts(
+    tmp_path, monkeypatch, log, accepted, expected
+):
+    """A kernel that calls an operation of Shader Model 6.7 or 6.8 runs at the first of those profiles DXC accepts."""
+    commands = _dxc_accepting(monkeypatch, tmp_path, accepted, log)
+    results, _ = validate(tmp_path / "src", "hlsl", tmp_path / "binary", "main")
+    assert [item.status for item in results] == ["accepted", "accepted"]
+    assert _profiles(commands) == expected
+    assert all("-Gis" in command for command in commands if "-T" in command)
+
+
+def test_hlsl_rejections_that_name_no_later_shader_model_stay_at_the_profile(
+    tmp_path, monkeypatch
+):
+    commands = _dxc_accepting(
+        monkeypatch, tmp_path, {"cs_6_7"}, "error: use of undeclared identifier 'x'"
+    )
+    results, _ = validate(tmp_path / "src", "hlsl", tmp_path / "binary", "main")
+    assert [item.status for item in results] == ["rejected"]
+    assert _profiles(commands) == ["cs_6_6"]
+
+
+def test_hlsl_kernels_no_supported_profile_accepts_report_the_last_profile(
+    tmp_path, monkeypatch
+):
+    """A kernel of Shader Model 6.9, whose pipelines the Direct3D 12 device does not create, stays invalid."""
+    log = "error: intrinsic X requires shader model 6.9 or greater"
+    commands = _dxc_accepting(monkeypatch, tmp_path, {"cs_6_9"}, log)
+    results, _ = validate(tmp_path / "src", "hlsl", tmp_path / "binary", "main")
+    assert [item.status for item in results] == ["rejected"]
+    assert "cs_6_8" in results[0].command and log in results[0].log
+    assert _profiles(commands) == ["cs_6_6", "cs_6_7", "cs_6_8"]
+    assert validators.later_profiles("cs_6_8") == ("cs_6_8",)
+    assert validators.later_profiles("cs_6_0") == ("cs_6_0", "cs_6_7", "cs_6_8")
+
+
 class _MetalFunction:
     def __init__(self, constants):
         self.constants = constants

@@ -31,16 +31,6 @@ _REASONS = {
 
 METAL_REFUSED_STAGES = frozenset(_REASONS)
 
-# A stage Metal writes in one form and refuses in another (:mod:`.metal_post_tessellation`).
-_FORM_REASONS = {
-    "tessellation_evaluation": (
-        "Metal evaluates tessellated patches in a [[patch]] post-tessellation vertex function that reads its "
-        "control points and per-patch data through [[stage_in]] (Metal Shading Language Specification 5.1.5); "
-        "a tessellation evaluation stage that reads gl_in, gl_TessCoord and per-vertex input arrays, as GLSL "
-        "writes it, is not lowered to that function yet, only one that takes an OutputPatch and @domain"
-    ),
-}
-
 
 class MetalStageUnsupportedError(TranslationDiagnostic):
     """A shader stage the Metal generator cannot write as a Metal entry point."""
@@ -49,7 +39,7 @@ class MetalStageUnsupportedError(TranslationDiagnostic):
 
     def __init__(self, stage: str):
         self.stage = stage
-        reason = _REASONS.get(stage) or _FORM_REASONS[stage]
+        reason = _REASONS[stage]
         super().__init__(f"{reason} (stage {stage})", target="metal")
 
 

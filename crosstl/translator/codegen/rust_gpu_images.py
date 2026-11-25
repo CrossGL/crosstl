@@ -50,6 +50,7 @@ from ..ast import (
     VariableNode,
 )
 from .ast_walk import walk_ast_values
+from .rust_gpu_ray_queries import is_acceleration_structure_type
 
 __all__ = [
     "SAMPLER_TYPE_NAMES",
@@ -292,10 +293,13 @@ def _array_parts(generator, type_name):
 
 
 def rust_gpu_image_parameter_type(generator, type_name):
-    """The rust-gpu parameter type of a CrossGL image or sampler, or of an array of them, else ``None``."""
+    """The rust-gpu parameter type of a CrossGL image, sampler or acceleration structure, or of an array of them,
+    else ``None``."""
     base, sizes = _array_parts(generator, type_name)
     if base in SAMPLER_TYPE_NAMES:
         inner = "Sampler"
+    elif is_acceleration_structure_type(base):
+        inner = "AccelerationStructure"
     else:
         shape = image_shape(base)
         if shape is None:
@@ -315,7 +319,7 @@ def rust_gpu_image_declaration_refusal(generator, node, type_name):
     when ``type_name`` is not an image or sampler type."""
     base, sizes = _array_parts(generator, type_name)
     name = getattr(node, "name", "?")
-    if base not in SAMPLER_TYPE_NAMES:
+    if base not in SAMPLER_TYPE_NAMES and not is_acceleration_structure_type(base):
         shape = image_shape(base)
         if shape is None:
             if not _IMAGE_TYPE.match(base) and not _SUBPASS_TYPE.match(base):

@@ -151,7 +151,11 @@ class OpenGLProgramStructureMixin:
 
         fresh = init_less_counter_loops(entry_function, self.walk_ast, writes)
         self.glsl_software_subgroup_fresh_counter_loops = set(fresh)
-        loops = any_start_counter_loops(entry_function, self.walk_ast, writes)
+        # The flow analysis visits the entry in order, so it also tracks
+        # counters assigned outside every loop.
+        loops = any_start_counter_loops(
+            entry_function, self.walk_ast, writes, tracked_writes=True
+        )
         loops.update(fresh)
         return loops
 
@@ -268,12 +272,32 @@ class OpenGLProgramStructureMixin:
                 or any_start_counter_loop_terminates(
                     type_name, offset, stops, step, operator
                 )
+                or self.glsl_wrapping_offset_counter_loop_terminates(
+                    type_name, offset, stops, step, operator
+                )
             )
             or wrapping_counter_loop_uniform(type_name, offset, step, operator)
         ):
             return False
         return self.glsl_software_subgroup_loop_controls_preserved(
             node, {name} | bound_names | offset_names | stride_names
+        )
+
+    def glsl_wrapping_offset_counter_loop_terminates(
+        self, type_name, offset, stops, step, operator
+    ):
+        """Prove ``for (; c + offset OP stop; c += step)`` from any start in GLSL.
+
+        GLSL's 32-bit integer addition keeps the low 32 bits of the result
+        (GLSL 4.60 section 4.1.3, GLSL ES 3.20 section 4.1.3), so ``c +
+        offset`` advances by ``step`` exactly as ``c`` does. The loop is the
+        offset-free loop on that sum, entered with an unknown value, which
+        ``any_start_counter_loop_terminates`` proves.
+        """
+        return (
+            offset != 0
+            and self.map_type(type_name) in {"int", "uint"}
+            and any_start_counter_loop_terminates(type_name, 0, stops, step, operator)
         )
 
     def glsl_software_subgroup_trip_uniform_for(self, node, uniform_names):

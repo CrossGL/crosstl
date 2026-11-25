@@ -98,6 +98,7 @@ from .slang_buffer_block_types import SlangBufferBlockTypesMixin
 from .slang_builtin_input_members import lower_slang_builtin_input_members
 from .slang_byte_address_words import SlangThreeComponentAccess
 from .slang_call_expressions import SlangCallExpressionMixin
+from .slang_compute_derivative_groups import validate_slang_compute_derivative_group
 from .slang_conservative_depth import slang_conservative_depth_semantic
 from .slang_control_flow import SlangControlFlowMixin
 from .slang_cull_distance import slang_cull_distance_member_type
@@ -1239,6 +1240,9 @@ class SlangCodeGen(
                 shader_type,
                 effective_param_list,
                 stage_role=stage_role,
+            )
+            validate_slang_compute_derivative_group(
+                self, node, shader_type, execution_config
             )
         else:
             self.validate_slang_ray_query_calls(node, "function", effective_param_list)

@@ -46,6 +46,7 @@ def fake_harness(
 
     class Provided:
         available = True
+        identity = "fake device"
 
     runtime = runtimes.RUNTIMES[runtime]
     monkeypatch.setattr(

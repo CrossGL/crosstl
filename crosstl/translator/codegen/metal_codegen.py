@@ -143,6 +143,7 @@ from .metal_threadgroup_forwarding import (
 from .metal_type_mapping import MetalTypeMappingMixin
 from .metal_wave_operations import MetalWaveOperationMixin
 from .metal_wide_atomics import (
+    METAL_WIDE_ATOMIC_OPERATIONS,
     discarded_wide_atomic_call,
     is_metal_wide_atomic,
     metal_wide_atomic_call,
@@ -3569,7 +3570,17 @@ class MetalCodeGen(
             }
         )
 
-    def generate_glsl_buffer_block_atomic_call(self, func_name, args):
+    def generate_glsl_buffer_block_atomic_call(
+        self, func_name, args, *, discarded=False
+    ):
+        """Lower a GLSL buffer-block atomic call, or None when it is not one.
+
+        ``discarded`` is true only when the call is an expression statement
+        (or an operand a comma discards), so its value is unused. It matters
+        for 64-bit min/max: Metal's only 64-bit forms are the void
+        ``atomic_max_explicit``/``atomic_min_explicit``, so a used result has
+        no lowering and is refused instead.
+        """
         operations = self.buffer_atomic_operations()
         operation_info = operations.get(func_name)
         if operation_info is None or not args:
@@ -3605,6 +3616,27 @@ class MetalCodeGen(
                 "requires a scalar int or uint buffer member",
                 access,
             )
+        if is_metal_wide_atomic(operation, access.get("component_type")):
+            # MSL 4.1 section 6.15.4.7: the 64-bit atomic modify functions
+            # are the void atomic_max_explicit/atomic_min_explicit on
+            # atomic_ulong; there is no value-returning 64-bit min/max to
+            # lower a used result to. A block member lowers by byte offset
+            # from the block's device pointer.
+            if not discarded:
+                return self.unsupported_glsl_buffer_block_atomic_call(
+                    target,
+                    func_name,
+                    "Metal's 64-bit atomic min/max return no value, "
+                    "so the result cannot be used",
+                    access,
+                )
+            value = self.generate_expression_with_expected(args[1], access["type"])
+            function = METAL_WIDE_ATOMIC_OPERATIONS[operation]
+            atomic_target = (
+                f"reinterpret_cast<{access.get('memory', '')}device atomic_ulong*>"
+                f"({access['buffer']} + {offset})"
+            )
+            return f"{function}({atomic_target}, {value}, memory_order_relaxed)"
         if not self.buffer_atomic_supports_scalar_type(
             operation, access.get("component_type")
         ):

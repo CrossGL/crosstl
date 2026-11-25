@@ -155,6 +155,62 @@ def test_conversions_follow_the_format():
     assert "make_uint4(c, 0u, 0u, 1u)" in load
 
 
+def test_narrow_integer_channels_extend_and_keep_low_bits():
+    # A load zero- or sign-extends each channel to the 32-bit integer of its signedness; a store keeps the low
+    # bits, one of the values Vulkan allows for an integer the format cannot represent ("Texel Output Format
+    # Conversion").
+    r8ui = format_surface_texel("r8ui")
+    assert (r8ui.kind, r8ui.storage, r8ui.count) == ("uint", "unsigned char", 1)
+    _, load = r8ui.load_helper()
+    _, store = r8ui.store_helper()
+    assert "make_uint4((unsigned int)c, 0u, 0u, 1u)" in load
+    assert "(unsigned char)v.x" in store
+    rgba16i = format_surface_texel("rgba16i")
+    assert (rgba16i.kind, rgba16i.storage, rgba16i.count) == ("int", "short", 4)
+    _, load = rgba16i.load_helper()
+    _, store = rgba16i.store_helper()
+    assert "(int)c.x" in load and "(int)c.w" in load
+    assert "(short)v.x" in store and "(short)v.w" in store
+
+
+@pytest.mark.parametrize("backend", BACKENDS)
+@pytest.mark.parametrize(
+    ("declaration", "texel", "element", "helper"),
+    [
+        (
+            "layout(r8ui) uniform uimage2D img;",
+            "uvec4",
+            "unsigned char",
+            "cgl_r8ui_texel",
+        ),
+        ("layout(rg8i) uniform iimage2D img;", "ivec4", "char2", "cgl_rg8i_texel"),
+        (
+            "layout(rgba16i) uniform iimage2D img;",
+            "ivec4",
+            "short4",
+            "cgl_rgba16i_texel",
+        ),
+        (
+            "layout(r16ui) uniform uimage2D img;",
+            "uvec4",
+            "unsigned short",
+            "cgl_r16ui_texel",
+        ),
+    ],
+)
+def test_narrow_integer_formats_read_and_write_their_element(
+    tmp_path, backend, declaration, texel, element, helper
+):
+    code = _translate(tmp_path, backend, declaration, COPY.format(texel=texel))
+    read = f"{READ[backend]}<{element}>(img, p.x * sizeof({element}), p.y)"
+    assert f"= {helper}({read});" in code
+    write = re.search(r"surf2Dwrite\(([^;]*)\);", code)
+    assert write is not None, code
+    value = helper.removesuffix("_texel") + "_element(v)"
+    assert write.group(1).startswith(f"{value}, img, "), write.group(1)
+    _compile(tmp_path, code, backend)
+
+
 def test_texel_types_and_widths():
     assert texel_type_surface_texel(["uvec4"]) == SurfaceTexel(
         "texel_uvec4", "uint", 4, "uint"
@@ -208,8 +264,6 @@ def test_stored_scalar_is_splatted_into_a_converted_element(tmp_path, backend):
 @pytest.mark.parametrize(
     ("declaration", "reason"),
     [
-        ("layout(r8ui) uniform uimage2D img;", "8-bit integer channels"),
-        ("layout(rgba16i) uniform iimage2D img;", "16-bit integer channels"),
         ("layout(rgb10_a2) uniform image2D img;", "bit fields"),
         ("@format(unknown) @texel(vec3) image2D img;", "three components"),
     ],

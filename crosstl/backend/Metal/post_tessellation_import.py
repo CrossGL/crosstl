@@ -8,22 +8,24 @@ Specification 4.1, section 5.1.5, "Post-Tessellation Vertex Functions", and sect
 such a function as a CrossGL vertex stage that kept ``patch_control_point``, ``@patch`` and ``@position_in_patch``
 verbatim, which no target reads, and refused a subscript of the control points.
 
-CrossGL spells the stage as HLSL's domain shader does, which every target with tessellation lowers::
+CrossGL spells the stage as the HLSL importer writes a domain shader, which every target with tessellation lowers::
 
     tessellation_evaluation {
-        vec4 probe(Patch patch, vec3 coord @SV_DomainLocation, OutputPatch<ControlPoint, 3> patch_points)
-            @domain(tri) { ... }
+        @domain("tri")
+        vec4 probe(Patch patch, vec3 coord @gl_TessCoord, OutputPatch<ControlPoint, 3> patch_points) { ... }
     }
 
 :meth:`MetalPostTessellationImport.plan_metal_post_tessellation_functions` rewrites each such function before the
 program is printed:
 
-* ``[[patch(triangle, N)]]`` becomes ``@domain(tri)`` and ``[[patch(quad, N)]]`` ``@domain(quad)``;
+* ``[[patch(triangle, N)]]`` becomes ``@domain("tri")`` and ``[[patch(quad, N)]]`` ``@domain("quad")``, written
+  before the function: an attribute after the parameter list is the return value's semantic;
 * the ``patch_control_point<T>`` member leaves the stage-input structure, and the function takes the control points
   as an ``OutputPatch<T, N>`` parameter instead. ``patch.points[i]`` reads that parameter and ``patch.points.size()``
   is ``N``. The rest of the stage-input structure stays the patch-constant parameter, its members keeping the
-  ``@location`` of their ``[[attribute(n)]]``; a structure with no other member is no longer a parameter;
-* ``[[position_in_patch]]`` becomes ``SV_DomainLocation`` and ``[[patch_id]]`` ``gl_PrimitiveID``.
+  ``@location`` of their ``[[attribute(n)]]``; a structure with no other member is no longer a parameter or a
+  declaration;
+* ``[[position_in_patch]]`` becomes ``gl_TessCoord`` and ``[[patch_id]]`` ``gl_PrimitiveID``.
 
 A function whose patch size is not an integer literal while it reads the control points, a structure with more than
 one control-point member, and a stage-input structure that another declaration also uses are refused through
@@ -47,6 +49,7 @@ _CONTROL_POINTS = re.compile(r"(?:metal\s*::\s*)?patch_control_point\s*<\s*(.+?)
 class _PostTessellationFunction:
     """One ``[[patch]]`` vertex function and the parameter that replaces its control-point member."""
 
+    domain: str = ""
     points: VariableNode | None = None
     point_type: str | None = None
     count: int | None = None
@@ -129,17 +132,16 @@ class MetalPostTessellationImport:
                 f"'{arguments[0] if arguments else ''}', and Metal patches are triangle or quad",
                 None,
             )
-        plan = _PostTessellationFunction()
+        plan = _PostTessellationFunction(domain=domain)
         if len(arguments) > 1:
             plan.count = int(arguments[1]) if arguments[1].isdigit() else None
         function.attributes = [
-            AttributeNode("domain", [domain]) if attribute is patch else attribute
-            for attribute in function.attributes
+            attribute for attribute in function.attributes if attribute is not patch
         ]
         for parameter in function.params:
             for attribute in getattr(parameter, "attributes", None) or []:
                 if attribute.name == "position_in_patch":
-                    attribute.name = "SV_DomainLocation"
+                    attribute.name = "gl_TessCoord"
                 elif attribute.name == "patch_id":
                     attribute.name = "gl_PrimitiveID"
         stage_in = next(
@@ -175,6 +177,10 @@ class MetalPostTessellationImport:
             return None
         # The patch size is kept in the OutputPatch type even when the body never reads a control point.
         kept = [stage_in] if struct.members else []
+        if not struct.members:
+            ast.structs = [
+                declared for declared in ast.structs if declared is not struct
+            ]
         if plan.count is not None:
             kept.append(plan.points)
         index = function.params.index(stage_in)
@@ -227,6 +233,13 @@ class MetalPostTessellationImport:
 
     def is_metal_post_tessellation_function(self, function):
         return id(function) in getattr(self, "metal_post_tessellation_functions", {})
+
+    def metal_post_tessellation_function_annotation(self, function, indent):
+        """The ``@domain("tri")`` line written before a post-tessellation function, else an empty string."""
+        plan = getattr(self, "metal_post_tessellation_functions", {}).get(id(function))
+        if plan is None:
+            return ""
+        return "    " * indent + f'@domain("{plan.domain}")\n'
 
     def metal_post_tessellation_parameter_declaration(self, var):
         """``OutputPatch<T, N> name`` for the parameter that replaces a control-point member, else None."""

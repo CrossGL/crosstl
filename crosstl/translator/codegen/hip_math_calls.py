@@ -11,6 +11,13 @@ from ..ast import (
 class HipMathCallMixin:
     """Math call members of ``HipCodeGen``."""
 
+    def scalar_float_math_functions(self):
+        """The shared precision-aware spellings, and ``exp10``, which the HIP math API declares as ``exp10f`` and ``exp10``."""
+        return {
+            **super().scalar_float_math_functions(),
+            "exp10": {"float": "exp10f", "double": "exp10"},
+        }
+
     def generate_lambda_expression(self, args):
         """Render CrossGL's pseudo-lambda as a HIP device lambda."""
         if not args:

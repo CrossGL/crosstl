@@ -222,13 +222,7 @@ HLSL = {
         "    ControlPoint output;\n    output.position = patch[id].position * 2.0;\n    return output;\n}\n",
         entry="main",
     ),
-    "tessellation-evaluation": Template(
-        program=_HLSL_PATCH
-        + '[domain("tri")]\nfloat4 main(PatchConstants constants, float3 coord : SV_DomainLocation,\n'
-        "            const OutputPatch<ControlPoint, 3> patch) : SV_Position {\n"
-        "    return patch[0].position * coord.x + patch[1].position * coord.y + patch[2].position * coord.z;\n}\n",
-        entry="main",
-    ),
+    "tessellation-evaluation": tessellation.hlsl_domain_stage(slang=False),
     "mesh": Template(
         program="struct Vertex {\n    float4 position : SV_Position;\n};\n\n"
         '[numthreads(1, 1, 1)]\n[outputtopology("triangle")]\n'

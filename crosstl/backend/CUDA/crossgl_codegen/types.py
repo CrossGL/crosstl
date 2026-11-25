@@ -2,6 +2,8 @@
 
 import re
 
+from ..libm_names import LIBM_BINARY32_FUNCTIONS
+
 
 class CudaImportTypeMixin:
     """Type members of ``CudaToCrossGLConverter``."""
@@ -411,6 +413,7 @@ class CudaImportTypeMixin:
             "sinhf": "sinh",
             "coshf": "cosh",
             "tanhf": "tanh",
+            **LIBM_BINARY32_FUNCTIONS,
             "asinf": "asin",
             "acosf": "acos",
             "atanf": "atan",
