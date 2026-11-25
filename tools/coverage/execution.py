@@ -64,6 +64,7 @@ its validation result, because the native probe and the translation would run on
 
 from __future__ import annotations
 
+import os
 import re
 import struct
 import tempfile
@@ -71,7 +72,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
-from . import lanes, lowering, validators
+from . import executed, lanes, lowering, validators
 from .model import Feature, Result, Type
 
 # The languages the harness runs, with the suffix it reads each one's sources from (tests/conformance/cases.py).
@@ -737,7 +738,9 @@ def run(results: list[Result], runtimes: str = "available", workers: int = 4):
     did not run, or ran without a verdict, says why in ``unrun``.
     """
     results = list(results)
+    kept = _kept(runtimes)
     by_language: dict[tuple[str, str], list[tuple[int, Result]]] = {}
+    used = set()
     for index, result in enumerate(results):
         native, translated = languages(result)
         if native == translated:
@@ -745,9 +748,14 @@ def run(results: list[Result], runtimes: str = "available", workers: int = 4):
                 continue
         elif not runs_pair(native, translated):
             continue
-        if executable(result):
-            by_language.setdefault((native, translated), []).append((index, result))
-    used = set()
+        if not executable(result):
+            continue
+        again = kept.lookup(result, (native, translated)) if kept else None
+        if again:
+            results[index] = again
+            used.add(again.runtime)
+            continue
+        by_language.setdefault((native, translated), []).append((index, result))
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-execution-") as scratch:
         for (language, into), items in by_language.items():
             found, runtime, skipped = {}, "", {}
@@ -794,8 +802,28 @@ def run(results: list[Result], runtimes: str = "available", workers: int = 4):
                 reason = "" if judged.runtime else skipped.get(index, judged.unrun)
                 if reason:
                     judged = replace(judged, unrun=f"on {where[index]}, {reason}")
+                if kept:
+                    kept.store(results[index], languages(judged), judged)
                 results[index] = judged
+    if kept:
+        kept.forget_unused()
     return results, sorted(used - {""})
+
+
+def _kept(runtimes: str) -> executed.Kept | None:
+    """The verdicts earlier runs kept for this selection of runtimes (:mod:`.executed`), or ``None``."""
+    if not os.environ.get(executed.EXECUTIONS):
+        return None
+    from tests.conformance import runner
+
+    selection = runner.select_runtimes(runtimes, sorted(SUFFIXES))
+    identities = "; ".join(
+        f"{runtime.id}={provision.identity}"
+        for target in sorted(selection)
+        for runtime, provision in selection[target]
+        if provision.available
+    )
+    return executed.open_kept(runtimes, identities)
 
 
 def _label(result: Result) -> str:
