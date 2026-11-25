@@ -218,6 +218,8 @@ def build(
     tools = sorted(
         {validators.TOOLS[language] for language in languages}
         | ({"spirv-as"} if "spirv" in languages else set())
+        # WGSL is checked by naga and then by Tint.
+        | ({"tint"} if "wgsl" in languages else set())
         # Slang functions that SPIR-V lacks, or that slangc cannot write as valid SPIR-V, are compiled for HLSL and
         # checked by DXC.
         | ({"dxc"} if "slang" in languages else set())

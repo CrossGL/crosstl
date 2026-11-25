@@ -614,6 +614,14 @@ def test_tools_lists_every_language_and_how_to_provide_a_missing_tool(
     monkeypatch.setattr(
         validators, "available", lambda language, target="": language == "glsl"
     )
+    # WGSL has naga but lacks Tint, the second tool of its toolchain; every other language lacks its only tool.
+    monkeypatch.setattr(
+        validators,
+        "missing",
+        lambda language, target="": (
+            "tint" if language == "wgsl" else validators.TOOLS[language]
+        ),
+    )
     monkeypatch.setattr(lowering, "can_lower", lambda language: language == "glsl")
     monkeypatch.setattr(validators, "version", lambda tool: "Glslang Version: 11")
     assert cli.main(["tools"]) == 0
@@ -622,7 +630,9 @@ def test_tools_lists_every_language_and_how_to_provide_a_missing_tool(
     assert sorted(rows) == cli.LANGUAGES
     assert rows["glsl"].endswith("Glslang Version: 11")
     assert "output, input" in rows["glsl"]
-    assert rows["wgsl"].endswith("no: put naga on PATH or set CROSSTL_COVERAGE_NAGA")
+    assert rows["wgsl"].endswith(
+        "no: put node on PATH and set CROSSTL_COVERAGE_WEBGPU to the webgpu package, see tools/coverage/tint.py"
+    )
     assert "CROSSTL_COVERAGE_RUST_GPU" in rows["rust"]
     assert "MetalToolchain" in rows["metal"]
     assert "glsl yes, hlsl no" in lines[-2]

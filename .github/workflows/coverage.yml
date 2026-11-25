@@ -2,8 +2,8 @@ name: Coverage
 
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
 # feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The Linux
-# job measures GLSL, GLSL ES 3.x, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga
-# and slangc (and nvcc for the Slang functions only CUDA has, and DXC's Shader Model 6.10 preview for the HLSL
+# job measures GLSL, GLSL ES 3.x, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga,
+# Tint and slangc (and nvcc for the Slang functions only CUDA has, and DXC's Shader Model 6.10 preview for the HLSL
 # intrinsics that need shader model 6.10), and OpenCL C input with the runner image's clang-18 and DXC, and
 # runs the GLSL and SPIR-V compute probes on Mesa's llvmpipe and lavapipe, and the HLSL, Slang and WGSL ones on lavapipe
 # as the SPIR-V DXC, slangc and naga write for them. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc
@@ -149,6 +149,35 @@ jobs:
         run: |
           echo "$RUNNER_TEMP/naga/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/naga/bin/naga" --version
+
+      # Tint, Dawn's WGSL compiler, checks WGSL after naga (tools/coverage/tint.py). It runs through Dawn's Node.js
+      # bindings, npm webgpu, on Dawn's null backend. npm ci installs the versions tools/coverage/webgpu pins and checks
+      # each package against the integrity hash in its lockfile; the package's only install script serves macOS.
+      - name: Restore Tint
+        id: tint
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/webgpu/node_modules
+          key: tint-webgpu-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/coverage/webgpu/package-lock.json') }}
+
+      - name: Install Tint (npm webgpu)
+        if: steps.tint.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/webgpu"
+          cp tools/coverage/webgpu/package.json tools/coverage/webgpu/package-lock.json "$RUNNER_TEMP/webgpu/"
+          npm ci --prefix "$RUNNER_TEMP/webgpu" --ignore-scripts --no-audit --no-fund
+          # The package carries Dawn for every platform; the cache keeps only this runner's.
+          own="$(node -p "process.platform + '-' + process.arch")"
+          find "$RUNNER_TEMP/webgpu/node_modules/webgpu/dist" -mindepth 1 -maxdepth 1 ! -name "$own" -exec rm -rf {} +
+
+      - name: Activate Tint
+        run: |
+          set -euo pipefail
+          echo "CROSSTL_COVERAGE_WEBGPU=$RUNNER_TEMP/webgpu/node_modules/webgpu" >> "$GITHUB_ENV"
+          node --version
+          printf '@compute @workgroup_size(1)\nfn main() {}\n' > "$RUNNER_TEMP/tint-check.wgsl"
+          node tools/coverage/webgpu/tint.mjs "$RUNNER_TEMP/webgpu/node_modules/webgpu" "$RUNNER_TEMP/tint-check.wgsl"
 
       # The release tools/coverage/upstream.py reads Slang's standard library from; the archive digest is pinned.
       - name: Install slangc ${{ env.SLANG_VERSION }}
