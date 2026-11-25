@@ -206,6 +206,8 @@ class MetalStructDeclarationMixin:
             for alias in getattr(struct_node, "type_aliases", None) or []
             if getattr(alias, "name", None)
         }
+        if alias_names and getattr(struct_node, "template_parameters", None):
+            return self.generic_struct_alias_member_type(struct_node, declared_type)
         if candidate in alias_names:
             if getattr(struct_node, "template_parameters", None):
                 return declared_type
@@ -231,6 +233,109 @@ class MetalStructDeclarationMixin:
             self.resolved_struct_member_qualifiers[id(member)] = qualifiers
             declared_type = f"{target}{suffix}"
 
+        if alias_names and not getattr(struct_node, "template_parameters", None):
+            declared_type = self.resolve_struct_scope_alias_arguments(
+                struct_node, member, declared_type, alias_names
+            )
+        return declared_type
+
+    _ALIAS_ARGUMENT_LIMIT = 32
+    # An alias target a generic struct's member can take as written: a type name or a template-id of plain
+    # arguments, with no qualifier, address space or dependent member (``typename Traits<T>::scalar``).
+    _PLAIN_ALIAS_TARGET_RE = re.compile(r"[A-Za-z_]\w*(?:\s*<[\w\s,<>]*>)?")
+    _ALIAS_TARGET_KEYWORDS = frozenset(
+        {"const", "constant", "device", "thread", "threadgroup", "typename", "volatile"}
+    )
+
+    def generic_struct_alias_member_type(self, struct_node, declared_type):
+        """``declared_type`` of a generic struct's member with the struct's plain aliases spelled out.
+
+        ``template <typename T> struct S { using scalar_T = T; using complex_T = vec<scalar_T, 2>; complex_T v; }``
+        declares ``v`` as ``vec<T, 2>``. CrossGL has no member aliases, so the generic struct names the alias
+        targets, which only use its own parameters. An alias whose target is not plain, or names another alias that
+        is not plain, stays as written.
+        """
+        written = declared_type
+        plain = {}
+        for alias in getattr(struct_node, "type_aliases", None) or []:
+            name = getattr(alias, "name", None)
+            target = str(getattr(alias, "alias_type", "") or "").strip()
+            if (
+                name
+                and not getattr(alias, "template_parameters", None)
+                and self._PLAIN_ALIAS_TARGET_RE.fullmatch(target)
+                and not self._ALIAS_TARGET_KEYWORDS.intersection(
+                    re.findall(r"[A-Za-z_]\w*", target)
+                )
+            ):
+                plain[name] = target
+        if not plain:
+            return declared_type
+        pattern = re.compile(
+            r"(?<![\w:.])(?:"
+            + "|".join(re.escape(name) for name in sorted(plain))
+            + r")(?![\w:])"
+        )
+        for _ in range(self._ALIAS_ARGUMENT_LIMIT):
+            substituted = pattern.sub(lambda match: plain[match.group(0)], declared_type)
+            if substituted == declared_type:
+                break
+            declared_type = substituted
+        unresolved = {
+            getattr(alias, "name", None)
+            for alias in getattr(struct_node, "type_aliases", None) or []
+        } - set(plain)
+        if unresolved.intersection(re.findall(r"[A-Za-z_]\w*", declared_type)):
+            return written
+        return declared_type
+
+    def resolve_struct_scope_alias_arguments(
+        self, struct_node, member, declared_type, alias_names
+    ):
+        """``declared_type`` with the struct's own aliases resolved inside its template argument lists.
+
+        Unqualified lookup of a name in a member declaration finds the members of the class first
+        ([basic.lookup.unqual]), so ``vec<scalar_T, 2> w;`` and ``using complex_T = vec<scalar_T, 2>; complex_T v;``
+        name ``vec<float, 2>`` when the struct declares ``using scalar_T = float;``. Only a whole member type was
+        resolved, which left ``scalar_T`` for CrossGL to refuse as undeclared. A name whose alias carries
+        qualifiers, or that the struct does not resolve to a concrete type, is left as written.
+        """
+        if "<" not in declared_type:
+            return declared_type
+        owner = self.normalize_qualified_type_name(
+            getattr(struct_node, "qualified_name", None) or struct_node.name
+        )
+        pattern = re.compile(
+            r"(?<![\w:.])(?:"
+            + "|".join(re.escape(name) for name in sorted(alias_names))
+            + r")(?![\w:])"
+        )
+        previous_context = self.current_type_resolution_context
+        self.current_type_resolution_context = member
+        try:
+            for _ in range(self._ALIAS_ARGUMENT_LIMIT):
+                start = declared_type.find("<")
+                if start < 0:
+                    break
+                head, arguments = declared_type[:start], declared_type[start:]
+                changed = False
+
+                def replace(match):
+                    nonlocal changed
+                    resolved = self.resolve_dependent_alias_contract(
+                        owner, match.group(0), required=False
+                    )
+                    if resolved is None or resolved[1]:
+                        return match.group(0)
+                    changed = True
+                    return str(resolved[0]).strip()
+
+                arguments = pattern.sub(replace, arguments)
+                declared_type = head + arguments
+                if not changed:
+                    break
+        finally:
+            self.current_type_resolution_context = previous_context
         return declared_type
 
     def collect_struct_static_constants(self, structs):
