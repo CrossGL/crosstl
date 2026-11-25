@@ -611,9 +611,12 @@ class SlangToCrossGLConverter(
         self.vertex_input_structs = set()
 
         self.semantic_map = {
-            # Vertex inputs position
-            "POSITION": "in_Position",
-            "POSITION0": "in_Position0",
+            # Classic vertex semantics, as the HLSL importer maps them: index 0
+            # is the CrossGL name that takes the semantic's fixed location
+            # (stage_io_semantic_locations), and an HLSL semantic without an
+            # index is index 0.
+            "POSITION": "Position",
+            "POSITION0": "Position",
             "POSITION1": "in_Position1",
             "POSITION2": "in_Position2",
             "POSITION3": "in_Position3",
@@ -621,9 +624,8 @@ class SlangToCrossGLConverter(
             "POSITION5": "in_Position5",
             "POSITION6": "in_Position6",
             "POSITION7": "in_Position7",
-            # Vertex inputs normal
-            "NORMAL": "in_Normal",
-            "NORMAL0": "in_Normal0",
+            "NORMAL": "Normal",
+            "NORMAL0": "Normal",
             "NORMAL1": "in_Normal1",
             "NORMAL2": "in_Normal2",
             "NORMAL3": "in_Normal3",
@@ -631,9 +633,8 @@ class SlangToCrossGLConverter(
             "NORMAL5": "in_Normal5",
             "NORMAL6": "in_Normal6",
             "NORMAL7": "in_Normal7",
-            # Vertex inputs tangent
-            "TANGENT": "in_Tangent",
-            "TANGENT0": "in_Tangent0",
+            "TANGENT": "Tangent",
+            "TANGENT0": "Tangent",
             "TANGENT1": "in_Tangent1",
             "TANGENT2": "in_Tangent2",
             "TANGENT3": "in_Tangent3",
@@ -641,9 +642,8 @@ class SlangToCrossGLConverter(
             "TANGENT5": "in_Tangent5",
             "TANGENT6": "in_Tangent6",
             "TANGENT7": "in_Tangent7",
-            # Vertex inputs binormal
-            "BINORMAL": "in_Binormal",
-            "BINORMAL0": "in_Binormal0",
+            "BINORMAL": "Binormal",
+            "BINORMAL0": "Binormal",
             "BINORMAL1": "in_Binormal1",
             "BINORMAL2": "in_Binormal2",
             "BINORMAL3": "in_Binormal3",

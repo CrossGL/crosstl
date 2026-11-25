@@ -25,6 +25,9 @@ LEFT_OUT_NAMES = {
     "atomicStoreMin": "Chromium extension (atomic_vec2u_min_max)",
     "inputAttachmentLoad": "Chromium extension (chromium_internal_input_attachments)",
 }
+# The enable extension (WGSL section 4.1.1) a section's functions need: a call of a subgroup or quad built-in is an
+# error unless the module enables ``subgroups``.
+EXTENSIONS = {"subgroups": "subgroups"}
 _SCALARS = {"f32": "float", "i32": "int", "u32": "uint", "bool": "bool"}
 _IMPLICIT_ORDER = ("f32", "i32", "u32", "bool")
 _EXPLICIT_ORDER = ("u32", "i32", "f32", "bool")
@@ -264,6 +267,7 @@ def parse(
                 stage=stage,
                 spelling=f"{name}<{template}>" if template else "",
                 counterpart=counterpart,
+                extension=EXTENSIONS.get(group, ""),
             )
         )
     return features

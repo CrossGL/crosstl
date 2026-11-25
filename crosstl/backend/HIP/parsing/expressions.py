@@ -432,6 +432,11 @@ class HipExpressionMixin:
         suffix = self.parse_template_suffix()
         if isinstance(base, str):
             return f"{base}{suffix}"
+        if isinstance(base, MemberAccessNode):
+            # ``x.f<T>`` names member ``f<T>`` of ``x``.
+            return MemberAccessNode(
+                base.object, f"{base.member}{suffix}", base.is_pointer
+            )
         return f"{self.expression_to_text(base)}{suffix}"
 
     def parse_template_suffix(self):

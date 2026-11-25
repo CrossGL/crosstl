@@ -17,6 +17,10 @@ class HipAliasMixin:
         declaration = self.parse_template_prefixed_declaration_body()
         if isinstance(declaration, FunctionNode) and parameters:
             declaration.template_parameters = parameters
+        for record in declaration if isinstance(declaration, list) else [declaration]:
+            if isinstance(record, StructNode):
+                # The member functions of a record template depend on its parameters, so the importer keeps none.
+                record.is_record_template = True
         return declaration
 
     def parse_template_prefixed_declaration_body(self):

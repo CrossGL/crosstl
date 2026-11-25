@@ -48,6 +48,7 @@ from .rust_gpu_spec_constants import spec_constant_infos
 from .rust_gpu_spelling import glam_spelling
 from .rust_gpu_stage_io import GRAPHICS_STAGES, RustGpuStageIoMixin
 from .rust_gpu_storage import PADDED_ELEMENTS, RustGpuPaddedSliceMixin
+from .rust_gpu_subgroups import rewrite_rust_gpu_lane_queries
 from .rust_gpu_subset import (
     program_stage_names,
     refuse_host_only_rust,
@@ -411,6 +412,8 @@ class RustCodeGen(
             # The mesh lowering rewrites the entry points it writes (rust_gpu_mesh), so it works on a copy.
             ast = copy.deepcopy(ast)
         ast = canonicalize_separate_textures(ast)
+        rewrite_rust_gpu_lane_queries(ast)
+        self.rust_current_program = ast
         return glam_spelling(self.refusals.run(self.generate_program, ast))
 
     def generate_program(self, ast):
