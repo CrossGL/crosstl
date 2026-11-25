@@ -27,9 +27,7 @@ class GLSLShaderSectionMixin:
         self.flattened_uniform_block_member_renames = {}
         rename_shadowing_locals(node, instance_block_member_names(node))
         self.emitted_cbuffer_member_names = set()
-        self.function_name_renames = self.collect_function_name_renames(
-            getattr(node, "functions", []) or []
-        )
+        self.function_name_renames = self.collect_function_name_renames(node)
         self.user_function_arities = {
             (
                 getattr(function, "name", None),

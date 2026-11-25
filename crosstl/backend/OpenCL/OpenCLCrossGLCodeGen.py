@@ -30,6 +30,7 @@ from ..no_contraction import (
     function_requires_no_contraction,
 )
 from ..thread_hierarchy import kernel_workgroup_size_attribute
+from .array_extents import format_opencl_array_extent
 from .compare_exchange import OpenCLCompareExchangeMixin, is_compare_exchange
 from .conversions import format_conversion, is_conversion_name
 from .enumerations import OpenCLEnumerationMixin
@@ -37,9 +38,54 @@ from .global_variables import refuse_writable_global_variable
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 from .pointer_results import OpenCLPointerResultMixin
 from .sizeof_scopes import OpenCLSizeofScopeMixin
+from .vector_components import (  # noqa: F401 - re-exported diagnostic
+    OpenCLVectorComponentMixin,
+    OpenCLVectorComponentUnsupportedError,
+)
 from .work_items import format_work_item_query
 
 _DYNAMIC_LOCAL_MEMORY_FALLBACK_SIZE = 1024
+_OPENCL_ARITHMETIC_OPERATORS = frozenset({"+", "-", "*", "/"})
+# Built-in functions whose result has the type of their vector arguments
+# (OpenCL C 3.0, sections 6.15.2, 6.15.4 and 6.15.5).
+_OPENCL_ARGUMENT_TYPE_BUILTINS = frozenset(
+    {
+        "ceil",
+        "clamp",
+        "copysign",
+        "cos",
+        "cross",
+        "degrees",
+        "exp",
+        "exp2",
+        "fabs",
+        "fast_normalize",
+        "floor",
+        "fma",
+        "fmax",
+        "fmin",
+        "fmod",
+        "log",
+        "log2",
+        "mad",
+        "max",
+        "min",
+        "mix",
+        "normalize",
+        "pow",
+        "radians",
+        "rint",
+        "round",
+        "rsqrt",
+        "sign",
+        "sin",
+        "smoothstep",
+        "sqrt",
+        "step",
+        "tan",
+        "trunc",
+    }
+)
 _OPENCL_WORK_ITEM_QUERIES = frozenset(
     {
         "get_enqueued_local_size",
@@ -55,6 +101,18 @@ _OPENCL_WORK_ITEM_QUERIES = frozenset(
         "get_work_dim",
     }
 )
+
+
+def _is_enclosed_in_parentheses(text):
+    """Whether ``text`` is one parenthesized group, such as ``(a + b)`` but not ``(a) + (b)``."""
+    if not text.startswith("(") or not text.endswith(")"):
+        return False
+    depth = 0
+    for index, character in enumerate(text):
+        depth += {"(": 1, ")": -1}.get(character, 0)
+        if depth == 0:
+            return index == len(text) - 1
+    return False
 
 
 class OpenCLRecordSemanticError(ValueError):
@@ -114,13 +172,18 @@ class OpenCLImageReadUnsupportedError(TranslationDiagnostic):
     code = CODE_PREFIX + "opencl-image-read-unsupported"
 
 
-class OpenCLVectorComponentUnsupportedError(TranslationDiagnostic):
-    """An OpenCL vector component selection that CrossGL cannot represent exactly."""
+class OpenCLPrintfValueUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C ``printf`` whose result is read.
 
-    code = CODE_PREFIX + "opencl-vector-component-unsupported"
+    OpenCL C ``printf`` returns an ``int``, 0 when it ran and -1 otherwise (OpenCL C 3.0 section 6.15.14). CrossGL
+    ``printf`` is the Vulkan debug print, which returns nothing, so only a ``printf`` statement is imported.
+    """
+
+    code = CODE_PREFIX + "opencl-printf-value-unsupported"
 
 
 class OpenCLToCrossGLConverter(
+    OpenCLVectorComponentMixin,
     OpenCLEnumerationMixin,
     OpenCLSizeofScopeMixin,
     OpenCLPointerResultMixin,
@@ -393,8 +456,10 @@ class OpenCLToCrossGLConverter(
         self.normalize_target_safe_cgl = normalize_target_safe_cgl
         self.opencl_image_access = {}
         self.opencl_sampler_states = {}
+        self.opencl_printf_statements = set()
 
     def generate(self, ast_node):
+        self.opencl_printf_statements = set()
         self.opencl_sizeof_symbols = {}
         self.opencl_current_function_name = None
         self.opencl_event_tokens = set()
@@ -990,6 +1055,15 @@ class OpenCLToCrossGLConverter(
         func_name = getattr(node, "name", None)
         if isinstance(func_name, str):
             raw_args = getattr(node, "args", []) or []
+            if (
+                func_name == "printf"
+                and id(node) not in self.opencl_printf_statements
+                and not self.is_user_defined_function(func_name)
+            ):
+                raise OpenCLPrintfValueUnsupportedError(
+                    "OpenCL C printf returns an int (0, or -1 on failure), and CrossGL printf, the Vulkan "
+                    "debug print, returns nothing, so its result cannot be read"
+                )
             image_write = self.format_opencl_image_write(func_name, raw_args)
             if image_write is not None:
                 return image_write
@@ -1005,6 +1079,9 @@ class OpenCLToCrossGLConverter(
                 if sizeof_value is not None:
                     return str(sizeof_value)
                 self.refuse_opencl_sizeof_expression(raw_args)
+            cross = self.format_opencl_four_component_cross(func_name, raw_args)
+            if cross is not None:
+                return cross
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
@@ -1015,6 +1092,100 @@ class OpenCLToCrossGLConverter(
             if fence is not None:
                 return fence
         return super().visit_FunctionCallNode(node)
+
+    def format_opencl_four_component_cross(self, func_name, args):
+        """Write OpenCL's four-component ``cross`` with the three-component form CrossGL has.
+
+        OpenCL defines ``cross`` for ``float4`` and ``double4`` as the cross product of the first three
+        components with a ``w`` of zero (OpenCL C 3.0, section 6.15.5). CrossGL's ``cross`` takes three
+        components only.
+        """
+        if (
+            func_name != "cross"
+            or len(args) != 2
+            or self.is_user_defined_function(func_name)
+        ):
+            return None
+        vector_types = {self.opencl_four_component_vector_type(arg) for arg in args}
+        vector_types.discard(None)
+        if len(vector_types) != 1:
+            return None
+        operands = []
+        for arg in args:
+            text = self.visit(arg)
+            if not re.fullmatch(
+                r"[A-Za-z_]\w*(?:\.\w+|\[[^\[\]]*\])*", text
+            ) and not _is_enclosed_in_parentheses(text):
+                text = f"({text})"
+            operands.append(f"{text}.xyz")
+        return f"{vector_types.pop()}(cross({operands[0]}, {operands[1]}), 0.0)"
+
+    def opencl_four_component_vector_type(self, expression):
+        """The CrossGL type of a four-component vector ``expression``, or ``None``."""
+        type_name = self.opencl_expression_vector_type(expression)
+        return type_name if re.fullmatch(r"vec4<\w+>", type_name or "") else None
+
+    def opencl_expression_vector_type(self, expression):
+        """The CrossGL type of a scalar or vector ``expression``, or ``None`` when it is not known."""
+        type_name = self.expression_declared_type(expression)
+        if type_name is not None:
+            return self.convert_hip_type_to_crossgl(str(type_name))
+        if (
+            isinstance(expression, BinaryOpNode)
+            and expression.op in _OPENCL_ARITHMETIC_OPERATORS
+        ):
+            return self.opencl_operands_vector_type((expression.left, expression.right))
+        if isinstance(expression, UnaryOpNode) and expression.op in {"+", "-"}:
+            return self.opencl_expression_vector_type(expression.operand)
+        if isinstance(expression, MemberAccessNode):
+            return self.opencl_swizzle_type(expression)
+        if not isinstance(expression, FunctionCallNode):
+            return None
+        name = str(expression.name)
+        if (
+            name in _OPENCL_ARGUMENT_TYPE_BUILTINS
+            and not self.is_user_defined_function(name)
+        ):
+            return self.opencl_operands_vector_type(expression.args or [])
+        # (float4)(x, y, z, w) is a call named after its type, as are
+        # convert_float4 and as_float4.
+        name = re.sub(r"^(?:convert|as)_", "", name).split("_")[0]
+        if name in self.OPENCL_VECTOR_TYPE_MAPPING:
+            return self.convert_hip_type_to_crossgl(name)
+        return None
+
+    def opencl_operands_vector_type(self, operands):
+        """The vector type of arithmetic or a built-in call on ``operands``.
+
+        A scalar operand is widened to the vector operand's type, and vector operands must have the same type
+        (OpenCL C 3.0, sections 6.4.2 and 6.15), so the result has the one vector type among the operands.
+        """
+        types = {self.opencl_expression_vector_type(operand) for operand in operands}
+        vector_types = {
+            name for name in types if re.fullmatch(r"vec\d<\w+>", name or "")
+        }
+        return vector_types.pop() if len(vector_types) == 1 else None
+
+    def opencl_swizzle_type(self, expression):
+        """The CrossGL type of a ``.xyzw``, ``.rgba`` or ``.s0123`` swizzle of a vector, or ``None``."""
+        vector = re.fullmatch(
+            r"vec(\d)<(\w+)>",
+            self.opencl_expression_vector_type(expression.object) or "",
+        )
+        if vector is None:
+            return None
+        width, element = int(vector.group(1)), vector.group(2)
+        member = str(expression.member)
+        if re.fullmatch(r"[sS][0-9a-fA-F]+", member):
+            indices = [int(digit, 16) for digit in member[1:]]
+        elif re.fullmatch(r"[xyzw]+|[rgba]+", member):
+            letters = "xyzw" if member[0] in "xyzw" else "rgba"
+            indices = [letters.index(letter) for letter in member]
+        else:
+            return None
+        if max(indices) >= width or len(indices) > 4:
+            return None
+        return element if len(indices) == 1 else f"vec{len(indices)}<{element}>"
 
     def format_opencl_fence_call(self, func_name, args):
         if func_name == "sub_group_barrier" and args:
@@ -1363,18 +1534,6 @@ class OpenCLToCrossGLConverter(
             return "int"
         return None
 
-    def visit_MemberAccessNode(self, node):
-        width = self.opencl_vector_width(node.object)
-        swizzle = self.opencl_vector_swizzle(str(node.member), width)
-        if swizzle is not None:
-            return f"{self.visit(node.object)}.{swizzle}"
-        if width is not None and self.is_opencl_vector_component(str(node.member)):
-            raise OpenCLVectorComponentUnsupportedError(
-                f"OpenCL vector component '.{node.member}' cannot be represented "
-                f"exactly for a {width}-component vector"
-            )
-        return super().visit_MemberAccessNode(node)
-
     def expression_declared_type(self, expression):
         declared = super().expression_declared_type(expression)
         if declared is not None or not isinstance(expression, BinaryOpNode):
@@ -1394,15 +1553,6 @@ class OpenCLToCrossGLConverter(
             return left
         return None
 
-    def opencl_vector_width(self, expression):
-        if isinstance(expression, MemberAccessNode):
-            parent_width = self.opencl_vector_width(expression.object)
-            swizzle = self.opencl_vector_swizzle(str(expression.member), parent_width)
-            if swizzle is not None:
-                return len(swizzle)
-        type_name = self.expression_declared_type(expression)
-        return self.opencl_vector_type_width(type_name)
-
     def opencl_vector_type_width(self, type_name):
         if not type_name:
             return None
@@ -1415,40 +1565,10 @@ class OpenCLToCrossGLConverter(
             return None
         return int(match.group(1) or match.group(2))
 
-    @staticmethod
-    def is_opencl_vector_component(member):
-        return bool(
-            re.fullmatch(r"[sS][0-9a-fA-F]+", member)
-            or member in {"lo", "hi", "even", "odd"}
-        )
-
-    def opencl_vector_swizzle(self, member, width):
-        if width is None or width > 4:
-            return None
-        numeric = re.fullmatch(r"[sS]([0-9a-fA-F]+)", member)
-        if numeric is not None:
-            indices = [int(component, 16) for component in numeric.group(1)]
-        elif member in {"lo", "hi", "even", "odd"}:
-            if width == 3 and member in {"lo", "even"}:
-                indices = [0, 1] if member == "lo" else [0, 2]
-            elif width not in {2, 4}:
-                return None
-            elif member == "lo":
-                indices = list(range(width // 2))
-            elif member == "hi":
-                indices = list(range(width // 2, width))
-            elif member == "even":
-                indices = list(range(0, width, 2))
-            else:
-                indices = list(range(1, width, 2))
-        else:
-            return None
-        if any(index >= width or index >= 4 for index in indices):
-            return None
-        components = "xyzw"
-        return "".join(components[index] for index in indices)
-
     def emit_statement(self, stmt):
+        if isinstance(stmt, FunctionCallNode) and stmt.name == "printf":
+            # A printf statement discards the result CrossGL's printf does not have.
+            self.opencl_printf_statements.add(id(stmt))
         if self.emit_opencl_compare_exchanges(stmt):
             return
         if self.is_opencl_prefetch_call(stmt):
@@ -1926,6 +2046,9 @@ class OpenCLToCrossGLConverter(
         else:
             return None
         return ("x", "y", "z")[value] if value in {0, 1, 2} else None
+
+    def format_crossgl_array_extent(self, size):
+        return format_opencl_array_extent(size, super().format_crossgl_array_extent)
 
     def convert_hip_type_to_crossgl(self, hip_type):
         if hip_type is None:

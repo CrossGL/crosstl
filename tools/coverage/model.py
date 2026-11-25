@@ -36,6 +36,7 @@ OTHER_WIDTHS = frozenset({"double"}) | WIDE_INTEGERS | NARROW_SCALARS | BYTES
 OUTCOMES = ("supported", "refused", "wrong", "untested")
 LANGUAGES = (
     "cuda",
+    "gles",
     "glsl",
     "hip",
     "hlsl",

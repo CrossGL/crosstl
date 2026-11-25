@@ -83,9 +83,16 @@ def generate_metal_array_copy(codegen, target, value):
         return None
     if isinstance(value, ArrayLiteralNode):
         return _generate_metal_array_literal_copy(codegen, target, value, target_type)
+    if codegen.metal_expression_is_value_array(
+        target
+    ) and codegen.metal_expression_is_value_array(value):
+        # Both are ``array<T, N>`` values, which ordinary assignment copies.
+        return None
     prologue = []
     if is_pure(target) and not is_pure(value):
-        source = _thread_array_source(codegen, value)
+        source = _thread_array_source(codegen, value) or _array_result_source(
+            codegen, value
+        )
         if source is not None:
             prologue.append(source[0])
             value = source[1]
@@ -129,6 +136,17 @@ def _thread_array_source(codegen, value):
     name = codegen.next_metal_temp_variable("array_source")
     rendered = codegen.generate_expression(value)
     return f"thread auto &{name} = {rendered}", IdentifierNode(name)
+
+
+def _array_result_source(codegen, value):
+    """``(declaration, name)`` holding the ``array<T, N>`` result of a user-function call, or ``None``.
+
+    The copy loop then reads the local, so the call runs once, as in the source assignment.
+    """
+    if not codegen.metal_expression_returns_value_array(value):
+        return None
+    name = codegen.next_metal_temp_variable("array_result")
+    return f"auto {name} = {codegen.generate_expression(value)}", IdentifierNode(name)
 
 
 def _generate_metal_array_literal_copy(codegen, target, value, target_type):
@@ -193,10 +211,11 @@ def _mentions(node, name):
     )
 
 
-def generate_metal_array_initializer(codegen, expr, field_type):
+def generate_metal_array_initializer(codegen, expr, field_type, *, value_array=False):
     """Brace list initializing array field ``field_type`` from array value ``expr``, or ``None``.
 
-    ``None`` means the field is not an array or ``expr`` is already an initializer list.
+    ``None`` means the field is not an array or ``expr`` is already an initializer list. ``value_array`` spells the
+    list for ``metal::array<T, N>`` instead of a C array (:func:`_value_array_list`).
     """
     parts = _array_parts(codegen.type_name_string(field_type))
     if parts is None or expr is None or isinstance(expr, ArrayLiteralNode):
@@ -211,19 +230,56 @@ def generate_metal_array_initializer(codegen, expr, field_type):
             f"array member initializer: '{codegen.type_name_string(field_type)}' members are initialized element "
             "by element in Metal, which evaluates the array value once per element, and this value has effects"
         )
-    return "{" + ", ".join(_array_elements(codegen, expr, parts)) + "}"
+    elements = _array_elements(codegen, expr, parts, value_array=value_array)
+    if value_array and _array_parts(parts[0]) is not None:
+        return _value_array_list(elements)
+    return "{" + ", ".join(elements) + "}"
 
 
-def _array_elements(codegen, expr, parts):
+def _value_array_list(elements):
+    """Fully braced list of one level of a nested ``metal::array``.
+
+    ``metal::array<T, N>`` is a structure whose one member is ``T[N]``, so each level of ``array<array<T, M>, N>``
+    takes two braces: with one, the inner lists initialize the outer member's elements and overflow it ("excess
+    elements in struct initializer"). A one-level ``array<T, N>`` takes a plain list by brace elision
+    ([dcl.init.aggr]/16).
+    """
+    return "{{" + ", ".join(elements) + "}}"
+
+
+def generate_metal_value_array_literal(codegen, literal, array_type):
+    """Braced list initializing a nested ``array<array<T, M>, N>`` from nested array list ``literal``, or ``None``.
+
+    ``None`` leaves a list without nested lists, which initializes a one-level ``array<T, N>`` as it is.
+    """
+    if not isinstance(literal, ArrayLiteralNode) or not any(
+        isinstance(element, ArrayLiteralNode) for element in literal.elements
+    ):
+        return None
+
+    def spell(node, type_name):
+        parts = _array_parts(type_name)
+        if not isinstance(node, ArrayLiteralNode) or parts is None:
+            return codegen.generate_expression_with_expected(node, type_name)
+        return _value_array_list(
+            [spell(element, parts[0]) for element in node.elements]
+        )
+
+    return spell(literal, codegen.type_name_string(array_type))
+
+
+def _array_elements(codegen, expr, parts, *, value_array=False):
     element_type, extent = parts
     rendered = []
     for index in range(extent):
         element = _element(expr, index)
         nested = _array_parts(element_type)
         if nested is not None:
-            rendered.append(
-                "{" + ", ".join(_array_elements(codegen, element, nested)) + "}"
-            )
+            inner = _array_elements(codegen, element, nested, value_array=value_array)
+            if value_array:
+                rendered.append(_value_array_list(inner))
+            else:
+                rendered.append("{" + ", ".join(inner) + "}")
         else:
             rendered.append(
                 codegen.generate_expression_with_expected(element, element_type)

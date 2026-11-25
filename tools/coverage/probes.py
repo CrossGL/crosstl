@@ -70,10 +70,18 @@ _STRUCTURED = {"hlsl": "hlsl_structured"}
 
 @dataclass(frozen=True)
 class Probe:
+    """A probe's source, entry point and file suffix. ``reads`` is what a compute probe of a function computes from:
+    the scalar type of each input element its call reads, in order, and then its output buffer's element. Two probes with
+    equal ``reads`` call their functions on the same input elements and store the same kind of result, so
+    :mod:`.runner` runs a CrossGL probe that calls a counterpart overload against the native probe only when they are
+    equal. It is empty for every other probe.
+    """
+
     language: str
     source: str
     entry: str
     suffix: str
+    reads: tuple[str, ...] = ()
 
 
 def spell(kind: Type, language: str) -> str:
@@ -127,6 +135,9 @@ class _Builder:
         self.traced = False
         self.uniforms = Uniforms(dialect)
         self.offsets: dict[str, int] = {}
+        # The scalar type of each input element the call reads, in order, and a buffer's storage and ``[]`` for one it
+        # passes whole.
+        self.reads: list[str] = []
         self.lines: list[str] = list(receiver.locals) if receiver else []
         # Variables the compute workgroup shares, for a parameter that takes one.
         self.shared: list[str] = []
@@ -147,6 +158,7 @@ class _Builder:
         storage = _storage(scalar)
         offset = self.offsets.get(storage, 0)
         self.offsets[storage] = offset + 1
+        self.reads.append(scalar)
         read = self.dialect.read(_BUFFERS[storage], offset)
         if scalar == "bool":
             return self.dialect.positive(read)
@@ -301,6 +313,7 @@ class _Builder:
                 if param.type.shape or storage not in _BUFFERS:
                     raise ProbeError(f"no probe buffer holds {param.type.scalar}")
                 self.offsets.setdefault(storage, 0)
+                self.reads.append(f"{storage}[]")
                 arguments.append(dialect.buffer_argument(_BUFFERS[storage]))
             elif param.direction == "out":
                 self.lines.append(dialect.declare(param.type, local))
@@ -531,4 +544,5 @@ def build(feature: Feature, language: str, *, baseline: bool = False) -> Probe:
         if lanes.divergent(feature):
             body = dialect.active(body, lanes.SKIPPED)
     source = dialect.kernel(buffers, body, declarations=declarations, **extra)
-    return Probe(language, source, dialect.entry, dialect.suffix)
+    reads = (*builder.reads, f"-> {'atomic ' if atomic else ''}{output!r}")
+    return Probe(language, source, dialect.entry, dialect.suffix, reads)
