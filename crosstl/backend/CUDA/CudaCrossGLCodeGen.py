@@ -17,6 +17,7 @@ from ..thread_hierarchy import (
 from .array_extents import IntegerConstants
 from .block_votes import BlockVoteLibrary, insert_block_vote_functions
 from .buffer_layout_import import EmittedBufferLayouts
+from .buffer_memory_qualifiers import buffer_memory_attributes
 from .crossgl_codegen.cooperative_groups import CudaImportCooperativeGroupMixin
 from .crossgl_codegen.declarations import CudaImportDeclarationMixin
 from .crossgl_codegen.intrinsics import CudaImportIntrinsicMixin
@@ -882,7 +883,8 @@ class CudaToCrossGLConverter(
                         element_type,
                     )
                     params.append(
-                        f"@group(0) @binding({binding}) var<storage, read_write> {param_name}: {storage_type}"
+                        f"{buffer_memory_attributes(param.vtype)}@group(0) @binding({binding}) "
+                        f"var<storage, read_write> {param_name}: {storage_type}"
                     )
                 else:
                     param_type = self.convert_cuda_variable_type_to_crossgl(

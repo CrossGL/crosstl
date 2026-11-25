@@ -206,7 +206,8 @@ def test_enum_declaration_names_the_renamed_enum(tmp_path, file_name, template, 
     code = _translate(tmp_path, file_name, template.format(name=name))
 
     assert f"enum {name}_ {{" in code
-    assert f"var e: {name}_ = B;" in code
+    # Unscoped enumerators import qualified by the renamed enum.
+    assert f"var e: {name}_ = {name}_::B;" in code
     Parser(Lexer(code).tokens).parse()
 
 
