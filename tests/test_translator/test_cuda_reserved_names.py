@@ -183,7 +183,13 @@ def _compile(tmp_path, tool, args, code, suffix):
 
 @pytest.mark.parametrize("source", [SPIRV_BLOCKS, MIXED], ids=["spirv", "mixed"])
 def test_nvcc_compiles(tmp_path, source):
-    _compile(tmp_path, "nvcc", ["-std=c++17", "-c"], _generate(tmp_path, "cuda", source), ".cu")
+    _compile(
+        tmp_path,
+        "nvcc",
+        ["-std=c++17", "-c"],
+        _generate(tmp_path, "cuda", source),
+        ".cu",
+    )
 
 
 @pytest.mark.parametrize("source", [SPIRV_BLOCKS, MIXED], ids=["spirv", "mixed"])
