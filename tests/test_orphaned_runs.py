@@ -7,7 +7,16 @@ import pytest
 import yaml
 
 from tools import orphaned_runs
-from tools.orphaned_runs import GitHub, Run, Sweeper, closed, orphaned, target
+from tools.orphaned_runs import (
+    GitHub,
+    Run,
+    Sweeper,
+    base,
+    closed,
+    doomed,
+    orphaned,
+    target,
+)
 
 GROUP = "gh-readonly-queue/main/pr-12-" + "a" * 40
 LIVE = "gh-readonly-queue/main/pr-13-" + "b" * 40
@@ -21,6 +30,43 @@ def test_target_is_the_branch_a_merge_group_merges_into():
     assert target("gh-readonly-queue/release/4.x/pr-7-" + "c" * 40) == "release/4.x"
     assert target("main") is None
     assert target("gh-readonly-queue/main") is None
+
+
+def test_base_is_the_head_of_the_group_ahead():
+    assert base(GROUP) == "a" * 40
+    assert base("gh-readonly-queue/release/4.x/pr-7-" + "c" * 40) == "c" * 40
+    assert base("gh-readonly-queue/main/pr-x-" + "c" * 40) is None
+    assert base("gh-readonly-queue/main/pr-7") is None
+    assert base("main") is None
+
+
+def _group(number, ahead):
+    return f"gh-readonly-queue/main/pr-{number}-{ahead}"
+
+
+def test_every_group_built_on_a_failed_group_is_doomed():
+    # main <- 1 <- 2 <- 3 <- 4, and 5 is built on a commit that is no group's head. A group the queue could not
+    # build, such as an entry with a conflict, is skipped: the next one is built on the group ahead of it.
+    main, heads = "0" * 40, {number: str(number) * 40 for number in range(1, 6)}
+    groups = {
+        _group(1, main): heads[1],
+        _group(2, heads[1]): heads[2],
+        _group(3, heads[2]): heads[3],
+        _group(4, heads[3]): heads[4],
+        _group(5, "9" * 40): heads[5],
+    }
+    assert doomed(groups, set()) == set()
+    assert doomed(groups, {main}) == set()
+    assert doomed(groups, {heads[2]}) == {
+        _group(2, heads[1]),
+        _group(3, heads[2]),
+        _group(4, heads[3]),
+    }
+    assert doomed(groups, {heads[4], heads[5]}) == {
+        _group(4, heads[3]),
+        _group(5, "9" * 40),
+    }
+    assert doomed(groups, {heads[1], heads[3]}) == set(groups) - {_group(5, "9" * 40)}
 
 
 def test_only_runs_of_groups_that_are_gone_and_did_not_land_are_orphaned():
@@ -161,14 +207,14 @@ def test_groups_and_landed_commits():
     gh = FakeGh(
         {
             "git/matching-refs/heads/gh-readonly-queue/?per_page=100&page=1": [
-                {"ref": f"refs/heads/{LIVE}"}
+                {"ref": f"refs/heads/{LIVE}", "object": {"sha": "2" * 40}}
             ],
             "commits?sha=release%2F4.x&per_page=100": [{"sha": "5" * 40}],
             "commits?sha=main&per_page=100": [{"sha": "6" * 40}],
         }
     )
     github = GitHub("o/r", run=gh)
-    assert github.groups() == {LIVE}
+    assert github.groups() == {LIVE: "2" * 40}
     assert github.landed({"main", "release/4.x"}) == {"5" * 40, "6" * 40}
 
 
@@ -198,24 +244,35 @@ def _suites(*runs):
             "nodes": [
                 {
                     "workflowRun": {"databaseId": id},
-                    "checkRuns": {"totalCount": failed},
+                    "checkRuns": {"nodes": [{"name": name} for name in failed]},
                 }
                 for id, failed in runs
-            ] + [{"workflowRun": None, "checkRuns": {"totalCount": 0}}]
+            ] + [{"workflowRun": None, "checkRuns": {"nodes": [{"name": "Dynamic"}]}}]
         }
     }
 
 
-def test_failing_asks_once_for_the_failed_runs_of_every_commit():
-    gh = FakeGh({"graphql": {"c0": _suites((11, 1), (12, 0)), "c1": None}})
+def test_failures_asks_once_for_the_failed_check_runs_of_every_commit():
+    gh = FakeGh(
+        {
+            "graphql": {
+                "c0": _suites((11, ["leg", REQUIRED]), (12, [])),
+                "c1": None,
+                "c2": _suites((13, ["leg"])),
+            }
+        }
+    )
     github = GitHub("o/r", run=gh)
-    assert github.failing(["2" * 40, "1" * 40, "1" * 40]) == {11}
-    assert gh.calls == [("GRAPHQL", "1" * 40 + "," + "2" * 40)]
-    assert github.failing([]) == set()
+    assert github.failures(["2" * 40, "1" * 40, "1" * 40, "3" * 40]) == {
+        "1" * 40: {11: {"leg", REQUIRED}},
+        "3" * 40: {13: {"leg"}},
+    }
+    assert gh.calls == [("GRAPHQL", ",".join(digit * 40 for digit in "123"))]
+    assert github.failures([]) == {}
     assert len(gh.calls) == 1
 
 
-def test_failing_declares_one_variable_per_commit():
+def test_failures_declares_one_variable_per_commit():
     commands = []
 
     def run(command, **kwargs):
@@ -224,7 +281,7 @@ def test_failing_declares_one_variable_per_commit():
             command, 0, '{"data": {"repository": {}}}', ""
         )
 
-    GitHub("o/r", run=run).failing(["1" * 40, "2" * 40])
+    GitHub("o/r", run=run).failures(["1" * 40, "2" * 40])
     values = dict(arg.split("=", 1) for arg in commands[0][4::2])
     query = values.pop("query")
     assert values == {"owner": "o", "name": "r", "c0": "1" * 40, "c1": "2" * 40}
@@ -307,10 +364,13 @@ class StubGitHub:
             Run(6, "Corpus", "merged", "3" * 40, "o/r"),
             Run(7, "Lint", "open", "4" * 40, "o/r"),
         ]
-        self.groups_ = {LIVE}
+        self.groups_ = {LIVE: "2" * 40}
         self.heads = {("o/r", "open")}
-        # 1 is not live; 5 was re-run and its latest attempt has not failed.
-        self.failing_ = {1, 3, 4, 5, 8}
+        # 1 is not live; 5 was re-run and its latest attempt has not failed. No required check has failed yet.
+        self.failures_ = {
+            "1" * 40: {1: {"leg"}},
+            "2" * 40: {run: {"leg"} for run in (3, 4, 5, 8)},
+        }
         # GitHub lists a job that needs others only once they have finished, so a result job that waits for the
         # slowest leg is missing from the list.
         self.jobs_ = {
@@ -347,7 +407,7 @@ class StubGitHub:
         return list(self.runs if event == "merge_group" else self.pulls)
 
     def groups(self):
-        return set(self.groups_)
+        return dict(self.groups_)
 
     def open_heads(self):
         return set(self.heads)
@@ -356,9 +416,10 @@ class StubGitHub:
         self.calls.append(("landed", tuple(sorted(branches))))
         return {"9" * 40}
 
-    def failing(self, shas):
-        self.calls.append(("failing", tuple(sorted(set(shas)))))
-        return set(self.failing_)
+    def failures(self, shas):
+        shas = set(shas)
+        self.calls.append(("failures", tuple(sorted(shas))))
+        return {sha: dict(runs) for sha, runs in self.failures_.items() if sha in shas}
 
     def required(self, branch):
         self.calls.append(("required", branch))
@@ -380,8 +441,10 @@ class StubGitHub:
 def test_a_live_run_has_failed_while_a_failed_job_keeps_a_required_check_waiting():
     github = StubGitHub()
     sweeper = Sweeper(github, apply=False, limit=10, keep=set())
-    assert [run.id for run in sweeper.failed(github.runs, {LIVE})] == [3, 8]
-    assert ("failing", ("2" * 40,)) in github.calls
+    failures = github.failures(["2" * 40])
+    assert [
+        run.id for run in sweeper.failed(github.runs, github.groups(), failures)
+    ] == [3, 8]
     # The workflow file is read only when the result job is not listed.
     assert [call for call in github.calls if call[0] in ("jobs", "names")] == [
         ("jobs", 3),
@@ -392,11 +455,13 @@ def test_a_live_run_has_failed_while_a_failed_job_keeps_a_required_check_waiting
         ("names", LINT, "2" * 40),
         ("jobs", 8),
     ]
-    # Corpus's run can never hold the queue, so it is not looked at again; Lint's can still fail.
-    assert sweeper.keep == {4}
+    # Corpus's run can never hold the queue, so it is not looked at again; Lint's can still fail. Runs 3 and 8
+    # will fail their required checks, so their group cannot land.
+    assert sweeper.settled == {4}
+    assert sweeper.broken == {"2" * 40}
     github.calls.clear()
-    sweeper.failed([run for run in github.runs if run.id not in sweeper.keep], {LIVE})
-    assert [call for call in github.calls if call[0] != "failing"] == [
+    sweeper.failed(github.runs, github.groups(), failures)
+    assert github.calls == [
         ("jobs", 3),
         ("jobs", 5),
         ("jobs", 8),
@@ -430,15 +495,27 @@ def test_sweep_cancels_failed_runs_first_and_each_run_once(capsys):
     github.stuck = {6}
     sweeper = Sweeper(github, apply=True, limit=10, keep={2})
     assert sweeper.sweep() is True
-    assert [call[1] for call in github.calls if call[0] == "cancel"] == [3, 8, 1, 6]
+    assert [call[1] for call in github.calls if call[0] == "cancel"] == [
+        3,
+        8,
+        4,
+        5,
+        1,
+        6,
+    ]
+    live = LIVE.removeprefix("gh-readonly-queue/")
     out = capsys.readouterr().out.splitlines()
+    # Runs 3 and 8 will fail required checks, so the group cannot land and its other runs, 4 and 5, are doomed;
+    # run 2 is kept.
     assert out == [
-        f"cancelled 3 Project Demo Testing on {LIVE.removeprefix('gh-readonly-queue/')} (failed)",
-        f"cancelled 8 Backend Tests on {LIVE.removeprefix('gh-readonly-queue/')} (failed)",
+        f"cancelled 3 Project Demo Testing on {live} (failed)",
+        f"cancelled 8 Backend Tests on {live} (failed)",
+        f"cancelled 4 Corpus on {live} (doomed)",
+        f"cancelled 5 Lint on {live} (doomed)",
         f"cancelled 1 Corpus on {GROUP.removeprefix('gh-readonly-queue/')} (orphaned)",
         "not cancelled: 6 Corpus on merged (closed)",
         "5 active merge-group and 2 pull-request runs: "
-        "1 orphaned, 2 failed, 1 closed, 3 cancelled",
+        "1 orphaned, 2 failed, 2 doomed, 1 closed, 5 cancelled; 1 of 1 groups cannot land",
     ]
     # A cancelled run stays active for a while, and one GitHub cannot cancel stays as it is; the next sweep
     # leaves both alone.
@@ -446,12 +523,59 @@ def test_sweep_cancels_failed_runs_first_and_each_run_once(capsys):
     assert sweeper.sweep() is True
     assert not [call for call in github.calls if call[0] == "cancel"]
     assert capsys.readouterr().out.splitlines()[-1] == (
-        "1 active merge-group and 1 pull-request runs: "
-        "0 orphaned, 0 failed, 0 closed, 0 cancelled"
+        "0 active merge-group and 1 pull-request runs: "
+        "0 orphaned, 0 failed, 0 doomed, 0 closed, 0 cancelled; 1 of 1 groups cannot land"
     )
     # Once the queue is empty, a watch can stop, even while pull requests have runs.
-    github.runs, github.groups_ = [], set()
+    github.runs, github.groups_ = [], {}
     assert sweeper.sweep() is False
+
+
+def test_sweep_cancels_the_runs_of_groups_behind_a_failed_group(capsys):
+    # main <- 21 <- 22 <- 23: group 22's required Backend Tests result has failed and only its Coverage run is
+    # left, so group 23, built on it, cannot land either. A failed check that no rule requires decides nothing.
+    main, heads = "0" * 40, {number: str(number - 20) * 40 for number in (21, 22, 23)}
+    first, failed, behind = (
+        _group(21, main),
+        _group(22, heads[21]),
+        _group(23, heads[22]),
+    )
+    github = StubGitHub()
+    github.runs = [
+        Run(31, "Coverage", first, heads[21]),
+        Run(32, "Coverage", failed, heads[22]),
+        Run(33, "Coverage", behind, heads[23]),
+        Run(34, "Lint", behind, heads[23], path=LINT),
+    ]
+    github.pulls = []
+    github.groups_ = {first: heads[21], failed: heads[22], behind: heads[23]}
+    github.failures_ = {
+        heads[21]: {41: {"leg", "Corpus result"}},
+        heads[22]: {42: {"leg", "Backend Tests result"}},
+    }
+    sweeper = Sweeper(github, apply=False, limit=10, keep=set())
+    assert sweeper.sweep() is True
+    # One query covers every group's head commit, whether or not the group still has active runs.
+    assert ("failures", tuple(sorted(heads.values()))) in github.calls
+    assert not [call for call in github.calls if call[0] == "jobs"]
+    assert capsys.readouterr().out.splitlines() == [
+        f"would cancel 32 Coverage on {failed.removeprefix('gh-readonly-queue/')} (doomed)",
+        f"would cancel 33 Coverage on {behind.removeprefix('gh-readonly-queue/')} (doomed)",
+        f"would cancel 34 Lint on {behind.removeprefix('gh-readonly-queue/')} (doomed)",
+        "4 active merge-group and 0 pull-request runs: "
+        "0 orphaned, 0 failed, 3 doomed, 0 closed; 2 of 3 groups cannot land",
+    ]
+    # Once the queue drops the failed entry and rebuilds the group behind it, nothing is doomed.
+    rebuilt = _group(23, heads[21])
+    github.groups_ = {first: heads[21], rebuilt: "4" * 40}
+    github.runs = [
+        Run(31, "Coverage", first, heads[21]),
+        Run(35, "Lint", rebuilt, "4" * 40),
+    ]
+    assert sweeper.sweep() is True
+    assert capsys.readouterr().out.splitlines()[-1] == (
+        "2 active merge-group and 0 pull-request runs: 0 orphaned, 0 failed, 0 doomed, 0 closed"
+    )
 
 
 def _main_answers(cancel=None):
@@ -471,13 +595,13 @@ def _main_answers(cancel=None):
             ]
         },
         "git/matching-refs/heads/gh-readonly-queue/?per_page=100&page=1": [
-            {"ref": f"refs/heads/{LIVE}"}
+            {"ref": f"refs/heads/{LIVE}", "object": {"sha": "2" * 40}}
         ],
         "pulls?state=open&per_page=100&page=1": [
             {"head": {"repo": {"full_name": "o/r"}, "ref": "open"}}
         ],
         "commits?sha=main&per_page=100": [{"sha": "9" * 40}],
-        "graphql": {"c0": _suites((3, 1), (4, 0))},
+        "graphql": {"c0": _suites((3, ["leg"]), (4, []))},
         "rules/branches/main": [
             {
                 "type": "required_status_checks",
@@ -505,27 +629,29 @@ def test_main_lists_without_cancelling(monkeypatch, capsys):
     assert not [call for call in gh.calls if call[0] == "POST"]
     assert capsys.readouterr().out.splitlines() == [
         f"would cancel 3 Coverage on {LIVE.removeprefix('gh-readonly-queue/')} (failed)",
+        f"would cancel 4 Coverage on {LIVE.removeprefix('gh-readonly-queue/')} (doomed)",
         f"would cancel 1 Coverage on {GROUP.removeprefix('gh-readonly-queue/')} (orphaned)",
         f"would cancel 2 Coverage on {GROUP.removeprefix('gh-readonly-queue/')} (orphaned)",
         "would cancel 5 Coverage on merged (closed)",
-        "4 active merge-group and 2 pull-request runs: 2 orphaned, 1 failed, 1 closed",
+        "4 active merge-group and 2 pull-request runs: "
+        "2 orphaned, 1 failed, 1 doomed, 1 closed; 1 of 1 groups cannot land",
     ]
 
 
 def test_main_cancels_up_to_the_limit(monkeypatch, capsys):
-    cancels = {"actions/runs/3/cancel": None, "actions/runs/1/cancel": None}
+    cancels = {"actions/runs/3/cancel": None, "actions/runs/4/cancel": None}
     gh = FakeGh(_main_answers(cancels))
     monkeypatch.setattr(orphaned_runs, "GitHub", lambda repo: GitHub(repo, run=gh))
     assert orphaned_runs.main(["--repo", "o/r", "--apply", "--limit", "2"]) == 0
     assert [call for call in gh.calls if call[0] == "POST"] == [
         ("POST", "actions/runs/3/cancel"),
-        ("POST", "actions/runs/1/cancel"),
+        ("POST", "actions/runs/4/cancel"),
     ]
     out = capsys.readouterr().out.splitlines()
     assert out[-2:] == [
-        "left 2 for the next sweep (limit 2)",
+        "left 3 for the next sweep (limit 2)",
         "4 active merge-group and 2 pull-request runs: "
-        "2 orphaned, 1 failed, 1 closed, 2 cancelled",
+        "2 orphaned, 1 failed, 1 doomed, 1 closed, 2 cancelled; 1 of 1 groups cannot land",
     ]
 
 

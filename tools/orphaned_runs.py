@@ -12,10 +12,20 @@ report at once; the group's other runs are orphaned when the queue rebuilds the 
 job that needs others only once they have finished, so a waiting result job is one that the run's workflow file
 names and the run does not list as completed.
 
+A run is doomed when its merge group cannot land: a required check of the group has failed or will fail (a failed
+run, above), or the group is built on top of such a group. The queue builds each group on the one ahead of it, the
+branch ``gh-readonly-queue/<target>/pr-<number>-<base>`` naming the head commit of that group as its base, and with
+the ``ALLGREEN`` grouping every entry's own group must pass. So once a group has failed, its entry leaves the queue
+or, when an entry ahead of it also fails, is rebuilt, and either way the queue rebuilds every group behind it, whose
+runs then test a commit that never lands. The queue removes the failed entry only once the entries ahead of it have
+finished, and until then the doomed runs hold runners the groups ahead of the failure need. Re-running a failed
+group's jobs does not bring back the runs this cancelled behind it; take the entry out of the queue and add it again
+instead.
+
 A pull-request run is closed when no open pull request has its head branch. GitHub lets the runs of a pull request
 that merged or closed carry on; the merge group tested what landed, and nothing reads their checks any more.
 
-``python -m tools.orphaned_runs`` lists the three kinds; ``--apply`` cancels them, and ``--watch`` repeats the
+``python -m tools.orphaned_runs`` lists the four kinds; ``--apply`` cancels them, and ``--watch`` repeats the
 sweep every few minutes while the queue has merge groups.
 """
 
@@ -28,7 +38,7 @@ import re
 import subprocess
 import sys
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass
 from urllib.parse import quote
 
@@ -45,14 +55,14 @@ INTERVAL = 300
 ERRORS = 3
 # Job conclusions that fail a gating workflow's result job.
 FAILED = ("failure", "timed_out", "startup_failure")
-# The latest check runs of each workflow run on a commit, counting only the failed ones.
+# The names of the latest check runs of each workflow run on a commit, listing only the failed ones.
 SUITES = """
 fragment suites on Commit {
   checkSuites(first: 50) {
     nodes {
       workflowRun { databaseId }
-      checkRuns(first: 1, filterBy: {checkType: LATEST, conclusions: [FAILURE, TIMED_OUT, STARTUP_FAILURE]}) {
-        totalCount
+      checkRuns(first: 100, filterBy: {checkType: LATEST, conclusions: [FAILURE, TIMED_OUT, STARTUP_FAILURE]}) {
+        nodes { name }
       }
     }
   }
@@ -82,7 +92,34 @@ def target(branch: str) -> str | None:
     return name if separator and name else None
 
 
-def orphaned(runs: Iterable[Run], groups: set[str], landed: set[str]) -> list[Run]:
+def base(branch: str) -> str | None:
+    """The commit a merge group's branch is built on: the head commit of the group ahead of it in the queue, or of
+    the target branch for the first group."""
+    if not target(branch):
+        return None
+    number, separator, sha = branch.rpartition("/pr-")[2].partition("-")
+    return sha if separator and number.isdigit() and sha else None
+
+
+def doomed(groups: Mapping[str, str], broken: set[str]) -> set[str]:
+    """The branches of the merge groups in ``groups``, a branch to head commit map, that cannot land: each group
+    whose head commit is in ``broken``, and every group built on one of them."""
+    behind: dict[str, list[str]] = {}
+    for branch in groups:
+        behind.setdefault(base(branch) or "", []).append(branch)
+    found = {branch for branch, sha in groups.items() if sha in broken}
+    stack = sorted(found)
+    while stack:
+        for branch in behind.get(groups[stack.pop()], []):
+            if branch not in found:
+                found.add(branch)
+                stack.append(branch)
+    return found
+
+
+def orphaned(
+    runs: Iterable[Run], groups: Collection[str], landed: set[str]
+) -> list[Run]:
     """The ``runs`` of merge groups whose branch is not in ``groups`` and whose commit is not in ``landed``, oldest
     first."""
     return sorted(
@@ -164,16 +201,19 @@ class GitHub:
                 return heads
             page += 1
 
-    def groups(self) -> set[str]:
-        """The branches of the merge groups that exist now."""
-        branches: set[str] = set()
+    def groups(self) -> dict[str, str]:
+        """The branches of the merge groups that exist now, with their head commits."""
+        branches: dict[str, str] = {}
         page = 1
         while True:
             batch = self._api(
                 "GET",
                 f"git/matching-refs/heads/{QUEUE}?per_page={PAGE}&page={page}",
             )
-            branches |= {item["ref"].removeprefix("refs/heads/") for item in batch}
+            branches.update(
+                (item["ref"].removeprefix("refs/heads/"), item["object"]["sha"])
+                for item in batch
+            )
             if len(batch) < PAGE:
                 return branches
             page += 1
@@ -188,12 +228,12 @@ class GitHub:
             shas |= {commit["sha"] for commit in commits}
         return shas
 
-    def failing(self, shas: Iterable[str]) -> set[int]:
-        """The ids of the workflow runs on the commits ``shas`` whose latest attempt has a failed job, in one
-        GraphQL query."""
+    def failures(self, shas: Iterable[str]) -> dict[str, dict[int, set[str]]]:
+        """The workflow runs on the commits ``shas`` whose latest attempt has failed check runs, with the names of
+        those check runs, by commit, in one GraphQL query."""
         shas = sorted(set(shas))
         if not shas:
-            return set()
+            return {}
         owner, name = self.repository.split("/", 1)
         declared = "".join(f", $c{index}: GitObjectID!" for index in range(len(shas)))
         fields = " ".join(
@@ -209,14 +249,17 @@ class GitHub:
         values.update({f"c{index}": sha for index, sha in enumerate(shas)})
         for key, value in values.items():
             command += ["-f", f"{key}={value}"]
-        commits = self._gh(command)["data"]["repository"].values()
-        return {
-            suite["workflowRun"]["databaseId"]
-            for commit in commits
-            if commit
-            for suite in commit["checkSuites"]["nodes"]
-            if suite["workflowRun"] and suite["checkRuns"]["totalCount"]
-        }
+        commits = self._gh(command)["data"]["repository"]
+        found: dict[str, dict[int, set[str]]] = {}
+        for index, sha in enumerate(shas):
+            commit = commits.get(f"c{index}")
+            for suite in (commit or {}).get("checkSuites", {}).get("nodes", []):
+                names = {check["name"] for check in suite["checkRuns"]["nodes"]}
+                if suite["workflowRun"] and names:
+                    found.setdefault(sha, {})[
+                        suite["workflowRun"]["databaseId"]
+                    ] = names
+        return found
 
     def required(self, branch: str) -> set[str]:
         """The names of the checks that the rules of ``branch`` require."""
@@ -274,16 +317,28 @@ class GitHub:
 
 
 class Sweeper:
-    """Finds and cancels orphaned, failed and closed runs, remembering what never needs another look."""
+    """Finds and cancels orphaned, failed, doomed and closed runs, remembering what never needs another look."""
 
     def __init__(self, github: GitHub, apply: bool, limit: int, keep: set[int]):
         self.github = github
         self.apply = apply
         self.limit = limit
-        # This run, and failed runs without a required check left to report: neither ever needs cancelling.
+        # This run, and the runs already cancelled or that GitHub cannot cancel: none needs another request.
         self.keep = set(keep)
+        # Failed runs without a required check left to report: they never hold the queue themselves.
+        self.settled: set[int] = set()
+        # The head commits of groups with a failed run that was found still holding a required check; once that run
+        # is cancelled, its check fails, so the group stays failed.
+        self.broken: set[str] = set()
         self._required: dict[str, set[str]] = {}
         self._names: dict[tuple[str, str], set[str]] = {}
+
+    def required(self, branch: str) -> set[str]:
+        """The required checks of the branch the merge group ``branch`` merges into."""
+        name = target(branch) or branch
+        if name not in self._required:
+            self._required[name] = self.github.required(name)
+        return self._required[name]
 
     def waiting(self, run: Run, jobs: list[dict], required: set[str]) -> set[str]:
         """The checks in ``required`` that ``run``, with the latest-attempt ``jobs``, has yet to report."""
@@ -298,28 +353,52 @@ class Sweeper:
             waiting = (required & self._names[key]) - done
         return waiting
 
-    def failed(self, runs: Iterable[Run], groups: set[str]) -> list[Run]:
-        """The ``runs`` of the merge groups in ``groups`` that have failed, oldest first."""
+    def failed(
+        self,
+        runs: Iterable[Run],
+        groups: Mapping[str, str],
+        failures: Mapping[str, Mapping[int, set[str]]],
+    ) -> list[Run]:
+        """The ``runs`` of the merge groups in ``groups`` that have failed, oldest first. ``failures`` holds the
+        failed check runs of the groups' head commits, as ``GitHub.failures`` returns them.
+        """
         live = {run.id: run for run in runs if run.branch in groups}
         found = []
-        # The commits' check runs single out the candidates in one query; each candidate's jobs show whether a
-        # required check is still waiting.
-        for run_id in sorted(self.github.failing(run.sha for run in live.values())):
+        # The commits' check runs single out the candidates; each candidate's jobs show whether a required check is
+        # still waiting.
+        for run_id in sorted(
+            {run_id for checks in failures.values() for run_id in checks}
+        ):
             run = live.get(run_id)
-            if run is None:
+            if run is None or run_id in self.settled:
                 continue
-            branch = target(run.branch)
-            if branch not in self._required:
-                self._required[branch] = self.github.required(branch)
+            required = self.required(run.branch)
             jobs = self.github.jobs(run.id)
-            if not self.waiting(run, jobs, self._required[branch]):
-                self.keep.add(run.id)
+            if not self.waiting(run, jobs, required):
+                self.settled.add(run.id)
             elif any(job["conclusion"] in FAILED for job in jobs):
                 found.append(run)
+                self.broken.add(run.sha)
         return found
 
+    def cut(
+        self,
+        groups: Mapping[str, str],
+        failures: Mapping[str, Mapping[int, set[str]]],
+    ) -> set[str]:
+        """The branches of the merge groups in ``groups`` that cannot land: those with a required check that has
+        failed, or a failed run found holding one, and every group built on one of them.
+        """
+        broken = set(self.broken)
+        for branch, sha in groups.items():
+            required = self.required(branch)
+            if any(names & required for names in failures.get(sha, {}).values()):
+                broken.add(sha)
+        return doomed(groups, broken)
+
     def sweep(self) -> bool:
-        """List or cancel the orphaned, failed and closed runs once; true while the queue has merge groups."""
+        """List or cancel the orphaned, failed, doomed and closed runs once; true while the queue has merge
+        groups."""
         # Runs first: a group or pull request created after these calls has no run in the lists, and a group that
         # lands meanwhile is in landed.
         runs = [run for run in self.github.active_runs() if run.id not in self.keep]
@@ -331,8 +410,17 @@ class Sweeper:
         groups = self.github.groups()
         heads = self.github.open_heads()
         landed = self.github.landed({target(run.branch) for run in runs} - {None})
-        # Failed runs first, since each one holds the queue.
-        found = [(run, "failed") for run in self.failed(runs, groups)]
+        failures = self.github.failures(groups.values())
+        # Failed runs first, since each one holds the queue, then the runs of the groups that cannot land, which
+        # hold runners the groups ahead of them need.
+        found = [(run, "failed") for run in self.failed(runs, groups, failures)]
+        listed = {run.id for run, _ in found}
+        cut = self.cut(groups, failures)
+        found += [
+            (run, "doomed")
+            for run in sorted(runs, key=lambda run: run.id)
+            if run.branch in cut and run.id not in listed
+        ]
         found += [(run, "orphaned") for run in orphaned(runs, groups, landed)]
         found += [(run, "closed") for run in closed(pulls, heads)]
         cancelled = 0
@@ -356,12 +444,13 @@ class Sweeper:
             )
         counts = {
             reason: sum(kind == reason for _, kind in found)
-            for reason in ("orphaned", "failed", "closed")
+            for reason in ("orphaned", "failed", "doomed", "closed")
         }
         print(
             f"{len(runs)} active merge-group and {len(pulls)} pull-request runs: "
             + ", ".join(f"{count} {reason}" for reason, count in counts.items())
             + (f", {cancelled} cancelled" if self.apply else "")
+            + (f"; {len(cut)} of {len(groups)} groups cannot land" if cut else "")
         )
         return bool(groups)
 
