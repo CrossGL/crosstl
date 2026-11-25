@@ -1,3 +1,4 @@
+import re
 from copy import deepcopy
 from enum import Enum
 
@@ -517,15 +518,27 @@ shader S {
 """
 
 
-@pytest.mark.parametrize("backend", ["directx", "metal"])
-def test_same_name_stage_resources_with_different_bindings_are_refused(
-    tmp_path, backend
-):
+def test_same_name_stage_resources_with_different_bindings_are_refused(tmp_path):
+    # HLSL resources live at file scope, so one name cannot take two registers.
     source = tmp_path / "moved_binding.cgl"
     source.write_text(_MOVED_BINDING_PROGRAM % 0)
 
     with pytest.raises(Exception, match="Conflicting .*declaration for 'out_?'"):
-        crosstl.translate(str(source), backend=backend)
+        crosstl.translate(str(source), backend="directx")
+
+
+def test_same_name_stage_resources_keep_their_bindings_in_per_entry_tables(
+    tmp_path,
+):
+    # Each Metal kernel has its own argument table, so both bindings survive.
+    source = tmp_path / "moved_binding.cgl"
+    source.write_text(_MOVED_BINDING_PROGRAM % 0)
+
+    metal = crosstl.translate(str(source), backend="metal")
+
+    first, second = metal.split("kernel void ")[1:]
+    assert "device float *out [[buffer(1)]]" in first
+    assert re.search(r"device float \*out\w* \[\[buffer\(0\)\]\]", second)
 
 
 def test_same_name_stage_resources_with_one_binding_share_a_register(tmp_path):
