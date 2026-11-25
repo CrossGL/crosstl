@@ -1,0 +1,1 @@
+WGSL output enables `subgroups` (and turns off the `subgroup_uniformity` diagnostic) in a module that uses a subgroup built-in, as Tint requires, and the coverage WGSL output row validates each translation with Tint (the `webgpu` package's Dawn bindings) as well as naga.

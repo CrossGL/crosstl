@@ -36,6 +36,10 @@ from .conversions import format_conversion, is_conversion_name
 from .enumerations import OpenCLEnumerationMixin
 from .global_variables import refuse_writable_global_variable
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
+from .pointer_qualifiers import (
+    opencl_pointee_qualifiers,
+    opencl_pointer_memory_attributes,
+)
 from .pointer_results import OpenCLPointerResultMixin
 from .sizeof_scopes import OpenCLSizeofScopeMixin
 from .vector_components import (  # noqa: F401 - re-exported diagnostic
@@ -843,6 +847,7 @@ class OpenCLToCrossGLConverter(
 
         access = self.opencl_kernel_pointer_access(raw_type)
         return (
+            f"{opencl_pointer_memory_attributes(raw_type)}"
             "@group(0) "
             f"@binding({binding}) "
             f"var<storage, {access}> "
@@ -854,7 +859,8 @@ class OpenCLToCrossGLConverter(
         return bool(qualifiers & self.OPENCL_LOCAL_QUALIFIERS)
 
     def opencl_kernel_pointer_access(self, raw_type):
-        qualifiers = set(str(raw_type).split())
+        # A ``const`` after the ``*`` makes the address constant, not the memory (``float* const p``).
+        qualifiers = opencl_pointee_qualifiers(raw_type)
         if qualifiers & {"read_write"}:
             return "read_write"
         if qualifiers & {"write_only"}:

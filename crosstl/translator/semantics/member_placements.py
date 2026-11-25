@@ -9,9 +9,10 @@ plans. Two generators wrote other declarations silently:
   layout (MSL 3.2 section 2.2) unless the block declares a layout it plans (``hlsl_cbuffer``, ``std140``, ``std430``
   or ``scalar``) or is a push-constant block, which it plans with the push-constant layout.
   ``float scale; vec3 v @offset(32);`` then read ``v`` at byte 16.
-* Slang declares the ``T`` of a push-constant ``ConstantBuffer<T>`` with no offsets, so slangc lays it out by std430;
-  and it writes the ``[[vk::offset(N)]]`` of a push-constant ``cbuffer`` member, which slangc moves to the member's
-  std430 alignment when ``N`` is not a multiple of it.
+* Slang writes the ``[[vk::offset(N)]]`` of a push-constant ``cbuffer`` member, and of an ``@ offset(N)`` member of
+  the struct a push-constant ``ConstantBuffer<T>`` holds (:mod:`..codegen.slang_push_constant_structs`); slangc
+  moves such an offset to the member's std430 alignment when ``N`` is not a multiple of it, and Slang writes no
+  ``@ align(N)`` of a push-constant ``T``'s members.
 
 HLSL and GLSL output declare a struct once, by their own rules, so they read a constant block whose structs carry
 placements that move a scalar from its 16-byte registers (:mod:`..codegen.glsl_hlsl_cbuffer`,
@@ -327,8 +328,12 @@ def _check_elements(structs, program, target, native, skip):
             )
 
 
-def _check_slang_cbuffer(structs, block, target):
+_SLANGC_MOVES_OFFSET = "slangc moves such a [[vk::offset]] to that alignment"
+
+
+def _check_slang_cbuffer(structs, block, target, name=None, moved=_SLANGC_MOVES_OFFSET):
     """slangc keeps a push-constant member's [[vk::offset(N)]] only at a multiple of its std430 alignment."""
+    name = block.name if name is None else name
     for member in block.members or []:
         if not isinstance(member, A.StructMemberNode):
             continue
@@ -338,15 +343,15 @@ def _check_slang_cbuffer(structs, block, target):
         ):
             _refuse(
                 target,
-                block.name,
+                name,
                 f"member '{member.name}' holds struct '{inner}', whose @offset or @align members Slang does not "
                 "place",
             )
     try:
         layout_type = structs.layout_type(block.name, block.members, True)
     except HlslLayoutError as exc:
-        _refuse(target, block.name, str(exc))
-    for (name, member_type), offset in zip(
+        _refuse(target, name, str(exc))
+    for (member_name, member_type), offset in zip(
         layout_type.members, layout_type.offsets or ()
     ):
         if offset is None:
@@ -355,10 +360,34 @@ def _check_slang_cbuffer(structs, block, target):
         if offset % alignment:
             _refuse(
                 target,
-                block.name,
-                f"member '{name}' is at byte {offset}, which is not a multiple of its std430 alignment "
-                f"{alignment}; slangc moves such a [[vk::offset]] to that alignment",
+                name,
+                f"member '{member_name}' is at byte {offset}, which is not a multiple of its std430 alignment "
+                f"{alignment}; {moved}",
             )
+
+
+def _check_slang_push_constant_struct(structs, variable, struct, target):
+    """Slang output writes the ``[[vk::offset(N)]]`` of each ``@ offset(N)`` member of the struct a push-constant
+    ``ConstantBuffer<T>`` holds (:mod:`..codegen.slang_push_constant_structs`), and no ``@ align(N)``.
+    """
+    for member in struct.members or []:
+        if isinstance(member, A.StructMemberNode) and (
+            member_explicit_alignment(member) is not None
+        ):
+            _refuse(
+                target,
+                variable.name,
+                f"member '{member.name}' of struct '{struct.name}' carries @align, and Slang places a push-constant "
+                "ConstantBuffer<T>'s members with [[vk::offset]] only",
+            )
+    _check_slang_cbuffer(
+        structs,
+        struct,
+        target,
+        variable.name,
+        "Slang declares a push-constant ConstantBuffer<T> with std430 offsets, and "
+        + _SLANGC_MOVES_OFFSET,
+    )
 
 
 def _check_slang(structs, program, target):
@@ -376,12 +405,7 @@ def _check_slang(structs, program, target):
         if struct is None or not structs.holds_placements(struct.members):
             continue
         if structs.placements_move(struct.name, struct.members, STD430_LAYOUT):
-            _refuse(
-                target,
-                variable.name,
-                f"the members of struct '{struct.name}' carry @offset or @align, and Slang declares a "
-                "push-constant ConstantBuffer<T> with std430 offsets only",
-            )
+            _check_slang_push_constant_struct(structs, variable, struct, target)
     _check_elements(
         structs,
         program,

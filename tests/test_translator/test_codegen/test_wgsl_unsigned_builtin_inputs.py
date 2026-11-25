@@ -6,9 +6,6 @@ stage-input member bound to one of them was declared ``i32``, which naga rejects
 siblings were printed verbatim, which WGSL does not define.
 """
 
-import shutil
-import subprocess
-
 import pytest
 
 from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
@@ -16,6 +13,7 @@ from crosstl.translator.codegen.wgsl_stage_io import WGSLStageIOUnsupportedError
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from crosstl.translator.refusals import WGSLRefusal
+from tools.coverage import validators
 
 
 def generate_wgsl(source):
@@ -24,15 +22,12 @@ def generate_wgsl(source):
 
 
 def validate_with_naga(tmp_path, code):
-    naga = shutil.which("naga")
-    if naga is None:
+    """naga reads ``code`` without the ``enable subgroups;`` directive it has not implemented, and Tint, where it is
+    installed, as written (tools/coverage/validators.py)."""
+    if not validators.command("naga"):
         pytest.skip("naga is not installed")
-    path = tmp_path / "shader.wgsl"
-    path.write_text(code, encoding="utf-8")
-    result = subprocess.run(
-        [naga, str(path)], capture_output=True, text=True, timeout=60
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
+    verdict = validators.validate("wgsl", code)
+    assert verdict.accepted, verdict.log
 
 
 VERTEX = """
@@ -156,6 +151,7 @@ shader Probe {
 )
 def test_subgroup_identifier_is_a_compute_builtin_input(tmp_path, identifier, builtin):
     code = generate_wgsl(COMPUTE.replace("VALUE", identifier))
+    assert "\nenable subgroups;\ndiagnostic(off, subgroup_uniformity);\n" in code
     assert f"@builtin({builtin}) {builtin}: u32" in code
     assert f"outp[i] = f32({builtin});" in code
     assert identifier not in code

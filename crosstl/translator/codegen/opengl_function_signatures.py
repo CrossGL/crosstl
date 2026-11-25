@@ -1030,6 +1030,17 @@ class OpenGLFunctionSignatureMixin:
             if source_key not in visited:
                 visit(source_key)
 
+    def glsl_function_visible_from_current_stage(self, function):
+        """Whether a call from the stage being emitted can name ``function``.
+
+        A helper declared inside one stage block is emitted only in that stage, so
+        a call from another stage never resolves to it.
+        """
+        owner = self.glsl_stage_local_function_owners.get(id(function))
+        current_key = self.current_glsl_function_key
+        current_stage = current_key[0] if current_key else None
+        return owner is None or not current_stage or owner == current_stage
+
     def resolve_glsl_function_overload(
         self, function_name, arguments, *, call_node=None
     ):
@@ -1040,6 +1051,7 @@ class OpenGLFunctionSignatureMixin:
                 getattr(function, "parameters", getattr(function, "params", [])) or []
             )
             == len(arguments)
+            and self.glsl_function_visible_from_current_stage(function)
         ]
         if not candidates:
             return None

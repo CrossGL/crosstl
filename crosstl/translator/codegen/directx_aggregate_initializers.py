@@ -25,6 +25,7 @@ from .generic_struct_utils import (
     format_struct_constructor_expression,
     infer_struct_constructor_type,
 )
+from .hlsl_array_zero_fill import hlsl_zero_array_assignments
 from .image_access_contracts import is_image_atomic_operation
 
 
@@ -419,6 +420,11 @@ class DirectXAggregateInitializerMixin:
         ):
             field_target = f"{target_name}.{field_name}"
             field_type_name = self.type_name_string(field_type)
+            if field_expr is None and self.hlsl_outer_array_type(field_type_name):
+                code += hlsl_zero_array_assignments(
+                    self, field_target, field_type_name, indent=indent
+                )
+                continue
             if field_expr is not None and self.hlsl_outer_array_type(field_type_name):
                 code += self.render_hlsl_aggregate_conditional_branch_assignment(
                     field_expr,
@@ -458,6 +464,11 @@ class DirectXAggregateInitializerMixin:
         for field_name, field_type in fields:
             field_target = f"{target_name}.{field_name}"
             field_type_name = self.type_name_string(field_type)
+            if self.hlsl_outer_array_type(field_type_name):
+                code += hlsl_zero_array_assignments(
+                    self, field_target, field_type_name, indent=indent
+                )
+                continue
             nested_fields = self.hlsl_struct_constructor_fields(field_type_name)
             if nested_fields is not None:
                 nested_code = self.render_hlsl_default_struct_field_assignments(

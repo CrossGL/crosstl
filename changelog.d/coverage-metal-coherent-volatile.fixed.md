@@ -1,0 +1,1 @@
+Coverage: a Metal translation of a buffer that is both coherent and volatile is no longer reported as losing `Volatile`. The Metal compiler writes its accesses as `@air.store.device_coherent.volatile` and `@air.load.device_coherent.volatile` intrinsic calls instead of volatile loads and stores, and the checker now counts those as volatile accesses.

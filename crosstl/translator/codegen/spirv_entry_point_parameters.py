@@ -1417,13 +1417,21 @@ class SpirvEntryPointParameterMixin:
         preferred_location = self.entry_point_interface_location(
             semantic, storage_class, node, member_index, execution_model
         )
+        # A tessellation evaluation stage reads its control points through its patch parameter, so each other user
+        # input is a per-patch value, which Vulkan reads only through a Patch variable (Vulkan 1.3 section 15.1.4).
+        patch = storage_class == "Input" and execution_model == "TessellationEvaluation"
         location = self.global_interface_location(
-            interface_node, storage_class, preferred_location=preferred_location
+            interface_node,
+            storage_class,
+            preferred_location=preferred_location,
+            patch=patch,
         )
         variable = self.create_variable(interface_type, storage_class, name)
         if interface_type.id != type_id.id:
             self.interface_original_value_types[variable.id] = type_id
         self.decorations.append(f"OpDecorate %{variable.id} Location {location}")
+        if patch:
+            self.decorations.append(f"OpDecorate %{variable.id} Patch")
         if (
             storage_class == "Input"
             and execution_model == "Fragment"

@@ -37,6 +37,7 @@ from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_subscripts import matrix_column_type
+from .cuda_surface_texels import CudaSurfaceTexelMixin
 from .cuda_texel_buffers import (
     TEXEL_BUFFER_QUERY_SPEC,
     CudaTexelBufferMixin,
@@ -162,6 +163,7 @@ class HipCodeGen(
     HipVectorTypeMixin,
     HipTextureMixin,
     CudaTexelBufferMixin,
+    CudaSurfaceTexelMixin,
     HipBufferCallMixin,
     HipBufferMetadataMixin,
     HipTypeMixin,
@@ -238,6 +240,7 @@ class HipCodeGen(
         self.match_temp_variable_index = 0
         self.variable_types = {}
         self.image_resource_accesses = {}
+        self.surface_texels = {}
         self.buffer_resource_accesses = {}
         self.glsl_buffer_block_accesses = {}
         self.glsl_buffer_block_layouts = {}
@@ -325,6 +328,7 @@ class HipCodeGen(
         self.validate_supported_stage_types(node)
         self.variable_types = {}
         self.image_resource_accesses = {}
+        self.surface_texels = {}
         self.buffer_resource_accesses = {}
         self.glsl_buffer_block_accesses = {}
         self.glsl_buffer_block_layouts = {}
@@ -422,6 +426,7 @@ class HipCodeGen(
         """Render a CrossGL function or compute entry point as HIP code."""
         saved_variable_types = self.variable_types.copy()
         saved_image_resource_accesses = self.image_resource_accesses.copy()
+        saved_surface_texels = self.surface_texels.copy()
         saved_buffer_resource_accesses = self.buffer_resource_accesses.copy()
         saved_glsl_buffer_block_accesses = self.glsl_buffer_block_accesses.copy()
         saved_glsl_buffer_block_layouts = self.glsl_buffer_block_layouts.copy()
@@ -536,6 +541,7 @@ class HipCodeGen(
         self.current_function_return_type = saved_current_function_return_type
         self.variable_types = saved_variable_types
         self.image_resource_accesses = saved_image_resource_accesses
+        self.surface_texels = saved_surface_texels
         self.buffer_resource_accesses = saved_buffer_resource_accesses
         self.glsl_buffer_block_accesses = saved_glsl_buffer_block_accesses
         self.glsl_buffer_block_layouts = saved_glsl_buffer_block_layouts
@@ -592,7 +598,10 @@ class HipCodeGen(
                 if array_initializer.strip():
                     declaration += f" = {array_initializer}"
                 return declaration
-            declaration += f" = {self.visit(initial_value)}"
+            value = self.visit_in_texel_context(
+                initial_value, self.map_type(var_type) if var_type else None
+            )
+            declaration += f" = {value}"
 
         return declaration
 
@@ -634,7 +643,13 @@ class HipCodeGen(
             left = self.visit(node.left)
         finally:
             self.assignment_lhs_depth -= 1
-        right = self.visit(node.right)
+        right = (
+            self.visit_in_texel_context(
+                node.right, self.expression_result_type(node.left)
+            )
+            if operator == "="
+            else self.visit(node.right)
+        )
         compound_binary_ops = {
             "+=": "+",
             "-=": "-",

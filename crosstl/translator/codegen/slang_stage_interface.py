@@ -5,6 +5,7 @@ from ..ast import (
     ParameterNode,
 )
 from ..refusals import SlangRefusal
+from ..semantics.builtin_values import glsl_builtin_name
 from .array_utils import split_array_type_suffix
 from .generic_function_utils import (
     generic_function_emission_list,
@@ -114,6 +115,36 @@ class SlangStageInterfaceMixin:
             if self.slang_ray_semantic_role(local_var, stage_name) is not None
         ]
 
+    def slang_stage_bound_builtin_input_ids(self, stage_name, local_variables):
+        """The stage-level ``@input`` built-ins that the entry point binds itself, by the GLSL name it reads.
+
+        The SPIR-V importer declares a compute stage's built-in inputs (``uint3 gl_GlobalInvocationID @input
+        @gl_GlobalInvocationID;``), and the entry point reads them by that name, which Slang binds as an entry
+        parameter (``SV_DispatchThreadID``) or an intrinsic (``WorkgroupCount()``). Declared as well, the variable
+        became a global without ``static``, which Slang makes an implicit uniform shader parameter: the artifact
+        declared a constants block the host does not provide.
+        """
+        bound = set(self.slang_implicit_stage_parameter_candidates(stage_name))
+        bound.update(
+            self.slang_stage_intrinsic_builtin_candidates(
+                self.slang_shader_stage_name(stage_name)
+            )
+        )
+        ids = set()
+        for local_var in local_variables or []:
+            attributes = getattr(local_var, "attributes", None) or []
+            if getattr(local_var, "initial_value", None) is not None or not any(
+                str(getattr(attribute, "name", "")).lower() == "input"
+                for attribute in attributes
+            ):
+                continue
+            name = getattr(local_var, "name", None)
+            if name in bound and any(
+                glsl_builtin_name(attribute) == name for attribute in attributes
+            ):
+                ids.add(id(local_var))
+        return ids
+
     def slang_stage_global_local_variables(self, stage_name, local_variables):
         interface_ids = {
             id(local_var)
@@ -121,6 +152,9 @@ class SlangStageInterfaceMixin:
                 stage_name, local_variables
             )
         }
+        interface_ids |= self.slang_stage_bound_builtin_input_ids(
+            stage_name, local_variables
+        )
         return [
             local_var
             for local_var in local_variables or []

@@ -13,6 +13,7 @@ from crosstl.translator.refusals import OpenGLSourceRefusal
 from crosstl.translator.wave_operations import GLSL_SUBGROUP_FUNCTIONS
 
 from ..switch_clauses import ordered_switch_clauses
+from . import atomic_counter_offsets
 from .aggregate_equality import lower_aggregate_equality
 from .block_member_names import (
     function_variable_names,
@@ -1318,8 +1319,13 @@ class GLSLToCrossGLConverter(GLSLShaderSectionMixin):
                 f"{self.layout_value_to_string(input_attachment_index)})"
             )
         offset = layout.get("offset")
-        if var_type == "atomic_uint" and offset is not None:
-            attributes.append(f"@offset({self.layout_value_to_string(offset)})")
+        if var_type == "atomic_uint":
+            # :mod:`.atomic_counter_offsets` resolved the implicit offsets and type-only defaults.
+            resolved = getattr(var, atomic_counter_offsets.OFFSET, None)
+            if resolved is not None and (resolved or offset is not None):
+                attributes.append(f"@offset({resolved})")
+            elif offset is not None:
+                attributes.append(f"@offset({self.layout_value_to_string(offset)})")
 
         if self.supports_image_format_metadata(resource_type):
             supported_formats = self.supported_image_formats()
