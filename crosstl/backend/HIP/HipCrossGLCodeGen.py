@@ -50,6 +50,12 @@ from .crossgl_codegen.surfaces import HipSurfaceMixin
 from .crossgl_codegen.textures import HipTextureMixin
 from .crossgl_codegen.type_conversion import HipTypeConversionMixin
 from .crossgl_codegen.union_layouts import HipUnionLayoutMixin
+from .crossgl_codegen.wave_shuffles import (
+    ballot_mask,
+    is_repeatable,
+    is_runtime_width,
+    runtime_width_shuffle,
+)
 from .HipAst import (
     ArrayAccessNode,
     EnumNode,
@@ -1707,6 +1713,14 @@ class HipToCrossGLConverter(
             # 5.7.1 does not declare the ``_sync`` forms at all, so these are
             # the ones real kernels compile against.
             width_limit = self.hip_warp_shuffle_segment_width(args[2:] or None)
+            if (
+                len(args) == 3
+                and width_limit is None
+                and is_runtime_width(args[2])
+                and is_repeatable(args[1])
+                and is_repeatable(args[2])
+            ):
+                return runtime_width_shuffle(function_name, *args)
             if len(args) not in {2, 3} or width_limit is None:
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
             value, lane = args[0], args[1]
@@ -1779,7 +1793,9 @@ class HipToCrossGLConverter(
             )
 
         if function_name == "__ballot":
-            return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+            if len(args) != 1 or not is_repeatable(args[0]):
+                return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+            return ballot_mask(self.format_wave_predicate(args[0]))
 
         return None
 

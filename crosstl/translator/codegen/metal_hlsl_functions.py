@@ -133,9 +133,14 @@ class MetalHlslFunctionMixin:
 
         Locals and parameters live in the thread address space, as do their
         struct fields and array elements. Vector components, buffer elements,
-        threadgroup or constant data and resource texels need a temporary.
+        threadgroup or constant data and resource texels need a temporary, and
+        so does an 8- or 16-bit integer struct field: the struct keeps the
+        declared width (``uchar value;``) while the parameter has the widened
+        computation type (``thread uint&``).
         """
         if not self.metal_argument_is_whole_storage_lvalue(expr):
+            return False
+        if self.metal_argument_has_narrow_member_storage(expr):
             return False
         name = self.expression_name(self.metal_argument_storage_root(expr))
         if not isinstance(name, str) or name not in self.local_variable_types:
@@ -150,6 +155,24 @@ class MetalHlslFunctionMixin:
                 or "*" in str(local_type)
                 or local_type.startswith(("device ", "constant ", "threadgroup "))
             )
+        )
+
+    def metal_argument_has_narrow_member_storage(self, expr):
+        """Whether ``expr`` is (an element of) a struct field stored narrower than it computes.
+
+        Aggregates keep the declared width of 8- and 16-bit integers (``metal_struct_storage_type``), while locals and
+        reference parameters use the widened type ``map_type`` gives, so such an lvalue cannot bind ``thread uint&``.
+        """
+        node = expr
+        while isinstance(node, ArrayAccessNode):
+            node = node.array
+        if not isinstance(node, MemberAccessNode):
+            return False
+        storage = self.metal_native_narrow_bitcast_storage_type(
+            self.expression_result_type(expr)
+        )
+        return storage is not None and storage != self.map_type(
+            self.expression_result_type(expr)
         )
 
     def metal_expression_is_side_effect_free(self, expr):

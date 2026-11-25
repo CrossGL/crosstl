@@ -14,6 +14,7 @@ import pytest
 from crosstl.backend.HIP.HipCrossGLCodeGen import HipToCrossGLConverter
 from crosstl.backend.HIP.HipLexer import HipLexer
 from crosstl.backend.HIP.HipParser import HipParser
+from crosstl.backend.import_refusals import HipImportRefused
 
 
 def _import(code):
@@ -75,7 +76,7 @@ def _python_expression(text):
     return (result + text[cursor:]).replace("%", " % ").replace("^", " ^ ")
 
 
-def _evaluate(expression, values, wave):
+def _evaluate(expression, values, wave, names=None):
     python = _python_expression(expression)
     results = []
     for lane in range(wave):
@@ -90,7 +91,9 @@ def _evaluate(expression, values, wave):
             "WaveReadLaneAt": read_lane,
             "gl_SubgroupSize": wave,
             "int": int,
+            "uint": int,
             "value": values[lane],
+            **(names or {}),
         }
         results.append(
             eval(python, scope)
@@ -247,3 +250,143 @@ def test_tile_shuffles_run_in_every_lane_and_stay_in_the_tile(member, tile, oper
     assert _evaluate(expression, values, wave) == _tile_reference(
         member, values, operand, tile, wave
     )
+
+
+RUNTIME_WIDTH_SHUFFLES = {
+    "shfl": "__shfl(value, src, w)",
+    "up": "__shfl_up(value, src, w)",
+    "down": "__shfl_down(value, src, w)",
+    "xor": "__shfl_xor(value, src, w)",
+}
+
+
+def _runtime_width_expression(function):
+    crossgl = _import(
+        "__global__ void probe(int* out, int value, int src, int w) {\n"
+        f"  int r = {RUNTIME_WIDTH_SHUFFLES[function]};\n"
+        "  out[threadIdx.x] = r;\n"
+        "}\n"
+    )
+    # The CrossGL unsigned literal 1u is the integer 1 for the lane-by-lane model.
+    return re.sub(r"\b(\d+)u\b", r"\1", _assigned_expression(crossgl, "r"))
+
+
+@pytest.mark.parametrize("function", sorted(RUNTIME_WIDTH_SHUFFLES))
+@pytest.mark.parametrize("width", [1, 2, 4, 8, 16, 32, 64])
+@pytest.mark.parametrize("operand", [0, 3, 37])
+@pytest.mark.parametrize("wave", [32, 64])
+def test_runtime_width_shuffles_follow_hip_segments(function, width, operand, wave):
+    # HIP takes any power-of-two width up to warpSize, also one the kernel
+    # computes; the import keeps HIP's own bitmask lane arithmetic.
+    if width > wave:
+        pytest.skip("HIP leaves a width above warpSize undefined")
+    if function != "shfl" and operand >= width:
+        operand %= width
+    expression = _runtime_width_expression(function)
+    values = [100 + lane for lane in range(wave)]
+    names = {"src": operand, "w": width}
+    assert _evaluate(expression, values, wave, names) == _hip_reference(
+        function, values, operand, width, wave
+    )
+
+
+@pytest.mark.parametrize("function", sorted(RUNTIME_WIDTH_SHUFFLES))
+def test_runtime_width_shuffles_read_in_every_lane(function):
+    # The source lane is selected before the read (#4569), so no lane skips
+    # the WaveReadLaneAt that another lane's result depends on.
+    expression = _runtime_width_expression(function)
+    wave = 32
+    values = [100 + lane for lane in range(wave)]
+    python = _python_expression(expression)
+    shuffled = []
+    for lane in range(wave):
+
+        def read_lane(value, index, lane=lane):
+            shuffled.append(lane)
+            return values[index]
+
+        eval(  # noqa: S307 - expression built by the test from generated text
+            python,
+            {
+                "WaveGetLaneIndex": lambda lane=lane: lane,
+                "WaveReadLaneAt": read_lane,
+                "int": int,
+                "uint": int,
+                "value": values[lane],
+                "src": 5,
+                "w": 8,
+            },
+        )
+    assert shuffled == list(range(wave))
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        "__shfl(value, src++, w)",
+        "__shfl_up(value, src, next_width(w))",
+        "__shfl_down(value, src, w += 1)",
+        "__shfl_xor(value, src, 3)",
+        "__shfl(value, src, 128)",
+    ],
+)
+def test_runtime_width_shuffles_refuse_repeated_side_effects_and_bad_literals(call):
+    # The lane arithmetic names the lane and width operands more than once,
+    # so an operand with a side effect is refused rather than run twice; a
+    # literal width that is not a power of two up to 64 is undefined in HIP.
+    source = (
+        "__device__ int next_width(int w) { return w * 2; }\n"
+        "__global__ void probe(int* out, int value, int src, int w) {\n"
+        f"  int r = {call};\n"
+        "  out[threadIdx.x] = r;\n"
+        "}\n"
+    )
+    with pytest.raises(HipImportRefused, match="has no CrossGL form"):
+        _import(source)
+
+
+class _Ballot:
+    def __init__(self, bits):
+        self.x = bits & 0xFFFFFFFF
+        self.y = bits >> 32
+
+
+@pytest.mark.parametrize("wave", [32, 64])
+def test_ballot_is_the_64_bit_mask_of_the_wavefront(wave):
+    # HIP __ballot returns a 64-bit mask whose bit n is wavefront lane n;
+    # CrossGL's WaveActiveBallot holds lane n in bit n % 32 of component n / 32.
+    crossgl = _import(
+        "__global__ void probe(unsigned long long* out, int v) {\n"
+        "  unsigned long long bits = __ballot(v > 0);\n"
+        "  out[threadIdx.x] = bits;\n"
+        "}\n"
+    )
+    match = re.search(r"var bits: u64 = (.+);\n", crossgl)
+    assert match, crossgl
+    expression = match.group(1)
+    assert "WaveActiveBallot(" in expression
+    inputs = [(lane * 7) % 5 - 2 for lane in range(wave)]
+    expected = sum(1 << lane for lane, v in enumerate(inputs) if v > 0)
+    python = _python_expression(expression).replace("!=", " != ")
+    for lane in range(wave):
+
+        def ballot(predicate, lane=lane):
+            assert predicate == (inputs[lane] > 0)
+            return _Ballot(expected)
+
+        result = eval(  # noqa: S307 - expression built by the test from generated text
+            python, {"WaveActiveBallot": ballot, "uint64": int, "v": inputs[lane]}
+        )
+        assert result == expected
+
+
+@pytest.mark.parametrize("call", ["__ballot(v++ > 0)", "__ballot(next_flag(v))"])
+def test_ballot_refuses_a_predicate_with_a_side_effect(call):
+    source = (
+        "__device__ int next_flag(int v) { return v + 1; }\n"
+        "__global__ void probe(unsigned long long* out, int v) {\n"
+        f"  out[threadIdx.x] = {call};\n"
+        "}\n"
+    )
+    with pytest.raises(HipImportRefused, match="__ballot"):
+        _import(source)
