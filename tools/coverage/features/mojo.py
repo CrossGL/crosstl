@@ -100,11 +100,7 @@ _BLOCK_LITERALS = {"block_size": str(THREADS)}
 # A named barrier waits for the threads of a whole number of warps (PTX ISA, ``bar.sync``), here those of that block.
 _SYNC_LITERALS = {"num_threads": str(THREADS)}
 # Why a module-qualified function has no CrossGL spelling, by group.
-_UNSPELLED_GROUPS = {
-    "block": (
-        "CrossGL reduces, scans and broadcasts over a subgroup only, not over a workgroup"
-    )
-}
+_UNSPELLED_GROUPS: dict[str, str] = {}
 # Atomic methods are probed with the relaxed ordering, the one CrossGL's atomics have, as GLSL's do (glslang writes
 # atomicAdd with the memory semantics None). MAX's default is sequentially consistent except on Apple GPUs
 # (atomic.mojo, _DEFAULT_ARITHMETIC_ORDERING).
