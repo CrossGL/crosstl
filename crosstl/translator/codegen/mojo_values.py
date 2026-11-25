@@ -304,7 +304,9 @@ class MojoValueMixin:
         return name
 
     def mojo_reserved_identifiers(self):
+        # A lone '_' is Mojo's discard pattern, so it cannot name an argument or a value.
         return {
+            "_",
             "False",
             "None",
             "Self",
