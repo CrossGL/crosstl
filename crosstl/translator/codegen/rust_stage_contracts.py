@@ -37,53 +37,6 @@ class RustStageContractMixin:
 
         return False
 
-    def generate_rust_geometry_stream_helpers(self):
-        """Emit compile-oriented placeholders for CrossGL geometry streams."""
-        return (
-            "pub struct CglRustPointStream<T> {\n"
-            "    _marker: core::marker::PhantomData<T>,\n"
-            "}\n\n"
-            "impl<T> Default for CglRustPointStream<T> {\n"
-            "    fn default() -> Self {\n"
-            "        Self { _marker: core::marker::PhantomData }\n"
-            "    }\n"
-            "}\n\n"
-            "impl<T> CglRustPointStream<T> {\n"
-            "    pub fn Append(&self, value: T) {\n"
-            "        let _ = value;\n"
-            "    }\n\n"
-            "    pub fn RestartStrip(&self) {}\n"
-            "}\n\n"
-            "pub struct CglRustLineStream<T> {\n"
-            "    _marker: core::marker::PhantomData<T>,\n"
-            "}\n\n"
-            "impl<T> Default for CglRustLineStream<T> {\n"
-            "    fn default() -> Self {\n"
-            "        Self { _marker: core::marker::PhantomData }\n"
-            "    }\n"
-            "}\n\n"
-            "impl<T> CglRustLineStream<T> {\n"
-            "    pub fn Append(&self, value: T) {\n"
-            "        let _ = value;\n"
-            "    }\n\n"
-            "    pub fn RestartStrip(&self) {}\n"
-            "}\n\n"
-            "pub struct CglRustTriangleStream<T> {\n"
-            "    _marker: core::marker::PhantomData<T>,\n"
-            "}\n\n"
-            "impl<T> Default for CglRustTriangleStream<T> {\n"
-            "    fn default() -> Self {\n"
-            "        Self { _marker: core::marker::PhantomData }\n"
-            "    }\n"
-            "}\n\n"
-            "impl<T> CglRustTriangleStream<T> {\n"
-            "    pub fn Append(&self, value: T) {\n"
-            "        let _ = value;\n"
-            "    }\n\n"
-            "    pub fn RestartStrip(&self) {}\n"
-            "}\n\n"
-        )
-
     def has_tessellation_stage(self, ast_node, target_stage=None):
         """Return whether the AST contains a tessellation stage to emit."""
         tessellation_stages = {"tessellation_control", "tessellation_evaluation"}
@@ -684,37 +637,6 @@ class RustStageContractMixin:
 
         self.validate_rust_geometry_input_primitive_arity(parameters)
 
-    def generate_rust_geometry_stage_comments(self, func, parameters):
-        maxvertexcount = self.rust_geometry_maxvertexcount(func)
-        input_descriptions = []
-        stream_descriptions = []
-
-        for parameter in parameters:
-            primitive = self.rust_geometry_input_primitive_qualifier(parameter)
-            if primitive is not None:
-                input_descriptions.append(f"{primitive}:{parameter.name}")
-
-            stream_info = self.rust_geometry_stream_info(
-                self.parameter_raw_type(parameter)
-            )
-            if stream_info is not None:
-                stream_name, output_type = stream_info
-                stream_descriptions.append(
-                    f"{stream_name}:{parameter.name}->{output_type}"
-                )
-
-        lines = [f"// CrossGL geometry stage: maxvertexcount={maxvertexcount}\n"]
-        if input_descriptions:
-            lines.append(
-                "// CrossGL geometry input primitive: "
-                f"{', '.join(input_descriptions)}\n"
-            )
-        if stream_descriptions:
-            lines.append(
-                f"// CrossGL geometry output stream: {', '.join(stream_descriptions)}\n"
-            )
-        return "".join(lines)
-
     def rust_geometry_stream_info(self, type_name):
         if type_name is None:
             return None
@@ -744,13 +666,6 @@ class RustStageContractMixin:
         if not output_type:
             return None
         return base_name, self.map_type(output_type)
-
-    def rust_geometry_stream_mapped_type(self, type_name):
-        stream_info = self.rust_geometry_stream_info(type_name)
-        if stream_info is None:
-            return None
-        stream_name, output_type = stream_info
-        return f"CglRust{stream_name}<{output_type}>"
 
     def rust_stage_entry_function_name(self, stage_name, func):
         """Return the deterministic Rust entry name for special stages."""

@@ -34,7 +34,7 @@ from .rust_gpu_interface import COMPUTE_BUILTIN_INPUTS
 from .stage_utils import normalize_stage_name
 
 # Entry-point stages the generator writes for rust-gpu.
-RUST_GPU_STAGES = frozenset({"compute", "vertex", "fragment"})
+RUST_GPU_STAGES = frozenset({"compute", "vertex", "fragment", "geometry"})
 _NODE_REASONS = (
     (TextureNode, "texture sampling"),
     (TextureOpNode, "texture operations"),
@@ -130,7 +130,7 @@ def refuse_outside_rust_gpu_subset(generator, ast) -> None:
     """Record a refusal on ``generator`` for each construct of ``ast`` the rust-gpu output does not lower."""
     for stage in sorted(_stage_names(ast) - RUST_GPU_STAGES):
         generator.refuse_lowering(
-            f"stage: Rust output writes rust-gpu compute, vertex and fragment entry points; {stage} entry "
+            f"stage: Rust output writes rust-gpu compute, vertex, fragment and geometry entry points; {stage} entry "
             "points are not lowered for rust-gpu"
         )
     written = written_names(ast)
@@ -141,7 +141,10 @@ def refuse_outside_rust_gpu_subset(generator, ast) -> None:
             f"parameter: '{parameter}' of '{function}' points into a storage buffer; the rust-gpu output passes "
             "storage buffers only as entry-point slices"
         )
+    geometry_interface = getattr(generator, "rust_geometry_interface", None) or {}
     for name in _undeclared_builtin_names(ast):
+        if name in geometry_interface:
+            continue
         generator.refuse_lowering(
             f"built-in: '{name}' is used by name, and the rust-gpu output binds no entry-point parameter for it"
         )

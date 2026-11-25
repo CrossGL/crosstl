@@ -23,6 +23,7 @@ from .comma_expressions import (
 )
 from .rust_exact_lookups import rust_foreign_call_reason
 from .rust_gpu_builtins import generate_rust_gpu_builtin_call
+from .rust_gpu_geometry import generate_rust_geometry_call
 from .rust_memory_atomics import generate_rust_memory_atomic_call
 from .shader_clock_refusals import (
     SHADER_CLOCK_BUILTINS,
@@ -162,7 +163,9 @@ class RustExpressionMixin:
             memory_atomic = generate_rust_memory_atomic_call(self, func_name, args)
             if memory_atomic is not None:
                 return memory_atomic
-            rust_gpu_call = generate_rust_gpu_builtin_call(self, func_name, args)
+            rust_gpu_call = generate_rust_gpu_builtin_call(
+                self, func_name, args
+            ) or generate_rust_geometry_call(self, func_name, args)
             if rust_gpu_call is not None:
                 return rust_gpu_call
             if not self.is_rust_gpu_constructor_call(

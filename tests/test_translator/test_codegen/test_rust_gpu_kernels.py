@@ -203,9 +203,10 @@ def test_fragment_inputs_rust_gpu_cannot_declare_are_refused(member, reason):
         rust(source)
 
 
-def test_geometry_stage_is_refused():
+def test_geometry_stage_in_hlsl_parameter_form_is_refused():
+    """rust-gpu output writes GLSL's geometry form; an entry point taking its primitive as a parameter is refused."""
     with pytest.raises(
-        RustLoweringRefused, match="geometry entry points are not lowered"
+        RustLoweringRefused, match="takes parameters or returns a value"
     ):
         rust("""
             shader G {

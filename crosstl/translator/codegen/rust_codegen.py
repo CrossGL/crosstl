@@ -29,6 +29,12 @@ from .rust_function_signatures import RustFunctionSignatureMixin
 from .rust_global_declarations import RustGlobalDeclarationMixin
 from .rust_gpu_constants import rust_integer_constants
 from .rust_gpu_entry_buffers import normalize_rust_gpu_buffers
+from .rust_gpu_geometry import (
+    GEOMETRY_STAGE,
+    plan_rust_geometry_interface,
+    refuse_rust_geometry_entry,
+    rust_geometry_stage_attribute,
+)
 from .rust_gpu_interface import RUST_GPU_PRELUDE
 from .rust_gpu_math_calls import rust_gpu_math_result_type
 from .rust_gpu_slice_length import RustGpuSliceLengthMixin
@@ -333,6 +339,8 @@ class RustCodeGen(
         self.rust_resource_capture_params = {}
         self.rust_spec_constant_infos = {}
         self.rust_entry_resource_infos = {}
+        self.rust_geometry_interface = {}
+        self.rust_geometry_modes = []
         self.struct_member_types = {}
         self.struct_member_semantics = {}
         self.struct_generic_params = {}
@@ -400,6 +408,7 @@ class RustCodeGen(
         self.rust_referenced_names = referenced_identifier_names(ast)
         self.struct_member_types = {}
         self.collect_rust_gpu_struct_nodes(ast)
+        plan_rust_geometry_interface(self, ast, self.rust_gpu_program_stages)
         refuse_outside_rust_gpu_subset(self, ast)
         self.variable_types = {}
         self.local_variable_names = set()
@@ -485,8 +494,6 @@ class RustCodeGen(
             for name, params in self.rust_resource_capture_params.items()
         }
         code = RUST_GPU_PRELUDE
-        if self.has_geometry_stage(ast):
-            code += self.generate_rust_geometry_stream_helpers()
         if self.has_tessellation_stage(ast):
             code += self.generate_rust_tessellation_patch_helpers()
 
@@ -843,8 +850,11 @@ class RustCodeGen(
         if fragment_output_info is not None:
             output_param = fragment_output_info[0]
             param_list = [param for param in param_list if param is not output_param]
-        if shader_type == "geometry":
-            self.validate_rust_geometry_stage(func, param_list)
+        if shader_type == GEOMETRY_STAGE:
+            if param_list and not getattr(stage_node, "layout_qualifiers", None):
+                # HLSL's form: its primitive and stream contracts are checked before the form is refused.
+                self.validate_rust_geometry_stage(func, param_list)
+            refuse_rust_geometry_entry(self, func, param_list, return_type)
         if shader_type in {"tessellation_control", "tessellation_evaluation"}:
             self.validate_rust_tessellation_stage(func, param_list, shader_type)
         if shader_type in self.rust_mesh_stage_names():
@@ -942,8 +952,8 @@ class RustCodeGen(
             code += self.rust_gpu_stage_attribute(shader_type, stage_interface)
         elif shader_type == "compute":
             code += self.generate_rust_compute_stage_attribute(func, stage_node)
-        elif shader_type == "geometry":
-            code += self.generate_rust_geometry_stage_comments(func, param_list)
+        elif shader_type == GEOMETRY_STAGE:
+            code += rust_geometry_stage_attribute(self)
         elif shader_type in {"tessellation_control", "tessellation_evaluation"}:
             code += self.generate_rust_tessellation_stage_comments(
                 func,

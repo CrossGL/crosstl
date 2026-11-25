@@ -18709,7 +18709,7 @@ def test_rust_mesh_task_stages_lower_to_metadata_and_intrinsic_placeholders(tmp_
 
     with pytest.raises(
         RustLoweringRefused,
-        match="stage: Rust output writes rust-gpu compute, vertex and fragment entry points",
+        match="stage: Rust output writes rust-gpu compute, vertex, fragment and geometry entry points",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -18811,7 +18811,7 @@ def test_rust_qualified_mesh_stage_uses_deterministic_entry_name(tmp_path):
 
     with pytest.raises(
         RustLoweringRefused,
-        match="stage: Rust output writes rust-gpu compute, vertex and fragment entry points",
+        match="stage: Rust output writes rust-gpu compute, vertex, fragment and geometry entry points",
     ):
         generate_code(ast)
 
@@ -18876,7 +18876,7 @@ def test_rust_tessellation_stages_lower_with_metadata_and_patch_placeholders(tmp
 
     with pytest.raises(
         RustLoweringRefused,
-        match="stage: Rust output writes rust-gpu compute, vertex and fragment entry points",
+        match="stage: Rust output writes rust-gpu compute, vertex, fragment and geometry entry points",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -18959,7 +18959,7 @@ def test_rust_tessellation_stages_validate_metadata_and_patch_shapes():
         generate_code(parse_code(tokenize_code(invalid_patch_shape)))
 
 
-def test_rust_geometry_stage_lowers_with_metadata_and_stream_placeholders(tmp_path):
+def test_rust_geometry_stage_in_hlsl_stream_form_is_refused(tmp_path):
     code = """
     shader RustGeometryExpansion {
         struct GSInput {
@@ -18987,7 +18987,7 @@ def test_rust_geometry_stage_lowers_with_metadata_and_stream_placeholders(tmp_pa
 
     with pytest.raises(
         RustLoweringRefused,
-        match="stage: Rust output writes rust-gpu compute, vertex and fragment entry points",
+        match="geometry entry point 'main' takes parameters or returns a value",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -19126,7 +19126,7 @@ def test_rust_ray_tracing_stages_emit_metadata_and_compile(tmp_path):
 
     with pytest.raises(
         RustLoweringRefused,
-        match="stage: Rust output writes rust-gpu compute, vertex and fragment entry points",
+        match="stage: Rust output writes rust-gpu compute, vertex, fragment and geometry entry points",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
