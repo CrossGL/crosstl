@@ -604,7 +604,7 @@ def _expected_scope():
         "checkedElementCountByEntry": {
             entry: _checked_elements(entry) for entry in ENTRIES
         },
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "gwTempReductionExecuted": False,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
@@ -624,8 +624,8 @@ def test_current_mlx_rms_norm_contract_is_exact():
         "headerSha256": HEADER_SHA256,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES

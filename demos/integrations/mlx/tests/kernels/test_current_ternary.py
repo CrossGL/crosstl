@@ -596,8 +596,8 @@ def test_current_mlx_ternary_contract_is_exact():
         "opsHeaderSha256": OPS_HEADER_SHA256,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES
@@ -632,7 +632,7 @@ def test_current_mlx_ternary_contract_is_exact():
         "coveredEntryCount": 212,
         "runtimeCoveredEntryCount": 212,
         "dispatchCountByTarget": {target: _dispatch_count() for target in TARGETS},
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }

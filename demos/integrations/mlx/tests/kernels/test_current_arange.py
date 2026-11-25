@@ -439,8 +439,8 @@ def test_current_mlx_arange_contract_is_exact():
         "headerSha256": HEADER_SHA256,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES
@@ -460,7 +460,7 @@ def test_current_mlx_arange_contract_is_exact():
             target: sum(case[2] for dtype in DTYPES for case in CASES[dtype].values())
             for target in TARGETS
         },
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }

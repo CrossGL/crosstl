@@ -3,13 +3,13 @@
   "kind": "crosstl-mlx-current-tree-arg-reduce-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/arg_reduce.metal",
     "sourceSha256": "036a586af92b869a94f0b67e54590abf935e87f99290db46daed86cd8941e429"
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -641,7 +641,7 @@
       "opengl": 14,
       "directx": 14
     },
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false
   }

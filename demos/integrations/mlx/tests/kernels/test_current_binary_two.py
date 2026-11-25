@@ -55,10 +55,10 @@ SOURCE_SHA256 = "a425eb847614267e04a92ee70009ef9250914a327848c8e3a71519a23326614
 HEADER = "mlx/backend/metal/kernels/binary_two.h"
 HEADER_SHA256 = "af26413a6161c1b37667fc5c3a802510d8b425074ee2ca0a8fd7e31646f52cd8"
 OPS_HEADER = "mlx/backend/metal/kernels/binary_ops.h"
-OPS_HEADER_SHA256 = "6dbe789faafbf7259f411c7fab7c0fcdd192df47a78f8f0bd408228f7a30e5c7"
+OPS_HEADER_SHA256 = "a24eaa4b610224d5f296c0a8b7a1317561b569f70c11c4b95c4aea8f484370a9"
 COMPLEX_HEADER = "mlx/backend/metal/kernels/complex.h"
 COMPLEX_HEADER_SHA256 = (
-    "16e8a815b2cbdb6070e0824e64fe33fccb6e918f1b84ea5c792bd89d33e57bf1"
+    "06031fa9f78e4abe5031924d403e5281d3c02c26e7e893e35a833e588acf1938"
 )
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_BINARY_TWO"
 CONTRACT_PATH = (
@@ -758,8 +758,8 @@ def test_current_mlx_binary_two_contract_is_exact():
         "complexHeaderSha256": COMPLEX_HEADER_SHA256,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES
@@ -799,7 +799,7 @@ def test_current_mlx_binary_two_contract_is_exact():
         "coveredEntryCount": 225,
         "runtimeCoveredEntryCount": 225,
         "dispatchCountByTarget": {target: _dispatch_count() for target in TARGETS},
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }

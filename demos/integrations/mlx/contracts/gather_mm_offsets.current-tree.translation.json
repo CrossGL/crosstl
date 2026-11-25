@@ -3,13 +3,13 @@
   "kind": "crosstl-mlx-current-tree-gather-mm-offsets-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/gather_mm_offsets.metal",
     "sourceSha256": "e2b3839ba16c384d65cad76f7426da38f7c11931f5e55bba75c6f70a5f7a98d4"
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -98,7 +98,7 @@
       "opengl": 147,
       "directx": 147
     },
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false
   }

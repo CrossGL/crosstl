@@ -3,15 +3,15 @@
   "kind": "crosstl-mlx-current-tree-layer-norm-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/layer_norm.metal",
-    "sourceSha256": "2d243f5abea7353929f9bc838ceb5a98e52a452dfc29609ad4d5974447ea689f",
+    "sourceSha256": "bdb31f2dc610826fb87c9040df12798960444699893574deb7673ca130f2e5de",
     "header": "mlx/backend/metal/kernels/utils.h",
     "headerSha256": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf"
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -995,7 +995,7 @@
       "layer_norm_loopedbfloat16": 56704,
       "vjp_layer_norm_loopedbfloat16": 209892
     },
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "idleThreadPaddingStores": "translated-as-written",
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false

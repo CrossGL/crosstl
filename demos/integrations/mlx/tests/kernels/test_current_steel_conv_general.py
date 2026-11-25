@@ -68,10 +68,10 @@ SOURCE = general.SOURCE
 SOURCE_HASH = "df95502fbc02ad2bdd31ac6e00c30ac8379dc07ab2038e915e02dbb813fb789b"
 CONV_HEADERS = {
     "kernels/steel_conv_general.h": (
-        "0128838502501415acf766e8b977711bcb3bdae7439eb014bdd693119d547a1d"
+        "b32896cde594e22340dd53cc861f35b761cd9985174b265fc67ad1652b4e6b8c"
     ),
     "loaders/loader_general.h": (
-        "9aabb2491e4f91029e3ae73c4201bb0937652152f7771428ae01ff4c75653a47"
+        "bfe90b792ed3f5b1c8d498873d48f0b07f90acd615499789b2322784b8d45ad6"
     ),
     "params.h": "354a832c5bf37791f4ad42ddc3ca9456a9c1ebbf3216650bb4a10c18110e03a8",
     "conv.h": "e469f51289eff2f632335c634bb5d346667a61f81e515f42159a1ebffd3dd4df",

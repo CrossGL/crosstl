@@ -61,10 +61,10 @@ from tests.runtime_helpers import _prepare_native_package, _validate_generated_a
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 SOURCE = "mlx/backend/metal/kernels/gemv.metal"
-SOURCE_SHA256 = "0bd8bde0c867a17c345a3651f9f0a6c2909e0c74e76ea2a08f373fe4dcafaeda"
+SOURCE_SHA256 = "b3b775fbd6ae17e77af89287f19d32193e69b838f47d251fe05c20087b35c04e"
 HEADERS = {
     "mlx/backend/metal/kernels/gemv.h": (
-        "296ef622ea3c67d7485aa7cdf102bbfcb582e07bd3207793179a9d1e65ee5a65"
+        "4d72d35da3662554fe46c869691d188c407c56ffd62d3876a6df046ad014a551"
     ),
     "mlx/backend/metal/kernels/utils.h": (
         "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf"
@@ -73,7 +73,7 @@ HEADERS = {
         "d4c36298145d1c5617a94f07dbfabf6ac932afe2fd7ea0c9291f1fb385c5404a"
     ),
     "mlx/backend/metal/kernels/complex.h": (
-        "16e8a815b2cbdb6070e0824e64fe33fccb6e918f1b84ea5c792bd89d33e57bf1"
+        "06031fa9f78e4abe5031924d403e5281d3c02c26e7e893e35a833e588acf1938"
     ),
     "mlx/backend/metal/kernels/bf16.h": (
         "abd87446a310b77ac530ef52a324feae5cb285d03ec9613e3a88ebb71410fdcb"
@@ -1156,7 +1156,7 @@ def _expected_scope():
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": len(ENTRIES) * len(CASES),
         "checkedElementCountByTarget": _element_count(),
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -1174,8 +1174,8 @@ def test_current_mlx_gemv_contract_is_exact():
         "headers": HEADERS,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES

@@ -3,27 +3,27 @@
   "kind": "crosstl-mlx-current-tree-reduce-family-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/reduce.metal",
-    "sourceSha256": "f1e410ab635eaa940ec195461069cbb013ab88ab0d1f8d5dd8790d30b32c454a",
+    "sourceSha256": "c40f06b54712f9ba71170d3ca775fb26b2936fb8f392a86ad51b63ef95b0d53e",
     "headers": {
       "mlx/backend/metal/kernels/reduce.h": "2b4ca93fd1f43ee91129440359b18c0fa49bc70098bd4ca3033c6550b2c07d94",
       "mlx/backend/metal/kernels/reduction/ops.h": "78d06730fc9564a73944e7f1fe3897d25c8789b28a939bf418e1968db311da41",
       "mlx/backend/metal/kernels/reduction/reduce_all.h": "44ea27207c4d976524960ae615de4889c8e5998bf5e88b88850398cc293b1abb",
-      "mlx/backend/metal/kernels/reduction/reduce_col.h": "9bb7b8b15612230c5f91cea3220048d09219809dbbc1adab4b2dabfd44315810",
-      "mlx/backend/metal/kernels/reduction/reduce_init.h": "c5ef9c65886f9aba64a5df03607cf175950fd99237ca068bd6fcaec72d63d519",
+      "mlx/backend/metal/kernels/reduction/reduce_col.h": "47d47a9a8b52e3dfd15b195f40cdb3623583e00f5ac11378cdc0a7fe49fe17cf",
+      "mlx/backend/metal/kernels/reduction/reduce_init.h": "2efff9a359069d38767eb764c9e15129e6ac07e4271f4cac0b190628824b8a4a",
       "mlx/backend/metal/kernels/reduction/reduce_row.h": "8045c77cb0dde4f97a77ddcdcfad825ccf855928d31369a1dc1832629a63da50",
       "mlx/backend/metal/kernels/defines.h": "a6c2c824e855078cd092fd9592457616f995755f0e865475c3f006a3f5d6bf1d",
       "mlx/backend/metal/kernels/utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf",
       "mlx/backend/metal/kernels/atomic.h": "4c35ea2798a2335502865247aee878149fc9ada0d7e84c05d771baef0c7fcc60",
-      "mlx/backend/metal/kernels/complex.h": "16e8a815b2cbdb6070e0824e64fe33fccb6e918f1b84ea5c792bd89d33e57bf1",
+      "mlx/backend/metal/kernels/complex.h": "06031fa9f78e4abe5031924d403e5281d3c02c26e7e893e35a833e588acf1938",
       "mlx/backend/metal/kernels/bf16.h": "abd87446a310b77ac530ef52a324feae5cb285d03ec9613e3a88ebb71410fdcb",
       "mlx/backend/metal/kernels/bf16_math.h": "1f374f8380f756eb89acf6a847741cb8fecbe642945e159fb6208d804cc06496"
     }
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -31736,7 +31736,7 @@
     "artifactCountByTarget": 2396,
     "dispatchCountByTarget": 2830,
     "checkedElementCountByTarget": 1186324,
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false
   }

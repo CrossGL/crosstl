@@ -890,7 +890,7 @@ def _expected_scope():
         "artifactCountByTarget": len(VARIANTS),
         "dispatchCountByTarget": len(VARIANTS) * len(CASES),
         "checkedElementCountByTarget": _element_count(),
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -911,8 +911,8 @@ def expected_contract(artifacts=None):
             "headers": HEADERS,
         },
         "corpusCensus": {
-            "metalUnitCount": 49,
-            "entryCount": 17832,
+            "metalUnitCount": 50,
+            "entryCount": 19723,
             "discoveryDiagnosticCount": 0,
         },
         "entries": list(ENTRIES),

@@ -103,7 +103,7 @@ preserve upstream launch widths and multipass planning. Empty elementwise arrays
 do not dispatch. This is a
 host integration proof, not a complete MLX backend or a performance benchmark.
 
-The pin is `9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. CI builds and runs the same
+The pin is `5996d291ee88db9535b33eec458ca241428c0d2b`. CI builds and runs the same
 proof on Linux/OpenGL, Windows/Direct3D 12 and macOS/generated Metal. Mesa software
 rendering and pinned WARP make Windows/Linux execution reproducible without
 dedicated GPU runners. The macOS path uses the same callback adapter with generated
@@ -1894,7 +1894,7 @@ platforms and retains dependency-install output even when setup fails.
 ```sh
 python -m pip install -e . moderngl PyOpenGL setuptools wheel cmake ninja nanobind numpy packaging
 git clone https://github.com/ml-explore/mlx.git mlx-upstream
-git -C mlx-upstream checkout 9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8
+git -C mlx-upstream checkout 5996d291ee88db9535b33eec458ca241428c0d2b
 python -m demos.integrations.mlx.portable_host.prepare --mlx-root mlx-upstream --output adaptation.json
 CMAKE_ARGS='-DMLX_BUILD_METAL=OFF -DMLX_BUILD_CUDA=OFF -DMLX_CROSTL_HOST=ON -DMLX_BUILD_TESTS=OFF -DMLX_BUILD_EXAMPLES=OFF -DBUILD_SHARED_LIBS=ON' python -m pip install -e ./mlx-upstream --no-build-isolation
 python -m demos.integrations.mlx.portable_host.packages --mlx-root mlx-upstream --target opengl --output-dir host-packages

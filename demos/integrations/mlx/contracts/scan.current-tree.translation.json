@@ -3,19 +3,19 @@
   "kind": "crosstl-mlx-current-tree-scan-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/scan.metal",
-    "sourceSha256": "49faeb1a36f346b2aa0f68a5f5fe2544af2109fec5357425550f97a79926b6f3",
+    "sourceSha256": "dfd261662e1d196b2ade96d062c190995524b73d49d4fdb7891ff8b9c923b9aa",
     "headers": {
-      "mlx/backend/metal/kernels/scan.h": "735e545d1296f48d0bddffaff289c4e4ef77c5f76cb2bace861a706c43fc24a0",
-      "mlx/backend/metal/kernels/binary_ops.h": "6dbe789faafbf7259f411c7fab7c0fcdd192df47a78f8f0bd408228f7a30e5c7",
+      "mlx/backend/metal/kernels/scan.h": "85c1e19ac4ac1b0382ec9956986fcb623979dc12855b261320be7e0528a8d1d1",
+      "mlx/backend/metal/kernels/binary_ops.h": "a24eaa4b610224d5f296c0a8b7a1317561b569f70c11c4b95c4aea8f484370a9",
       "mlx/backend/metal/kernels/utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf",
-      "mlx/backend/metal/kernels/complex.h": "16e8a815b2cbdb6070e0824e64fe33fccb6e918f1b84ea5c792bd89d33e57bf1"
+      "mlx/backend/metal/kernels/complex.h": "06031fa9f78e4abe5031924d403e5281d3c02c26e7e893e35a833e588acf1938"
     }
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -6184,7 +6184,7 @@
     "artifactCountByTarget": 456,
     "dispatchCountByTarget": 1824,
     "checkedElementCountByTarget": 3019068,
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false
   }

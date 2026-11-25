@@ -3,19 +3,19 @@
   "kind": "crosstl-mlx-current-tree-gemv-masked-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/gemv_masked.metal",
     "sourceSha256": "c044719fbf8c8de8b5ec37527be9537a60fdd81220a3415fcda1dc1c4097b249",
     "headers": {
-      "mlx/backend/metal/kernels/gemv_masked.h": "af153cb6241e02c6d9d61c3b25718fb54108450311ad5c1f4ecca53c89cca717",
+      "mlx/backend/metal/kernels/gemv_masked.h": "ba6f011977248caaceaec4b46135605f8da429852a279def4372e4b602d9fa20",
       "mlx/backend/metal/kernels/utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf",
       "mlx/backend/metal/kernels/steel/utils.h": "d4c36298145d1c5617a94f07dbfabf6ac932afe2fd7ea0c9291f1fb385c5404a",
       "mlx/backend/metal/kernels/bf16.h": "abd87446a310b77ac530ef52a324feae5cb285d03ec9613e3a88ebb71410fdcb"
     }
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -7092,7 +7092,7 @@
     "artifactCountByTarget": 528,
     "dispatchCountByTarget": 1584,
     "checkedElementCountByTarget": 371088,
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false
   }

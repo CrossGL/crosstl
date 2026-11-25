@@ -3,17 +3,17 @@
   "kind": "crosstl-mlx-current-tree-gated-delta-vjp-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/gated_delta_update_vjp.metal",
-    "sourceSha256": "59590c0bc3dbeb6ce1c808660b43abdf462a3f43f16abcb484220605b8aa86e7",
+    "sourceSha256": "8cc4f4b3eb079628b97843bb974b983e910c39b90246951bafef2017ecc643d4",
     "headers": {
-      "mlx/backend/metal/kernels/gated_delta_update_vjp.h": "717aa81794efca14c589371c83a16e86f2d0b5e0660778b0e09e34abe46e63c6",
+      "mlx/backend/metal/kernels/gated_delta_update_vjp.h": "777e9cd04778f97f5bc5c252d00868564bda04d53eb55b2e81cedc1e64e496aa",
       "mlx/backend/metal/kernels/atomic.h": "4c35ea2798a2335502865247aee878149fc9ada0d7e84c05d771baef0c7fcc60"
     }
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -1143,7 +1143,7 @@
       "seq_gated_delta_vjp_float16_t_128_128_16_64_8": 4492288,
       "seq_gated_delta_vjp_float16_t_128_128_16_64_16": 4690944
     },
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false
   }

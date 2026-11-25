@@ -479,7 +479,7 @@ def _expected_scope():
         "dispatchCountByTarget": _dispatch_count(),
         "checkedElementCountByTarget": _checked_element_count(),
         "ciShardCount": CI_SHARD_COUNT,
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -500,8 +500,8 @@ def expected_contract(artifacts=None):
             "hostSource": {"path": HOST_SOURCE, "sha256": HOST_SHA256},
         },
         "corpusCensus": {
-            "metalUnitCount": 49,
-            "entryCount": 17832,
+            "metalUnitCount": 50,
+            "entryCount": 19723,
             "discoveryDiagnosticCount": 0,
         },
         "entries": list(ENTRIES),

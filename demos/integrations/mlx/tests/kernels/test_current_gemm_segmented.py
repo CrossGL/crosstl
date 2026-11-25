@@ -63,7 +63,7 @@ SOURCE_SHA256 = "fe8a6ac43fd0383c94dff4cb0acf2d6e0b83b2ef692387a4e3307c824c6d14d
 SEGMENTED_HEADERS = {
     **HEADER_HASHES,
     "kernels/steel_gemm_segmented.h": (
-        "e1256eb925f97cd594ffd0382ecd22f5540637a7bbb902da357a80ece284a9ad"
+        "bf8b3e9a491a4a4146d5169111ee2b98e21413574193e53f2a4796182cf26ee1"
     ),
     "../utils.h": "d4c36298145d1c5617a94f07dbfabf6ac932afe2fd7ea0c9291f1fb385c5404a",
     "../../utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf",

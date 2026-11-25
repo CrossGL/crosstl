@@ -1,7 +1,7 @@
 {
-  "upstreamCommit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+  "upstreamCommit": "5996d291ee88db9535b33eec458ca241428c0d2b",
   "source": "mlx/backend/metal/kernels/scan.metal",
-  "sourceSha256": "49faeb1a36f346b2aa0f68a5f5fe2544af2109fec5357425550f97a79926b6f3",
+  "sourceSha256": "dfd261662e1d196b2ade96d062c190995524b73d49d4fdb7891ff8b9c923b9aa",
   "reference": "original-metal",
   "referenceModuleSha256": "b9153626560850c1ac0d4d9de910113261e3c73e77203a60cdbd26c5497e8f58",
   "compileFlags": [

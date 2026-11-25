@@ -11536,7 +11536,7 @@ def test_dot_native_runtime_evidence_records_bounded_current_corpus_proof():
     assert status["status"] == "translated-packaged-native-regression"
     assert status["native_validation_regression"] == {
         "target": "directx",
-        "source_commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+        "source_commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
         "translator_commit": "f5bd9c6842c134bde92b2108b48cd4af2d26d899",
         "run": (
             "https://github.com/CrossGL/crosstl/actions/runs/37659104143/job/112922487218"

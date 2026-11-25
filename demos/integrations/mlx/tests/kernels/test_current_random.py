@@ -36,7 +36,7 @@ SOURCE_SHA256 = "f1a19b3f11b7b10203824890f13debc6d627959b4e7f17c219e2e9da553c1bd
 # cases transcribe them and reach the kernels with the dispatches MLX issues.
 KNOWN_ANSWERS = "tests/random_tests.cpp"
 KNOWN_ANSWERS_SHA256 = (
-    "3fc4e7fb0481fff61dbe6b3776b152ef018e142db89bdc7b9bedbcc9c2374e9d"
+    "db07b22cba97b30be6b652d85d7f15668e944944893187ffa4d19ebbdd0873c3"
 )
 ENTRIES = ("rbitsc", "rbits")
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_RANDOM"
@@ -411,7 +411,7 @@ def _expected_scope():
             )
             for target in TARGETS
         },
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -430,8 +430,8 @@ def test_current_mlx_random_contract_is_exact():
         "knownAnswersSha256": KNOWN_ANSWERS_SHA256,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES

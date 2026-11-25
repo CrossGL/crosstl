@@ -3,19 +3,19 @@
   "kind": "crosstl-mlx-current-tree-binary-two-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/binary_two.metal",
     "sourceSha256": "a425eb847614267e04a92ee70009ef9250914a327848c8e3a71519a233266142",
     "header": "mlx/backend/metal/kernels/binary_two.h",
     "headerSha256": "af26413a6161c1b37667fc5c3a802510d8b425074ee2ca0a8fd7e31646f52cd8",
     "opsHeader": "mlx/backend/metal/kernels/binary_ops.h",
-    "opsHeaderSha256": "6dbe789faafbf7259f411c7fab7c0fcdd192df47a78f8f0bd408228f7a30e5c7",
+    "opsHeaderSha256": "a24eaa4b610224d5f296c0a8b7a1317561b569f70c11c4b95c4aea8f484370a9",
     "complexHeader": "mlx/backend/metal/kernels/complex.h",
-    "complexHeaderSha256": "16e8a815b2cbdb6070e0824e64fe33fccb6e918f1b84ea5c792bd89d33e57bf1"
+    "complexHeaderSha256": "06031fa9f78e4abe5031924d403e5281d3c02c26e7e893e35a833e588acf1938"
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -3287,7 +3287,7 @@
       "opengl": 450,
       "directx": 450
     },
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false
   }

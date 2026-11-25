@@ -3,18 +3,18 @@
   "kind": "crosstl-mlx-current-tree-sdpa-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/scaled_dot_product_attention.metal",
-    "sourceSha256": "21a6c5a69a6c98e2b353fadc0cef00c46d26fac4aa6b55637ec454520ea7bc56",
+    "sourceSha256": "70d5153709e274533c03570520d73bd95daae0c76730971d61c7d15e16a87e5c",
     "headers": {
-      "mlx/backend/metal/kernels/sdpa_vector.h": "f52c8da21f2c31f3f77168d326a49815fc29bde4b573883896a8eb3298f11508",
+      "mlx/backend/metal/kernels/sdpa_vector.h": "b44d2c3541a05742c6c8c801e4dc0bdb702628813243621c86e3340f676eaf74",
       "mlx/backend/metal/kernels/sdpa_blocked.h": "665d98c389b042a2cbdfae9d95263d7d4ae56d9fc1dfe903b914940c82c8a4f3",
       "mlx/backend/metal/kernels/utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf"
     }
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -6313,7 +6313,7 @@
       "sdpa_vector_2pass_2_float16_t_256": 2560,
       "sdpa_vector_2pass_2_float16_t_512": 5120
     },
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false
   }

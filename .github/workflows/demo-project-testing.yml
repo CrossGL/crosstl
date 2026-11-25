@@ -89,7 +89,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
       PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
       LIBGL_ALWAYS_SOFTWARE: "1"
@@ -281,7 +281,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'opengl')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
 
     name: Translated OpenGL indexed gather
@@ -439,7 +439,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'metal')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
 
     name: Original and translated Metal gather
@@ -573,7 +573,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'metal-float')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
 
       DEVELOPER_DIR: /Applications/Xcode_27.1.app/Contents/Developer
@@ -630,7 +630,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'directx')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
 
     name: Translated DirectX indexed gather
@@ -784,7 +784,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'metal-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
 
@@ -1284,7 +1284,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'portable-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
       PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
@@ -2488,7 +2488,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'small-row-reductions')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
       PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
@@ -2719,7 +2719,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'half-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
       PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
@@ -2958,7 +2958,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'quantized-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
       PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
@@ -3145,7 +3145,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'quantized-upstream-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
       PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
@@ -3232,7 +3232,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'integer64-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
       PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
@@ -3368,7 +3368,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'slice-update-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
       PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
@@ -3523,7 +3523,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'scatter-host')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
       PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
@@ -3632,7 +3632,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'row-packages')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
       PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
@@ -3687,7 +3687,7 @@ jobs:
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'reductions')
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
       PYTHONUNBUFFERED: "1"
       PYTEST_XDIST_AUTO_NUM_WORKERS: "2"
       CMAKE_BUILD_PARALLEL_LEVEL: "4"
@@ -3880,7 +3880,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX Metal project porting (${{ matrix.os }})
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-metal-porting')
@@ -4373,8 +4373,8 @@ jobs:
           python demos/integrations/mlx/discover_entries.py \
             --mlx-root mlx-current-tree-upstream \
             --expected-commit "$MLX_CURRENT_TREE_COMMIT" \
-            --expected-unit-count 49 \
-            --expected-entry-count 17832
+            --expected-unit-count 50 \
+            --expected-entry-count 19723
 
       - name: Validate pinned complete scans
         shell: bash
@@ -6855,7 +6855,7 @@ jobs:
       cancel-in-progress: false
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX current-tree native parity (${{ matrix.os }}, ${{ matrix.group }})
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-current-native-parity')
@@ -8121,7 +8121,7 @@ jobs:
       cancel-in-progress: false
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX current-tree quantized native parity (${{ matrix.os }}, ${{ matrix.group }})
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-current-quantized-parity')
@@ -8200,7 +8200,7 @@ jobs:
       cancel-in-progress: false
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX current-tree GEMM and convolution native parity (${{ matrix.os }}, ${{ matrix.group }})
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-current-gemm-parity')
@@ -8279,7 +8279,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX complete unary Metal sources (shard ${{ matrix.shard_index }} of 5)
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-unary-metal-sources')
@@ -8401,7 +8401,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX complete unary OpenGL translation (shard ${{ matrix.shard_index }} of 5)
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-unary-complete-opengl-translation')
@@ -8472,7 +8472,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX complete unary DirectX translation (shard ${{ matrix.shard_index }} of 5)
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-unary-complete-directx-translation')
@@ -8535,7 +8535,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX complete binary Metal sources (shard ${{ matrix.shard_index }} of 24)
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-binary-metal-sources')
@@ -8647,7 +8647,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX complete copy Metal sources (shard ${{ matrix.shard_index }} of 24)
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-copy-metal-sources')
@@ -8759,7 +8759,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX complete reduce Metal sources (shard ${{ matrix.shard_index }} of 24)
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-reduce-metal-sources')
@@ -8871,7 +8871,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX complete quantized Metal sources (shard ${{ matrix.shard_index }} of 24)
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-quantized-metal-sources')
@@ -9002,7 +9002,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX quantized wide OpenGL translation
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-quantized-wide-opengl')
@@ -9053,7 +9053,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX complete reduce OpenGL translation (shard ${{ matrix.shard_index }} of 24)
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-reduce-complete-opengl-translation')
@@ -9112,7 +9112,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX complete copy OpenGL translation (shard ${{ matrix.shard_index }} of 24)
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-copy-complete-opengl-translation')
@@ -9171,7 +9171,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX complete copy DirectX translation (shard ${{ matrix.shard_index }} of 24)
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-copy-complete-directx-translation')
@@ -9230,7 +9230,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX complete reduce DirectX translation (shard ${{ matrix.shard_index }} of 24)
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-reduce-complete-directx-translation')
@@ -9289,7 +9289,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX complete binary OpenGL translation (shard ${{ matrix.shard_index }} of 24)
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-binary-complete-opengl-translation')
@@ -9348,7 +9348,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX complete binary DirectX translation (shard ${{ matrix.shard_index }} of 24)
     if: contains(fromJSON(needs.ci-plan.outputs.jobs), 'mlx-binary-complete-directx-translation')
@@ -9407,7 +9407,7 @@ jobs:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
       MLX_COMMIT: "4367c73b60541ddd5a266ce4644fd93d20223b6e"
       MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"
-      MLX_CURRENT_TREE_COMMIT: "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+      MLX_CURRENT_TREE_COMMIT: "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     name: MLX full-corpus artifact scout
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

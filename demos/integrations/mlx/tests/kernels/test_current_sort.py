@@ -50,9 +50,9 @@ from tests.runtime_helpers import _prepare_native_package, _validate_generated_a
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 SOURCE = "mlx/backend/metal/kernels/sort.metal"
-SOURCE_SHA256 = "be97ea6106fb2e0c0c26f006037408e246fafa012fd2577bfc20cf356475ee61"
+SOURCE_SHA256 = "d1ebc7bc4ca91ac6c54aa7f2d694192026a1f72011f7c68f8d53d1f25bde7445"
 HEADER = "mlx/backend/metal/kernels/sort.h"
-HEADER_SHA256 = "3171f47dabf2cf501dffc2e388e3d66446d6f71712e8d070028258a084b63574"
+HEADER_SHA256 = "18bd92887134c791bad3353a7b00695b93114d619e87f07760f6edfdbb340580"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_SORT"
 CONTRACT_PATH = (
     ROOT / "demos/integrations/mlx/contracts/sort.current-tree.translation.json"
@@ -825,7 +825,7 @@ def _expected_scope():
         "runtimeCoveredEntryCount": len(ENTRIES),
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": block_dispatches + multi_dispatches,
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -844,8 +844,8 @@ def test_current_mlx_sort_contract_is_exact():
         "headerSha256": HEADER_SHA256,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES

@@ -65,12 +65,12 @@ from tests.test_translator.test_native_loader_dispatch_integration import _execu
 
 np = pytest.importorskip("numpy")
 
-MLX_COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+MLX_COMMIT = "5996d291ee88db9535b33eec458ca241428c0d2b"
 SOURCE = "mlx/backend/metal/kernels/steel/attn/kernels/steel_attention.metal"
-SOURCE_SHA256 = "ade46f59394199b17ae4a04323d2840838d594d22173490df732f1c3b0b8f605"
+SOURCE_SHA256 = "2074731fa5b55c8cf88195dddb8fc276ee835058de4e6cec1226e80b6d591871"
 HEADER_HASHES = {
     "kernels/steel_attention.h": (
-        "0519f2ec5f6b2917a7685df85ecc5555ca8acd7e070a14c9945ad28adadec36c"
+        "6c5261ceae4a38808b2cc5d247f598a6d353f5b7411cbe0856de703dbe98c495"
     ),
     "attn.h": "67722214ff487ec95df675e2f135ccd7fbe639b6eb6ab98b14bcefa58d66ba95",
     "loader.h": "e435f413d71d44ca4ad72a59d192046be77388f63936179c58882286f4cc5dab",

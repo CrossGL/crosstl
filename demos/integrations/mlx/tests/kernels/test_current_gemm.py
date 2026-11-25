@@ -32,7 +32,7 @@ from tests.runtime_helpers import _prepare_native_package, compile_metal, run
 from tests.test_translator.test_loop_updates import _execute
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
-MLX_COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+MLX_COMMIT = "5996d291ee88db9535b33eec458ca241428c0d2b"
 SOURCE = "mlx/backend/metal/kernels/steel/gemm/kernels/steel_gemm_fused.metal"
 SOURCE_SHA256 = "6c6e67f5c7fc6b378ca2c849c36a79d696c93e65b3a60d3f5b1f13928c79029e"
 ENTRY = "steel_gemm_fused_nn_float32_float32_bm32_bn32_bk16_wm2_wn2"
@@ -49,7 +49,7 @@ CONSTANT_IDS = {
 HEADER_HASHES = {
     "loader.h": "c1b82153670b1e18371a6e88fdbcf440af692957775c2f837700315ab8a5112e",
     "gemm.h": "c84af31e2c57154f2a8a24fa7f9fe2449765cce9a66f3f035846ed3c03b6a8b0",
-    "mma.h": "9b37709de40c3acaa5411875e52c8d26e6de093261741f671fbdab9c39a852b7",
+    "mma.h": "21439be1087ac840ac5936bda0e57bd982fb7b104ea5e5f82ba7be0d2eaee524",
 }
 WORKGROUP_LOADERS = {
     "BlockLoader_float_false_16_32_false_32_16_false_32_4_16_4_false_128__load_unsafe": (

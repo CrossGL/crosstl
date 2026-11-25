@@ -3,15 +3,15 @@
   "kind": "crosstl-mlx-current-tree-dot-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/dot.metal",
     "sourceSha256": "97bcad13d09c3d5fed87482a0bb9719d6eeff9b21d364967cd6aec5b695b3462",
     "header": "mlx/backend/metal/kernels/dot.h",
     "headerSha256": "24ca982ca5558e43100be7d6dc08722b512b06461c8460d14134eb78f52431ba"
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -175,7 +175,7 @@
       "dot_product_float16_it32_tg512_sg16": 17,
       "dot_product_bfloat16_it32_tg512_sg16": 17
     },
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "partialAllReduceCovered": false,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false

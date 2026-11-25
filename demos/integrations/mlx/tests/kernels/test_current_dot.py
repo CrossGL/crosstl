@@ -208,7 +208,7 @@ def _expected_scope():
             entry: sum(_groups(count) for count, _ in CASES.values())
             for entry in ENTRIES
         },
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         # MLX sums the partials with a separate all-reduce dispatch.
         "partialAllReduceCovered": False,
         "upstreamMlxTestSuiteExecuted": False,
@@ -229,8 +229,8 @@ def test_current_mlx_dot_contract_is_exact():
         "headerSha256": HEADER_SHA256,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES

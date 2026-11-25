@@ -31,7 +31,7 @@ from tests.test_translator.test_metal_builtin_ownership import _compile
 
 ROOT = Path(__file__).resolve().parents[5]
 SOURCE = "mlx/backend/metal/kernels/scan.metal"
-SOURCE_SHA256 = "49faeb1a36f346b2aa0f68a5f5fe2544af2109fec5357425550f97a79926b6f3"
+SOURCE_SHA256 = "dfd261662e1d196b2ade96d062c190995524b73d49d4fdb7891ff8b9c923b9aa"
 REFERENCE = Path(__file__).resolve().parents[1] / "fixtures/scan_reference.json"
 REFERENCE_SHA256 = "8302e4268f6ed3bcbed4ffed60ba9749aaec1279085a96c4e122f80e23e800b9"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_SCAN"

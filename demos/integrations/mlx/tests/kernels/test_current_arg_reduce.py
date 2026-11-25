@@ -42,7 +42,7 @@ from crosstl.translator.dispatch_regions import plan_dispatch_regions
 from demos.integrations.mlx.tests.pins import check_generated_artifact
 
 ROOT = Path(__file__).resolve().parents[5]
-MLX_COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+MLX_COMMIT = "5996d291ee88db9535b33eec458ca241428c0d2b"
 SOURCE = "mlx/backend/metal/kernels/arg_reduce.metal"
 SOURCE_SHA256 = "036a586af92b869a94f0b67e54590abf935e87f99290db46daed86cd8941e429"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_ARG_REDUCE"
@@ -546,8 +546,8 @@ def test_current_mlx_arg_reduce_contract_is_exact():
         "sourceSha256": SOURCE_SHA256,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert contract["entries"] == ENTRIES
@@ -609,7 +609,7 @@ def test_current_mlx_arg_reduce_contract_is_exact():
         "coveredEntryCount": 24,
         "runtimeCoveredEntryCount": 14,
         "runtimeCoveredEntryCountByTarget": {"metal": 14, "opengl": 14, "directx": 14},
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }

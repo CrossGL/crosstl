@@ -44,7 +44,7 @@ from tests.test_translator.test_native_loader_dispatch_integration import _execu
 SOURCE = "mlx/backend/metal/kernels/gated_delta_update.metal"
 SOURCE_SHA256 = "8e3a37c7e272dd7fd9aadcce28e210bb5b9a26d1c2aae1fd34823007b1ff1df7"
 HEADER = "mlx/backend/metal/kernels/gated_delta_update.h"
-HEADER_SHA256 = "ca081d5bf13e2a5379cfc12306da779cbe1ea73e346aa68e6d68ab814a284597"
+HEADER_SHA256 = "6936b7cf7e705ac066edf8e942658ab8e8e4f1fb3fe12740e21276b60b9be0b9"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_GATED_DELTA"
 CONTRACT_PATH = (
     ROOT
@@ -1147,7 +1147,7 @@ def _expected_scope():
         "checkedElementCountByEntry": {
             entry: _checked_elements(entry) for entry in ENTRIES
         },
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -1166,8 +1166,8 @@ def test_current_mlx_gated_delta_contract_is_exact():
         "headerSha256": HEADER_SHA256,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES

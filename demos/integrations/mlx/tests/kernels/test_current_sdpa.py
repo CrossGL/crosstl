@@ -48,10 +48,10 @@ from tests.runtime_helpers import _prepare_native_package, _validate_generated_a
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 SOURCE = "mlx/backend/metal/kernels/scaled_dot_product_attention.metal"
-SOURCE_SHA256 = "21a6c5a69a6c98e2b353fadc0cef00c46d26fac4aa6b55637ec454520ea7bc56"
+SOURCE_SHA256 = "70d5153709e274533c03570520d73bd95daae0c76730971d61c7d15e16a87e5c"
 HEADERS = {
     "mlx/backend/metal/kernels/sdpa_vector.h": (
-        "f52c8da21f2c31f3f77168d326a49815fc29bde4b573883896a8eb3298f11508"
+        "b44d2c3541a05742c6c8c801e4dc0bdb702628813243621c86e3340f676eaf74"
     ),
     "mlx/backend/metal/kernels/sdpa_blocked.h": (
         "665d98c389b042a2cbdfae9d95263d7d4ae56d9fc1dfe903b914940c82c8a4f3"
@@ -2532,7 +2532,7 @@ def _expected_scope():
         "checkedElementCountByEntry": {
             entry: _checked_elements(entry) for entry in ENTRIES
         },
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -2550,8 +2550,8 @@ def test_current_mlx_sdpa_contract_is_exact():
         "headers": HEADERS,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES == INSTANTIATED

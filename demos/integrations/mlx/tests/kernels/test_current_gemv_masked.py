@@ -78,7 +78,7 @@ SOURCE = "mlx/backend/metal/kernels/gemv_masked.metal"
 SOURCE_SHA256 = "c044719fbf8c8de8b5ec37527be9537a60fdd81220a3415fcda1dc1c4097b249"
 HEADERS = {
     "mlx/backend/metal/kernels/gemv_masked.h": (
-        "af153cb6241e02c6d9d61c3b25718fb54108450311ad5c1f4ecca53c89cca717"
+        "ba6f011977248caaceaec4b46135605f8da429852a279def4372e4b602d9fa20"
     ),
     "mlx/backend/metal/kernels/utils.h": (
         "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf"
@@ -1099,7 +1099,7 @@ def _expected_scope():
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": len(ENTRIES) * len(CASES),
         "checkedElementCountByTarget": _element_count(),
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -1117,8 +1117,8 @@ def test_current_mlx_gemv_masked_contract_is_exact():
         "headers": HEADERS,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES

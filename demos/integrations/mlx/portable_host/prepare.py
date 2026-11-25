@@ -15,7 +15,7 @@ from demos.integrations.mlx.portable_host.packages import (
     UNARY_OPERATIONS,
 )
 
-COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+COMMIT = "5996d291ee88db9535b33eec458ca241428c0d2b"
 HERE = Path(__file__).resolve().parent
 VIEW_PRIMITIVES = (
     "AsStrided",

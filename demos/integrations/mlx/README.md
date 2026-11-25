@@ -225,7 +225,7 @@ same defect.
 
 `tests/kernels/test_current_gemm.py` translates the unchanged
 `steel_gemm_fused_nn_float32_float32_bm32_bn32_bk16_wm2_wn2` entry at commit
-`9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8` through the project API, package
+`5996d291ee88db9535b33eec458ca241428c0d2b` through the project API, package
 verification and native Metal, DirectX or OpenGL loader. All three targets
 compare generated execution with an exact matrix-product reference. Metal
 additionally compares with the independently compiled upstream kernel; Windows
@@ -505,7 +505,7 @@ python -m pytest -q -n auto demos/integrations/mlx/tests/kernels/test_current_st
 
 `tests/kernels/test_current_attention.py` translates seventeen configurations
 of unchanged entries of `steel_attention.metal` at commit
-`9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. The float32 float-mask entries cover
+`5996d291ee88db9535b33eec458ca241428c0d2b`. The float32 float-mask entries cover
 head dimensions 64, 72, 80, 96, 128 and 256 and the asymmetric query and value
 head dimensions (96, 64)
 (`steel_attention_float32_bq32_bk32_bd64_bv64_wm4_wn1_maskfloat32`, its `bd72`,
@@ -774,7 +774,7 @@ baselines are not, by themselves, evidence that every kernel translates or
 passes a target validator.
 
 The next corpus increment is separately pinned to
-`9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. Its authoritative discovery census
+`5996d291ee88db9535b33eec458ca241428c0d2b`. Its authoritative discovery census
 is 49 Metal units, 17,832 entries, and zero discovery diagnostics. The compact
 `contracts/arg_reduce.current-tree.translation.json` contract pins all 24
 entries from `arg_reduce.metal` and all 72 deterministic Metal, OpenGL, and
@@ -2640,7 +2640,7 @@ the existing native runners and preserves every earlier check and deadline.
 
 The general-gather jobs in [Project Demo Testing](../../../.github/workflows/demo-project-testing.yml)
 uses the unchanged JIT template and indexing headers at
-`9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. It executes 24 original/generated
+`5996d291ee88db9535b33eec458ca241428c0d2b`. It executes 24 original/generated
 Metal workloads through public project, package and native-dispatch APIs.
 Coverage includes zero through two index buffers, scalar through three-dimensional
 indices, negative and repeated indices, and dense, transposed, strided and
@@ -5272,7 +5272,7 @@ These reduced controls do not establish full-corpus or host-runtime parity.
 
 The current-pin native copy gate separately tests 11 float32 layouts and the
 contiguous and strided half-copy entries at
-`9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8`. Both half entries transport all
+`5996d291ee88db9535b33eec458ca241428c0d2b`. Both half entries transport all
 65,536 binary16 payloads, including signed zero, subnormals and NaNs, in bounded
 dispatches with 32 untouched output guards. OpenGL uses the exact widened
 binary32 representation; DirectX and Metal retain two-byte encoded storage.

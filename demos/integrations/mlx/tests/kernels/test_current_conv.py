@@ -61,7 +61,7 @@ from tests.runtime_helpers import _prepare_native_package, _validate_generated_a
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 SOURCE = "mlx/backend/metal/kernels/conv.metal"
-SOURCE_SHA256 = "d0604f69e144ffb65dcfc99e6383880b6d2d61645fa73147f35230034a1cd874"
+SOURCE_SHA256 = "e9547087fa6b4f12ec31771aa85396a7d503f6a72f7317d6ca387d91e5ef68a2"
 HEADERS = {
     "mlx/backend/metal/kernels/steel/conv/params.h": (
         "354a832c5bf37791f4ad42ddc3ca9456a9c1ebbf3216650bb4a10c18110e03a8"
@@ -1285,7 +1285,7 @@ def _expected_scope():
         "checkedElementCountByEntry": {
             entry: _checked_elements(entry) for entry in ENTRIES
         },
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         # conv.cpp picks the int64-index kernels above INT32_MAX elements; the
         # gate runs them on the same small cases as their int32 forms.
         "largeIndexKernelsUseSmallCases": True,
@@ -1308,8 +1308,8 @@ def test_current_mlx_conv_contract_is_exact():
         "headers": HEADERS,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES

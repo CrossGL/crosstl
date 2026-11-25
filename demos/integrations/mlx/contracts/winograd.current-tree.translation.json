@@ -3,9 +3,9 @@
   "kind": "crosstl-mlx-current-tree-winograd-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/conv.metal",
-    "sourceSha256": "d0604f69e144ffb65dcfc99e6383880b6d2d61645fa73147f35230034a1cd874",
+    "sourceSha256": "e9547087fa6b4f12ec31771aa85396a7d503f6a72f7317d6ca387d91e5ef68a2",
     "headers": {
       "mlx/backend/metal/kernels/steel/conv/params.h": "354a832c5bf37791f4ad42ddc3ca9456a9c1ebbf3216650bb4a10c18110e03a8",
       "mlx/backend/metal/kernels/utils.h": "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf"
@@ -756,7 +756,7 @@
       "winograd_conv_2d_input_transform_float16_bc32": 86016,
       "winograd_conv_2d_output_transform_float16_bo32": 23424
     },
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "partialOutputTilesExercised": true,
     "partialThreadgroupsExercised": false,
     "upstreamMlxTestSuiteExecuted": false,

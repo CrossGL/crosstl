@@ -3,15 +3,15 @@
   "kind": "crosstl-mlx-current-tree-sort-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/sort.metal",
-    "sourceSha256": "be97ea6106fb2e0c0c26f006037408e246fafa012fd2577bfc20cf356475ee61",
+    "sourceSha256": "d1ebc7bc4ca91ac6c54aa7f2d694192026a1f72011f7c68f8d53d1f25bde7445",
     "header": "mlx/backend/metal/kernels/sort.h",
-    "headerSha256": "3171f47dabf2cf501dffc2e388e3d66446d6f71712e8d070028258a084b63574"
+    "headerSha256": "18bd92887134c791bad3353a7b00695b93114d619e87f07760f6edfdbb340580"
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -3811,7 +3811,7 @@
     "runtimeCoveredEntryCount": 264,
     "artifactCountByTarget": 264,
     "dispatchCountByTarget": 690,
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false
   }

@@ -245,7 +245,7 @@ def test_full_gemm_uses_existing_native_jobs_and_retains_evidence():
     assert upload["with"]["include-hidden-files"] is True
     assert (
         job["env"]["MLX_CURRENT_TREE_COMMIT"]
-        == "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+        == "5996d291ee88db9535b33eec458ca241428c0d2b"
     )
     _assert_workflow_triggers(workflow, path)
 
@@ -291,7 +291,7 @@ def test_windows_host_qualification_preserves_required_workloads():
     assert "continue-on-error" not in job
     assert job["timeout-minutes"] == 360
     assert "WARP {0} qualification" in job["name"]
-    assert job["env"]["MLX_COMMIT"] == "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+    assert job["env"]["MLX_COMMIT"] == "5996d291ee88db9535b33eec458ca241428c0d2b"
     assert not any("warp_qualification" in str(value) for value in job["env"].values())
     steps = {step.get("name"): step for step in job["steps"]}
     install = steps["Install pinned DirectX tools"]
@@ -1451,7 +1451,7 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     )
     mlx_reference_commit = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
     mlx_corpus_commit = "846d176227a0ac13d2667e58d2bb68b322109ab0"
-    mlx_current_tree_commit = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+    mlx_current_tree_commit = "5996d291ee88db9535b33eec458ca241428c0d2b"
 
     assert mlx_porting, "demo-project-testing.yml must exist"
     for event_name in ("push", "pull_request"):
@@ -1494,8 +1494,8 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     )
     assert "if: runner.os == 'Linux'" in current_census
     assert '--expected-commit "$MLX_CURRENT_TREE_COMMIT"' in current_census
-    assert "--expected-unit-count 49" in current_census
-    assert "--expected-entry-count 17832" in current_census
+    assert "--expected-unit-count 50" in current_census
+    assert "--expected-entry-count 19723" in current_census
     math_checks = workflow_text.workflow_step_section(
         mlx_porting, "Validate Direct3D Metal math semantics"
     )

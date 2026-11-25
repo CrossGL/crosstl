@@ -81,16 +81,16 @@ CONTRACT_PATH = (
 )
 TARGETS = ("metal", "opengl", "directx")
 SOURCE = "mlx/backend/metal/kernels/fp_quantized.metal"
-SOURCE_SHA256 = "18ba5ebc68cb0ffa1a992f36a941d810bfdcf0163731a6351bd17bee076e2425"
+SOURCE_SHA256 = "b7ef0eca322c666eb469914072e73763ce4e7b6935ca6f2c15a40e9ae6573727"
 HEADERS = {
     "mlx/backend/metal/kernels/fp_quantized.h": (
-        "359a1ea9008f74cc15c61e9d39c6300dcffb9cfb9cc0ebd59ec7c00b789d719f"
+        "553777467b49cb1f1b498cf24a5870ea57b65cf8b68536d17dd64fe56583de45"
     ),
     "mlx/backend/metal/kernels/fp4.h": (
         "e3159945d7e5ae24f7a1ca9c4875b2a5d15cfb6952405df24a0df1bb2622a93a"
     ),
     "mlx/backend/metal/kernels/fp8.h": (
-        "9a9d77a6295f66b4ada4311c3b855b6ecb7a2b38f28623109e3c61d2e17e81ae"
+        "0d212a9fa1d371bd85c8d7cf8159dbe0e702a4bbdf0a334f7fe3032c55743a1c"
     ),
     "mlx/backend/metal/kernels/quantized_utils.h": (
         "a12841b57d505f6cca81631901b845dbf76bc90dfc099e7f40c763b2cc838c51"
@@ -102,7 +102,7 @@ HEADERS = {
 # quantize_impl, fp_quantize_dequantize and get_quantize_kernel_dims, whose
 # bindings and grid the cases follow.
 HOST_SOURCE = "mlx/backend/metal/quantized.cpp"
-HOST_SHA256 = "36b79607ee01bc213511dcdad590b2dc3b96099300551cbc3e7e6c7e13ba5982"
+HOST_SHA256 = "242cc50dd4e69ccd0750f6cc4e1832066f66ba11d03ef04101e311823094e6b2"
 UNIT_ENTRY_COUNT = 518
 
 # fp_quantized.metal's instantiation order: instantiate_quantized_types walks
@@ -847,7 +847,7 @@ def _expected_scope():
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": len(ENTRIES) * len(CASES),
         "checkedElementCountByTarget": _checked_element_count(),
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -868,8 +868,8 @@ def expected_contract(artifacts=None):
             "hostSource": {"path": HOST_SOURCE, "sha256": HOST_SHA256},
         },
         "corpusCensus": {
-            "metalUnitCount": 49,
-            "entryCount": 17832,
+            "metalUnitCount": 50,
+            "entryCount": 19723,
             "discoveryDiagnosticCount": 0,
         },
         "entries": list(ENTRIES),

@@ -3,15 +3,15 @@
   "kind": "crosstl-mlx-current-tree-logsumexp-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/logsumexp.metal",
     "sourceSha256": "f9bec5e1e5a23d20bedf9ff8d29a8c03bbb5144bc5d751bbfe906d32ee894817",
     "header": "mlx/backend/metal/kernels/logsumexp.h",
     "headerSha256": "233f9a7072bed21f2b71f522c41aa5e86208e3bcfd18fafc87cf28a7d7f13154"
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -415,7 +415,7 @@
       "block_logsumexp_bfloat16": 93,
       "looped_logsumexp_bfloat16": 9
     },
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "fastMathLowering": "metal-keeps-fast-exp-others-use-default-exp",
     "allMaskedRowsCovered": false,
     "upstreamMlxTestSuiteExecuted": false,

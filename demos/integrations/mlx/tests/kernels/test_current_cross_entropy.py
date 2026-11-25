@@ -419,8 +419,8 @@ def test_current_mlx_cross_entropy_contract_is_exact():
         "headerSha256": HEADER_SHA256,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES
@@ -443,7 +443,7 @@ def test_current_mlx_cross_entropy_contract_is_exact():
         "coveredEntryCount": 6,
         "runtimeCoveredEntryCount": 6,
         "checkedValueCountByEntry": value_counts,
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "fastMathLowering": "metal-keeps-fast-exp-others-use-default-exp",
         "donatedInputAliasingCovered": False,
         "upstreamMlxTestSuiteExecuted": False,

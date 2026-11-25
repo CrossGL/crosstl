@@ -934,7 +934,7 @@ def _expected_scope():
         "checkedElementCountByEntry": {
             entry: _checked_elements(entry) for entry in ENTRIES
         },
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "partialOutputTilesExercised": True,
         "partialThreadgroupsExercised": False,
         "upstreamMlxTestSuiteExecuted": False,

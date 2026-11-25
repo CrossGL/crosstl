@@ -74,10 +74,10 @@ CONTRACT_PATH = (
 )
 TARGETS = ("metal", "opengl", "directx")
 SOURCE = "mlx/backend/metal/kernels/quantized.metal"
-SOURCE_SHA256 = "292aab5a98e3fc047b8ed91343fc10b66e5a92e12c258cde168929520ab2abfd"
+SOURCE_SHA256 = "476c9a733f005eb8d0ca90fc3ccc3d566ee5cc1f2f2e6daabb23b7fe98335f36"
 HEADERS = {
     "mlx/backend/metal/kernels/quantized.h": (
-        "8e2ca65d8d8dafe67b97120d1127d54ce57032f621bdba161e54a0bc4a948b8c"
+        "3bcdd29bb52f35d1a3cbc6caebda990ba3033e5448e3e7ccb5e25c028ba4cbea"
     ),
     "mlx/backend/metal/kernels/quantized_utils.h": (
         "a12841b57d505f6cca81631901b845dbf76bc90dfc099e7f40c763b2cc838c51"
@@ -92,7 +92,7 @@ HEADERS = {
 # quantize_impl and get_quantize_kernel_dims, whose bindings and grid the
 # cases follow.
 HOST_SOURCE = "mlx/backend/metal/quantized.cpp"
-HOST_SHA256 = "36b79607ee01bc213511dcdad590b2dc3b96099300551cbc3e7e6c7e13ba5982"
+HOST_SHA256 = "242cc50dd4e69ccd0750f6cc4e1832066f66ba11d03ef04101e311823094e6b2"
 UNIT_ENTRY_COUNT = 2052
 
 # quantized.metal's instantiation order: instantiate_quantized_all() walks
@@ -716,7 +716,7 @@ def _expected_scope():
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": len(ENTRIES) * len(CASES),
         "checkedElementCountByTarget": _checked_element_count(),
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -737,8 +737,8 @@ def expected_contract(artifacts=None):
             "hostSource": {"path": HOST_SOURCE, "sha256": HOST_SHA256},
         },
         "corpusCensus": {
-            "metalUnitCount": 49,
-            "entryCount": 17832,
+            "metalUnitCount": 50,
+            "entryCount": 19723,
             "discoveryDiagnosticCount": 0,
         },
         "entries": list(ENTRIES),

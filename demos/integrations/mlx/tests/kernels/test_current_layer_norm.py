@@ -44,7 +44,7 @@ from tests.runtime_helpers import _prepare_native_package, _validate_generated_a
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 SOURCE = "mlx/backend/metal/kernels/layer_norm.metal"
-SOURCE_SHA256 = "2d243f5abea7353929f9bc838ceb5a98e52a452dfc29609ad4d5974447ea689f"
+SOURCE_SHA256 = "bdb31f2dc610826fb87c9040df12798960444699893574deb7673ca130f2e5de"
 HEADER = "mlx/backend/metal/kernels/utils.h"
 HEADER_SHA256 = "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_LAYER_NORM"
@@ -614,7 +614,7 @@ def _expected_scope():
         "checkedElementCountByEntry": {
             entry: _checked_elements(entry) for entry in ENTRIES
         },
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "idleThreadPaddingStores": "translated-as-written",
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
@@ -634,8 +634,8 @@ def test_current_mlx_layer_norm_contract_is_exact():
         "headerSha256": HEADER_SHA256,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES

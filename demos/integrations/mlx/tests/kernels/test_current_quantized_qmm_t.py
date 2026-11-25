@@ -143,10 +143,10 @@ QMM_HEADERS = {
         "c1b82153670b1e18371a6e88fdbcf440af692957775c2f837700315ab8a5112e"
     ),
     f"{STEEL}/mma.h": (
-        "9b37709de40c3acaa5411875e52c8d26e6de093261741f671fbdab9c39a852b7"
+        "21439be1087ac840ac5936bda0e57bd982fb7b104ea5e5f82ba7be0d2eaee524"
     ),
     f"{STEEL}/transforms.h": (
-        "73487e29beab5af9478bc931c49b5e8d66937c2fa2651499867f47ac5529afc2"
+        "ac276dd33675d3fac60870d385349d1e4bc94bb06e88e31a19bada0ef4ea39a8"
     ),
 }
 QMM_PARAMETERS = (
@@ -607,7 +607,7 @@ def _expected_scope():
         "dispatchCountByTarget": _dispatch_count(),
         "checkedElementCountByTarget": _checked_element_count(),
         "ciShardCount": CI_SHARD_COUNT,
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -628,8 +628,8 @@ def expected_contract(artifacts=None):
             "hostSource": {"path": HOST_SOURCE, "sha256": HOST_SHA256},
         },
         "corpusCensus": {
-            "metalUnitCount": 49,
-            "entryCount": 17832,
+            "metalUnitCount": 50,
+            "entryCount": 19723,
             "discoveryDiagnosticCount": 0,
         },
         "entries": list(ENTRIES),

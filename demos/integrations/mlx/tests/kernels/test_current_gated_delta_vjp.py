@@ -64,9 +64,9 @@ from tests.runtime_helpers import _prepare_native_package, _validate_generated_a
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 SOURCE = "mlx/backend/metal/kernels/gated_delta_update_vjp.metal"
-SOURCE_SHA256 = "59590c0bc3dbeb6ce1c808660b43abdf462a3f43f16abcb484220605b8aa86e7"
+SOURCE_SHA256 = "8cc4f4b3eb079628b97843bb974b983e910c39b90246951bafef2017ecc643d4"
 HEADER = "mlx/backend/metal/kernels/gated_delta_update_vjp.h"
-HEADER_SHA256 = "717aa81794efca14c589371c83a16e86f2d0b5e0660778b0e09e34abe46e63c6"
+HEADER_SHA256 = "777e9cd04778f97f5bc5c252d00868564bda04d53eb55b2e81cedc1e64e496aa"
 ATOMIC_HEADER = "mlx/backend/metal/kernels/atomic.h"
 ATOMIC_HEADER_SHA256 = (
     "4c35ea2798a2335502865247aee878149fc9ada0d7e84c05d771baef0c7fcc60"
@@ -763,7 +763,7 @@ def _expected_scope():
         "checkedElementCountByEntry": {
             entry: _checked_elements(entry) for entry in ENTRIES
         },
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -781,8 +781,8 @@ def test_current_mlx_gated_delta_vjp_contract_is_exact():
         "headers": {HEADER: HEADER_SHA256, ATOMIC_HEADER: ATOMIC_HEADER_SHA256},
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES

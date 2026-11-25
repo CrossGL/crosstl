@@ -3,7 +3,7 @@
   "kind": "crosstl-mlx-current-tree-ternary-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/ternary.metal",
     "sourceSha256": "e042fe449dbf49761547d244d521bbe0be883eff2e67cffd33f674b95c3a4dc5",
     "header": "mlx/backend/metal/kernels/ternary.h",
@@ -12,8 +12,8 @@
     "opsHeaderSha256": "afef5c3048963f9d3d4301ff40e8d5322dc07a3b3ec307c175262566091e5c11"
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -3132,7 +3132,7 @@
       "opengl": 424,
       "directx": 424
     },
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "upstreamMlxTestSuiteExecuted": false,
     "mlxHostRuntimeRedirectionImplemented": false
   }

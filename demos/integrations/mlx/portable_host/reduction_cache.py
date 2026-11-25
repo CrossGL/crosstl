@@ -27,7 +27,7 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
     SOURCE,
 )
 
-SOURCE_SHA256 = "f1e410ab635eaa940ec195461069cbb013ab88ab0d1f8d5dd8790d30b32c454a"
+SOURCE_SHA256 = "c40f06b54712f9ba71170d3ca775fb26b2936fb8f392a86ad51b63ef95b0d53e"
 
 
 def verify_events(events, root, directory, index):

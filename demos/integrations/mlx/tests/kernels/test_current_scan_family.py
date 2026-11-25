@@ -54,19 +54,19 @@ from tests.runtime_helpers import _prepare_native_package, _validate_generated_a
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 SOURCE = "mlx/backend/metal/kernels/scan.metal"
-SOURCE_SHA256 = "49faeb1a36f346b2aa0f68a5f5fe2544af2109fec5357425550f97a79926b6f3"
+SOURCE_SHA256 = "dfd261662e1d196b2ade96d062c190995524b73d49d4fdb7891ff8b9c923b9aa"
 HEADERS = {
     "mlx/backend/metal/kernels/scan.h": (
-        "735e545d1296f48d0bddffaff289c4e4ef77c5f76cb2bace861a706c43fc24a0"
+        "85c1e19ac4ac1b0382ec9956986fcb623979dc12855b261320be7e0528a8d1d1"
     ),
     "mlx/backend/metal/kernels/binary_ops.h": (
-        "6dbe789faafbf7259f411c7fab7c0fcdd192df47a78f8f0bd408228f7a30e5c7"
+        "a24eaa4b610224d5f296c0a8b7a1317561b569f70c11c4b95c4aea8f484370a9"
     ),
     "mlx/backend/metal/kernels/utils.h": (
         "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf"
     ),
     "mlx/backend/metal/kernels/complex.h": (
-        "16e8a815b2cbdb6070e0824e64fe33fccb6e918f1b84ea5c792bd89d33e57bf1"
+        "06031fa9f78e4abe5031924d403e5281d3c02c26e7e893e35a833e588acf1938"
     ),
 }
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_CURRENT_SCAN_FAMILY"
@@ -1389,7 +1389,7 @@ def _expected_scope():
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": sum(len(_cases(entry)) for entry in ENTRIES),
         "checkedElementCountByTarget": _element_count(),
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -1407,8 +1407,8 @@ def test_current_mlx_scan_contract_is_exact():
         "headers": HEADERS,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES

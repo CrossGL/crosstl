@@ -58,23 +58,23 @@ from tests.test_translator.test_native_loader_dispatch_integration import _execu
 SOURCE_HASHES = {
     model.SOURCES[
         2
-    ]: "29ce84c7fbc964cc2257ad7a1f5792493f0af502a2e74223d473a26f83493928",
+    ]: "4008eb11adda7dd667673a48354cc8d1135494ba12a9ee3b3e228b2f523c1942",
     model.SOURCES[
         3
     ]: "bd9985c4bc4d468b1485edf98065f4fb6319bf912d1de2bb766bf183655791dd",
 }
 CONV_HEADERS = {
     "kernels/steel_conv.h": (
-        "a34ae933e291169538ef9415323833f568d649b8ed6a5342c0eff40ced085d8c"
+        "ace697d131946606d80ef29bd5593b8ac57b0623303e996cc5a2a902db5968a3"
     ),
     "kernels/steel_conv_3d.h": (
         "d785d7032d460d8ac1277b1a0707b43bfc6fd3e4e3aeb87d33771d920bf920c5"
     ),
     "loaders/loader_channel_l.h": (
-        "4377845f9553eed23ff1707cddfaabcf0056578c829f67616a1e68efcab94703"
+        "797bb16aec7ec51dc0563a0132d3dd504abf4078c44cfc44dad3926bba9cc9ad"
     ),
     "loaders/loader_channel_n.h": (
-        "6e6efd6b2b1af0686030f703fb25f3e022edf9079f81f3501d09548447f48294"
+        "2d94d48fb42b0c910cd40a11937df9fc31a6f3e8458a30470cf4692bfb227fa5"
     ),
     "params.h": "354a832c5bf37791f4ad42ddc3ca9456a9c1ebbf3216650bb4a10c18110e03a8",
     "conv.h": "e469f51289eff2f632335c634bb5d346667a61f81e515f42159a1ebffd3dd4df",

@@ -137,8 +137,8 @@ def test_current_mlx_gather_mm_offsets_contract_is_exact():
         "sourceSha256": SOURCE_SHA256,
     }
     assert contract["corpusCensus"] == {
-        "metalUnitCount": 49,
-        "entryCount": 17832,
+        "metalUnitCount": 50,
+        "entryCount": 19723,
         "discoveryDiagnosticCount": 0,
     }
     assert tuple(contract["entries"]) == ENTRIES
@@ -169,7 +169,7 @@ def test_current_mlx_gather_mm_offsets_contract_is_exact():
         "offsetCountByTarget": {
             target: sum(groups for _, groups in CASES.values()) for target in TARGETS
         },
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }

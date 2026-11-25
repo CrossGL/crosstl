@@ -71,7 +71,7 @@ verification still run independently for each artifact. This cache is not a
 persistent translation checkpoint.
 
 The next MLX kernel-tree increment is pinned independently at
-``9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8``. Entry discovery must report
+``5996d291ee88db9535b33eec458ca241428c0d2b``. Entry discovery must report
 exactly 49 Metal units, 17,832 entries, and zero diagnostics. The compact
 ``arg_reduce.current-tree.translation.json`` contract pins all 24 discovered
 ``arg_reduce.metal`` entries and 72 deterministic Metal, OpenGL, and DirectX
@@ -4606,7 +4606,7 @@ the `GLSL buffer layout specification
 
 Required native CI exercises a reduced two-field transform and the unmodified
 ``g1_Powercomplex64`` entry from MLX commit
-``9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8``. The latter runs 256 finite and
+``5996d291ee88db9535b33eec458ca241428c0d2b``. The latter runs 256 finite and
 zero-base cases through translated HLSL/GLSL runtime packages; macOS compiles
 and executes both original and roundtrip Metal. The numerical bound is
 ``5e-5 * max(1, abs(reference))`` for the complex absolute error. Reports retain

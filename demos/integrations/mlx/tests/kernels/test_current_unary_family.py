@@ -115,19 +115,19 @@ HEADERS = {
         "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf"
     ),
     "mlx/backend/metal/kernels/fp8.h": (
-        "9a9d77a6295f66b4ada4311c3b855b6ecb7a2b38f28623109e3c61d2e17e81ae"
+        "0d212a9fa1d371bd85c8d7cf8159dbe0e702a4bbdf0a334f7fe3032c55743a1c"
     ),
     "mlx/backend/metal/kernels/erf.h": (
         "31d88004390bbe08636c5f64a3cb3180ebc8d79a89267347de9f6c33aba0e9f9"
     ),
     "mlx/backend/metal/kernels/expm1f.h": (
-        "dbdf551f45723639da54d72e327008bde6ef01a2f1ed561bb065e251ab6c9f1a"
+        "69999ff7906d20d2688373b6b83b54cec708a26054f6da022910ce39ba1b11d2"
     ),
     "mlx/backend/metal/kernels/cexpf.h": (
         "88b6e15a52a5800d98d9bc6da840ca5cf70bf572fda136409580c1f17b1e0aab"
     ),
     "mlx/backend/metal/kernels/complex.h": (
-        "16e8a815b2cbdb6070e0824e64fe33fccb6e918f1b84ea5c792bd89d33e57bf1"
+        "06031fa9f78e4abe5031924d403e5281d3c02c26e7e893e35a833e588acf1938"
     ),
 }
 # The headers at the complete-family commit. ``unary_ops.h`` moved complex
@@ -1464,8 +1464,8 @@ def expected_contract(current_artifacts=None):
             "headers": HEADERS,
         },
         "corpusCensus": {
-            "metalUnitCount": 49,
-            "entryCount": 17832,
+            "metalUnitCount": 50,
+            "entryCount": 19723,
             "discoveryDiagnosticCount": 0,
         },
         "entries": list(ENTRIES),
@@ -1536,7 +1536,7 @@ def expected_contract(current_artifacts=None):
             "runtimeCoveredEntryCount": len(ENTRIES),
             "currentArtifactEntryCount": len(CHANGED_ENTRIES),
             "dispatchCountByTarget": {target: _dispatch_count() for target in TARGETS},
-            "completeCorpusEntryCount": 17832,
+            "completeCorpusEntryCount": 19723,
             "upstreamMlxTestSuiteExecuted": False,
             "mlxHostRuntimeRedirectionImplemented": False,
         },

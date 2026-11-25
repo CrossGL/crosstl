@@ -15,7 +15,7 @@ from crosstl.project import ProjectConfig, translate_project
 from demos.integrations.mlx.run_metal_host import MLX_COMMIT, run
 
 SOURCE = "mlx/backend/metal/kernels/gated_delta_update_vjp.metal"
-SOURCE_SHA256 = "59590c0bc3dbeb6ce1c808660b43abdf462a3f43f16abcb484220605b8aa86e7"
+SOURCE_SHA256 = "8cc4f4b3eb079628b97843bb974b983e910c39b90246951bafef2017ecc643d4"
 ENTRY = "seq_gated_delta_vjp_float_128_128_24_24_1"
 REQUIRE_ENV = "CROSTL_REQUIRE_MLX_GATED_DELTA_METAL"
 

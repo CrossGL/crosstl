@@ -3,15 +3,15 @@
   "kind": "crosstl-mlx-current-tree-softmax-contract",
   "provenance": {
     "repository": "https://github.com/ml-explore/mlx.git",
-    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "commit": "5996d291ee88db9535b33eec458ca241428c0d2b",
     "source": "mlx/backend/metal/kernels/softmax.metal",
     "sourceSha256": "d19231c66973edc3944f12529d1cc393029e7f7262b914907c710ef9dbcb39e2",
     "header": "mlx/backend/metal/kernels/softmax.h",
     "headerSha256": "cb233fe42a7358f5f658c9a1ef52cd2ee9dd3786ddfad01793a976d58f4d4051"
   },
   "corpusCensus": {
-    "metalUnitCount": 49,
-    "entryCount": 17832,
+    "metalUnitCount": 50,
+    "entryCount": 19723,
     "discoveryDiagnosticCount": 0
   },
   "entries": [
@@ -585,7 +585,7 @@
       "block_softmax_precise_bfloat16": 24718,
       "looped_softmax_precise_bfloat16": 63382
     },
-    "completeCorpusEntryCount": 17832,
+    "completeCorpusEntryCount": 19723,
     "fastMathLowering": "metal-keeps-fast-exp-others-use-default-exp",
     "allMaskedRowsCovered": false,
     "upstreamMlxTestSuiteExecuted": false,

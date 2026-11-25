@@ -15,7 +15,7 @@ import tempfile
 from collections import Counter
 from pathlib import Path
 
-MLX_COMMIT = "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8"
+MLX_COMMIT = "5996d291ee88db9535b33eec458ca241428c0d2b"
 HERE = Path(__file__).resolve().parent
 # Both upstream runs reset these generators to the same seed before every test,
 # so the original and translated runs see identical random inputs.
@@ -53,11 +53,11 @@ HOST_LAYOUTS = {
 }
 SOURCE_HASHES = {
     "mlx/backend/metal/device.cpp": (
-        "d2254ea5cb2ac282f65c2869c6ef56decc97669e2a5fc26fba9d831b60569c9f",
+        "2de8cf4f8c434405fc905792c0e98ba505775e4c90231e059bc0d7f1a50bdcc9",
         "25981c452fc28eb4a8f3273b87966578df03f2a891ec901630dfe52beaca8af7",
     ),
     "mlx/backend/metal/device.h": (
-        "ab1e07495b916a86eb762cddc68c6f1ae5e4c61020baacdea3c0dadd59150603",
+        "d8850e405bd019e9d2812728e532f9d0a674eb5bc54a3421b134c1c040619a48",
         "d70264da6a7c4ace820037c65af0fec75acb595e4a0cfa297a9e258d8515d402",
     ),
 }

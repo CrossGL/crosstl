@@ -82,16 +82,16 @@ from tests.runtime_helpers import _prepare_native_package, _validate_generated_a
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 SOURCE = "mlx/backend/metal/kernels/binary.metal"
-SOURCE_SHA256 = "4dadb612a9b768f9d51b3b394b32fc0129d361a55b35d545b3c014c87e00897e"
+SOURCE_SHA256 = "787fb66e10e759a0c9bdd60d696792e6368b7418f24f0b61ffa89f6eb2845100"
 HEADERS = {
     "mlx/backend/metal/kernels/binary.h": (
         "9a367967a48907ac6792be685bab4cc062f3ad916cccacb441c627d87a4b7898"
     ),
     "mlx/backend/metal/kernels/binary_ops.h": (
-        "6dbe789faafbf7259f411c7fab7c0fcdd192df47a78f8f0bd408228f7a30e5c7"
+        "a24eaa4b610224d5f296c0a8b7a1317561b569f70c11c4b95c4aea8f484370a9"
     ),
     "mlx/backend/metal/kernels/complex.h": (
-        "16e8a815b2cbdb6070e0824e64fe33fccb6e918f1b84ea5c792bd89d33e57bf1"
+        "06031fa9f78e4abe5031924d403e5281d3c02c26e7e893e35a833e588acf1938"
     ),
     "mlx/backend/metal/kernels/utils.h": (
         "e40473c36e2f2e7ba250b29e8dbbe3c150ce207379e57a2818e916b343e9f2cf"
@@ -1291,8 +1291,8 @@ def expected_contract(current_artifacts=None):
             "headers": HEADERS,
         },
         "corpusCensus": {
-            "metalUnitCount": 49,
-            "entryCount": 17832,
+            "metalUnitCount": 50,
+            "entryCount": 19723,
             "discoveryDiagnosticCount": 0,
         },
         "entries": list(ENTRIES),
@@ -1363,7 +1363,7 @@ def expected_contract(current_artifacts=None):
             "runtimeCoveredEntryCount": len(ENTRIES),
             "currentArtifactEntryCount": len(CHANGED_ENTRIES),
             "dispatchCountByTarget": {target: _dispatch_count() for target in TARGETS},
-            "completeCorpusEntryCount": 17832,
+            "completeCorpusEntryCount": 19723,
             "upstreamMlxTestSuiteExecuted": False,
             "mlxHostRuntimeRedirectionImplemented": False,
         },

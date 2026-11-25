@@ -82,7 +82,7 @@ from tests.runtime_helpers import _prepare_native_package, _validate_generated_a
 from tests.test_translator.test_native_loader_dispatch_integration import _executor
 
 SOURCE = "mlx/backend/metal/kernels/reduce.metal"
-SOURCE_SHA256 = "f1e410ab635eaa940ec195461069cbb013ab88ab0d1f8d5dd8790d30b32c454a"
+SOURCE_SHA256 = "c40f06b54712f9ba71170d3ca775fb26b2936fb8f392a86ad51b63ef95b0d53e"
 HEADERS = {
     f"mlx/backend/metal/kernels/{name}": digest
     for name, digest in (
@@ -100,11 +100,11 @@ HEADERS = {
         ),
         (
             "reduction/reduce_col.h",
-            "9bb7b8b15612230c5f91cea3220048d09219809dbbc1adab4b2dabfd44315810",
+            "47d47a9a8b52e3dfd15b195f40cdb3623583e00f5ac11378cdc0a7fe49fe17cf",
         ),
         (
             "reduction/reduce_init.h",
-            "c5ef9c65886f9aba64a5df03607cf175950fd99237ca068bd6fcaec72d63d519",
+            "2efff9a359069d38767eb764c9e15129e6ac07e4271f4cac0b190628824b8a4a",
         ),
         (
             "reduction/reduce_row.h",
@@ -121,7 +121,7 @@ HEADERS = {
         ),
         (
             "complex.h",
-            "16e8a815b2cbdb6070e0824e64fe33fccb6e918f1b84ea5c792bd89d33e57bf1",
+            "06031fa9f78e4abe5031924d403e5281d3c02c26e7e893e35a833e588acf1938",
         ),
         ("bf16.h", "abd87446a310b77ac530ef52a324feae5cb285d03ec9613e3a88ebb71410fdcb"),
         (
@@ -1717,7 +1717,7 @@ def _expected_scope():
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": _dispatch_count(),
         "checkedElementCountByTarget": _element_count(),
-        "completeCorpusEntryCount": 17832,
+        "completeCorpusEntryCount": 19723,
         "upstreamMlxTestSuiteExecuted": False,
         "mlxHostRuntimeRedirectionImplemented": False,
     }
@@ -1738,8 +1738,8 @@ def expected_contract(artifacts=None):
             "headers": HEADERS,
         },
         "corpusCensus": {
-            "metalUnitCount": 49,
-            "entryCount": 17832,
+            "metalUnitCount": 50,
+            "entryCount": 19723,
             "discoveryDiagnosticCount": 0,
         },
         "entries": list(ENTRIES),
