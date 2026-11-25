@@ -19,6 +19,7 @@ import pytest
 import yaml
 
 from tests.fake_commands import write_python_command
+from tests.workflow_text import expand_item_aliases
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
@@ -681,9 +682,10 @@ def test_apt_installer_saves_only_new_downloads():
 
 
 def _workflow_job_section(workflow, job_id):
+    # A step shared through a YAML anchor is written out in every job that reuses it.
     match = re.search(
         rf"^  {re.escape(job_id)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
-        workflow,
+        expand_item_aliases(workflow),
         flags=re.MULTILINE | re.DOTALL,
     )
     assert match is not None, f"workflow job {job_id!r} is missing"

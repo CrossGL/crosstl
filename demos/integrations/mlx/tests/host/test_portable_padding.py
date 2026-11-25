@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import packages
 from demos.integrations.mlx.portable_host import padding_workloads as workloads
 from demos.integrations.mlx.portable_host import verify_padding as proof
@@ -194,8 +195,7 @@ def test_padding_ci_requires_native_execution_and_retained_evidence():
     job = workflow["jobs"]["integer64-host"]
     assert job["needs"] == ["ci-plan", "portable-host"]
     assert (
-        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
-        and "continue-on-error" not in job
+        job["if"] == job_condition("integer64-host") and "continue-on-error" not in job
     )
     assert {
         (item["target"], item["os"]) for item in job["strategy"]["matrix"]["include"]
