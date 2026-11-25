@@ -473,6 +473,15 @@ OTHER_NAMES = {
         "warp.vote": "subgroupBallot({0}).x",
         "warp.match_any": "__match_any_sync(4294967295u, {0})",
         "syncwarp": "subgroupBarrier",
+        # MAX's block functions (max/gpu/primitives/block.mojo) are CrossGL's workgroup collectives over the one
+        # workgroup whose block_size the probe names: sum, max and min give every thread the reduction (broadcast is
+        # True by default), prefix_sum is inclusive unless asked to be exclusive, and broadcast copies the value of
+        # thread 0, its default source.
+        "block.sum": "workgroupAdd",
+        "block.max": "workgroupMax",
+        "block.min": "workgroupMin",
+        "block.prefix_sum": "workgroupInclusiveAdd",
+        "block.broadcast": "workgroupBroadcast({0}, 0u)",
         # max.gpu's lane_id is the invocation's index in its warp, and warp_id divides the x index in the block by the
         # warp size (max/gpu/primitives/id.mojo), both as an Int. Atomic.fetch_add returns the value it replaced, and
         # Atomic.fetch_sub, which CrossGL has no operation of its own for, is an atomicAdd of the negated operand,
