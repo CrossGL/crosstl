@@ -11018,7 +11018,10 @@ def test_advanced_generic_pattern_matching_example_emits_referenced_enums():
     repo_root = Path(__file__).resolve().parents[3]
     source = (repo_root / "examples/advanced/GenericPatternMatching.cgl").read_text()
 
-    with pytest.raises(RustLoweringRefused, match=r"resource: uniform 'normal_matrix': 'mat3 column 1' is at std140 offset 16, rust\-gpu lays i"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"resource: uniform 'normal_matrix': 'mat3 column 1' is at std140 offset 16, rust\-gpu lays i",
+    ):
         generate_code(parse_code(tokenize_code(source)))
 
 
@@ -11026,7 +11029,10 @@ def test_advanced_generic_pattern_matching_example_smoke_compiles(tmp_path):
     repo_root = Path(__file__).resolve().parents[3]
     source = (repo_root / "examples/advanced/GenericPatternMatching.cgl").read_text()
 
-    with pytest.raises(RustLoweringRefused, match=r"resource: uniform 'normal_matrix': 'mat3 column 1' is at std140 offset 16, rust\-gpu lays i"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"resource: uniform 'normal_matrix': 'mat3 column 1' is at std140 offset 16, rust\-gpu lays i",
+    ):
         generate_code(parse_code(tokenize_code(source)))
 
 
@@ -11797,7 +11803,10 @@ def test_rust_texture_helper_diagnostics_reject_invalid_resources():
         }
     }
     """
-    with pytest.raises(RustLoweringRefused, match=r"texture operation: 'textureCompare' has no spirv\-std method for these operands on a Image!"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"texture operation: 'textureCompare' has no spirv\-std method for these operands on a Image!",
+    ):
         generate_code(parse_code(tokenize_code(non_shadow_compare)))
 
     image_gather = """
@@ -11852,7 +11861,10 @@ def test_texture_lod_grad_offset_calls_map_to_rust_helpers_and_compile(tmp_path)
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"texture operation: 'textureOffset' reads with a texel offset, and spirv\-std's image operan"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"texture operation: 'textureOffset' reads with a texel offset, and spirv\-std's image operan",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -11942,7 +11954,10 @@ def test_texel_fetch_sampler_family_helpers_compile(tmp_path):
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"texture operation: 'texelFetchOffset' reads with a texel offset, and spirv\-std's image ope"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"texture operation: 'texelFetchOffset' reads with a texel offset, and spirv\-std's image ope",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -11969,7 +11984,10 @@ def test_texel_fetch_and_texture_query_calls_map_to_rust_helpers_and_compile(
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"texture operation: 'texelFetchOffset' reads with a texel offset, and spirv\-std's image ope"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"texture operation: 'texelFetchOffset' reads with a texel offset, and spirv\-std's image ope",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -12051,7 +12069,10 @@ def test_projected_sampling_and_gather_calls_map_to_rust_helpers_and_compile(
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"texture operation: 'textureProjOffset' reads with a texel offset, and spirv\-std's image op"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"texture operation: 'textureProjOffset' reads with a texel offset, and spirv\-std's image op",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -12105,7 +12126,10 @@ def test_explicit_sampler_texture_helpers_map_to_rust_helpers_and_compile(tmp_pa
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"texture operation: 'textureLodOffset' reads with a texel offset, and spirv\-std's image ope"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"texture operation: 'textureLodOffset' reads with a texel offset, and spirv\-std's image ope",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -12180,7 +12204,10 @@ def test_shadow_compare_helpers_map_to_rust_helpers_and_compile(tmp_path):
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"texture operation: 'textureCompareOffset' reads with a texel offset, and spirv\-std's image"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"texture operation: 'textureCompareOffset' reads with a texel offset, and spirv\-std's image",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -12244,7 +12271,10 @@ def test_resource_arrays_map_to_rust_arrays_and_compile(tmp_path):
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"resource: storage image 'fixedImages' \(image2D\) has no format layout qualifier, and rust\-g"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"resource: storage image 'fixedImages' \(image2D\) has no format layout qualifier, and rust\-g",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -12376,7 +12406,10 @@ def test_storage_image_and_buffer_helpers_map_to_rust_resources_and_compile(tmp_
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"resource: storage image 'colorImage' \(image2D\) has no format layout qualifier, and rust\-gp"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"resource: storage image 'colorImage' \(image2D\) has no format layout qualifier, and rust\-gp",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -12597,7 +12630,10 @@ def test_resource_binding_metadata_comments_compile_with_rust(tmp_path):
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"resource: 'counters' \(RWStructuredBuffer<int>\[2\]\) is not lowered to a rust\-gpu resource bi"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"resource: 'counters' \(RWStructuredBuffer<int>\[2\]\) is not lowered to a rust\-gpu resource bi",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -12673,7 +12709,10 @@ def test_rust_storage_image_atomic_binds_the_image_as_an_entry_parameter(tmp_pat
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"stage: compute entry parameter 'pixel' is not a compute built\-in input"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"stage: compute entry parameter 'pixel' is not a compute built\-in input",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -12768,7 +12807,10 @@ def test_explicit_storage_image_formats_map_to_rust_value_types_and_compile(tmp_
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"resource: 'signedVolume' \(image3D<r32i>\) has no spirv\-std Image! type"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"resource: 'signedVolume' \(image3D<r32i>\) has no spirv\-std Image! type",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -12810,7 +12852,10 @@ def test_multisample_storage_image_helpers_map_to_rust_and_compile(tmp_path):
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"resource: storage image 'msImage' \(image2DMS\) has no format layout qualifier, and rust\-gpu"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"resource: storage image 'msImage' \(image2DMS\) has no format layout qualifier, and rust\-gpu",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
