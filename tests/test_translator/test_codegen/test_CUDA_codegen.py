@@ -4157,6 +4157,118 @@ class TestCudaCodeGen:
         for bare in ("length(a)", "distance(a, b)", "normalize(a)", "distance(h, k)"):
             assert f" = {bare};" not in code
 
+    def test_integer_scalar_and_vector_geometric_builtins_lower_through_float(self):
+        source_code = """
+        shader G {
+            int next_int(int x) {
+                return x + 1;
+            }
+            float f(int i, int j, uint u, uint v, ivec3 iv, ivec3 jv, uvec2 uv, uvec2 wv, i64vec2 lv, i64vec2 mw) {
+                float a = length(i);
+                float b = distance(i, j);
+                float c = normalize(i);
+                float d = length(u);
+                float du = distance(u, v);
+                float nu_s = normalize(u);
+                float dmu = distance(i, u);
+                float e = length(iv);
+                float g = distance(iv, jv);
+                vec3 n = normalize(iv);
+                float eu = length(uv);
+                float gu = distance(uv, wv);
+                vec2 nu = normalize(uv);
+                float el = length(lv);
+                float dl = distance(lv, mw);
+                vec2 nl = normalize(lv);
+                float cn = normalize(next_int(i));
+                float ce = length(i + j);
+                vec3 scaled = normalize(iv) * 2.0f;
+                return a + b + c + d + du + nu_s + dmu + e + g + n.x + eu + gu + nu.x + el + dl + nl.x + cn + ce + scaled.x;
+            }
+        }
+        """
+
+        code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert "float a = fabsf((float)i);" in code
+        assert "float b = fabsf((float)i - (float)j);" in code
+        assert "float c = ((float)i / fabsf((float)i));" in code
+        assert "float d = fabsf((float)u);" in code
+        assert "float du = fabsf((float)u - (float)v);" in code
+        assert "float nu_s = ((float)u / fabsf((float)u));" in code
+        assert "float dmu = fabsf((float)i - (float)u);" in code
+        assert "float e = cgl_int3_length(iv);" in code
+        assert "float g = cgl_int3_distance(iv, jv);" in code
+        assert "float3 n = cgl_int3_normalize(iv);" in code
+        assert "float eu = cgl_uint2_length(uv);" in code
+        assert "float gu = cgl_uint2_distance(uv, wv);" in code
+        assert "float2 nu = cgl_uint2_normalize(uv);" in code
+        assert "float el = cgl_longlong2_length(lv);" in code
+        assert "float dl = cgl_longlong2_distance(lv, mw);" in code
+        assert "float2 nl = cgl_longlong2_normalize(lv);" in code
+        assert "float cn = cgl_normalize_float((float)next_int(i));" in code
+        assert "float ce = fabsf((float)(i + j));" in code
+        assert (
+            "float3 scaled = cgl_float3_mul_scalar(cgl_int3_normalize(iv), 2.0f);"
+            in code
+        )
+        assert "__device__ inline float cgl_int3_length(int3 value)" in code
+        assert "__device__ inline float cgl_int3_distance(int3 lhs, int3 rhs)" in code
+        assert "__device__ inline float3 cgl_int3_normalize(int3 value)" in code
+        assert "__device__ inline float cgl_uint2_length(uint2 value)" in code
+        assert (
+            "__device__ inline float cgl_uint2_distance(uint2 lhs, uint2 rhs)" in code
+        )
+        assert "__device__ inline float2 cgl_uint2_normalize(uint2 value)" in code
+        assert "__device__ inline float cgl_longlong2_length(longlong2 value)" in code
+        assert (
+            "__device__ inline float cgl_longlong2_distance(longlong2 lhs, longlong2 rhs)"
+            in code
+        )
+        assert (
+            "__device__ inline float2 cgl_longlong2_normalize(longlong2 value)" in code
+        )
+        assert code.count("next_int(i)") == 1
+        for bare in (
+            "length(i)",
+            "distance(i, j)",
+            "normalize(i)",
+            "length(u)",
+            "normalize(u)",
+            "distance(i, u)",
+            "length(iv)",
+            "distance(iv, jv)",
+            "normalize(iv)",
+            "distance(lv, mw)",
+        ):
+            assert f" {bare}" not in code and f"({bare}" not in code
+
+    @pytest.mark.parametrize(
+        ("params", "expr", "call"),
+        [
+            ("bvec3 b", "length(b)", "length"),
+            ("bvec3 b", "distance(b, b)", "distance"),
+            ("bvec3 b", "normalize(b).x", "normalize"),
+            ("bool flag", "length(flag)", "length"),
+            ("bool flag", "normalize(flag)", "normalize"),
+            ("int i, bool flag", "distance(i, flag)", "distance"),
+            ("ivec3 iv, vec3<i8> cv", "distance(iv, cv)", "distance"),
+            ("vec3<i8> a, vec3<i16> b", "distance(a, b)", "distance"),
+        ],
+    )
+    def test_bool_vector_geometric_builtins_remain_refused(self, params, expr, call):
+        source_code = f"""
+        shader G {{
+            float f({params}) {{
+                return {expr};
+            }}
+        }}
+        """
+        ast = Parser(Lexer(source_code).tokens).parse()
+
+        with pytest.raises(CudaLoweringRefused, match=f"call to '{call}'"):
+            CudaCodeGen().generate(ast)
+
     def test_vector_geometric_builtins_emit_cuda_helpers(self):
         source_code = """
         shader TestShader {
