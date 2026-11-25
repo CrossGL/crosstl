@@ -47,6 +47,12 @@ from .push_constant_blocks import is_push_constant, push_constant_block_layout
 # Element layouts of structured buffers and buffer pointers that Metal declarations reproduce: HLSL's, and the
 # std430 rules of a CrossGL buffer (marked by ``semantics.default_buffer_layouts`` where MSL's differ).
 ELEMENT_LAYOUTS = (HLSL_STRUCTURED_LAYOUT, STD430_LAYOUT)
+# The row a single-component selection of a matrix column names.
+METAL_COMPONENT_INDICES = {
+    letter: str(index)
+    for names in ("xyzw", "rgba", "stpq")
+    for index, letter in enumerate(names)
+}
 
 
 def metal_layout_refusal(message, layout):
@@ -506,16 +512,95 @@ class MetalHlslResourceMixin:
             obj = f"({obj})"
         return obj
 
+    def metal_hlsl_matrix_word_storage(self, matrix):
+        """``(storage_lvalue, storage_name)`` of a matrix held as words, or ``None``.
+
+        ``matrix`` is a structured-buffer element ``b[i]``, a struct member ``s.m`` or an element ``s.m[k]`` of an
+        array member, whose Metal storage is one of the planner's register-word matrix structs.
+        """
+        planner = getattr(self, "metal_hlsl_layout_planner", None)
+        if planner is None:
+            return None
+        words = planner.matrix_word_layouts
+        if isinstance(matrix, ArrayAccessNode):
+            storage = self.metal_hlsl_structured_buffer_storage(matrix.array)
+            if storage is not None:
+                if storage[0] not in words:
+                    return None
+                array = self.generate_expression(matrix.array)
+                return f"{array}[{self.generate_expression(matrix.index)}]", storage[0]
+            root, indices = metal_layout_subscripts(matrix)
+        else:
+            root, indices = matrix, []
+        if not isinstance(root, MemberAccessNode):
+            return None
+        member = self.metal_hlsl_layout_member(root)
+        if (
+            member is None
+            or member.element_load
+            or member.storage_type not in words
+            or len(indices) != member.dimensions
+        ):
+            return None
+        lvalue = f"{self.metal_hlsl_layout_member_object_code(root)}.{root.member}"
+        lvalue += "".join(f"[{self.generate_expression(index)}]" for index in indices)
+        return lvalue, member.storage_type
+
+    def metal_hlsl_matrix_element_store_target(self, target):
+        """``(lhs, write_conversion)`` for a store to one element of a matrix held as words.
+
+        ``m[c][r]`` and ``m[c].y`` name the word that holds the element, so the store, or an update such as
+        ``+=``, writes that word in place and leaves the matrix's other elements as they are.
+        """
+        if isinstance(target, ArrayAccessNode):
+            column_access, row = target.array, target.index
+            row_code = None
+        elif isinstance(target, MemberAccessNode) and len(str(target.member)) == 1:
+            column_access, row = target.object, None
+            row_code = METAL_COMPONENT_INDICES.get(str(target.member))
+            if row_code is None:
+                return None
+        else:
+            return None
+        if not isinstance(column_access, ArrayAccessNode):
+            return None
+        storage = self.metal_hlsl_matrix_word_storage(column_access.array)
+        if storage is None:
+            return None
+        lvalue, name = storage
+        column_code = self.generate_expression(column_access.index)
+        if row_code is None:
+            row_code = self.generate_expression(row)
+        index, conversion = self.metal_hlsl_layout_planner.matrix_element_word(
+            name, column_code, row_code
+        )
+        return f"{lvalue}.v[{index}]", conversion
+
+    @staticmethod
+    def metal_hlsl_layout_whole_element(target, member_node, member):
+        """Whether ``target`` selects one whole element, ``s.m[k]``, of the word-held array member ``member_node``."""
+        if member.array_count is None or member.element_load:
+            return False
+        root, indices = metal_layout_subscripts(target)
+        return root is member_node and len(indices) == member.dimensions
+
     def metal_hlsl_layout_store_target(self, target):
         """``(lhs, write_conversion)`` for a store into HLSL layout storage."""
         planner = getattr(self, "metal_hlsl_layout_planner", None)
+        element_store = self.metal_hlsl_matrix_element_store_target(target)
+        if element_store is not None:
+            return element_store
         node = target
         while planner is not None and isinstance(
             node, (MemberAccessNode, ArrayAccessNode)
         ):
             node = node.object if isinstance(node, MemberAccessNode) else node.array
             member = self.metal_hlsl_layout_member(node)
-            if member is not None and member.storage_type in planner.matrix_storages:
+            if (
+                member is not None
+                and member.storage_type in planner.matrix_storages
+                and not self.metal_hlsl_layout_whole_element(target, node, member)
+            ):
                 kind = "array" if member.element_load else "matrix"
                 layout = self.metal_hlsl_layout_member_plan(node).layout
                 if layout == HLSL_CBUFFER_LAYOUT:
