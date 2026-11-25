@@ -77,6 +77,9 @@ _PAYLOAD_NAMES = frozenset({"taskpayloadsharedext", "payload"})
 # Output topology -> (execution mode, CrossGL index type, index built-in).
 _TOPOLOGIES = {
     "triangle": ("output_triangles_ext", "uvec3", "primitive_triangle_indices_ext"),
+    # Winding is a rasterizer state; the mesh output mode is the same triangle list.
+    "triangle_cw": ("output_triangles_ext", "uvec3", "primitive_triangle_indices_ext"),
+    "triangle_ccw": ("output_triangles_ext", "uvec3", "primitive_triangle_indices_ext"),
     "line": ("output_lines_ext", "uvec2", "primitive_line_indices_ext"),
     "point": ("output_points", "uint", "primitive_point_indices_ext"),
 }
@@ -250,9 +253,6 @@ def _plan_mesh_entry(generator, func, used, outside):
     plan = _MeshPlan()
     plan.outside, plan.used = outside, used
     topology = generator.rust_mesh_output_topology(func, "mesh", required=True)
-    topology = {"triangle_cw": "triangle", "triangle_ccw": "triangle"}.get(
-        topology, topology
-    )
     mode, index_type, index_builtin = _TOPOLOGIES[topology]
     roles = {}
     vertex_users, primitive_users = [], []
