@@ -16820,7 +16820,8 @@ def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():
         ("fragment", "vec3", "gl_FragCoord", "position", "float4"),
         ("fragment", "vec3", "gl_PointCoord", "point_coord", "float2"),
         ("fragment", "float", "gl_SampleID", "sample_id", "uint"),
-        ("fragment", "int", "gl_SampleMaskIn", "sample_mask", "uint"),
+        # GLSL's int mask is accepted (test_metal_sample_mask_input.py); a float is not.
+        ("fragment", "float", "gl_SampleMaskIn", "sample_mask", "uint"),
     ],
 )
 def test_graphics_builtin_parameter_types_are_validated(

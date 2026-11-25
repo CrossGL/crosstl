@@ -326,7 +326,8 @@ class MetalFunctionPartsMixin:
                 )
                 reserved_parameter_names.add(builtin_lowering["name"])
                 stage_builtin_parameter_alias_declarations.append(
-                    f"{param_type} {p.name} = {param_type}({builtin_lowering['name']});"
+                    builtin_lowering.get("declaration")
+                    or f"{param_type} {p.name} = {param_type}({builtin_lowering['name']});"
                 )
                 continue
 
