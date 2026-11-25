@@ -11,6 +11,7 @@ from pathlib import Path
 
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import (
     conv_dispatch,
     conv_layout,
@@ -1580,7 +1581,7 @@ def test_ci_runs_the_convolution_routes_on_every_platform():
         "directx",
         "opengl",
     }
-    assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
+    assert job["if"] == job_condition("conv-host")
     steps = job["steps"]
     names = [item.get("name") for item in steps]
     step = "Execute convolutions through MLX"

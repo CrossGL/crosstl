@@ -5,7 +5,18 @@ import re
 from copy import deepcopy
 from dataclasses import replace
 from functools import lru_cache
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from crosstl.backend.DirectX.macro_expansion import HAS_INCLUDE_MACROS, METAL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
