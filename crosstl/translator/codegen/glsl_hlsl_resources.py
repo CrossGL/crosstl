@@ -124,6 +124,7 @@ class GLSLHlslResourceMixin:
         "texture binding": "texture",
         "image binding": "image",
         "sampler binding": "sampler",
+        "atomic counter binding": "atomic-counter-buffer",
     }
 
     def glsl_source_register(self, node):
@@ -146,6 +147,7 @@ class GLSLHlslResourceMixin:
         binding,
         count=1,
         of=None,
+        offset=None,
     ):
         if binding is None:
             return
@@ -160,6 +162,8 @@ class GLSLHlslResourceMixin:
         }
         if of is not None:
             record["of"] = of
+        if offset is not None:
+            record["offset"] = int(offset)
         if self.glsl_binding_written_by_source(node, binding):
             # Read by :mod:`.glsl_vulkan_binding_classes`; resource_binding_records leaves it out.
             record[self.GLSL_SOURCE_BINDING_KEY] = True
@@ -197,9 +201,11 @@ class GLSLHlslResourceMixin:
 
         Valid after ``generate``. Each record names the source resource, its
         GLSL identifier, its OpenGL binding table (``shader-storage-buffer``,
-        ``uniform-buffer``, ``texture``, ``image`` or ``sampler``) and binding
-        point, the binding count for arrays and the HLSL register that bound it
-        when the source used one. OpenGL combines textures and samplers in
+        ``uniform-buffer``, ``texture``, ``image``, ``sampler`` or
+        ``atomic-counter-buffer``) and binding point, the binding count for
+        arrays and the HLSL register that bound it when the source used one.
+        An atomic counter's record also gives its byte ``offset`` in the
+        buffer (:mod:`.glsl_atomic_counters`). OpenGL combines textures and samplers in
         texture units, so a source sampler that is combined with a texture is
         reported once per texture unit it must be bound to, with ``texture``
         naming that texture.
