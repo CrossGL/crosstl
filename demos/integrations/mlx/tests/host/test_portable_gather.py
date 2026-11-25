@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import (
     gather_capacity_workloads,
     gather_dispatch,
@@ -274,7 +275,7 @@ def test_gather_ci_requires_unchanged_tests_on_all_three_targets():
     } == {"directx": "windows-2025", "opengl": "ubuntu-24.04", "metal": "macos-26"}
     assert (
         job["needs"] == ["ci-plan", "integer64-host"]
-        and job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
+        and job["if"] == job_condition("slice-update-host")
         and "continue-on-error" not in job
     )
     steps = {step.get("name"): step for step in job["steps"]}

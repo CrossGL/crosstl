@@ -15,6 +15,12 @@ from pathlib import Path
 import pytest
 import yaml
 
+from demos.integrations.mlx.ci_conditions import job_condition
+from demos.integrations.mlx.tests.upstream_checkouts import (
+    KERNEL_TREE,
+    fetches,
+    upstream_fetches,
+)
 from tests import workflow_text
 from tests.test_ci_workflows import (
     RUNNER_OSES,
@@ -166,36 +172,52 @@ def test_pinned_binary_step_selects_every_native_case_without_portable_duplicate
 
 def test_current_attention_runs_in_the_native_jobs_and_retains_evidence():
     workflow = _workflow_texts()["demo-project-testing.yml"]
-    job = yaml.safe_load(workflow)["jobs"]["mlx-metal-porting"]
+    jobs = yaml.safe_load(workflow)["jobs"]
+    job = jobs["mlx-current-gemm-parity"]
     names = [step.get("name") for step in job["steps"]]
-    step = job["steps"][names.index("Prove current MLX attention native execution")]
+    step = job["steps"][names.index("Prove current MLX steel attention native parity")]
     path = "demos/integrations/mlx/tests/kernels/test_current_attention.py"
     assert workflow.count(path) == 1
     assert path in step["run"]
-    assert "if" not in step and "continue-on-error" not in step
-    assert step["env"]["CROSTL_MLX_CURRENT_TARGET"] == (
-        "${{ runner.os == 'Windows' && 'directx' || runner.os == 'Linux' && 'opengl'"
-        " || 'metal' }}"
-    )
+    porting = [step.get("name") for step in jobs["mlx-metal-porting"]["steps"]]
+    assert not [name for name in porting if "attention native" in name]
+    assert step["if"] == "matrix.family == 'steel-attention'"
+    assert "continue-on-error" not in step
+    for target, runner in (
+        ("opengl", "Linux"),
+        ("directx", "Windows"),
+        ("metal", "macOS"),
+    ):
+        assert f"{runner}) export CROSTL_MLX_CURRENT_TARGET={target} ;;" in step["run"]
     assert step["env"]["CROSTL_REQUIRE_MLX_CURRENT_ATTENTION"] == "1"
     assert step["env"]["CROSTL_MLX_CURRENT_ROOT"].endswith("/mlx-current-tree-upstream")
+    assert (
+        step["env"]["CROSTL_MLX_CURRENT_ATTENTION_SHARD_INDEX"] == "${{ matrix.shard }}"
+    )
+    assert step["env"]["CROSTL_MLX_CURRENT_ATTENTION_SHARD_COUNT"] == "3"
     assert step["env"]["EGL_PLATFORM"] == "surfaceless"
     assert step["env"]["LIBGL_ALWAYS_SOFTWARE"] == "1"
     assert step["env"]["PYOPENGL_PLATFORM"] == "egl"
-    # Entries translate in parallel groups; Windows runners take several
-    # minutes for each one.
-    assert "--timeout-seconds 1800" in step["run"]
+    # Each worker translates the entries of its xdist groups once.
     assert "-n auto --dist loadgroup" in step["run"]
-    assert "--junitxml=mlx-attention-results/results.xml" in step["run"]
-    upload = job["steps"][names.index("Upload current MLX attention native evidence")]
-    assert names.index("Upload current MLX attention native evidence") == (
-        names.index("Prove current MLX attention native execution") + 1
-    )
-    assert upload["if"] == "always()"
-    assert upload["with"]["name"] == "mlx-attention-${{ runner.os }}"
-    assert upload["with"]["path"] == "mlx-attention-results"
-    assert upload["with"]["if-no-files-found"] == "error"
-    assert upload["with"]["include-hidden-files"] is True
+    assert "--junitxml=mlx-current-results/${{ matrix.group }}.xml" in step["run"]
+    groups = [
+        item
+        for item in job["strategy"]["matrix"]["include"]
+        if item["family"] == "steel-attention"
+    ]
+    assert groups == [
+        {
+            "group": f"steel-attention-{index}",
+            "family": "steel-attention",
+            "shard": index,
+        }
+        for index in range(3)
+    ]
+    # The job's last step retains every group's results.
+    from tests.ci_helpers import CURRENT_PARITY_UPLOAD
+
+    assert names[-1] == CURRENT_PARITY_UPLOAD
     _assert_workflow_triggers(workflow, path)
 
 
@@ -984,9 +1006,11 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         assert set(part_matrix["os"]) == RUNNER_OSES
         assert len(part_matrix["os"]) * len(part_matrix["group"]) <= MAX_MATRIX_LEGS
         # Every part runs the same steps on the same runners within one
-        # deadline; a step runs only in the groups of its own part.
-        for key in ("needs", "env", "if", "runs-on", "timeout-minutes", "steps"):
+        # deadline; a step runs only in the groups of its own part. Each part
+        # runs when the plan selects it.
+        for key in ("needs", "env", "runs-on", "timeout-minutes", "steps"):
             assert part[key] == job[key], (name, key)
+        assert part["if"] == job_condition(name), name
         for entry in part_matrix.get("include", []):
             assert entry["group"] in part_matrix["group"], (name, entry)
         assert part["name"].startswith("MLX current-tree ")
@@ -1143,9 +1167,12 @@ def test_current_tree_native_parity_job_runs_each_family_group_once():
         "gemm-segmented-4",
         "gemm-segmented-5",
         "gemm-segmented-6",
+        "steel-attention-0",
+        "steel-attention-1",
+        "steel-attention-2",
     ]
     assert job["runs-on"] == "${{ matrix.os }}"
-    assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
+    assert job["if"] == job_condition(CURRENT_PARITY_JOB)
     assert job["name"] == (
         "MLX current-tree native parity (${{ matrix.os }}, ${{ matrix.group }})"
     )
@@ -1238,8 +1265,7 @@ def test_affine_metal_numerics_reuse_the_complete_source_bundle():
         "mlx-quantized-metal-sources",
     ]
     assert 'MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"' in job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in job
-    assert "sparse-checkout set mlx/backend/metal/kernels" in job
+    assert fetches(job, "$MLX_CORPUS_COMMIT", "mlx-affine-upstream")
     assert '--timeout-seconds 900 --label "Affine Metal roundtrip" --' in step
     assert "python demos/integrations/mlx/prove_quantized_metal.py" in step
     assert "--mlx-root mlx-affine-upstream" in step
@@ -1384,15 +1410,40 @@ def test_directx_corpus_report_matches_compiler_runner(family):
     assert len(_matrix_values(job, "shard_index")) == validation["ci_shard_count"]
 
 
+def test_every_mlx_checkout_retries_and_verifies_the_pinned_commit():
+    """A dropped connection retries; it must not fail a queue group."""
+    jobs = yaml.safe_load(_workflow_texts()["demo-project-testing.yml"])["jobs"]
+    found = {}
+    for name, job in jobs.items():
+        for step in job.get("steps", []):
+            run = step.get("run", "")
+            assert "ml-explore/mlx.git" not in run, (name, step.get("name"))
+            assert not re.search(r"git -C mlx[\w-]*", run), (name, step.get("name"))
+            for directory, commit, sparse in upstream_fetches(run):
+                variable = commit.removeprefix("$")
+                assert variable in job["env"], (name, commit)
+                assert re.fullmatch(r"[0-9a-f]{40}", job["env"][variable])
+                assert all(not path.startswith("/") for path in sparse)
+                found.setdefault(name, []).append(directory)
+            if "fetch_upstream" in run:
+                assert run.count("fetch_upstream") == len(upstream_fetches(run))
+    assert {
+        "mlx-smoke",
+        "mlx-metal-porting",
+        "portable-host",
+        "directx",
+        "opengl",
+        "metal",
+        "mlx-current-native-parity",
+    } <= set(found)
+
+
 def test_mlx_gather_checkout_preserves_pinned_source_bytes():
     workflow = (WORKFLOW_DIR / "demo-project-testing.yml").read_text(encoding="utf-8")
     for target in ("metal", "metal-float", "directx", "opengl"):
         job = _workflow_job_section(workflow, target)
         step = workflow_text.workflow_step_section(job, "Checkout pinned upstream MLX")
-        initialization = step.index("git init mlx-upstream")
-        configuration = step.index("git -C mlx-upstream config core.autocrlf false")
-        checkout = step.index("git -C mlx-upstream checkout --detach FETCH_HEAD")
-        assert initialization < configuration < checkout
+        assert upstream_fetches(step) == [("mlx-upstream", "$MLX_COMMIT", ())]
 
 
 def test_mlx_float_atomic_reference_uses_fixed_metal_toolchain():
@@ -1436,35 +1487,26 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert f'MLX_COMMIT: "{mlx_reference_commit}"' in mlx_porting
     assert f'MLX_CORPUS_COMMIT: "{mlx_corpus_commit}"' in mlx_porting
     assert f'MLX_CURRENT_TREE_COMMIT: "{mlx_current_tree_commit}"' in mlx_porting
-    assert 'git -C mlx-upstream checkout "$MLX_COMMIT"' in mlx_porting
-    assert 'git -C mlx-upstream checkout "$MLX_CORPUS_COMMIT"' in mlx_porting
+    assert fetches(mlx_porting, "$MLX_COMMIT", "mlx-upstream")
+    assert fetches(mlx_porting, "$MLX_CORPUS_COMMIT", "mlx-upstream")
     current_runtime_checkout = workflow_text.workflow_step_section(
         mlx_porting,
         "Checkout current MLX runtime proof corpus",
     )
-    assert "git clone --filter=blob:none --no-checkout" in current_runtime_checkout
-    assert "mlx-current-upstream" in current_runtime_checkout
-    assert (
-        'git -C mlx-current-upstream checkout --detach "$MLX_CORPUS_COMMIT"'
-        in current_runtime_checkout
-    )
-    assert (
-        'test "$(git -C mlx-current-upstream rev-parse HEAD)" = '
-        '"$MLX_CORPUS_COMMIT"' in current_runtime_checkout
-    )
+    assert upstream_fetches(current_runtime_checkout) == [
+        ("mlx-current-upstream", "$MLX_CORPUS_COMMIT", KERNEL_TREE)
+    ]
     current_tree_checkout = workflow_text.workflow_step_section(
         mlx_porting,
         "Checkout current MLX kernel tree",
     )
-    assert "mlx-current-tree-upstream" in current_tree_checkout
-    assert (
-        "git -C mlx-current-tree-upstream checkout --detach "
-        '"$MLX_CURRENT_TREE_COMMIT"' in current_tree_checkout
-    )
-    assert (
-        'test "$(git -C mlx-current-tree-upstream rev-parse HEAD)" = '
-        '"$MLX_CURRENT_TREE_COMMIT"' in current_tree_checkout
-    )
+    assert upstream_fetches(current_tree_checkout) == [
+        (
+            "mlx-current-tree-upstream",
+            "$MLX_CURRENT_TREE_COMMIT",
+            (*KERNEL_TREE, "python/tests", "tests"),
+        )
+    ]
     current_census = workflow_text.workflow_step_section(
         mlx_porting,
         "Audit current MLX kernel census",
@@ -1720,13 +1762,13 @@ def test_mlx_project_porting_workflow_runs_tracked_porting_harness():
     assert "if: always()\n" in runtime_upload
     assert "runner.os" not in runtime_upload
     assert "path: mlx-current-results" in runtime_upload
-    assert "actions/upload-artifact@" in runtime_upload
+    assert "uses: ./demos/integrations/mlx/actions/upload-evidence\n" in runtime_upload
     assert '-k "$entry"' in current_arg_reduce
     assert '-k "argmin_float32 or argmax_float32"' not in current_arg_reduce
     assert "timeout-minutes: 60" in mlx_porting
     assert re.search(r"\bschedule\s*:", mlx_porting)
     assert 'cron: "31 4 * * *"' in mlx_porting
-    assert "needs.ci-plan.outputs.heavy == 'true'" in mlx_porting
+    assert job_condition("mlx-metal-porting") in mlx_porting
     assert "--mode reduced-frontier" in mlx_porting
     assert "--require-metal-toolchain" in mlx_porting
     assert "Install macOS Metal Toolchain" in mlx_porting
@@ -2102,9 +2144,9 @@ def test_mlx_platform_runtime_workflow_preserves_pinned_checkout():
         _workflow_job_section(workflow, name)
         for name in ("directx-dispatch-sequence", "opengl-dispatch-sequence")
     )
-    assert workflow.count("checkout --detach FETCH_HEAD") == 2
-    assert workflow.count('rev-parse HEAD)" = "$MLX_COMMIT"') == 2
-    assert workflow.count("sparse-checkout set mlx/backend/metal/kernels") == 2
+    assert (
+        upstream_fetches(workflow) == [("mlx-upstream", "$MLX_COMMIT", KERNEL_TREE)] * 2
+    )
     assert workflow.count("CROSTL_MLX_SOURCE_ROOT: mlx-upstream") == 2
     assert "continue-on-error" not in workflow
 
@@ -3289,7 +3331,7 @@ def test_mlx_project_porting_workflow_runs_pinned_unary_proofs():
         "mlx-unary-metal-roundtrip",
     )
     assert "name: MLX complete unary Metal compilation" in family_metal_job
-    assert "if: needs.ci-plan.outputs.heavy == 'true'" in family_metal_job
+    assert f"if: {job_condition('mlx-unary-metal-roundtrip')}" in family_metal_job
     assert "runs-on: macOS-latest" in family_metal_job
     assert "timeout-minutes: 75" in family_metal_job
     assert yaml.safe_load(family_metal_job)["mlx-unary-metal-roundtrip"]["needs"] == [
@@ -3398,7 +3440,7 @@ def test_mlx_project_porting_workflow_runs_unary_complete_opengl_proof():
         "name: MLX complete unary OpenGL translation "
         "(shard ${{ matrix.shard_index }} of 5)" in opengl_job
     )
-    assert "if: needs.ci-plan.outputs.heavy == 'true'" in opengl_job
+    assert f"if: {job_condition('mlx-unary-complete-opengl-translation')}" in opengl_job
     assert "runs-on: ubuntu-latest" in opengl_job
     assert "timeout-minutes: 120" in opengl_job
     assert "fail-fast: false" in opengl_job
@@ -3416,7 +3458,7 @@ def test_mlx_project_porting_workflow_runs_unary_complete_opengl_proof():
     assert "glslangValidator --version" in opengl_job
     assert "spirv-val --version" in opengl_job
     assert "Checkout current MLX unary corpus" in opengl_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in opengl_job
+    assert fetches(opengl_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     opengl_step = workflow_text.workflow_step_section(
         opengl_job,
@@ -3455,7 +3497,9 @@ def test_mlx_project_porting_workflow_runs_unary_complete_directx_proof():
         "name: MLX complete unary DirectX translation "
         "(shard ${{ matrix.shard_index }} of 5)" in directx_job
     )
-    assert "if: needs.ci-plan.outputs.heavy == 'true'" in directx_job
+    assert (
+        f"if: {job_condition('mlx-unary-complete-directx-translation')}" in directx_job
+    )
     assert "runs-on: ubuntu-24.04" in directx_job
     assert "timeout-minutes: 180" in directx_job
     assert "fail-fast: false" in directx_job
@@ -3472,7 +3516,7 @@ def test_mlx_project_porting_workflow_runs_unary_complete_directx_proof():
     assert 'pinned: "true"' in directx_job
     assert "shell: pwsh" not in directx_job
     assert "Checkout current MLX unary corpus" in directx_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in directx_job
+    assert fetches(directx_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     directx_step = workflow_text.workflow_step_section(
         directx_job,
@@ -3512,7 +3556,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
         "name: MLX complete binary Metal sources "
         "(shard ${{ matrix.shard_index }} of 24)" in sources
     )
-    assert "if: needs.ci-plan.outputs.heavy == 'true'" in sources
+    assert f"if: {job_condition('mlx-binary-metal-sources')}" in sources
     assert "runs-on: ubuntu-24.04" in sources
     assert "timeout-minutes: 180" in sources
     assert "fail-fast: false" in sources
@@ -3521,7 +3565,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
     assert "python -m pip install -e . pytest-xdist" in sources
     assert "xcrun" not in sources
     assert 'MLX_CORPUS_COMMIT: "846d176227a0ac13d2667e58d2bb68b322109ab0"' in sources
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in sources
+    assert fetches(sources, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
     source_step = workflow_text.workflow_step_section(
         sources, "Verify and export complete binary Metal sources"
     )
@@ -3556,13 +3600,13 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
     ):
         step = workflow_text.workflow_step_section(sources, name)
         assert "if: always()" in step
-        assert "uses: actions/upload-artifact@" in step
+        assert "uses: ./demos/integrations/mlx/actions/upload-evidence\n" in step
         assert f"name: {artifact}" in step
         assert "include-hidden-files: true" in step
         assert "if-no-files-found: error" in step
 
     native = _workflow_job_section(mlx_porting, "mlx-binary-complete-metal-roundtrip")
-    assert "if: needs.ci-plan.outputs.heavy == 'true'" in native
+    assert f"if: {job_condition('mlx-binary-complete-metal-roundtrip')}" in native
     assert yaml.safe_load(native)["mlx-binary-complete-metal-roundtrip"]["needs"] == [
         "ci-plan",
         "mlx-binary-metal-sources",
@@ -3599,7 +3643,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_metal_proof():
         native, "Retain binary Metal native compilation evidence"
     )
     assert "if: always()" in evidence
-    assert "uses: actions/upload-artifact@" in evidence
+    assert "uses: ./demos/integrations/mlx/actions/upload-evidence\n" in evidence
     assert "path: .binary-metal-native" in evidence
     assert "include-hidden-files: true" in evidence
     assert "if-no-files-found: error" in evidence
@@ -3652,7 +3696,10 @@ def test_mlx_project_porting_workflow_runs_binary_complete_opengl_proof():
         "name: MLX complete binary OpenGL translation "
         "(shard ${{ matrix.shard_index }} of 24)" in binary_opengl_job
     )
-    assert "if: needs.ci-plan.outputs.heavy == 'true'" in binary_opengl_job
+    assert (
+        f"if: {job_condition('mlx-binary-complete-opengl-translation')}"
+        in binary_opengl_job
+    )
     assert "runs-on: ubuntu-latest" in binary_opengl_job
     assert "timeout-minutes: 240" in binary_opengl_job
     assert "fail-fast: false" in binary_opengl_job
@@ -3666,7 +3713,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_opengl_proof():
     assert "glslangValidator --version" in binary_opengl_job
     assert "spirv-val --version" in binary_opengl_job
     assert "Checkout current MLX binary corpus" in binary_opengl_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in binary_opengl_job
+    assert fetches(binary_opengl_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     binary_opengl_step = workflow_text.workflow_step_section(
         binary_opengl_job,
@@ -3708,7 +3755,9 @@ def test_mlx_project_porting_workflow_runs_binary_complete_directx_proof():
         "name: MLX complete binary DirectX translation "
         "(shard ${{ matrix.shard_index }} of 24)" in directx_job
     )
-    assert "if: needs.ci-plan.outputs.heavy == 'true'" in directx_job
+    assert (
+        f"if: {job_condition('mlx-binary-complete-directx-translation')}" in directx_job
+    )
     assert "runs-on: ubuntu-24.04" in directx_job
     assert "timeout-minutes: 240" in directx_job
     assert "fail-fast: false" in directx_job
@@ -3723,10 +3772,7 @@ def test_mlx_project_porting_workflow_runs_binary_complete_directx_proof():
     assert 'pinned: "true"' in directx_job
     assert "shell: pwsh" not in directx_job
     assert "Checkout current MLX binary corpus" in directx_job
-    assert "config core.autocrlf false" in directx_job
-    assert "sparse-checkout init --cone" in directx_job
-    assert "sparse-checkout set mlx/backend/metal/kernels" in directx_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in directx_job
+    assert fetches(directx_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     directx_step = workflow_text.workflow_step_section(
         directx_job,
@@ -4026,7 +4072,10 @@ def test_mlx_project_porting_workflow_runs_copy_complete_opengl_proof():
         "name: MLX complete copy OpenGL translation "
         "(shard ${{ matrix.shard_index }} of 24)" in copy_opengl_job
     )
-    assert "if: needs.ci-plan.outputs.heavy == 'true'" in copy_opengl_job
+    assert (
+        f"if: {job_condition('mlx-copy-complete-opengl-translation')}"
+        in copy_opengl_job
+    )
     assert "runs-on: ubuntu-latest" in copy_opengl_job
     assert "timeout-minutes: 180" in copy_opengl_job
     assert "fail-fast: false" in copy_opengl_job
@@ -4040,7 +4089,7 @@ def test_mlx_project_porting_workflow_runs_copy_complete_opengl_proof():
     assert "glslangValidator --version" in copy_opengl_job
     assert "spirv-val --version" in copy_opengl_job
     assert "Checkout current MLX copy corpus" in copy_opengl_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in copy_opengl_job
+    assert fetches(copy_opengl_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     copy_opengl_step = workflow_text.workflow_step_section(
         copy_opengl_job,
@@ -4082,7 +4131,10 @@ def test_mlx_project_porting_workflow_runs_copy_complete_directx_proof():
         "name: MLX complete copy DirectX translation "
         "(shard ${{ matrix.shard_index }} of 24)" in copy_directx_job
     )
-    assert "if: needs.ci-plan.outputs.heavy == 'true'" in copy_directx_job
+    assert (
+        f"if: {job_condition('mlx-copy-complete-directx-translation')}"
+        in copy_directx_job
+    )
     assert "runs-on: ubuntu-24.04" in copy_directx_job
     assert "timeout-minutes: 180" in copy_directx_job
     assert "fail-fast: false" in copy_directx_job
@@ -4095,7 +4147,7 @@ def test_mlx_project_porting_workflow_runs_copy_complete_directx_proof():
     assert 'pinned: "true"' in copy_directx_job
     assert "shell: pwsh" not in copy_directx_job
     assert "Checkout current MLX copy corpus" in copy_directx_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in copy_directx_job
+    assert fetches(copy_directx_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     copy_directx_step = workflow_text.workflow_step_section(
         copy_directx_job,
@@ -4178,6 +4230,8 @@ def test_mlx_project_porting_workflow_runs_complete_metal_proof(family):
                     step["run"] = command.replace(
                         '"metal", "-Werror"', '"metal", "-std=metal3.1", "-Werror"'
                     )
+        # Each job runs when the plan names it.
+        expected["if"] = job_condition(f"mlx-{family}-{actual_suffix}")
         actual = jobs[f"mlx-{family}-{actual_suffix}"]
         if family == "quantized" and suffix == "complete-metal-roundtrip":
             # The separate native-affine policy test covers these extra steps.
@@ -4224,7 +4278,7 @@ def test_mlx_project_porting_workflow_requires_quantized_wide_opengl_compilation
     assert "continue-on-error" not in job
     assert "uses: ./.github/actions/apt-install" in job
     assert "packages: glslang-tools spirv-tools" in job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in job
+    assert fetches(job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
     assert 'CROSTL_REQUIRE_MLX_QUANTIZED_WIDE_OPENGL: "1"' in job
     assert "CROSTL_MLX_ROOT: ${{ github.workspace }}/mlx-current-upstream" in job
     assert "python -m pytest -q -n auto" in job
@@ -4248,7 +4302,10 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_opengl_proof():
         "name: MLX complete reduce OpenGL translation "
         "(shard ${{ matrix.shard_index }} of 24)" in reduce_opengl_job
     )
-    assert "if: needs.ci-plan.outputs.heavy == 'true'" in reduce_opengl_job
+    assert (
+        f"if: {job_condition('mlx-reduce-complete-opengl-translation')}"
+        in reduce_opengl_job
+    )
     assert "runs-on: ubuntu-latest" in reduce_opengl_job
     assert "timeout-minutes: 180" in reduce_opengl_job
     assert "fail-fast: false" in reduce_opengl_job
@@ -4262,7 +4319,7 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_opengl_proof():
     assert "glslangValidator --version" in reduce_opengl_job
     assert "spirv-val --version" in reduce_opengl_job
     assert "Checkout current MLX reduce corpus" in reduce_opengl_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in reduce_opengl_job
+    assert fetches(reduce_opengl_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     reduce_opengl_step = workflow_text.workflow_step_section(
         reduce_opengl_job,
@@ -4304,7 +4361,10 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_directx_proof():
         "name: MLX complete reduce DirectX translation "
         "(shard ${{ matrix.shard_index }} of 24)" in reduce_directx_job
     )
-    assert "if: needs.ci-plan.outputs.heavy == 'true'" in reduce_directx_job
+    assert (
+        f"if: {job_condition('mlx-reduce-complete-directx-translation')}"
+        in reduce_directx_job
+    )
     assert "runs-on: ubuntu-24.04" in reduce_directx_job
     assert "timeout-minutes: 240" in reduce_directx_job
     assert "fail-fast: false" in reduce_directx_job
@@ -4317,7 +4377,7 @@ def test_mlx_project_porting_workflow_runs_reduce_complete_directx_proof():
     assert 'pinned: "true"' in reduce_directx_job
     assert "shell: pwsh" not in reduce_directx_job
     assert "Checkout current MLX reduce corpus" in reduce_directx_job
-    assert 'checkout --detach "$MLX_CORPUS_COMMIT"' in reduce_directx_job
+    assert fetches(reduce_directx_job, "$MLX_CORPUS_COMMIT", "mlx-current-upstream")
 
     reduce_directx_step = workflow_text.workflow_step_section(
         reduce_directx_job,

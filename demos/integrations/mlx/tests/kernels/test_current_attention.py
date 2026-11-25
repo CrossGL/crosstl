@@ -2,18 +2,19 @@
 
 The entries (``steel_attention_{T}_bq32_bk{32,16}_bd{D}_bv{V}_wm4_wn{1,2}_mask{M}``)
 compute ``softmax(scale * Q K^T + mask) V`` with threadgroup Q, K and V tiles,
-simdgroup matrix fragments and an online base-2 softmax. The gate covers the
-head dimensions 64, 72, 80, 96, 128 and 256 and the asymmetric query and value
-head dimensions (96, 64), with the key block ``scaled_dot_product_attention.cpp``
-selects for each. Every element type and both mask types meet several of them.
-Head dimension 192 is not covered: its 16-bit tiles fill 21.5 KiB of threadgroup
-memory, which the OpenGL and bfloat16 DirectX outputs widen to 32-bit words,
-past the 32 KiB limit. Head dimension 256 uses the ``wn2`` entries, whose two
-simdgroups per row each multiply half of the head dimension and add their
-partial scores through the K/V tile viewed as float32; the gate covers their
-float32 entries. Thirteen entries freeze the aligned, masked
+simdgroup matrix fragments and an online base-2 softmax. The gate covers every
+``wn1`` entry with head dimensions 64, 72, 80, 96 and 128 and the asymmetric
+query and value head dimensions (96, 64): all three element types and both
+mask types, with the key block ``scaled_dot_product_attention.cpp`` selects for
+each. Head dimension 192 is not covered: its 16-bit tiles fill 21.5 KiB of
+threadgroup memory, which the OpenGL and bfloat16 DirectX outputs widen to
+32-bit words, past the 32 KiB limit. Head dimension 256 uses the ``wn2``
+entries, whose two simdgroups per row each multiply half of the head dimension
+and add their partial scores through the K/V tile viewed as float32; the gate
+covers their float32 entries. ``NOT_COVERED`` names each remaining entry with
+the issue that tracks it. Every covered entry freezes the aligned, masked
 constants that host code selects for sequence lengths that are multiples of the
-blocks. Four more freeze the other sets the host selects: unaligned sequences
+blocks. Four more configurations freeze the other sets the host selects: unaligned sequences
 with attention sinks under float and boolean masks, and causal masks, unaligned
 with the logsumexp and aligned with sinks and the logsumexp. The gate fills
 ``AttnParams`` and ``AttnMaskParams`` as the host does, and dispatches the
@@ -246,6 +247,79 @@ VARIANTS = (
     Variant("float32", 32, 32, 96, bv=64),
 )
 
+# steel_attention.metal's instantiate_attn_shapes_helper, per element type:
+# (head dimension, value head dimension, key block), all wm4_wn1; and its
+# wm4_wn2 head dimension 256 entries' key blocks.
+SHAPES = (
+    (192, 192, 16),
+    (128, 128, 16),
+    (96, 96, 32),
+    (96, 64, 32),
+    (80, 80, 32),
+    (72, 72, 32),
+    (64, 64, 32),
+)
+WN2_KEY_BLOCKS = {"float16": (16, 32), "bfloat16": (16, 32), "float32": (16,)}
+
+
+def _instantiated():
+    """Every entry steel_attention.metal instantiates, in source order."""
+    for dtype in ("float16", "bfloat16", "float32"):
+        for head_dim, value_dim, bk in SHAPES:
+            for boolean in (False, True):
+                bv = 0 if value_dim == head_dim else value_dim
+                yield Variant(dtype, 32, bk, head_dim, boolean_mask=boolean, bv=bv)
+    for dtype, blocks in WN2_KEY_BLOCKS.items():
+        for bk in blocks:
+            for boolean in (False, True):
+                yield Variant(dtype, 32, bk, 256, boolean_mask=boolean, wn=2)
+
+
+INSTANTIATED = tuple(_instantiated())
+
+
+def _not_covered(variant):
+    """The issue that keeps ``variant``'s entry out of the gate, if any."""
+    if variant.head_dim == 192:
+        return 2307
+    if variant.wn == 2 and variant.dtype != "float32":
+        return 4823
+    return None
+
+
+NOT_COVERED = {
+    variant.entry: issue
+    for variant in INSTANTIATED
+    if (issue := _not_covered(variant)) is not None
+}
+# Every other instantiated entry runs with the aligned, masked constants.
+VARIANTS += tuple(
+    variant
+    for variant in INSTANTIATED
+    if variant.entry not in NOT_COVERED and variant not in VARIANTS
+)
+
+SHARD_INDEX_ENV = "CROSTL_MLX_CURRENT_ATTENTION_SHARD_INDEX"
+SHARD_COUNT_ENV = "CROSTL_MLX_CURRENT_ATTENTION_SHARD_COUNT"
+# CI runs the native execution in this many shards.
+CI_SHARD_COUNT = 3
+
+
+def _selected_variants():
+    """The configurations this run executes natively: all, or one shard."""
+    index, count = os.environ.get(SHARD_INDEX_ENV), os.environ.get(SHARD_COUNT_ENV)
+    if index is None and count is None:
+        return VARIANTS
+    if index is None or count is None:
+        raise RuntimeError(f"{SHARD_INDEX_ENV} and {SHARD_COUNT_ENV} go together")
+    index, count = int(index), int(count)
+    if not 0 <= index < count:
+        raise RuntimeError(f"attention shard {index} is outside [0, {count})")
+    return VARIANTS[index::count]
+
+
+SELECTED_VARIANTS = _selected_variants()
+
 
 @dataclass(frozen=True)
 class Case:
@@ -386,33 +460,37 @@ def test_attention_target_contract_is_explicit(tmp_path, target, variant):
     )
 
 
-def test_attention_variants_span_types_shapes_and_masks():
-    """Each element type and each mask type meets several block shapes.
+def test_attention_variants_cover_every_entry_but_the_tracked_ones():
+    """Every instantiated entry runs with the aligned, masked constants.
 
-    Translating an entry proves that it is instantiated upstream. Every other
-    function constant is set by at least one entry and cleared by another.
+    Translating an entry proves that it is instantiated upstream. The only
+    entries left out are head dimension 192 (#2307) and the 16-bit wn2 entries
+    (#4823). Every other function constant is set by at least one
+    configuration and cleared by another.
     """
-    shapes = {(32, 32, 64), (32, 32, 80), (32, 16, 128), (32, 16, 256)}
     assert len({variant.name for variant in VARIANTS}) == len(VARIANTS)
+    assert len(INSTANTIATED) == len({v.entry for v in INSTANTIATED}) == 52
     assert Variant("float32", 32, 32, 64).specializations == SPECIALIZATIONS
     default = [v for v in VARIANTS if v.specializations == SPECIALIZATIONS]
-    assert len({variant.entry for variant in default}) == len(default) == 13
-    assert {variant.dtype for variant in VARIANTS} == set(SIGNIFICAND_BITS) | {
-        "float32"
+    assert len({variant.entry for variant in default}) == len(default) == 38
+    assert {v.entry for v in default} == {
+        v.entry for v in INSTANTIATED if v.entry not in NOT_COVERED
     }
-    for boolean in (False, True):
-        chosen = [v for v in default if v.boolean_mask is boolean]
-        assert {v.dtype for v in chosen} == {"float32", "float16", "bfloat16"}
-    float32 = {(v.bq, v.bk, v.head_dim) for v in default if v.dtype == "float32"}
-    assert float32 == shapes | {(32, 32, 72), (32, 32, 96)}
-    boolean = {(v.bq, v.bk, v.head_dim) for v in default if v.boolean_mask}
-    assert boolean == shapes | {(32, 32, 96)}
-    # Every head dimension the host dispatches to these entries except 192,
-    # and its asymmetric (query, value) pair.
-    assert {(v.head_dim, v.value_dim) for v in VARIANTS} == {
-        *((d, d) for d in (64, 72, 80, 96, 128, 256)),
-        (96, 64),
+    assert {v.entry for v in VARIANTS} == {v.entry for v in default}
+    assert sorted(NOT_COVERED.values()) == [2307] * 6 + [4823] * 8
+    assert {
+        (v.dtype, v.head_dim, v.wn) for v in INSTANTIATED if v.entry in NOT_COVERED
+    } == {
+        *((dtype, 192, 1) for dtype in ("float32", "float16", "bfloat16")),
+        ("float16", 256, 2),
+        ("bfloat16", 256, 2),
     }
+    # The host's key blocks: 16 from head dimension 128, both for the 16-bit
+    # wn2 entries.
+    for v in INSTANTIATED:
+        assert v.bk == (16 if v.head_dim >= 128 else 32) or (
+            v.wn == 2 and v.dtype != "float32"
+        )
     assert {v.workgroup for v in VARIANTS} == {(32, 4, 1), (32, 4, 2)}
     for name in CONSTANT_IDS:
         values = {variant.specializations[name] for variant in VARIANTS}
@@ -420,11 +498,34 @@ def test_attention_variants_span_types_shapes_and_masks():
     # Each other set covers a narrow element type, and the causal sets both
     # alignments.
     others = [v for v in VARIANTS if v not in default]
+    assert len(others) == 4
     assert {v.dtype for v in others} == {"float32", "float16", "bfloat16"}
     assert {v.aligned for v in others if v.causal} == {False, True}
     assert any(v.boolean_mask and v.sinks for v in others)
     # Every entry runs two cases of its alignment.
     assert len(CASES) == len(UNALIGNED_CASES) == 2
+
+
+def test_attention_shards_partition_the_variants(monkeypatch):
+    shards = []
+    for index in range(CI_SHARD_COUNT):
+        monkeypatch.setenv(SHARD_INDEX_ENV, str(index))
+        monkeypatch.setenv(SHARD_COUNT_ENV, str(CI_SHARD_COUNT))
+        shards.append(_selected_variants())
+    assert sorted(v.name for shard in shards for v in shard) == sorted(
+        v.name for v in VARIANTS
+    )
+    for shard in shards:
+        assert len(shard) == len(VARIANTS) // CI_SHARD_COUNT
+        assert {v.dtype for v in shard} == {"float32", "float16", "bfloat16"}
+    monkeypatch.setenv(SHARD_INDEX_ENV, str(CI_SHARD_COUNT))
+    with pytest.raises(RuntimeError):
+        _selected_variants()
+    monkeypatch.delenv(SHARD_COUNT_ENV)
+    with pytest.raises(RuntimeError):
+        _selected_variants()
+    monkeypatch.delenv(SHARD_INDEX_ENV)
+    assert _selected_variants() == VARIANTS
 
 
 def _strides(shape):
@@ -861,7 +962,7 @@ def attention_source(tmp_path_factory):
         pytest.param(
             variant, id=variant.name, marks=pytest.mark.xdist_group(variant.name)
         )
-        for variant in VARIANTS
+        for variant in SELECTED_VARIANTS
     ],
 )
 def translated_attention(attention_source, tmp_path_factory, request):
@@ -1003,12 +1104,14 @@ def test_current_attention_executes(
                 },
                 "result": result,
                 "scope": (
-                    "Seventeen entry configurations: head dimensions 64 to 256 "
-                    "except 192 and (96, 64); float32, float16 and bfloat16; "
-                    "float, boolean and causal masks; aligned and unaligned "
-                    "sequences; sinks and the logsumexp; the float32 wm4_wn2 "
-                    "entries, with frozen constants. Not head dimension 192, "
-                    "the float16 and bfloat16 wn2 entries or the upstream suite."
+                    "38 of steel_attention.metal's 52 entries with aligned, "
+                    "masked constants: every wm4_wn1 entry with head dimensions "
+                    "64 to 128 and (96, 64), and the float32 wm4_wn2 entries; "
+                    "float32, float16 and bfloat16; float and boolean masks. "
+                    "Four more constant sets: causal masks, unaligned "
+                    "sequences, sinks and the logsumexp. Not head dimension "
+                    "192 (#2307), the float16 and bfloat16 wn2 entries (#4823) "
+                    "or the upstream suite."
                 ),
             },
         )
