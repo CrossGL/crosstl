@@ -70,6 +70,7 @@ from .image_access_contracts import (
     unsupported_texture_samples_query_call_expression,
 )
 from .metal_buffer_coherence import memory_helper_token
+from .metal_compare_exchange import compare_exchange_loop
 from .metal_texel_buffers import texel_buffer_component_type
 from .storage_image_texels import (
     leading_components_suffix,
@@ -799,17 +800,16 @@ class MetalTextureOperationMixin:
             self.required_buffer_atomic_compare_helpers
         ):
             value_type = self.map_type(component_type)
-            atomic_type = f"{memory}device atomic_{component_type}"
             helper_name = self.buffer_atomic_compare_helper_name(component_type, memory)
             helpers.append(
                 f"static {value_type} {helper_name}({memory}device uchar* buffer, uint offset, {value_type} compareValue, {value_type} value) {{\n"
-                f"    {atomic_type}* target = reinterpret_cast<{atomic_type}*>(buffer + offset);\n"
-                f"    {value_type} original;\n"
-                "    do {\n"
-                "        original = compareValue;\n"
-                "    } while (!atomic_compare_exchange_weak_explicit(target, &original, value, memory_order_relaxed, memory_order_relaxed) && original == compareValue);\n"
-                "    return original;\n"
-                "}\n\n"
+                + compare_exchange_loop(
+                    f"{memory}device atomic_",
+                    "buffer + offset",
+                    component_type,
+                    name="target",
+                )
+                + "}\n\n"
             )
         return "".join(helpers)
 

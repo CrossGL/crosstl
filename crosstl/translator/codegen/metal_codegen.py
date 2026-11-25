@@ -3566,6 +3566,7 @@ class MetalCodeGen(
                 "store",
                 "fetch_add",
                 "exchange",
+                "compare_exchange",
                 "compare_exchange_expected",
             }
         )
