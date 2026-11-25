@@ -11249,12 +11249,16 @@ def test_generated_rust_lazy_lock_statics_are_refused(tmp_path):
             }
         }
 """,
-            r"resource: 'volumeMap' \(sampler3D\) is not lowered",
+            None,
         ),
     ]
-    for shader, refusal in shaders:
-        generated_code = generate_code(parse_code(tokenize_code(shader)))
-        assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+    returning, sampled = shaders
+    with pytest.raises(RustLoweringRefused, match=returning[1]):
+        generate_code(parse_code(tokenize_code(returning[0])))
+    # A sampled texture is a spirv-std Image! entry parameter (rust_gpu_images), not a static.
+    generated_code = generate_code(parse_code(tokenize_code(sampled[0])))
+    assert "static" not in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_vertex_uniform_matrix_binds_as_a_uniform_reference(tmp_path):
@@ -11713,7 +11717,10 @@ def test_shadow_sampler_texture_calls_return_float_and_compile(tmp_path):
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"texture operation: 'texture' has no spirv\-std method for these operands on a Image!\(2D, ty"):
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"cannot lower 1 construct: texture operation: 'texture_compare_sampler' has no spirv-std lowering",
+    ):
         generate_code(parse_code(tokenize_code(code)))
 
 
@@ -11805,7 +11812,8 @@ def test_rust_texture_helper_diagnostics_reject_invalid_resources():
     }
     """
     with pytest.raises(
-        RustLoweringRefused, match="function: 'textureGather' has no rust-gpu lowering"
+        RustLoweringRefused,
+        match="texture operation: 'textureGather' samples an image that is not a sampled texture",
     ):
         generate_code(parse_code(tokenize_code(image_gather)))
 
@@ -11985,8 +11993,8 @@ def test_wgsl_texture_dimensions_alias_maps_to_unsigned_rust_helpers_and_compile
     }
     """
 
-    with pytest.raises(RustLoweringRefused, match=r"function: 'textureDimensions' has no rust\-gpu lowering for these operands"):
-        generate_code(parse_code(tokenize_code(code)))
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
 def test_multisample_texture_fetch_and_query_helpers_compile(tmp_path):
@@ -12240,7 +12248,7 @@ def test_resource_arrays_map_to_rust_arrays_and_compile(tmp_path):
         generate_code(parse_code(tokenize_code(code)))
 
 
-def test_resource_array_member_sample_maps_to_rust_helper_and_compile(tmp_path):
+def test_resource_array_member_sample_is_refused_for_rust(tmp_path):
     code = """
     shader ResourceArrayAccessShader {
         const int MAP_COUNT = 2;
@@ -12264,8 +12272,12 @@ def test_resource_array_member_sample_maps_to_rust_helper_and_compile(tmp_path):
     }
     """
 
-    generated_code = generate_code(parse_code(tokenize_code(code)))
-    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+    # The member-call spelling (``.sample(sampler, uv)``) is not lowered to spirv-std yet; each call is refused.
+    with pytest.raises(
+        RustLoweringRefused,
+        match=r"texture operation: 'sample_sampler' has no spirv-std lowering.*'sample_lod_sampler'",
+    ):
+        generate_code(parse_code(tokenize_code(code)))
 
 
 def test_resource_bundle_member_helpers_and_non_copy_array_alias_compile(tmp_path):
@@ -12605,9 +12617,11 @@ def test_sampler_descriptor_array_source_bindings_do_not_expand_rust_ranges(tmp_
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_texture_and_sampler_binding_namespaces_are_independent_for_rust_codegen(
+def test_texture_and_sampler_on_one_binding_are_refused_for_rust_codegen(
     tmp_path,
 ):
+    # Vulkan numbers every descriptor of a set in one binding range (Vulkan 1.3 section 14.2.2), so a sampled image
+    # and a sampler cannot share set 0 binding 2.
     code = """
     shader RustTextureSamplerBindings {
         sampler2D colorMap @binding(2);
@@ -12622,7 +12636,8 @@ def test_texture_and_sampler_binding_namespaces_are_independent_for_rust_codegen
     """
 
     with pytest.raises(
-        RustLoweringRefused, match=r"resource: 'colorMap' \(sampler2D\) is not lowered"
+        RustRefusal,
+        match=r"Conflicting Rust resource binding for 'linearSampler': buffer set 0 binding 2-2 overlaps 'colorMap'",
     ):
         generate_code(parse_code(tokenize_code(code)))
 

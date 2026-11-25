@@ -11252,8 +11252,16 @@ def test_translate_project_rust_sampled_texture_uses_entry_resource_parameters(
     assert output.exists()
     assert payload["summary"]["translatedCount"] == 1
     rust_code = " ".join(output.read_text(encoding="utf-8").split())
-    assert "#[spirv(descriptor_set = 1, binding = 2)] colorMap : &Image" in rust_code
-    assert "#[spirv(descriptor_set = 1, binding = 3)] linearSampler : &Sampler" in rust_code
+    # rustfmt, when it is on PATH, drops the space before ':' and inside the Image! arguments.
+    assert re.search(
+        r"#\[spirv\(descriptor_set = 1, binding = 2\)\] colorMap ?: "
+        r"&Image ?!\( ?2D, type ?= ?f32, sampled\)",
+        rust_code,
+    )
+    assert re.search(
+        r"#\[spirv\(descriptor_set = 1, binding = 3\)\] linearSampler ?: &Sampler",
+        rust_code,
+    )
     assert "colorMap.sample(*linearSampler, uv)" in rust_code
     assert "static COLOR_MAP" not in rust_code
     assert "Default::default()" not in rust_code
