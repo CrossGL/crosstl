@@ -45,6 +45,7 @@ from .cuda_math_calls import CudaMathCallMixin
 from .cuda_query_metadata import CudaQueryMetadataMixin
 from .cuda_query_returns import CudaQueryReturnMixin
 from .cuda_refusals import CudaLoweringRefused
+from .cuda_reserved_names import rename_reserved_program_names
 from .cuda_resource_access import CudaResourceAccessMixin
 from .cuda_resource_calls import CudaResourceCallMixin
 from .cuda_semantics import CudaSemanticMixin
@@ -358,6 +359,8 @@ class CudaCodeGen(
         ast_node = canonicalize_separate_textures(ast_node)
         # A user function named like a device library function would redefine it or make its calls ambiguous.
         ast_node = rename_cuda_library_functions(ast_node)
+        # A program-scope value is declared in the global namespace, where C++ reserves names that start with ``_``.
+        ast_node = rename_reserved_program_names(ast_node)
         # GLSL's lessThan, equal, not and the other relational built-ins are the componentwise operators.
         lower_relational_builtins(ast_node)
         # CUDA has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.

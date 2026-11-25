@@ -28,6 +28,10 @@ from .metal_exact_lookups import (
 from .metal_fragment_outputs import metal_fragment_output_color_semantic
 from .metal_invariant_position import metal_invariant_attribute_suffix
 from .metal_raster_order_groups import metal_raster_order_group_attribute
+from .metal_sample_mask_input import (
+    METAL_SAMPLE_MASK_INPUT_NAME,
+    metal_sample_mask_input_declaration,
+)
 from .metal_signed_builtins import metal_signed_builtin_parameter_name
 from .metal_stage_input_merge import nested_stage_input_attribute_indices
 from .metal_varyings import (
@@ -446,6 +450,24 @@ class MetalStageInterfaceMixin:
         metal_semantic = self.canonical_metal_semantic(
             self.semantic_from_node(parameter)
         )
+        mask_name = self.unique_metal_generated_name(
+            METAL_SAMPLE_MASK_INPUT_NAME, reserved_names or ()
+        )
+        mask_declaration = metal_sample_mask_input_declaration(
+            stage_name,
+            metal_semantic,
+            self.type_name_string(mapped_param_type),
+            getattr(parameter, "name", None),
+            mask_name,
+        )
+        if mask_declaration is not None:
+            return {
+                "type": "uint",
+                "name": mask_name,
+                "attribute": metal_semantic,
+                "source_type": raw_param_type,
+                "declaration": mask_declaration,
+            }
         base_name = metal_signed_builtin_parameter_name(
             stage_name, metal_semantic, mapped_param_type
         )
