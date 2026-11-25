@@ -81,6 +81,15 @@ class HipMathCallMixin:
 
     def generate_vector_constructor_args(self, vector_info, raw_args, args):
         """Flatten vector arguments passed to HIP make_* constructors."""
+        if not args:
+            # vec4{} and vec4() value-initialize every component to zero.
+            zero = {
+                "float": "0.0f",
+                "double": "0.0",
+                "uint": "0u",
+                "bool": "false",
+            }.get(vector_info["component_type"], "0")
+            return [zero] * len(vector_info["components"])
         if len(args) == 1:
             arg_type = self.expression_result_type(raw_args[0])
             if arg_type is not None and not self.swizzle_result_vector_info(arg_type):
