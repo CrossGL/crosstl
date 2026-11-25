@@ -50,6 +50,7 @@ from .metal_argument_tables import assign_metal_argument_tables
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_draw_base_indices import offset_metal_draw_base_indices
+from .metal_interpolation_qualifiers import metal_interpolation_qualifier
 from .metal_invariant_position import metal_invariant_attribute_suffix
 from .metal_keyword_identifiers import (
     rename_metal_keyword_members,
@@ -1062,10 +1063,10 @@ class MetalProgramEntryMixin:
         ) + metal_invariant_attribute_suffix(self, node)
 
     def metal_interpolation_only_suffix(self, node):
-        for attr in getattr(node, "attributes", []) or []:
-            interpolation = self.metal_interpolation_attribute_name(attr)
-            if interpolation is not None:
-                return f" [[{interpolation}]]"
+        # The mode and sampling attributes combine into one Metal attribute (metal_interpolation_qualifiers.py).
+        interpolation = metal_interpolation_qualifier(node)
+        if interpolation is not None:
+            return f" [[{interpolation}]]"
         implied = self.metal_semantic_implied_interpolation_attribute(node)
         if implied is not None:
             return f" [[{implied}]]"
