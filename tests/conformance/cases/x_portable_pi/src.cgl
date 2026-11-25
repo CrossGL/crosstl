@@ -1,0 +1,21 @@
+// sinpi and cospi are exact at integers and half-integers (sinpi(n) is a zero with the sign of n, cospi(n + 1/2)
+// is +0) and give NaN for infinities and NaN; scalars and vectors compute component by component.
+shader PortablePi {
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+        buffer float* inp;
+        buffer float* outp;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float x = inp[i];
+            vec2 pair = vec2(x, -x);
+            vec2 s = sinpi(pair);
+            outp[i * 4u] = sinpi(x);
+            outp[i * 4u + 1u] = s.y;
+            outp[i * 4u + 2u] = cospi(x);
+            outp[i * 4u + 3u] = cospi(pair).y;
+        }
+    }
+}

@@ -101,7 +101,8 @@ def test_a_user_function_named_powr_is_kept(tmp_path):
     assert "pow(" not in code
 
 
-@pytest.mark.parametrize("function", ["sinpi", "cospi", "tanpi", "asinpi", "atanpi"])
+# sinpi and cospi lower to exact CrossGL helpers (crosstl/translator/semantics/portable_math.py).
+@pytest.mark.parametrize("function", ["tanpi", "asinpi", "atanpi"])
 @pytest.mark.parametrize("backend", ["directx", "opengl", "vulkan"])
 def test_pi_functions_are_refused_until_they_reduce_exactly(
     tmp_path, function, backend

@@ -170,6 +170,7 @@ from .partitioned_waves import (
     PartitionedWaveUnsupportedError,
     lower_partitioned_wave_operations,
 )
+from .portable_math import PortableMathError, lower_portable_math
 from .powi_helpers import PowiUnsupportedError, lower_powi_calls
 from .program_families import discharge_program_families
 from .push_constant_layouts import mark_push_constant_layouts
@@ -351,6 +352,7 @@ __all__ = [
     "NarrowIntegerUnsupportedError",
     "OpaqueStructUnsupportedError",
     "PerVertexInputUnsupportedError",
+    "PortableMathError",
     "RelativeVertexIdUnsupportedError",
     "InstanceIdUnsupportedError",
     "RuleInexpressibleError",
@@ -624,6 +626,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     resolve_static_assertions(program, report.target)
     zero_empty_scalar_initializers(program, report.target)
     refuse_initializer_shape_mismatches(program, report.source, report.target)
+    lower_portable_math(program, report.target)
     lower_metal_math_spellings(program, report.target)
     lower_powi_calls(program, report.target)
     lower_float_relations(program, report.target)

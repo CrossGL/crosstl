@@ -1,0 +1,21 @@
+// fdim(x, y) is x - y when x > y and +0 otherwise, nextafter(x, y) the representable value next to x towards y
+// (y when they are equal), copysign(x, y) the magnitude of x with the sign of y; a NaN operand gives NaN.
+shader PortablePairs {
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+        buffer float* inp;
+        buffer float* outp;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float x = inp[i * 2u];
+            float y = inp[i * 2u + 1u];
+            vec2 d = fdim(vec2(x, y), vec2(y, x));
+            outp[i * 4u] = fdim(x, y);
+            outp[i * 4u + 1u] = d.y;
+            outp[i * 4u + 2u] = nextafter(x, y);
+            outp[i * 4u + 3u] = copysign(vec3(x, y, x), vec3(y, x, y)).z;
+        }
+    }
+}
