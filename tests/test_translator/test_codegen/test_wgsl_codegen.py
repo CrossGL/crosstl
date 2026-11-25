@@ -4629,6 +4629,21 @@ def test_wgsl_codegen_passes_cube_array_texture_layer_to_gradient_lookup(tmp_pat
 @pytest.mark.parametrize(
     ("sampler_type", "lookup"),
     [
+        ("samplerCube", "textureOffset(tex, uv, ivec2(1, 0))"),
+        ("samplerCube", "textureOffset(tex, uv, ivec2(1, 0), 0.5)"),
+        ("samplerCube", "textureLodOffset(tex, uv, 1.0, ivec2(1, 0))"),
+        (
+            "samplerCube",
+            "textureGradOffset(tex, uv, vec3(0.1), vec3(0.2), ivec2(1, 0))",
+        ),
+        (
+            "samplerCubeShadow",
+            "vec4(textureCompareOffset(tex, uv, 0.5, ivec2(1, 0)))",
+        ),
+        (
+            "samplerCubeShadow",
+            "vec4(textureCompareLodOffset(tex, uv, 0.5, 0, ivec2(1, 0)))",
+        ),
         ("samplerCubeArray", "textureOffset(tex, uv, ivec2(1, 0))"),
         ("samplerCubeArray", "textureOffset(tex, uv, ivec2(1, 0), 0.5)"),
         ("samplerCubeArray", "textureLodOffset(tex, uv, 1.0, ivec2(1, 0))"),
@@ -4646,11 +4661,9 @@ def test_wgsl_codegen_passes_cube_array_texture_layer_to_gradient_lookup(tmp_pat
         ),
     ],
 )
-def test_wgsl_codegen_refuses_offset_lookups_on_cube_array_textures(
-    sampler_type, lookup
-):
+def test_wgsl_codegen_refuses_offset_lookups_on_cube_textures(sampler_type, lookup):
     shader = f"""
-    shader WGSLCubeArrayTextureOffset {{
+    shader WGSLCubeTextureOffset {{
         uniform {sampler_type} tex;
         fragment {{
             vec4 main(vec4 uv @ TEXCOORD0) @ gl_FragColor {{
@@ -4662,7 +4675,7 @@ def test_wgsl_codegen_refuses_offset_lookups_on_cube_array_textures(
 
     with pytest.raises(
         WGSLCubeTextureOffsetUnsupportedError,
-        match=r"cannot lower \w+\(\) on a cube array texture \(tex\)",
+        match=r"cannot lower \w+\(\) on a cube texture \(tex\)",
     ) as raised:
         WGSLCodeGen().generate(parse_shader(shader))
 
