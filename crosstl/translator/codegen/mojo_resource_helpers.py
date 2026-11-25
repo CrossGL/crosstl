@@ -19,10 +19,6 @@ class MojoResourceHelperMixin:
             expanded.add("dot_product")
         if "normalize" in expanded:
             expanded.add("magnitude")
-        if "smoothstep" in expanded:
-            expanded.add("clamp")
-        if "clamp" in expanded:
-            expanded.update({"min", "max"})
         return expanded
 
     def generate_builtin_placeholder(self, name, type_name):
