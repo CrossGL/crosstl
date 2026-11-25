@@ -45,7 +45,6 @@ def mojo(expression):
         ("simd_sum(a)", "simd_sum"),
         ("msad4(a, a, a)", "msad4"),
         ("ddx(a)", "ddx"),
-        ("rcp(a)", "rcp"),
     ],
 )
 def test_foreign_builtin_call_is_refused(expression, name):
@@ -64,6 +63,7 @@ def test_foreign_builtin_call_is_refused(expression, name):
         ("atan(a, a)", "atan2(a, a)"),
         ("fma(a, a, a)", "fma(a, a, a)"),
         ("length(v)", "magnitude(v)"),
+        ("rcp(a)", "recip(a)"),
         ("helper(a)", "helper(a)"),
     ],
 )

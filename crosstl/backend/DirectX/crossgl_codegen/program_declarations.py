@@ -337,7 +337,10 @@ class ProgramDeclarationMixin:
             variable_type = f"{variable_type}{array_suffix}"
             array_suffix = ""
         initializer = ""
-        if getattr(node, "value", None) is not None:
+        if (
+            getattr(node, "value", None) is not None
+            and id(node) not in self.hlsl_program_constant_global_ids
+        ):
             # DXC folds global initializers with exact math at compile time.
             self.constant_initializer_depth += 1
             try:
@@ -369,17 +372,12 @@ class ProgramDeclarationMixin:
         )
 
     def is_hlsl_program_constant_global(self, node):
-        if getattr(node, "value", None) is not None:
-            return False
+        # A module variable without ``static`` is a $Globals member, ``const`` or not, even with an initializer, which
+        # DXC ignores ("Initializer of external global will be ignored").
         if self.is_vk_push_constant_global(node):
             return False
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
-        if getattr(node, "is_const", False) or qualifiers & {
-            "const",
-            "groupshared",
-            "static",
-            "shared",
-        }:
+        if qualifiers & {"groupshared", "static", "shared"}:
             return False
 
         type_name = getattr(node, "vtype", None)

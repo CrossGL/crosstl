@@ -18,6 +18,9 @@ from .lowering_refusals import (
 from .mojo_bit_functions import (
     generate_mojo_bit_function_call,
 )
+from .mojo_numeric_functions import (
+    generate_mojo_numeric_function_call,
+)
 from .mojo_tables import (
     MOJO_GENERIC_TEXTURE_BUILTINS,
     MOJO_IMAGE_ATOMIC_BUILTINS,
@@ -238,6 +241,11 @@ class MojoCallExpressionMixin:
         bit_function = generate_mojo_bit_function_call(self, func_name, expr.args)
         if bit_function is not None:
             return bit_function
+        numeric_function = generate_mojo_numeric_function_call(
+            self, func_name, expr.args, target_type
+        )
+        if numeric_function is not None:
+            return numeric_function
         split_builtin = self.generate_mojo_split_builtin_call(func_name, expr.args)
         if split_builtin is not None:
             return split_builtin
