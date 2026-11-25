@@ -244,10 +244,63 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
         ("matrices[id.xy] = float2x2(1, 0, 0, 1);", "no texels of type"),
         (
             "InterlockedCompareStoreFloatBitwise(totals[0], 1.0, 2.0);",
-            "has no CrossGL atomic operation",
+            "InterlockedCompareStoreFloatBitwise needs a float location",
+        ),
+        (
+            "InterlockedCompareStoreFloatBitwise(colors[id.xy], 1.0, 2.0);",
+            "InterlockedCompareStoreFloatBitwise has no CrossGL image atomic",
+        ),
+        (
+            "float o; InterlockedCompareExchangeFloatBitwise(totals[0], 1.0, 2.0);",
+            "InterlockedCompareExchangeFloatBitwise takes 4 arguments, not 3",
         ),
     ],
 )
 def test_texel_writes_crossgl_cannot_express_are_refused(tmp_path, body, reason):
     with pytest.raises(SlangImportRefused, match=reason):
         _translate(tmp_path, COMPUTE_PREFIX + f"    {body}\n}}\n", "cgl")
+
+
+FLOAT_BITWISE = """RWStructuredBuffer<float> values;
+groupshared float shared_value;
+[numthreads(1, 1, 1)]
+void CSMain(uint3 id : SV_DispatchThreadID) {
+    float original;
+    InterlockedCompareExchangeFloatBitwise(values[0], 1.0, 2.0, original);
+    InterlockedCompareStoreFloatBitwise(values[1], original, 3.0);
+    InterlockedCompareStoreFloatBitwise(shared_value, 0.0, 3.0);
+}
+"""
+
+
+def _statements(text):
+    return [line.strip() for line in text.splitlines() if "Interlocked" in line]
+
+
+def test_float_bitwise_compare_exchanges_import_as_the_hlsl_importer_writes_them(
+    tmp_path,
+):
+    """The shader model 6.6 float compare-exchanges stay calls, the HLSL importer's CrossGL form."""
+    from_slang = _translate(tmp_path, FLOAT_BITWISE, "cgl")
+    from_hlsl = _translate(tmp_path, FLOAT_BITWISE, "cgl", suffix=".hlsl")
+
+    assert _statements(from_slang) == [
+        "InterlockedCompareExchangeFloatBitwise(values[0], 1.0, 2.0, original);",
+        "InterlockedCompareStoreFloatBitwise(values[1], original, 3.0);",
+        "InterlockedCompareStoreFloatBitwise(shared_value, 0.0, 3.0);",
+    ]
+    assert _statements(from_slang) == _statements(from_hlsl)
+
+
+@pytest.mark.parametrize("backend", ["directx", "slang"])
+def test_imported_float_bitwise_compare_exchanges_compile(tmp_path, backend):
+    code = _translate(tmp_path, FLOAT_BITWISE, backend)
+    assert "InterlockedCompareExchangeFloatBitwise(" in code
+    if backend == "directx":
+        dxc = shutil.which("dxc")
+        if dxc is None:
+            pytest.skip("dxc is not installed")
+        (tmp_path / "out.hlsl").write_text(code, encoding="utf-8")
+        _run(tmp_path, [dxc, "-T", "cs_6_6", "-E", "CSMain", "out.hlsl"])
+    else:
+        _compile(tmp_path, backend, code)
