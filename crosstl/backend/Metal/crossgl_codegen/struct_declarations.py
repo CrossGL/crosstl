@@ -277,7 +277,9 @@ class MetalStructDeclarationMixin:
             + r")(?![\w:])"
         )
         for _ in range(self._ALIAS_ARGUMENT_LIMIT):
-            substituted = pattern.sub(lambda match: plain[match.group(0)], declared_type)
+            substituted = pattern.sub(
+                lambda match: plain[match.group(0)], declared_type
+            )
             if substituted == declared_type:
                 break
             declared_type = substituted
