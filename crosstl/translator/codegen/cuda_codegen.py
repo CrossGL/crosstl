@@ -904,10 +904,10 @@ class CudaCodeGen(
                 qualifier_str += " "
 
             declaration_type = self.glsl_buffer_block_declaration_type(var_type, node)
-            declaration = (
-                f"{qualifier_str}"
-                f"{self.format_typed_declarator(declaration_type, node.name)}"
+            declarator = self.apply_volatile_qualifier_to_declarator(
+                self.format_typed_declarator(declaration_type, node.name), node
             )
+            declaration = f"{qualifier_str}{declarator}"
             declaration = self.apply_restrict_qualifier_to_declaration(
                 declaration, node.name, node
             )

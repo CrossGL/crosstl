@@ -31,9 +31,11 @@ invocation's element of per-vertex output arrays and ``gl_out[]``, and writes ``
   backend drops it: it is an optimisation hint, and GLSL clamps levels to ``gl_MaxTessGenLevel`` itself;
 * the domain entry point becomes ``<entry>_domain_point``, called by a new entry that rebuilds the patch-constant
   structure from ``gl_TessLevel*`` and the ``patch in`` variables and writes the returned vertex to the stage
-  outputs. GLSL declares the spacing and winding on the evaluation shader, HLSL on the hull, so the domain stage
-  takes ``@partitioning`` and ``@outputtopology`` from the program's hull stage. A GLSL domain stage translated
-  without its hull is refused; SPIR-V leaves those execution modes to the control stage, as DXC does;
+  outputs. In GLSL output, a domain entry point that returns a value rather than a structure
+  (``float4 main(...) : SV_Position``) writes it to the built-in or the one located output its semantic names.
+  GLSL declares the spacing and winding on the evaluation shader, HLSL on the hull, so the domain stage takes
+  ``@partitioning`` and ``@outputtopology`` from the program's hull stage. A GLSL domain stage translated without
+  its hull is refused; SPIR-V leaves those execution modes to the control stage, as DXC does;
 * ``patch[i].member`` reads of an ``InputPatch`` or ``OutputPatch`` read the arrayed variables directly; any other use
   of the patch reads a local array copy of it, and helpers that take a patch take that array.
 
@@ -56,6 +58,7 @@ from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import call_name
 from .stage_varyings import (
     GLSL_TARGETS,
+    INTERPOLATION,
     SPIRV_TARGETS,
     FreshNames,
     allocated_locations,
@@ -97,6 +100,13 @@ _PATCH_FUNCTION_PARAMETERS = {"gl_PrimitiveID": "gl_PrimitiveID"}
 _DOMAIN_PARAMETERS = {"gl_PrimitiveID": "gl_PrimitiveID"}
 _HULL_ONLY_ATTRIBUTES = frozenset({"patchconstantfunc", "maxtessfactor"})
 _DOMAIN_FROM_HULL = ("partitioning", "outputtopology")
+# Entry-point attributes that configure a tessellation stage rather than name the semantic of its result.
+_STAGE_ATTRIBUTES = frozenset(
+    {"domain", "outputcontrolpoints", "shader", "stage_entry"}
+    | _HULL_ONLY_ATTRIBUTES
+    | set(_DOMAIN_FROM_HULL)
+)
+_VARYING_ATTRIBUTES = INTERPOLATION | {"location", "component", "stream"}
 # Tessellation system values that :mod:`.system_values` leaves in their ``SV_`` spelling, and the GLSL built-in the
 # HLSL importer writes for each (``crosstl/backend/DirectX/import_tables.py``).
 _SYSTEM_VALUE_BUILTINS = {
@@ -133,7 +143,15 @@ def lower_tessellation_patches(program, target) -> int:
         name = stage_name(stage)
         if name in ("tessellation_control", "tessellation_evaluation"):
             entry = getattr(stage, "entry_point", None)
-            if entry is not None and _returns_struct(program, stage, entry):
+            if entry is None:
+                continue
+            # SPIR-V output reads a domain entry point that returns a value in place: its patch-constant
+            # structure parameter takes the leading elements of the level built-ins and a Patch input per member.
+            if _returns_struct(program, stage, entry) or (
+                name == "tessellation_evaluation"
+                and target in GLSL_TARGETS
+                and _result_semantic(entry)
+            ):
                 found[name] = stage
     if not found:
         return 0
@@ -559,8 +577,14 @@ class _TessellationLowering:
             if point_struct is not None
             else {}
         )
-        out_struct = structs[type_name(entry.return_type)]
-        output_writes = self.domain_outputs(out_struct, declarations)
+        result = _result_semantic(entry)
+        if type_name(entry.return_type) in structs:
+            result = None
+            output_writes = self.domain_outputs(
+                structs[type_name(entry.return_type)], declarations
+            )
+        else:
+            output_writes = self.domain_value_output(entry, result, declarations)
 
         coordinate = A.IdentifierNode("gl_TessCoord")
         parameters = dict(_DOMAIN_PARAMETERS)
@@ -586,7 +610,8 @@ class _TessellationLowering:
             )
         ]
         body += [write(A.IdentifierNode(vertex)) for write in output_writes]
-        attributes = list(identity.attributes)
+        # A value's semantic moves to the stage output it is written to; the new entry point returns nothing.
+        attributes = [attr for attr in identity.attributes if attr is not result]
         present = {_attr_name(attr) for attr in attributes}
         hull_attributes = list(hull.attributes or []) if hull is not None else []
         for name in _DOMAIN_FROM_HULL:
@@ -695,12 +720,27 @@ class _TessellationLowering:
             )
         return statements
 
-    def domain_outputs(self, struct, declarations):
+    def domain_value_output(self, entry, result, declarations):
+        """Writes of a domain entry point's returned value, whose semantic names the stage output it fills."""
+        member = A.StructMemberNode(
+            name="return",
+            member_type=copy.deepcopy(entry.return_type),
+            attributes=[copy.deepcopy(result)],
+        )
+        return self.domain_outputs(
+            A.StructNode(name=entry.name, members=[member]), declarations, whole=True
+        )
+
+    def domain_outputs(self, struct, declarations, *, whole=False):
+        """``vertex -> statement`` writes of the domain's result to its stage outputs.
+
+        ``whole`` marks the result as the value of ``struct``'s one member rather than a structure holding it.
+        """
         writes, allocated = [], allocated_locations(struct.members)
         for member in struct.members:
             name = builtin(member)
             if name in _POINT_BUILTINS:
-                writes.append(_member_copy(name, member.name))
+                writes.append(_member_copy(name, None if whole else member.name))
             else:
                 self.refuse_value_member(struct, member)
                 location = neighbour_location(
@@ -718,7 +758,9 @@ class _TessellationLowering:
                     ["out"],
                 )
                 declarations.append(variable)
-                writes.append(_member_copy(variable.name, member.name))
+                writes.append(
+                    _member_copy(variable.name, None if whole else member.name)
+                )
         return writes
 
     # Shared.
@@ -999,6 +1041,25 @@ def _returns_struct(program, stage, entry):
     return any(isinstance(s, A.StructNode) and s.name == name for s in structs)
 
 
+def _result_semantic(entry):
+    """The semantic attribute of an HLSL-style domain entry point that returns a value instead of a structure.
+
+    ``float4 main(...) : SV_Position`` imports as ``vec4 main(...) @ gl_Position``; the attributes that configure
+    the stage are no semantic.
+    """
+    if _attribute_args(entry, "domain") is None:
+        return None
+    kind = getattr(entry, "return_type", None)
+    if kind is None or type_name(kind) == "void":
+        return None
+    for attr in entry.attributes or []:
+        name = _attr_name(attr)
+        if name in _STAGE_ATTRIBUTES or name in _VARYING_ATTRIBUTES:
+            continue
+        return attr
+    return None
+
+
 def _attr_name(attr):
     return str(getattr(attr, "name", "")).lower()
 
@@ -1031,11 +1092,11 @@ def _type_key(type_node):
 
 
 def _member_copy(target_name, member_name):
-    """``value -> target = value.member``."""
+    """``value -> target = value.member``, or ``target = value`` without a member name."""
 
     def statement(value):
-        return A.AssignmentNode(
-            A.IdentifierNode(target_name), A.MemberAccessNode(value, member_name)
-        )
+        if member_name is not None:
+            value = A.MemberAccessNode(value, member_name)
+        return A.AssignmentNode(A.IdentifierNode(target_name), value)
 
     return statement

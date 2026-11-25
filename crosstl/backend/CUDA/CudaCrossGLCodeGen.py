@@ -17,6 +17,7 @@ from ..thread_hierarchy import (
 from .array_extents import IntegerConstants
 from .block_votes import BlockVoteLibrary, insert_block_vote_functions
 from .buffer_layout_import import EmittedBufferLayouts
+from .buffer_memory_qualifiers import buffer_memory_attributes
 from .crossgl_codegen.cooperative_groups import CudaImportCooperativeGroupMixin
 from .crossgl_codegen.declarations import CudaImportDeclarationMixin
 from .crossgl_codegen.intrinsics import CudaImportIntrinsicMixin
@@ -50,6 +51,13 @@ from .function_templates import (
 from .keyword_renames import source_identifier_names
 from .parameter_defaults import parameter_default_suffix
 from .struct_methods import lower_struct_methods
+from .surface_formats import (
+    SurfaceAccessMixin,
+    SurfaceElementKey,
+    declared_variable_types,
+    is_address_of,
+    surface_value_type,
+)
 from .union_layout_import import UnionLayoutContracts
 
 # Warp intrinsics CrossGL keeps as CUDA calls; __syncwarp is a statement (visit_SyncNode).
@@ -71,6 +79,7 @@ class CudaToCrossGLConverter(
     CudaImportResourceMixin,
     CudaImportStatementMixin,
     CudaImportTypeMixin,
+    SurfaceAccessMixin,
     ImportRefusalMixin,
 ):
     """Serialize CUDA backend AST nodes back into CrossGL source.
@@ -233,69 +242,6 @@ class CudaToCrossGLConverter(
         "Cubemap": 2,
         "CubemapLayered": 2,
     }
-    CUDA_SURFACE_VALUE_BYTE_SIZES = {
-        "char": 1,
-        "signed char": 1,
-        "unsigned char": 1,
-        "int8_t": 1,
-        "uint8_t": 1,
-        "uchar": 1,
-        "short": 2,
-        "unsigned short": 2,
-        "int16_t": 2,
-        "uint16_t": 2,
-        "half": 2,
-        "__half": 2,
-        "__nv_bfloat16": 2,
-        "int": 4,
-        "signed int": 4,
-        "uint": 4,
-        "unsigned int": 4,
-        "int32_t": 4,
-        "uint32_t": 4,
-        "float": 4,
-        "long long": 8,
-        "signed long long": 8,
-        "unsigned long long": 8,
-        "int64_t": 8,
-        "uint64_t": 8,
-        "double": 8,
-        "char1": 1,
-        "uchar1": 1,
-        "short1": 2,
-        "ushort1": 2,
-        "int1": 4,
-        "uint1": 4,
-        "float1": 4,
-        "double1": 8,
-        "char2": 2,
-        "uchar2": 2,
-        "short2": 4,
-        "ushort2": 4,
-        "half2": 4,
-        "__half2": 4,
-        "__nv_bfloat162": 4,
-        "int2": 8,
-        "uint2": 8,
-        "float2": 8,
-        "double2": 16,
-        "char3": 3,
-        "uchar3": 3,
-        "short3": 6,
-        "ushort3": 6,
-        "int3": 12,
-        "uint3": 12,
-        "float3": 12,
-        "double3": 24,
-        "char4": 4,
-        "uchar4": 4,
-        "short4": 8,
-        "ushort4": 8,
-        "int4": 16,
-        "uint4": 16,
-        "float4": 16,
-        "double4": 32,
-    }
     CUDA_DEVICE_GRAPH_LAUNCH_MODES = {
         "cudaStreamGraphFireAndForget": "fire-and-forget",
         "cudaStreamGraphTailLaunch": "tail",
@@ -326,6 +272,8 @@ class CudaToCrossGLConverter(
         self.vector1_name_scopes = [{}]
         self.user_function_names = set()
         self.global_resource_object_type_hints = {}
+        self.global_surface_variable_types = {}
+        self.surface_struct_members = {}
         self.struct_resource_member_hints = {}
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
@@ -365,6 +313,10 @@ class CudaToCrossGLConverter(
             ast_node
         )
         self.user_function_names = self.collect_user_function_names(ast_node)
+        self.global_surface_variable_types = (
+            self.collect_global_declared_variable_types(ast_node)
+        )
+        self.surface_struct_members = self.collect_struct_member_types(ast_node)
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
         )
@@ -427,6 +379,7 @@ class CudaToCrossGLConverter(
 
     def collect_resource_object_type_hints(self, node, declared_names=None):
         hints = {}
+        variable_types = declared_variable_types(node)
 
         def collect(current):
             if current is None:
@@ -445,7 +398,7 @@ class CudaToCrossGLConverter(
                 return
 
             if isinstance(current, FunctionCallNode):
-                hint = self.get_resource_object_call_hint(current.name)
+                hint = self.get_resource_object_call_hint(current.name, current.args)
                 if hint is not None:
                     arg_index, resource_type = hint
                     if len(current.args) > arg_index:
@@ -456,6 +409,10 @@ class CudaToCrossGLConverter(
                             ),
                             resource_type,
                         )
+                # A global surface's element is merged over the whole program instead.
+                self.collect_surface_element_hint(
+                    hints, current, variable_types, declared_names
+                )
 
             for value in vars(current).values():
                 collect(value)
@@ -463,12 +420,19 @@ class CudaToCrossGLConverter(
         collect(node)
         for name in declared_names or []:
             hints.setdefault(name, None)
+            # A local name hides the element of a global surface of the same name.
+            hints.setdefault(SurfaceElementKey(name), None)
         return hints
 
     def collect_global_resource_object_type_hints_from_function(
         self, node, global_names, hints
     ):
         local_names = self.collect_declared_variable_names(node)
+        variable_types = {
+            **self.global_surface_variable_types,
+            **declared_variable_types(node),
+        }
+        surface_names = set(global_names) - set(local_names)
 
         def collect(current):
             if current is None:
@@ -487,7 +451,7 @@ class CudaToCrossGLConverter(
                 return
 
             if isinstance(current, FunctionCallNode):
-                hint = self.get_resource_object_call_hint(current.name)
+                hint = self.get_resource_object_call_hint(current.name, current.args)
                 if hint is not None:
                     arg_index, resource_type = hint
                     if len(current.args) > arg_index:
@@ -498,6 +462,9 @@ class CudaToCrossGLConverter(
                             self.add_resource_object_type_hint(
                                 hints, name, resource_type
                             )
+                self.collect_surface_element_hint(
+                    hints, current, variable_types, surface_names
+                )
 
             for value in vars(current).values():
                 collect(value)
@@ -583,7 +550,9 @@ class CudaToCrossGLConverter(
             for current in self.walk_ast_values(getattr(function, "body", [])):
                 if not isinstance(current, FunctionCallNode):
                     continue
-                call_hint = self.get_resource_object_call_hint(current.name)
+                call_hint = self.get_resource_object_call_hint(
+                    current.name, current.args
+                )
                 if call_hint is None:
                     continue
                 arg_index, resource_type = call_hint
@@ -610,14 +579,16 @@ class CudaToCrossGLConverter(
 
         return hints
 
-    def get_resource_object_call_hint(self, function_name):
+    def get_resource_object_call_hint(self, function_name, args=None):
+        """``(index of the resource argument, its CrossGL type)`` of a texture or surface call, or ``None``."""
         base_name, _ = self.parse_cpp_template(function_name)
         if self.is_user_defined_function(base_name):
             return None
         if base_name in self.CUDA_TEXTURE_CALL_TYPE_HINTS:
             return 0, self.CUDA_TEXTURE_CALL_TYPE_HINTS[base_name]
         if base_name in self.CUDA_SURFACE_CALL_TYPE_HINTS:
-            if base_name.endswith("write"):
+            # surf*write(value, surface, ...) and the pointer form surf*read(&value, surface, ...).
+            if base_name.endswith("write") or (args and is_address_of(args[0])):
                 return 1, self.CUDA_SURFACE_CALL_TYPE_HINTS[base_name]
             return 0, self.CUDA_SURFACE_CALL_TYPE_HINTS[base_name]
         return None
@@ -762,8 +733,9 @@ class CudaToCrossGLConverter(
         self.push_vector1_name_scope()
         try:
             for index, param in enumerate(node.params):
-                param_type = self.convert_cuda_variable_type_to_crossgl(
-                    param.vtype, param.name
+                param_type = self.surface_declaration_type(
+                    self.convert_cuda_variable_type_to_crossgl(param.vtype, param.name),
+                    param.name,
                 )
                 self.register_vector1_name(param.name, param.vtype)
                 param_name = self.crossgl_parameter_name(param, index)
@@ -882,13 +854,16 @@ class CudaToCrossGLConverter(
                         element_type,
                     )
                     params.append(
-                        f"@group(0) @binding({binding}) var<storage, read_write> {param_name}: {storage_type}"
+                        f"{buffer_memory_attributes(param.vtype)}@group(0) @binding({binding}) "
+                        f"var<storage, read_write> {param_name}: {storage_type}"
                     )
                 else:
                     param_type = self.convert_cuda_variable_type_to_crossgl(
                         param.vtype, param.name
                     )
-                    param_type = self.format_crossgl_type_syntax(param_type)
+                    param_type = self.surface_declaration_type(
+                        self.format_crossgl_type_syntax(param_type), param.name
+                    )
                     params.append(f"{param_type} {param_name}")
 
             self.emit(f"fn {kernel.name}(")
@@ -1229,7 +1204,7 @@ class CudaToCrossGLConverter(
                 "surfCubemapLayeredread": 3,
             }[base_name]
             return self.format_cuda_surface_read(
-                args, dimensions, value_type, base_name
+                args, dimensions, value_type, base_name, raw_args
             )
 
         if base_name in {
@@ -1256,93 +1231,95 @@ class CudaToCrossGLConverter(
 
         return None
 
-    def format_cuda_surface_read(self, args, dimensions, value_type, base_name):
-        if len(args) < dimensions + 1:
+    def format_cuda_surface_read(
+        self, args, dimensions, value_type, base_name, raw_args=None
+    ):
+        """``imageLoad`` of a surface read: ``surf2Dread<T>(s, x, y)`` or ``surf2Dread(&v, s, x, y)``.
+
+        The pointer form stores the texel in its destination, so it becomes an assignment; CUDA declares it
+        ``void``, so it only stands as a statement. :mod:`..surface_formats` gives the element type ``T``, the
+        image's format, and the texel column ``x / sizeof(T)``.
+        """
+        raw_args = list(raw_args or [])
+        pointer_form = bool(raw_args) and is_address_of(raw_args[0])
+        start = 1 if pointer_form else 0
+        if len(args) < start + dimensions + 1 or len(raw_args) < len(args):
             return None
-        surface_name = args[0]
-        coord_args = [self.strip_surface_byte_offset(args[1], value_type)]
-        coord_args.extend(args[2 : dimensions + 1])
+        surface_name = args[start]
+        if pointer_form and value_type is None:
+            value_type = self.cuda_surface_value_type(raw_args[0].operand)
+        access = self.surface_access_element(base_name, raw_args[start], value_type)
+        if access is None:
+            return "0"
+        element, size = access
+        coord_args = [
+            self.cuda_surface_texel_column(base_name, raw_args[start + 1], size)
+        ]
+        coord_args.extend(args[start + 2 : start + dimensions + 1])
         coord = self.format_cuda_surface_coordinate(
-            base_name, surface_name, coord_args, dimensions, args[dimensions + 1 :]
+            base_name,
+            surface_name,
+            coord_args,
+            dimensions,
+            args[start + dimensions + 1 :],
         )
         if coord is None:
             return None
-        return f"imageLoad({surface_name}, {coord})"
+        texel = f"imageLoad({surface_name}, {coord})"
+        if element is not None:
+            texel = element.load(texel)
+        if pointer_form:
+            return f"{self.visit(raw_args[0].operand)} = {texel}"
+        return texel
 
     def format_cuda_surface_write(
         self, args, dimensions, value_type, raw_args=None, base_name=None
     ):
-        if len(args) < dimensions + 2:
+        """``imageStore`` of ``surf2Dwrite(v, s, x, y)``: the element of ``v`` widened to the image's texel."""
+        raw_args = list(raw_args or [])
+        if len(args) < dimensions + 2 or len(raw_args) < len(args):
             return None
-        if value_type is None and raw_args:
-            value_type = self.infer_cuda_surface_value_type(raw_args[0])
-        value = args[0]
+        if value_type is None:
+            value_type = self.cuda_surface_value_type(raw_args[0])
         surface_name = args[1]
-        coord_args = [self.strip_surface_byte_offset(args[2], value_type)]
+        access = self.surface_access_element(base_name, raw_args[1], value_type)
+        if access is None:
+            return "0"
+        element, size = access
+        coord_args = [self.cuda_surface_texel_column(base_name, raw_args[2], size)]
         coord_args.extend(args[3 : dimensions + 2])
         coord = self.format_cuda_surface_coordinate(
             base_name, surface_name, coord_args, dimensions, args[dimensions + 2 :]
         )
         if coord is None:
             return None
+        value = args[0] if element is None else element.store(args[0])
         return f"imageStore({surface_name}, {coord}, {value})"
 
-    def strip_surface_byte_offset(self, expression, value_type):
-        text = str(expression).strip()
-        if text.startswith("(") and text.endswith(")"):
-            text = text[1:-1].strip()
+    def cuda_surface_value_type(self, expression):
+        """The CUDA type of a surface write's value or a pointer-form read's destination, or ``None``."""
+        return surface_value_type(
+            expression, self.lookup_variable_type, self.surface_member_type
+        )
 
-        if value_type:
-            suffix = f" * sizeof({value_type})"
-            if text.endswith(suffix):
-                return text[: -len(suffix)].strip()
+    def surface_member_type(self, object_type, member):
+        """The declared type of member ``member`` of the program's structure ``object_type``, or ``None``."""
+        name = self.strip_type_qualifiers(self.resolve_type_alias(str(object_type)))
+        name = name.replace("&", "").strip().removeprefix("struct ").strip()
+        return self.surface_struct_members.get(name, {}).get(member)
 
-            byte_size = self.cuda_surface_value_byte_size(value_type)
-            if byte_size is not None:
-                for literal in self.cuda_byte_size_literals(byte_size):
-                    suffix = f" * {literal}"
-                    if text.endswith(suffix):
-                        return text[: -len(suffix)].strip()
-                    prefix = f"{literal} * "
-                    if text.startswith(prefix):
-                        return text[len(prefix) :].strip()
-
-        marker = " * sizeof("
-        if marker in text and text.endswith(")"):
-            return text.split(marker, 1)[0].strip()
-
-        return expression
-
-    def infer_cuda_surface_value_type(self, expression):
-        if isinstance(expression, CastNode):
-            return self.strip_type_qualifiers(expression.target_type)
-        if isinstance(expression, ArrayAccessNode):
-            array_type = self.cuda_surface_value_source_type(expression.array)
-            return self.cuda_surface_element_type(array_type)
-        if isinstance(expression, str):
-            return self.cuda_surface_element_type(self.lookup_variable_type(expression))
-        if isinstance(expression, UnaryOpNode) and expression.op == "*":
-            return self.cuda_surface_element_type(
-                self.cuda_surface_value_source_type(expression.operand)
-            )
-        return None
-
-    def cuda_surface_value_source_type(self, expression):
-        if isinstance(expression, str):
-            return self.lookup_variable_type(expression)
-        if isinstance(expression, ArrayAccessNode):
-            return self.cuda_surface_element_type(
-                self.cuda_surface_value_source_type(expression.array)
-            )
-        if isinstance(expression, CastNode):
-            return expression.target_type
-        if isinstance(expression, UnaryOpNode):
-            return self.cuda_surface_value_source_type(expression.operand)
-        return None
-
-    def cuda_byte_size_literals(self, byte_size):
-        text = str(byte_size)
-        return (text, f"{text}u", f"{text}U", f"{text}ul", f"{text}UL")
+    def cuda_surface_texel_column(self, base_name, raw_offset, element_size):
+        """The texel column of a surface access's x byte offset; an offset not provably a multiple is refused."""
+        divided = self.divide_surface_byte_offset(raw_offset, element_size, None)
+        if divided is not None:
+            return divided[0]
+        offset = self.visit(raw_offset) if raw_offset is not None else "?"
+        return self.refuse_import(
+            f"CUDA {base_name} x byte offset {offset} is not provably a multiple of the "
+            f"{element_size}-byte surface element; write it as a multiple of the element "
+            "size, for example x * sizeof(T)",
+            "0",
+        )
 
     def visit_SyncNode(self, node):
         if node.sync_type == "__syncthreads":

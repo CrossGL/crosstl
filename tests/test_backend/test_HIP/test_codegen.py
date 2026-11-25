@@ -2740,8 +2740,12 @@ class TestHipCodeGen:
         result = codegen.generate(ast)
 
         assert "var globalTex: sampler2D;" in result
-        assert "var globalSurf: image2D;" in result
-        assert "void launch(sampler2D paramTex, image3D paramVolume)" in result
+        # Surfaces with float4 accesses take the rgba32f format.
+        assert "@format(rgba32f) var globalSurf: image2D;" in result
+        assert (
+            "void launch(sampler2D paramTex, @format(rgba32f) image3D paramVolume)"
+            in result
+        )
         assert "var grid: vec3<u32> = vec3<u32>(16, 8, 1);" in result
         assert "var block: vec3<u32> = vec3<u32>(32, 1, 1);" in result
         assert "var v: vec3<f32> = vec3<f32>(1.0f, 2.0f, 3.0f);" in result
@@ -2845,6 +2849,7 @@ class TestHipCodeGen:
         code = """
         void surfaceByteStrideOps(
             hipSurfaceObject_t surf,
+            hipSurfaceObject_t vectorSurf,
             surface<void, hipSurfaceType1D> lineSurf,
             int x,
             int y,
@@ -2857,7 +2862,7 @@ class TestHipCodeGen:
             surf2Dread<float>(&pointerLoaded, surf, 4 * x, y);
             surf2Dwrite<float>(value, surf, x * 4, y);
             surf1Dwrite<unsigned int>(flags, lineSurf, 4 * x);
-            surf2Dwrite<float4>(vectorValue, surf, x * 16, y);
+            surf2Dwrite<float4>(vectorValue, vectorSurf, x * 16, y);
         }
         """
         lexer = HipLexer(code)
@@ -2867,13 +2872,15 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
-        assert "image2D surf" in result
-        assert "image1D lineSurf" in result
-        assert "var loaded: f32 = imageLoad(surf, vec2<i32>(x, y));" in result
-        assert "pointerLoaded = imageLoad(surf, vec2<i32>(x, y));" in result
+        # Each surface's declaration carries the format of the texels it is accessed as.
+        assert "@format(r32f) image2D surf," in result
+        assert "@format(rgba32f) image2D vectorSurf," in result
+        assert "@format(r32ui) uimage1D lineSurf," in result
+        assert "var loaded: f32 = imageLoad(surf, vec2<i32>(x, y)).x;" in result
+        assert "pointerLoaded = imageLoad(surf, vec2<i32>(x, y)).x;" in result
         assert "imageStore(surf, vec2<i32>(x, y), value);" in result
         assert "imageStore(lineSurf, x, flags);" in result
-        assert "imageStore(surf, vec2<i32>(x, y), vectorValue);" in result
+        assert "imageStore(vectorSurf, vec2<i32>(x, y), vectorValue);" in result
         assert "x * 4" not in result
         assert "4 * x" not in result
         assert "x * 16" not in result
@@ -2886,12 +2893,12 @@ class TestHipCodeGen:
         # #4197: HIP surface x is a byte offset; CrossGL takes a texel coordinate.
         code = """
         struct P { float4 c; };
-        extern "C" __global__ void probe(float* outp, hipSurfaceObject_t img, int x, int y) {
+        extern "C" __global__ void probe(float* outp, hipSurfaceObject_t img, hipSurfaceObject_t img1, int x, int y) {
             P p;
             surf2Dread(&p.c, img, x * 16, y);
             surf2Dwrite(p.c, img, x * 16, y);
             float a;
-            surf2Dread(&a, img, x * 4 + 4, y);
+            surf2Dread(&a, img1, x * 4 + 4, y);
             outp[0] = p.c.x + a;
         }
         """
@@ -2902,9 +2909,11 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
+        assert "@format(rgba32f) image2D img," in result
+        assert "@format(r32f) image2D img1," in result
         assert "p.c = imageLoad(img, vec2<i32>(x, y));" in result
         assert "imageStore(img, vec2<i32>(x, y), p.c);" in result
-        assert "a = imageLoad(img, vec2<i32>(x + 1, y));" in result
+        assert "a = imageLoad(img1, vec2<i32>(x + 1, y)).x;" in result
         assert "surf2Dread" not in result
         assert "surf2Dwrite" not in result
 
@@ -2914,22 +2923,22 @@ class TestHipCodeGen:
         # size divides, and calls and increments still evaluate exactly once.
         code = """
         __device__ int bump(int v) { return v + 1; }
-        extern "C" __global__ void probe(hipSurfaceObject_t img, int x, int y, int2 pixel) {
+        extern "C" __global__ void probe(hipSurfaceObject_t img, hipSurfaceObject_t img4, int x, int y, int2 pixel) {
             int off;
             float a = surf2Dread<float>(img, x * sizeof(float), y);
             float b = surf2Dread<float>(img, 4 * x + 8, y);
             float c = surf2Dread<float>(img, (x + 1) * 4, y);
             float d = surf2Dread<float>(img, 8, y);
             float e = surf2Dread<float>(img, x * 8 - 4, y);
-            float4 f = surf2Dread<float4>(img, pixel.x * sizeof(float4), y);
+            float4 f = surf2Dread<float4>(img4, pixel.x * sizeof(float4), y);
             float g = surf2Dread<float>(img, x * 0x4, y);
-            float h = surf2Dread<float4>(img, (blockIdx.x * blockDim.x + threadIdx.x) * sizeof(float4), y);
-            float i = surf2Dread<float4>(img, (x + y) * 16, y);
-            float j = surf2Dread<float4>(img, x * y * 16, y);
+            float4 h = surf2Dread<float4>(img4, (blockIdx.x * blockDim.x + threadIdx.x) * sizeof(float4), y);
+            float4 i = surf2Dread<float4>(img4, (x + y) * 16, y);
+            float4 j = surf2Dread<float4>(img4, x * y * 16, y);
             float k = surf2Dread<float>(img, -x * 4, y);
             float l = surf2Dread<float>(img, (int)(x * 4), y);
             float s = surf2Dread<float>(img, bump(x) * 16 - bump(x) * 16, y);
-            float t = surf2Dread<float4>(img, (off = x) * 32, y);
+            float4 t = surf2Dread<float4>(img4, (off = x) * 32, y);
         }
         """
         lexer = HipLexer(code)
@@ -2939,29 +2948,33 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
-        assert "var a: f32 = imageLoad(img, vec2<i32>(x, y));" in result
-        assert "var b: f32 = imageLoad(img, vec2<i32>(x + 2, y));" in result
-        assert "var c: f32 = imageLoad(img, vec2<i32>((x + 1), y));" in result
-        assert "var d: f32 = imageLoad(img, vec2<i32>(2, y));" in result
-        assert "var e: f32 = imageLoad(img, vec2<i32>(x * 2 - 1, y));" in result
-        assert "var f: vec4<f32> = imageLoad(img, vec2<i32>(pixel.x, y));" in result
-        assert "var g: f32 = imageLoad(img, vec2<i32>(x, y));" in result
+        assert "var a: f32 = imageLoad(img, vec2<i32>(x, y)).x;" in result
+        assert "var b: f32 = imageLoad(img, vec2<i32>(x + 2, y)).x;" in result
+        assert "var c: f32 = imageLoad(img, vec2<i32>((x + 1), y)).x;" in result
+        assert "var d: f32 = imageLoad(img, vec2<i32>(2, y)).x;" in result
+        assert "var e: f32 = imageLoad(img, vec2<i32>(x * 2 - 1, y)).x;" in result
+        assert "var f: vec4<f32> = imageLoad(img4, vec2<i32>(pixel.x, y));" in result
+        assert "var g: f32 = imageLoad(img, vec2<i32>(x, y)).x;" in result
         assert (
-            "var h: f32 = imageLoad(img, vec2<i32>(gl_GlobalInvocationID.x, y));"
+            "var h: vec4<f32> = imageLoad(img4, vec2<i32>(gl_GlobalInvocationID.x, y));"
             in result
         )
-        assert "var i: f32 = imageLoad(img, vec2<i32>((x + y), y));" in result
-        assert "var j: f32 = imageLoad(img, vec2<i32>((x * y), y));" in result
-        assert "var k: f32 = imageLoad(img, vec2<i32>((-x), y));" in result
-        assert "var l: f32 = imageLoad(img, vec2<i32>(x, y));" in result
+        assert "var i: vec4<f32> = imageLoad(img4, vec2<i32>((x + y), y));" in result
+        assert "var j: vec4<f32> = imageLoad(img4, vec2<i32>((x * y), y));" in result
+        assert "var k: f32 = imageLoad(img, vec2<i32>((-x), y)).x;" in result
+        assert "var l: f32 = imageLoad(img, vec2<i32>(x, y)).x;" in result
         assert (
-            "var s: f32 = imageLoad(img, vec2<i32>(bump(x) * 4 - bump(x) * 4, y));"
+            "var s: f32 = imageLoad(img, vec2<i32>(bump(x) * 4 - bump(x) * 4, y)).x;"
             in result
         )
-        assert "var t: f32 = imageLoad(img, vec2<i32>((off = x) * 2, y));" in result
+        assert (
+            "var t: vec4<f32> = imageLoad(img4, vec2<i32>((off = x) * 2, y));" in result
+        )
 
-    def test_hip_surface_byte_offset_template_sizeof(self):
-        # #4197: `x * sizeof(T)` is a multiple of the element size whatever `T` is.
+    def test_hip_surface_template_element_is_refused(self):
+        # `x * sizeof(T)` is a multiple of the element size whatever `T` is, but a template element type gives
+        # the surface no single texel format, so the access is refused instead of reading a four-component
+        # texel as a `T`.
         code = """
         template <typename T> __device__ T load(hipSurfaceObject_t img, int x, int y) { return surf2Dread<T>(img, x * sizeof(T), y); }
         """
@@ -2970,9 +2983,10 @@ class TestHipCodeGen:
         parser = HipParser(tokens)
         ast = parser.parse()
 
-        result = HipToCrossGLConverter().generate(ast)
-
-        assert "return imageLoad(img, vec2<i32>(x, y));" in result
+        with pytest.raises(
+            HipImportRefused, match="T is not a value type a surface holds"
+        ):
+            HipToCrossGLConverter().generate(ast)
 
     def test_hip_surface_write_value_type_from_member_and_array(self):
         # #4197: the write element type comes from the value, including member
@@ -2980,12 +2994,12 @@ class TestHipCodeGen:
         code = """
         struct P { float4 c; float v; };
         struct Box { P p; };
-        extern "C" __global__ void probe(float* arr, hipSurfaceObject_t img, int x, int y, P p, Box box, float4 v) {
+        extern "C" __global__ void probe(float* arr, hipSurfaceObject_t img, hipSurfaceObject_t img4, hipSurfaceObject_t bytes, int x, int y, P p, Box box, float4 v) {
             surf2Dwrite(arr[3], img, x * 4, y);
             surf2Dwrite(p.v, img, x * 4, y);
-            surf2Dwrite(box.p.c, img, x * 16, y);
+            surf2Dwrite(box.p.c, img4, x * 16, y);
             surf2Dwrite(v.x, img, x * 4, y);
-            surf2Dwrite(make_uchar4(1, 2, 3, 4), img, x * 4, y);
+            surf2Dwrite(make_uchar4(1, 2, 3, 4), bytes, x * 4, y);
         }
         """
         lexer = HipLexer(code)
@@ -2995,11 +3009,18 @@ class TestHipCodeGen:
 
         result = HipToCrossGLConverter().generate(ast)
 
+        assert "@format(r32f) image2D img," in result
+        assert "@format(rgba32f) image2D img4," in result
+        assert "@format(rgba8ui) uimage2D bytes," in result
         assert "imageStore(img, vec2<i32>(x, y), arr[3]);" in result
         assert "imageStore(img, vec2<i32>(x, y), p.v);" in result
-        assert "imageStore(img, vec2<i32>(x, y), box.p.c);" in result
+        assert "imageStore(img4, vec2<i32>(x, y), box.p.c);" in result
         assert "imageStore(img, vec2<i32>(x, y), v.x);" in result
-        assert "imageStore(img, vec2<i32>(x, y), vec4<u8>(1, 2, 3, 4));" in result
+        # An 8-bit unsigned texel is stored as the four-component unsigned value of an rgba8ui image.
+        assert (
+            "imageStore(bytes, vec2<i32>(x, y), vec4<u32>(vec4<u8>(1, 2, 3, 4)));"
+            in result
+        )
         assert "surf2Dwrite" not in result
 
     def test_hip_surface_byte_offset_unproven_is_refused(self):
@@ -3026,16 +3047,6 @@ class TestHipCodeGen:
                 "float4 a = surf2Dread<float4>(img, x * sizeof(float), y);",
                 "not provably a multiple",
             ),
-            # A value read without a template argument has no known element type.
-            (
-                "float a = surf2Dread(img, x * 4, y);",
-                "the element type is unknown",
-            ),
-            # The write value type cannot be inferred, so no element size is known.
-            (
-                "surf2Dwrite(someCall(), img, x * 16, y);",
-                "the element type is unknown",
-            ),
         ]
         for statement, pattern in cases:
             code = f"""
@@ -3054,21 +3065,30 @@ class TestHipCodeGen:
                 error.value.code == "project.translate.hip-surface-byte-offset-unproven"
             )
 
-        # A constant offset of a template element type cannot be shown to be a
-        # multiple of its unknown size.
+        # Without a known element type neither the texel format nor the byte
+        # stride of x is known: a value read without a template argument, a
+        # write whose value type cannot be inferred, and a template element.
+        unknown = [
+            ("float a = surf2Dread(img, x * 4, y);", "type of the value it reads"),
+            ("surf2Dwrite(someCall(), img, x * 16, y);", "type of the value it reads"),
+        ]
+        for statement, pattern in unknown:
+            code = f"""
+            extern "C" __global__ void probe(hipSurfaceObject_t img, int x, int y) {{
+                {statement}
+            }}
+            """
+            ast = HipParser(HipLexer(code).tokenize()).parse()
+            with pytest.raises(HipImportRefused, match=pattern):
+                HipToCrossGLConverter().generate(ast)
         code = """
         template <typename T> __device__ T load(hipSurfaceObject_t img, int x, int y) { return surf2Dread<T>(img, 16, y); }
         """
-        lexer = HipLexer(code)
-        tokens = lexer.tokenize()
-        parser = HipParser(tokens)
-        ast = parser.parse()
-
+        ast = HipParser(HipLexer(code).tokenize()).parse()
         with pytest.raises(
-            HipSurfaceByteOffsetError, match="has no known size"
-        ) as error:
+            HipImportRefused, match="T is not a value type a surface holds"
+        ):
             HipToCrossGLConverter().generate(ast)
-        assert error.value.code == "project.translate.hip-surface-byte-offset-unproven"
 
     def test_hip_texture_gather_helpers_convert(self):
         code = """

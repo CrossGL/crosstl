@@ -8,7 +8,8 @@ The other targets restrict implicit-LOD sampling to fragment shaders instead of 
 ``ImplicitLod`` instructions only in the Fragment execution model (and compute-like models with derivative groups);
 DXC rejects ``Sample``, ``SampleBias``, ``SampleCmp`` and ``CalculateLevelOfDetail`` outside pixel shaders (and
 compute-like shaders of Shader Model 6.6); WGSL allows ``textureSample`` and ``textureSampleCompare`` only in
-fragment shaders (WGSL section 17.7). :func:`legalize_implicit_lod` therefore rewrites, for those targets, each
+fragment shaders (WGSL section 17.7); spirv-std's ``sample`` methods, which the Rust output calls, issue the same
+``ImplicitLod`` instructions. :func:`legalize_implicit_lod` therefore rewrites, for those targets, each
 implicit-LOD sample reached from a vertex, geometry, tessellation or ray-tracing stage into the explicit-LOD form at
 level 0, which is the base level GLSL defines there:
 
@@ -26,11 +27,12 @@ has no clamp overload, and an explicit level of ``max(0, clamp)`` would apply th
 instead of before it.
 
 Mesh and task stages are left unchanged: their implicit-LOD semantics depend on derivative groups, which the
-emitters decide on their own. The compute stage is too, except for DirectX: SPIR-V's emitter already samples the
-base level there, while DXC accepts an implicit-LOD ``Sample`` in a compute shader only under Shader Model 6.6 with a
-derivative-capable thread-group shape, and then takes quad derivatives instead of the base level. For DirectX the
-implicit-LOD samples a compute stage reaches are therefore rewritten to level 0 as well; nothing is refused there,
-because derivative functions in compute shaders remain the emitter's decision.
+emitters decide on their own. The compute stage is too, except for DirectX and Rust: SPIR-V's emitter already samples
+the base level there, while DXC accepts an implicit-LOD ``Sample`` in a compute shader only under Shader Model 6.6
+with a derivative-capable thread-group shape, and then takes quad derivatives instead of the base level, and rust-gpu
+rejects an ``ImplicitLod`` instruction in the GLCompute execution model. For those targets the implicit-LOD samples a
+compute stage reaches are therefore rewritten to level 0 as well; nothing is refused there, because derivative
+functions in compute shaders remain the emitter's decision.
 """
 
 from __future__ import annotations
@@ -68,11 +70,11 @@ BASE_LEVEL_STAGES = frozenset(
 
 # Targets whose implicit-LOD sampling is fragment-only, so base-level samples must be written with an explicit LOD.
 EXPLICIT_LOD_TARGETS = frozenset(
-    {"directx", "hlsl", "vulkan", "spirv", "wgsl", "slang"}
+    {"directx", "hlsl", "vulkan", "spirv", "wgsl", "slang", "rust"}
 )
 
 # Targets whose compute-stage samples are rewritten to the base level, without the base-level stages' refusals.
-_COMPUTE_BASE_LEVEL_TARGETS = frozenset({"directx", "hlsl"})
+_COMPUTE_BASE_LEVEL_TARGETS = frozenset({"directx", "hlsl", "rust"})
 _COMPUTE_STAGES = frozenset({"compute"})
 
 # Targets that print CrossGL itself and keep the program unchanged.
