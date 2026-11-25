@@ -50,6 +50,10 @@ from .metal_argument_tables import assign_metal_argument_tables
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_draw_base_indices import offset_metal_draw_base_indices
+from .metal_fragment_interlock import (
+    canonicalize_rasterizer_ordered_types,
+    lower_metal_fragment_interlocks,
+)
 from .metal_invariant_position import metal_invariant_attribute_suffix
 from .metal_keyword_identifiers import (
     rename_metal_keyword_members,
@@ -400,6 +404,7 @@ class MetalProgramEntryMixin:
         """The program ``render_program`` renders, with the Metal rewrites applied, and its stage."""
         target_stage = requested_stage_name(target_stage)
         ast = fold_workgroup_size_extents(ast, "Metal", self.refuse_lowering)
+        ast = canonicalize_rasterizer_ordered_types(ast)
         ast = lower_constant_buffer_resources(
             ast,
             lambda name: self.refuse_lowering(
@@ -416,6 +421,7 @@ class MetalProgramEntryMixin:
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
+        ast = lower_metal_fragment_interlocks(ast)
         ast = rename_metal_keyword_members(ast)
         ast = self.rename_metal_reserved_program_identifiers(ast)
         ast = rename_msl_library_functions(ast)
