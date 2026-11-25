@@ -10,6 +10,11 @@
   mask taken at the call keeps out the values of inactive lanes. An exclusive scan starts from the operator's
   identity, as ``OpGroupNonUniform*`` defines it.
 * ``WaveActiveBitAnd``, ``WaveActiveBitOr`` and ``WaveActiveBitXor`` of ``bool`` values are the logical reductions.
+* DXC declares ``WaveActiveBitAnd``, ``WaveActiveBitOr`` and ``WaveActiveBitXor`` for ``uint`` and ``uint64_t``
+  scalars and vectors only. A signed or 16-bit integer operand reduces as the unsigned integer of its width (or
+  ``uint`` for the 16-bit types) and converts back. Two's complement conversion keeps the low bits, and a
+  bitwise operation's low bits depend only on its operands' low bits, so the result is the operand type's own
+  bitwise reduction.
 """
 
 from __future__ import annotations
@@ -29,8 +34,22 @@ from .array_utils import evaluate_literal_int_expression
 __all__ = [
     "emit_hlsl_wave_extension_helpers",
     "hlsl_subgroup_lane_mask_expression",
+    "hlsl_wave_all_equal_scalar_call",
+    "hlsl_wave_bitwise_transport_call",
     "hlsl_wave_extension_call",
 ]
+
+# The unsigned type a WaveActiveBit* operand of each integer component type
+# reduces as; DXC's overloads take uint and uint64_t only.
+_BITWISE_TRANSPORT_COMPONENTS = {
+    "int": "uint",
+    "int16_t": "uint",
+    "uint16_t": "uint",
+    "min16int": "uint",
+    "min16uint": "uint",
+    "min12int": "uint",
+    "int64_t": "uint64_t",
+}
 
 _FLOAT_COMPONENTS = {"float", "half", "float16_t", "min16float"}
 _LANE_LOOP_COMPONENTS = _FLOAT_COMPONENTS | {"double", "int", "uint"}
@@ -316,6 +335,38 @@ def _boolean_reduction_call(codegen, operation, args, operator, mapped):
         "}\n\n",
     )
     return f"{name}({value})"
+
+
+def hlsl_wave_bitwise_transport_call(codegen, operation, args):
+    """``WaveActiveBit*`` of a signed or 16-bit integer operand through DXC's unsigned overload, else ``None``."""
+    if operation not in _BOOLEAN_REDUCTIONS or len(args) != 1:
+        return None
+    component, mapped = codegen.hlsl_wave_value_component_type(args[0])
+    transport = _BITWISE_TRANSPORT_COMPONENTS.get(component)
+    if transport is None:
+        return None
+    if codegen.is_vector_value_type(mapped):
+        count = codegen.value_component_count(mapped)
+        transport = f"{transport}{count}"
+    value = codegen.generate_expression_with_expected(args[0], mapped)
+    return f"(({mapped})({operation}(({transport})({value}))))"
+
+
+def hlsl_wave_all_equal_scalar_call(codegen, operation, args):
+    """``all(WaveActiveAllEqual(value))`` for a vector or matrix ``value`` in a scalar ``bool`` context, else ``None``.
+
+    GLSL's ``subgroupAllEqual`` and SPIR-V's ``OpGroupNonUniformAllEqual`` compare the whole value and return one
+    ``bool``; HLSL's ``WaveActiveAllEqual`` compares each component. The whole value is equal on every active lane
+    exactly when every component is.
+    """
+    if operation != "WaveActiveAllEqual" or len(args) != 1:
+        return None
+    expected = codegen.type_name_string(codegen.current_expression_expected_type)
+    if not expected or codegen.map_type(expected) != "bool":
+        return None
+    if codegen.hlsl_wave_all_equal_return_type(args[0]) == "bool":
+        return None
+    return f"all(WaveActiveAllEqual({codegen.generate_hlsl_wave_operands(operation, args)}))"
 
 
 def hlsl_wave_extension_call(codegen, operation, args):

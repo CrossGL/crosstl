@@ -193,8 +193,12 @@ class DirectXExpressionFormMixin:
             previous_expected_type = self.current_expression_expected_type
             self.current_expression_expected_type = None
             try:
-                left = self.generate_expression(getattr(expr, "left", ""))
-                right = self.generate_expression(getattr(expr, "right", ""))
+                left = self.generate_hlsl_comparison_or_logical_operand(
+                    getattr(expr, "left", ""), mapped_op
+                )
+                right = self.generate_hlsl_comparison_or_logical_operand(
+                    getattr(expr, "right", ""), mapped_op
+                )
             finally:
                 self.current_expression_expected_type = previous_expected_type
         else:
@@ -276,6 +280,23 @@ class DirectXExpressionFormMixin:
         if minimum_precision_integer is not None:
             return minimum_precision_integer
         return f"({left} {mapped_op} {right})"
+
+    def generate_hlsl_comparison_or_logical_operand(self, operand, operator):
+        """One operand of a comparison, shift or logical operator, generated without the enclosing context.
+
+        CrossGL ``&&`` and ``||`` take scalar ``bool`` operands, so an operand whose HLSL type would be a
+        ``bool`` vector or matrix (a whole-value ``WaveActiveAllEqual`` vote) is generated in a ``bool`` context.
+        """
+        if operator in {"&&", "||"}:
+            operand_type = self.type_name_string(self.expression_result_type(operand))
+            mapped = self.map_type(operand_type) if operand_type else ""
+            if mapped.startswith("bool") and mapped != "bool":
+                self.current_expression_expected_type = "bool"
+                try:
+                    return self.generate_expression(operand)
+                finally:
+                    self.current_expression_expected_type = None
+        return self.generate_expression(operand)
 
     def generate_hlsl_unary_expression(
         self,
