@@ -1443,18 +1443,6 @@ class GLSLCodeGen(
                 self.glsl_software_subgroup_uniform_call_ids.add(id(call))
             elif storage_load_call(name, call.arguments):
                 storage_loads.add(id(call))
-        analysis = UniformReturnAnalysis(
-            {
-                call_id: functions_by_id[target_id]
-                for call_id, target_id in (
-                    self.glsl_software_subgroup_resolved_call_targets.items()
-                )
-            },
-            self.glsl_software_subgroup_uniform_call_ids,
-            self.structs_by_name,
-            storage_loads,
-        )
-        self.glsl_software_subgroup_uniform_returns = analysis
         constant_source_types = {
             **self.glsl_constant_types,
             **{
@@ -1465,6 +1453,19 @@ class GLSLCodeGen(
                 and "volatile" not in node.qualifiers
             },
         }
+        analysis = UniformReturnAnalysis(
+            {
+                call_id: functions_by_id[target_id]
+                for call_id, target_id in (
+                    self.glsl_software_subgroup_resolved_call_targets.items()
+                )
+            },
+            self.glsl_software_subgroup_uniform_call_ids,
+            self.structs_by_name,
+            storage_loads,
+            constants=constant_source_types,
+        )
+        self.glsl_software_subgroup_uniform_returns = analysis
         for function in functions:
             lexical = self.glsl_scalar_array_view_lexical_bindings(function)
             declared_names = {
