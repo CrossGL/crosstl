@@ -122,6 +122,10 @@ class MojoCallExpressionMixin:
         if reduction is not None:
             return reduction
 
+        buffer_object_call = self.generate_mojo_buffer_object_call(func_name, expr.args)
+        if buffer_object_call is not None:
+            return buffer_object_call
+
         ray_tracing_call = self.generate_ray_tracing_call_expression(
             func_name, expr.args
         )

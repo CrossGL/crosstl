@@ -85,6 +85,7 @@ from .loop_induction import (
     offset_counter_loop_terminates,
     subgroup_strided_trips,
 )
+from .metal_typed_buffers import lower_metal_typed_buffers
 from .opengl_values import (
     OpenGLSoftwareSubgroupError,
     OpenGLSubgroupWidthError,
@@ -1183,6 +1184,8 @@ class OpenGLProgramStructureMixin:
         """Render the program and refuse every built-in the target profile does not have."""
         ast = lower_byte_address_buffers(ast, self.refuse_lowering)
         ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
+        # HLSL typed buffers (Buffer<T>, RWBuffer<T>) become samplerBuffer and imageBuffer texel buffers.
+        ast = lower_metal_typed_buffers(ast, self.refuse_lowering, target="GLSL")
         ast = assign_generic_pointer_spaces(ast, self.refuse_lowering)
         self.program_type_names = declared_type_names(ast)
         self.written_foreign_type_names = set()

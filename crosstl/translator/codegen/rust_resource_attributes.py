@@ -13,6 +13,7 @@ from ..ast import (
 from ..refusals import RustRefusal
 from .array_utils import prepend_array_dimension
 from .glsl_buffer_layout import glsl_buffer_block_node_type
+from .push_constant_blocks import is_push_constant
 from .rust_exact_lookups import rust_resource_kind_of_spelling
 from .rust_gpu_interface import (
     BUILTIN_INPUT_KIND,
@@ -22,7 +23,11 @@ from .rust_gpu_interface import (
     is_uniform_value,
     storage_slice_parts,
 )
-from .rust_gpu_spec_constants import SPEC_CONSTANT_KIND, spec_constant_parameter
+from .rust_gpu_spec_constants import (
+    SPEC_CONSTANT_KIND,
+    spec_constant_local,
+    spec_constant_parameter,
+)
 
 
 class RustResourceAttributeMixin:
@@ -544,10 +549,9 @@ class RustResourceAttributeMixin:
                     )
 
         ranges = self.rust_used_resource_bindings.setdefault(key, [])
+        # An automatic binding takes the lowest free slot, as the other generators assign them, so an explicit
+        # binding leaves the cursor where it is (next_available_rust_resource_binding skips the taken slots).
         ranges.append((binding, end, name))
-        self.rust_resource_binding_cursors[key] = max(
-            self.rust_resource_binding_cursors.get(key, 0), end + 1
-        )
 
     def next_free_emitted_rust_binding(self, set_index, start, count):
         """Return the lowest free emitted binding at or after ``start`` in ``set_index``."""
@@ -627,6 +631,19 @@ class RustResourceAttributeMixin:
             return cached_info
 
         _base_type, count = self.rust_resource_base_type_and_count(type_name)
+        if resource_kind == UNIFORM_VALUE_KIND and is_push_constant(node):
+            # A push-constant block has no descriptor set or binding (Vulkan 1.3 section 14.9).
+            info = {
+                "name": name,
+                "kind": resource_kind,
+                "set_index": None,
+                "binding": None,
+                "binding_source": "push_constant",
+                "count": count,
+                "register": None,
+            }
+            self.rust_resource_binding_infos[cache_key] = info
+            return info
         validation_count = self.rust_resource_binding_validation_count(
             node, resource_kind, count
         )
@@ -685,13 +702,16 @@ class RustResourceAttributeMixin:
         if info["kind"] == "glsl_buffer_block":
             parts.append(f"layout={self.glsl_buffer_block_layout(node)}")
             parts.append(f"access={self.explicit_resource_access(node) or 'readwrite'}")
-        parts.extend(
-            [
-                f"set={info['set_index']}",
-                f"binding={info['binding']}",
-                f"binding_source={info['binding_source']}",
-            ]
-        )
+        if info["binding_source"] == "push_constant":
+            parts.append("push_constant")
+        else:
+            parts.extend(
+                [
+                    f"set={info['set_index']}",
+                    f"binding={info['binding']}",
+                    f"binding_source={info['binding_source']}",
+                ]
+            )
         if info["count"] != 1:
             parts.append(f"count={info['count']}")
         if info["register"]:
@@ -703,6 +723,8 @@ class RustResourceAttributeMixin:
         if info is None:
             return ""
 
+        if info["binding_source"] == "push_constant":
+            return "#[spirv(push_constant)] "
         spirv_args = []
         if info["kind"] in {"buffer", "glsl_buffer_block", STORAGE_SLICE_KIND}:
             spirv_args.append("storage_buffer")
@@ -732,6 +754,21 @@ class RustResourceAttributeMixin:
         if kind == UNIFORM_VALUE_KIND:
             return f"{attribute}{name}: &{self.map_type(type_name)}"
         return f"{attribute}{name}: {self.map_function_parameter_type(type_name)}"
+
+    def rust_resource_parameter_local(self, resource_info):
+        """The local an entry point declares from its resource parameter, else ``None``.
+
+        A uniform is read-only, so the entry point reads it once into a local of the same name; a specialization
+        constant may need a typed local (:func:`.rust_gpu_spec_constants.spec_constant_local`).
+        """
+        kind = resource_info.get("kind")
+        name = self.rust_identifier(resource_info["node"].name)
+        rust_type = self.map_type(resource_info["type_name"])
+        if kind == UNIFORM_VALUE_KIND:
+            return f"let {name}: {rust_type} = *{name};"
+        if kind == SPEC_CONSTANT_KIND:
+            return spec_constant_local(name, resource_info, rust_type)
+        return None
 
     def reserve_explicit_rust_resource_binding(
         self, node, type_name, kind=None, order=0

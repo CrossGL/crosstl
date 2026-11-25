@@ -28,6 +28,10 @@ from .image_access_contracts import (
     explicit_image_access,
     explicit_image_format,
 )
+from .metal_buffer_handle_values import (
+    is_metal_buffer_handle_type,
+    metal_buffer_handle_pointer_type,
+)
 from .stage_utils import (
     function_stage_name,
     normalize_stage_name,
@@ -640,6 +644,11 @@ class MetalLocalDeclarationMixin:
             # the qualifier prefix supplies, not a `ptr<T>` value: Metal has
             # no such type, so it is declared as a C-style pointer.
             return self.metal_crossgl_pointer_local_type(node, pointee)
+        handle_type = metal_buffer_handle_pointer_type(
+            self, declared_type, f"local '{getattr(node, 'name', '')}'"
+        )
+        if handle_type is not None:
+            return handle_type
         mapped_type = self.map_type(declared_type)
         aggregate_type, array_suffix = split_array_type_suffix(mapped_type)
         if aggregate_type in self.structs_by_name and (
@@ -1150,6 +1159,9 @@ class MetalLocalDeclarationMixin:
         )
 
     def local_variable_address_space(self, node):
+        if is_metal_buffer_handle_type(self, self.local_variable_declared_type(node)):
+            # Metal holds a structured buffer handle local in a device pointer.
+            return "device"
         explicit_address_space = self.normalized_address_space(
             self.parameter_address_space(node)
         )

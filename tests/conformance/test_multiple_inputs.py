@@ -145,7 +145,10 @@ def test_interfaces_require_the_exact_number_of_storage_slots(tmp_path, language
     case = make_case(tmp_path, language)
     assert interface(case.src, language, 1, input_count=2)["bindings"] == (0, 1, 2)
     for count in (1, 3):
-        with pytest.raises(InterfaceChanged, match="slots"):
+        # HLSL reads a buffer past the contract's registers as another resource of the kernel
+        # (:mod:`.directx_resources`), so with one input its second input stands where the output belongs.
+        expected = "UAV u1" if language == "hlsl" and count == 1 else "slots"
+        with pytest.raises(InterfaceChanged, match=expected):
             interface(case.src, language, 1, input_count=count)
     suffix, text = SOURCES[language]
     old = SLOT_ONE[language]

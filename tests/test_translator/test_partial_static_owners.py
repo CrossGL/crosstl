@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from crosstl import translate
+from crosstl.backend.Metal.preprocessing.support import MetalTemplateSpecializationError
 from crosstl.backend.Metal.preprocessor import MetalPreprocessor
 from crosstl.project import build_native_loader_dispatch_request
 from tests.test_translator.test_boolean_buffer_runtime import _bound_values
@@ -201,7 +202,10 @@ def test_forward_primary_retains_signature_without_inventing_definition():
     assert "struct Incomplete_uint_8" not in output
 
 
-def test_forward_primary_does_not_select_ambiguous_partial():
+def test_forward_primary_refuses_ambiguous_partial():
+    # Both partials match Fragment<uint, 8, 8> and neither is more specialized, so the use
+    # is ill-formed ([temp.spec.partial.match]/1); the import names the ambiguity instead of
+    # selecting either partial.
     source = """
         template<typename T, int R, int C> struct Fragment;
         template<typename T, int C> struct Fragment<T, 8, C> {
@@ -212,11 +216,11 @@ def test_forward_primary_does_not_select_ambiguous_partial():
         };
         uint probe(uint lane) { return Fragment<uint, 8, 8>::get_coord(lane); }
     """
-    output = MetalPreprocessor()._materialize_explicit_template_struct_instantiations(
-        source
-    )
-    assert "Fragment<uint, 8, 8>::get_coord(lane)" in output
-    assert "struct Fragment_uint_8_8" not in output
+    with pytest.raises(
+        MetalTemplateSpecializationError,
+        match=r"'Fragment<uint, 8, 8>' is ambiguous: it matches the partial specializations",
+    ):
+        MetalPreprocessor()._materialize_explicit_template_struct_instantiations(source)
 
 
 def test_static_alias_resolution_ignores_comments_and_string_literals():

@@ -1,0 +1,1 @@
+Same-name stage resources whose attributes differ only in an argument, such as `@binding(0)` and `@binding(1)`, are now refused as conflicting declarations. The deduplication of named declarations compared attributes by `repr`, which prints only the attribute name, so one of the two was silently dropped and the program read the wrong resource.

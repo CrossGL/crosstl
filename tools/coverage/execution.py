@@ -112,6 +112,11 @@ _GLSL_460 = re.compile(r"^#version 460\b.*$", re.M)
 _GROUP_VOTE = re.compile(
     r"\b(anyInvocation|allInvocations|allInvocationsEqual)(?=\s*\()"
 )
+# Its atomic counter operations beyond increment and decrement came from ARB_shader_atomic_counter_ops, which llvmpipe
+# implements and which also names them with an ARB suffix.
+_COUNTER_OPS = re.compile(
+    r"\b(atomicCounter(?:Add|Subtract|Min|Max|And|Or|Xor|Exchange|CompSwap))(?=\s*\()"
+)
 # lavapipe drops a conversion of a 32-bit float to 16 bits that is converted straight back, so a native probe that
 # rounds through a 16-bit float writes its unrounded input there. Probes whose SPIR-V declares a 16-bit float keep
 # their validation result on every Vulkan runtime, so a verdict does not depend on the runtime that ran it.
@@ -253,9 +258,13 @@ def runnable(language: str, source: str) -> str:
     if language != "glsl" or not _GLSL_460.search(source):
         return source
     version = "#version 450 core"
-    if _GROUP_VOTE.search(source):
-        version += "\n#extension GL_ARB_shader_group_vote : require"
-        source = _GROUP_VOTE.sub(r"\1ARB", source)
+    for functions, extension in (
+        (_GROUP_VOTE, "GL_ARB_shader_group_vote"),
+        (_COUNTER_OPS, "GL_ARB_shader_atomic_counter_ops"),
+    ):
+        if functions.search(source):
+            version += f"\n#extension {extension} : require"
+            source = functions.sub(r"\1ARB", source)
     return _GLSL_460.sub(version, source, count=1)
 
 
