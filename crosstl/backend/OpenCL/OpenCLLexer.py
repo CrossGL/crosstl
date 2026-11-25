@@ -24,20 +24,38 @@ OPENCL_TOKENS = (
     ("WRITE_ONLY", r"\b(?:__write_only|write_only)\b"),
     ("SYNCTHREADS", r"\b(?:barrier|work_group_barrier)\b"),
     ("SYNCWARP", r"\bmem_fence\b"),
+    # atom_add and the other atom_ functions of the cl_khr_*_atomics extensions are the atomic_ functions OpenCL C
+    # 1.1 made core (OpenCL C 1.1 section 9.5, "renamed"); the lexer spells them with the core name.
     (
         "ATOMICCAS",
-        r"\batomic_(?:cmpxchg|compare_exchange(?:_strong|_weak)?(?:_explicit)?)\b",
+        r"\batomic_(?:cmpxchg|compare_exchange(?:_strong|_weak)?(?:_explicit)?)\b"
+        r"|\batom_cmpxchg\b",
     ),
-    ("ATOMICADD", r"\batomic_(?:add|fetch_add(?:_explicit)?)\b"),
-    ("ATOMICSUB", r"\batomic_(?:sub|fetch_sub(?:_explicit)?)\b"),
-    ("ATOMICMAX", r"\batomic_(?:max|fetch_max(?:_explicit)?)\b"),
-    ("ATOMICMIN", r"\batomic_(?:min|fetch_min(?:_explicit)?)\b"),
-    ("ATOMICEXCH", r"\batomic_(?:xchg|exchange(?:_explicit)?)\b"),
-    ("ATOMICAND", r"\batomic_(?:and|fetch_and(?:_explicit)?)\b"),
-    ("ATOMICOR", r"\batomic_(?:or|fetch_or(?:_explicit)?)\b"),
-    ("ATOMICXOR", r"\batomic_(?:xor|fetch_xor(?:_explicit)?)\b"),
-    ("ATOMICINC", r"\batomic_inc\b"),
-    ("ATOMICDEC", r"\batomic_dec\b"),
+    ("ATOMICADD", r"\batomic_(?:add|fetch_add(?:_explicit)?)\b|\batom_add\b"),
+    ("ATOMICSUB", r"\batomic_(?:sub|fetch_sub(?:_explicit)?)\b|\batom_sub\b"),
+    ("ATOMICMAX", r"\batomic_(?:max|fetch_max(?:_explicit)?)\b|\batom_max\b"),
+    ("ATOMICMIN", r"\batomic_(?:min|fetch_min(?:_explicit)?)\b|\batom_min\b"),
+    ("ATOMICEXCH", r"\batomic_(?:xchg|exchange(?:_explicit)?)\b|\batom_xchg\b"),
+    ("ATOMICAND", r"\batomic_(?:and|fetch_and(?:_explicit)?)\b|\batom_and\b"),
+    ("ATOMICOR", r"\batomic_(?:or|fetch_or(?:_explicit)?)\b|\batom_or\b"),
+    ("ATOMICXOR", r"\batomic_(?:xor|fetch_xor(?:_explicit)?)\b|\batom_xor\b"),
+    ("ATOMICINC", r"\batomic_inc\b|\batom_inc\b"),
+    ("ATOMICDEC", r"\batomic_dec\b|\batom_dec\b"),
+)
+_ATOMIC_TOKENS = frozenset(
+    {
+        "ATOMICCAS",
+        "ATOMICADD",
+        "ATOMICSUB",
+        "ATOMICMAX",
+        "ATOMICMIN",
+        "ATOMICEXCH",
+        "ATOMICAND",
+        "ATOMICOR",
+        "ATOMICXOR",
+        "ATOMICINC",
+        "ATOMICDEC",
+    }
 )
 
 _HEX_DIGITS = r"[0-9a-fA-F](?:'?[0-9a-fA-F])*"
@@ -225,6 +243,8 @@ class OpenCLLexer:
 
             if token_type not in SKIP_TOKENS:
                 value = NORMALIZED_VALUES.get(token_type, text)
+                if token_type in _ATOMIC_TOKENS and text.startswith("atom_"):
+                    value = "atomic_" + text[len("atom_") :]
                 tokens.append(Token(token_type, value, self.line, self.column))
 
             self._advance_position(text)
