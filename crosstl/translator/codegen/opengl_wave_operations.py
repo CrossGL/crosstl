@@ -959,7 +959,11 @@ class OpenGLWaveOperationMixin:
         ):
             return None
         buffer_expr = func_expr.object
-        if not isinstance(buffer_expr, (IdentifierNode, VariableNode)):
+        # One buffer of a declared buffer array keeps its elements in a block member.
+        array_member = self.glsl_structured_buffer_array_element_member(buffer_expr)
+        if array_member is None and not isinstance(
+            buffer_expr, (IdentifierNode, VariableNode)
+        ):
             return None
         structured = {"StructuredBuffer", "RWStructuredBuffer"}
         buffer_type = self.expression_result_type(buffer_expr)
