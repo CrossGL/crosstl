@@ -16,6 +16,10 @@ from ..storage_image_texels import (
 )
 from .float_literals import check_float_literal_range
 from .slang_clock_import import SLANG_CLOCK_IMPORTS
+from .slang_core_function_import import (
+    SLANG_CORE_FUNCTION_IMPORTS,
+    crossgl_half_unpack_call,
+)
 from .slang_matrix_import import SlangMatrixImportMixin
 from .slang_narrow_arithmetic import SlangNarrowArithmeticMixin
 from .slang_specialization_import import (
@@ -2508,6 +2512,10 @@ class SlangToCrossGLConverter(
                 # Slang select(cond, t, f) is HLSL's; CrossGL select(f, t, cond) is MSL's.
                 condition, true_value, false_value = rendered_args
                 return f"select({false_value}, {true_value}, {condition})"
+            if is_hlsl_namespace_builtin or expr.name not in self.user_function_names:
+                half_unpack = crossgl_half_unpack_call(function_name, rendered_args)
+                if half_unpack is not None:
+                    return half_unpack
             generic_type_name = self.map_generic_vector_or_matrix_type(function_name)
             if not is_hlsl_namespace_builtin and expr.name in self.user_function_names:
                 name = self.format_function_name(expr.name)
@@ -2908,6 +2916,8 @@ class SlangToCrossGLConverter(
         """
         if name in self.function_map:
             return self.function_map[name]
+        if name in SLANG_CORE_FUNCTION_IMPORTS:
+            return SLANG_CORE_FUNCTION_IMPORTS[name]
         return name
 
     def map_generic_vector_type(self, slang_type):
