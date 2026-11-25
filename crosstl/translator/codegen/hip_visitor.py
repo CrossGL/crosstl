@@ -17,6 +17,7 @@ from .cuda_function_prototypes import (
     prototype_of,
 )
 from .cuda_shared_memory import helper_shared_variables
+from .cuda_subgroup_inputs import is_subgroup_builtin_input
 from .enum_utils import (
     enum_struct_fields,
     generate_enum_constants,
@@ -381,9 +382,11 @@ class HipVisitorMixin:
                     and id(var) not in self.file_scope_shared_variable_ids
                 ):
                     continue
-                if self.hip_stage_local_builtin_role(stage_name, var) is not None:
-                    # A stage-local input that names a compute built-in is the
-                    # built-in itself, not a variable to declare.
+                if self.hip_stage_local_builtin_role(
+                    stage_name, var
+                ) is not None or is_subgroup_builtin_input(var):
+                    # A stage-local input that names a compute or subgroup
+                    # built-in is the built-in itself, not a variable to declare.
                     continue
                 var_name = getattr(var, "name", None)
                 var_type = self.type_name_string(self.get_variable_node_type(var))
@@ -517,11 +520,13 @@ class HipVisitorMixin:
         if stage_name in self.hip_ray_stage_names() and name == "main":
             return f"{stage_name}_{name}"
         if (
-            stage_name in {
+            stage_name
+            in {
                 "geometry",
                 "tessellation_control",
                 "tessellation_evaluation",
-            } | self.hip_mesh_task_stage_names()
+            }
+            | self.hip_mesh_task_stage_names()
             and name == "main"
         ):
             return f"{stage_name}_{name}"
