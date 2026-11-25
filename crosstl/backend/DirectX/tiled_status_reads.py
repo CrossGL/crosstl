@@ -107,7 +107,9 @@ _LOAD_STATUS_COUNTS = {
     "Buffer": 2,
     "RWBuffer": 2,
 }
-_CANONICAL_TEXTURE_NAMES = {
+# Every resource spelling with Status overloads, mapped to its canonical name; any other resource has none.
+_STATUS_RESOURCE_NAMES = {
+    **{name: name for name in sorted(_SAMPLED_TEXTURES | _LOAD_STATUS_COUNTS.keys())},
     "TextureCUBE": "TextureCube",
     "TextureCUBEArray": "TextureCubeArray",
 }
@@ -116,8 +118,8 @@ _SIGNED_KIND = re.compile(r"^(?P<kind>[ui])(?=texture|image|sampler)")
 
 
 def _resource_base(codegen, resource_type):
-    base = codegen.raw_type_base(resource_type)
-    return _CANONICAL_TEXTURE_NAMES.get(base, base)
+    """Canonical name of a resource with Status overloads, or None for any other resource."""
+    return _STATUS_RESOURCE_NAMES.get(codegen.raw_type_base(resource_type))
 
 
 def status_operand_count(member, resource_base):
