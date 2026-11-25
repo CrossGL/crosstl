@@ -1794,7 +1794,7 @@ EXTERNAL_FIXTURES = [
         "crossgl": True,
         "contains": [
             "struct Vertex {",
-            "vec3 position @ in_Position;",
+            "vec3 position @ Position;",
             "vec4 svPosition @ gl_Position;",
             "vec3 barycentrics @ gl_BaryCoordEXT",
             "bool sierpinski = (xy.x & xy.y) == 0;",
