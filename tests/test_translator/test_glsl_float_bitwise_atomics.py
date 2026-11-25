@@ -76,7 +76,9 @@ def _glslang(tmp_path, glsl):
 
 
 def _collapsed(code):
-    return " ".join(code.split())
+    # Independent of where the formatter breaks long calls.
+    flat = " ".join(code.split())
+    return re.sub(r"\s+\)", ")", re.sub(r"\(\s+", "(", flat))
 
 
 def test_compare_exchange_returns_the_previous_value_through_its_out_argument(
@@ -87,7 +89,7 @@ def test_compare_exchange_returns_the_previous_value_through_its_out_argument(
     # The destination buffer holds words, so the comparison is of the operands' bits.
     assert re.search(r"buffer \w+ \{ uint outp\[\]; \};", flat)
     assert re.search(
-        r"uint \w+ = atomicCompSwap\( outp\[\w+\], floatBitsToUint\(\w+\), floatBitsToUint\(\w+\)\); "
+        r"uint \w+ = atomicCompSwap\(outp\[\w+\], floatBitsToUint\(\w+\), floatBitsToUint\(\w+\)\); "
         r"return uintBitsToFloat\(\w+\);",
         flat,
     )
@@ -99,7 +101,7 @@ def test_compare_exchange_returns_the_previous_value_through_its_out_argument(
 def test_compare_store_of_a_structure_member_discards_the_previous_value(tmp_path):
     glsl = _translate(tmp_path, COMPARE_STORE_MEMBER, "opengl")
     flat = _collapsed(glsl)
-    assert re.search(r"atomicCompSwap\( pairs\[\w+\]\.b,", flat)
+    assert re.search(r"atomicCompSwap\(pairs\[\w+\]\.b,", flat)
     # A statement of its own: the previous value is discarded. -0.0 compares unequal to a stored +0.0.
     assert re.search(
         r"[;{] \w+\(uint\(gl_GlobalInvocationID\.x\), \(-0\.0\), 2\.0\);", flat
