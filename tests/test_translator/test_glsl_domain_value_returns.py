@@ -79,6 +79,7 @@ def _glslang(tmp_path, code, stage):
         ["glslangValidator", "-V", str(path), "-o", str(tmp_path / f"{stage}.spv")],
         capture_output=True,
         text=True,
+        check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 
@@ -93,7 +94,7 @@ def _spirv_val(tmp_path, code):
         ["spirv-as", "--target-env", "vulkan1.1", str(asm), "-o", str(binary)],
         ["spirv-val", "--target-env", "vulkan1.1", str(binary)],
     ):
-        result = subprocess.run(command, capture_output=True, text=True)
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
         assert result.returncode == 0, result.stdout + result.stderr
 
 

@@ -57,8 +57,8 @@ from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
 from .hub_types import call_name
 from .stage_varyings import (
     GLSL_TARGETS,
-    SPIRV_TARGETS,
     INTERPOLATION,
+    SPIRV_TARGETS,
     FreshNames,
     allocated_locations,
     attribute_text,
