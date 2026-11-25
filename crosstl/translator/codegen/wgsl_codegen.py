@@ -113,6 +113,10 @@ from .wgsl_matrix_inverse import (
 )
 from .wgsl_matrix_resize import wgsl_matrix_resize
 from .wgsl_multisampled_textures import WGSLMultisampledTextureMixin
+from .wgsl_nan_aware_min_max import (
+    is_nan_aware_min_max_call,
+    wgsl_nan_aware_min_max_call,
+)
 from .wgsl_narrow_storage import narrow_storage_word_type
 from .wgsl_parameter_lowering import WGSLParameterLoweringMixin
 from .wgsl_program_collection import WGSLProgramCollectionMixin
@@ -901,6 +905,7 @@ class WGSLCodeGen(
         self._frexp_modf_helpers = {}
         self._matrix_inverse_helpers = {}
         self._matrix_resize_helpers = {}
+        self._nan_aware_min_max_helpers = {}
         self._uniform_registers = None
         self._half_conversion_helpers = {}
         self._constant_values = {}
@@ -1591,6 +1596,8 @@ class WGSLCodeGen(
             return wgsl_matrix_inverse_call(self, node)
         if is_float_classification_call(self, node):
             return wgsl_float_classification_call(self, node)
+        if is_nan_aware_min_max_call(self, node):
+            return wgsl_nan_aware_min_max_call(self, node)
 
         if self.is_type_constructor_name(function_name):
             if len(node.arguments) == 1:

@@ -347,12 +347,11 @@ class RustStatementMixin:
         if op not in {"++", "--"}:
             return None
 
-        operand = self.generate_expression(getattr(initial_value, "operand", ""))
-        assignment_op = "+=" if op == "++" else "-="
-        increment = self.rust_increment_literal(
-            self.expression_result_type(getattr(initial_value, "operand", None))
+        operand_expr = getattr(initial_value, "operand", "")
+        operand = self.generate_expression(operand_expr)
+        update = (
+            f"{'    ' * indent}{self.generate_increment_update(operand_expr, op)};\n"
         )
-        update = f"{'    ' * indent}{operand} {assignment_op} {increment};\n"
         declaration = (
             f"{'    ' * indent}{self.local_let_keyword(stmt)} "
             f"{self.rust_identifier(stmt.name)}: "

@@ -1,0 +1,45 @@
+// workgroupUniformLoad(x) returns the value of workgroup memory x to every invocation of the workgroup: its first
+// barrier makes the writes before it visible, and its second keeps an invocation from overwriting x while another
+// still reads it. Each 64-invocation workgroup loads an element another invocation wrote, a sum built with atomics,
+// a structure member, and an element rewritten after an earlier load of it.
+shader WorkgroupUniformLoad {
+    struct Cell {
+        int v;
+        int w[2];
+    };
+
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+        readonly buffer int inp[] @binding(0);
+        buffer int outp[] @binding(1);
+
+        shared int tile[64];
+        shared int total;
+        shared Cell cells[4];
+
+        void main() {
+            uint l = gl_LocalInvocationID.x;
+            uint g = gl_GlobalInvocationID.x;
+            int x = inp[g];
+            tile[l] = x;
+            if (l == 0u) {
+                total = 0;
+            }
+            int last = workgroupUniformLoad(tile[63]);
+            tile[l] = x * 2 + 1;
+            atomicAdd(total, x);
+            if (l < 4u) {
+                cells[l].v = x * 3;
+                cells[l].w[1] = x + int(l);
+            }
+            int sum = workgroupUniformLoad(total);
+            int member = workgroupUniformLoad(cells[2].w[1]);
+            int first = workgroupUniformLoad(tile[0]);
+            outp[g * 4u] = last;
+            outp[g * 4u + 1u] = sum;
+            outp[g * 4u + 2u] = member;
+            outp[g * 4u + 3u] = first;
+        }
+    }
+}

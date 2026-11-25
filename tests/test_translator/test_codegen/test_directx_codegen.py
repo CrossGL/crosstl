@@ -1347,7 +1347,7 @@ def test_hlsl_metal_union_bool4_uint_alias_preserves_packed_bytes(tmp_path):
     ("declaration", "reason"),
     [
         (
-            "union BadSize { uint2 words; uint word; };",
+            "union BadSize { uint4 words; uint pair[2]; };",
             "member-size-mismatch",
         ),
         (
@@ -1355,7 +1355,7 @@ def test_hlsl_metal_union_bool4_uint_alias_preserves_packed_bytes(tmp_path):
             "member-shape-unsupported",
         ),
         (
-            "union Padded { uint3 words; uchar4 bytes[4]; };",
+            "union Padded { uint4 words; float2 pairs[2]; };",
             "member-storage-shape-mismatch",
         ),
         (
