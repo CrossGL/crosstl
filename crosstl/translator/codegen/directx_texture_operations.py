@@ -4,6 +4,12 @@ from ..ast import LiteralNode
 from ..refusals import DirectXRefusal
 from ..validation import expression_debug_name
 from .enum_utils import default_value_expression
+from .hlsl_texture_operands import (
+    biased_sample_cmp_text,
+    component_gather_cmp_text,
+    split_compare_bias,
+    split_gather_compare_component,
+)
 from .image_access_contracts import (
     default_storage_image_channel_count,
     image_format_or_default_channel_count,
@@ -443,11 +449,15 @@ class DirectXTextureOperationMixin:
     def texture_sample_position_expression(self, texture_arg, sample_arg):
         texture_name = self.generate_expression(texture_arg)
         texture_type = self.texture_resource_type(texture_arg)
-        if not self.is_multisample_texture_resource_type(texture_type):
+        # Texture2DMS[Array] and, from Shader Model 6.7, RWTexture2DMS[Array] declare GetSamplePosition.
+        if not (
+            self.is_multisample_texture_resource_type(texture_type)
+            or self.is_multisample_storage_image_resource_type(texture_type)
+        ):
             resource = texture_type or "resource"
             return self.refuse_lowering(
                 f"texture sample-position query: textureSamplePosition on {resource} "
-                "requires a sampled multisample texture",
+                "requires a multisample texture",
                 "float2(0.0, 0.0)",
             )
         sample = self.generate_expression(sample_arg)
@@ -1113,6 +1123,11 @@ class DirectXTextureOperationMixin:
         return f"{texture_name}.SampleCmp({', '.join(call_args)})"
 
     def generate_texture_compare_call(self, func_name, args, *, call_node=None):
+        biased = self.hlsl_biased_texture_compare_call(
+            func_name, args, call_node=call_node
+        )
+        if biased is not None:
+            return biased
         parts = self.texture_call_parts(args, func_name)
         if parts is None:
             return self.unsupported_texture_compare_call(
@@ -1336,8 +1351,43 @@ class DirectXTextureOperationMixin:
             "DirectX", func_name, reason
         )
 
+    def hlsl_biased_texture_compare_call(self, func_name, args, *, call_node=None):
+        """``SampleCmpBias`` for a compare form whose last operand is a bias (hlsl_texture_operands.py), or
+        ``None`` for a call without one."""
+        parts = self.texture_call_parts(args, func_name)
+        if parts is None:
+            return None
+        _operands, bias = split_compare_bias(func_name, parts[3])
+        if bias is None:
+            return None
+        base_text = self.generate_texture_compare_call(
+            func_name, list(args[:-1]), call_node=call_node
+        )
+        biased = biased_sample_cmp_text(base_text, self.generate_expression(bias))
+        if biased is not None:
+            return biased
+        return self.unsupported_texture_compare_call(
+            func_name,
+            f"with a bias lowered to '{base_text}', not to SampleCmp, whose biased form "
+            "SampleCmpBias takes the bias",
+        )
+
     def generate_texture_gather_compare_call(self, func_name, args):
         parts = self.texture_call_parts(args, func_name)
+        if parts is not None:
+            _operands, component = split_gather_compare_component(func_name, parts[3])
+            if component is not None:
+                base_text = self.generate_texture_gather_compare_call(
+                    func_name, list(args[:-1])
+                )
+                gathered = component_gather_cmp_text(base_text, component)
+                if gathered is not None:
+                    return gathered
+                return self.unsupported_texture_gather_compare_call(
+                    func_name,
+                    f"of component {component} lowered to '{base_text}', not to GatherCmp, "
+                    "whose channel forms gather the other components",
+                )
         if parts is None:
             return self.unsupported_texture_gather_compare_call(
                 func_name, texture_coordinate_arguments_error()

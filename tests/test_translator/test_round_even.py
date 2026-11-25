@@ -177,7 +177,7 @@ def test_mojo_round_even_casts_integer_buffer_elements(tmp_path):
     path = tmp_path / "round.hlsl"
     path.write_text(HLSL_ROUND.replace("<float>", "<int>"))
     out = crosstl.translate(str(path), backend="mojo", format_output=False)
-    assert "round_even((output[id[0]]).cast[DType.float32]())" in out
+    assert "round_even((output[Int(id[0])]).cast[DType.float32]())" in out
 
 
 @pytest.mark.parametrize(

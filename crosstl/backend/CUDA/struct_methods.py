@@ -21,6 +21,9 @@ of the program, rather than written through as a member call that no target decl
 member function (a constructor, an operator, a template, a static or virtual member, or one defined outside the
 class), a receiver whose type the pass cannot determine, a local or parameter that hides a member, ``this`` used as
 a pointer value, a member function that returns a reference, and a body construct the pass does not know.
+
+The HIP importer runs the same pass through :class:`StructMethodDialect`, which names the language in its refusals,
+adds the HIP node kinds a body may contain and builds a receiver in the shape of HIP's parameter dictionaries.
 """
 
 from __future__ import annotations
@@ -58,12 +61,13 @@ from ..common_ast import (
     UnaryOpNode,
     VariableNode,
     VectorConstructorNode,
+    WhileNode,
 )
 from .CudaAst import AtomicOperationNode, CudaBuiltinNode, SharedMemoryNode
 from .keyword_renames import source_identifier_names
 from .parameter_defaults import parameter_default
 
-__all__ = ["lower_struct_methods"]
+__all__ = ["StructMethodDialect", "lower_struct_methods"]
 
 RECEIVER_NAME = "this_"
 
@@ -97,6 +101,7 @@ _EXPRESSION_FIELDS = {
     UnaryOpNode: ("operand",),
     VariableNode: ("value",),
     VectorConstructorNode: ("args",),
+    WhileNode: ("condition", "body"),
 }
 
 _TYPE_WORDS = frozenset(
@@ -105,14 +110,51 @@ _TYPE_WORDS = frozenset(
 _ARRAY_SUFFIX = re.compile(r"\[[^\[\]]*\]\s*$")
 
 
-def lower_struct_methods(program, refuse):
-    """Lower the kept member functions of ``program`` in place; ``refuse(reason)`` records each refusal."""
+class StructMethodDialect:
+    """What the pass needs to know about the source language of the program it lowers.
+
+    ``language`` starts each refusal, ``node_fields`` adds node kinds a member function body may contain (with the
+    attributes that hold their operands) and ``make_receiver(type_text, name)`` builds the receiver parameter in the
+    language's parameter shape.
+    """
+
+    def __init__(self, language="CUDA", node_fields=None, make_receiver=None):
+        self.language = language
+        self.node_fields = {**_EXPRESSION_FIELDS, **dict(node_fields or {})}
+        self.make_receiver = make_receiver or (
+            lambda type_text, name: VariableNode(type_text, name, qualifiers=[])
+        )
+
+
+def lower_struct_methods(program, refuse, dialect=None):
+    """Lower the kept member functions of ``program`` in place; ``refuse(reason)`` records each refusal.
+
+    Returns the free functions made from each struct's member functions, keyed by struct name, in the order
+    they were inserted.
+    """
     if not isinstance(program, ASTNode):
-        return
+        return {}
     method_names = set(getattr(program, "struct_method_names", None) or [])
     if not method_names:
-        return
-    _StructMethodLowering(program, method_names, refuse).run()
+        return {}
+    return _StructMethodLowering(
+        program, method_names, refuse, dialect or StructMethodDialect()
+    ).run()
+
+
+def _parameter_name(param):
+    """The name of a parsed parameter: a CUDA ``VariableNode`` or a HIP parameter dictionary."""
+    if isinstance(param, dict):
+        return str(param.get("name") or "") or None
+    if isinstance(param, VariableNode):
+        return str(param.name)
+    return None
+
+
+def _parameter_type(param):
+    if isinstance(param, dict):
+        return param.get("type")
+    return getattr(param, "vtype", None)
 
 
 def _walk(node):
@@ -203,10 +245,9 @@ class _MemberContext:
         fields = lowering.fields.get(self.owner, {})
         own_methods = lowering.methods.get(self.owner, {})
         params = {
-            str(param.name)
+            _parameter_name(param)
             for param in getattr(method.function, "params", None) or []
-            if isinstance(param, VariableNode)
-        }
+        } - {None}
         locals_ = {
             str(node.name)
             for node in _walk(getattr(method.function, "body", None))
@@ -226,7 +267,7 @@ class _MemberContext:
             )
 
     def refuse(self, reason):
-        self.lowering.refuse(f"CUDA {self.label} {reason}")
+        self.lowering.refuse(f"{self.lowering.dialect.language} {self.label} {reason}")
 
     def rewrite(self, value):
         lowering = self.lowering
@@ -280,7 +321,7 @@ class _MemberContext:
                         f"'{self.owner}' as a function CrossTL imports"
                     )
                     return value
-        fields = _EXPRESSION_FIELDS.get(type(value))
+        fields = lowering.dialect.node_fields.get(type(value))
         if fields is None:
             self.refuse(
                 f"contains a {type(value).__name__}, which the member function import does not handle"
@@ -312,8 +353,9 @@ class _MemberContext:
 
 
 class _StructMethodLowering:
-    def __init__(self, program, method_names, refuse):
+    def __init__(self, program, method_names, refuse, dialect):
         self.program = program
+        self.dialect = dialect
         self.method_names = method_names
         self.refuse = refuse
         self.used_names = set(source_identifier_names(program))
@@ -412,6 +454,7 @@ class _StructMethodLowering:
                 free_functions[id(function)] = self.lower(method)
         functions = list(getattr(self.program, "functions", None) or [])
         offset = 0
+        inserted = {}
         for struct, kept in sorted(
             lowered, key=lambda item: getattr(item[0], "function_index", 0) or 0
         ):
@@ -422,11 +465,13 @@ class _StructMethodLowering:
             new = [free_functions[id(function)] for function in ordered]
             functions[index:index] = new
             offset += len(new)
+            inserted[str(struct.name)] = new
         self.program.functions = functions
         for function in functions:
             self.rewrite_calls(function)
         for kernel in getattr(self.program, "kernels", None) or []:
             self.rewrite_calls(kernel)
+        return inserted
 
     def reachable(self, kept_by_owner):
         """``(owner, name)`` of every kept member function that a call of the program can reach.
@@ -517,7 +562,7 @@ class _StructMethodLowering:
             if getattr(function, "struct_method_is_const", False)
             else f"{owner} &"
         )
-        receiver = VariableNode(receiver_type, self.receiver, qualifiers=[])
+        receiver = self.dialect.make_receiver(receiver_type, self.receiver)
         body = _replace(function.body, context.rewrite)
         free = FunctionNode(
             function.return_type,
@@ -538,9 +583,9 @@ class _StructMethodLowering:
         scope = dict(self.global_types)
         scope.update(
             {
-                str(param.name): param.vtype
+                _parameter_name(param): _parameter_type(param)
                 for param in getattr(function, "params", None) or []
-                if isinstance(param, VariableNode)
+                if _parameter_name(param) is not None
             }
         )
         declared = {}
@@ -596,7 +641,7 @@ class _StructMethodLowering:
         wanted = 1 if access.is_pointer else 0
         if record is None or indirection != wanted:
             self.refuse(
-                f"CUDA member call '{name}' in {label}: the type of its receiver is not a struct of the program "
+                f"{self.dialect.language} member call '{name}' in {label}: the type of its receiver is not a struct of the program "
                 "that CrossTL can determine, so the member function cannot be imported"
             )
             return call
@@ -608,7 +653,7 @@ class _StructMethodLowering:
         ]
         if len(candidates) != 1:
             self.refuse(
-                f"CUDA member call '{record}::{name}' in {label}: no single member function defined in the "
+                f"{self.dialect.language} member call '{record}::{name}' in {label}: no single member function defined in the "
                 f"body of '{record}' takes {len(args)} arguments (constructors, operators, templates, static, "
                 "virtual and out-of-class member functions are not imported)"
             )

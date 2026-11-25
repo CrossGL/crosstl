@@ -124,6 +124,7 @@ class GLSLHlslResourceMixin:
         "texture binding": "texture",
         "image binding": "image",
         "sampler binding": "sampler",
+        "atomic counter binding": "atomic-counter-buffer",
     }
 
     def glsl_source_register(self, node):
@@ -146,6 +147,7 @@ class GLSLHlslResourceMixin:
         binding,
         count=1,
         of=None,
+        offset=None,
     ):
         if binding is None:
             return
@@ -160,6 +162,8 @@ class GLSLHlslResourceMixin:
         }
         if of is not None:
             record["of"] = of
+        if offset is not None:
+            record["offset"] = int(offset)
         if self.glsl_binding_written_by_source(node, binding):
             # Read by :mod:`.glsl_vulkan_binding_classes`; resource_binding_records leaves it out.
             record[self.GLSL_SOURCE_BINDING_KEY] = True
@@ -197,9 +201,11 @@ class GLSLHlslResourceMixin:
 
         Valid after ``generate``. Each record names the source resource, its
         GLSL identifier, its OpenGL binding table (``shader-storage-buffer``,
-        ``uniform-buffer``, ``texture``, ``image`` or ``sampler``) and binding
-        point, the binding count for arrays and the HLSL register that bound it
-        when the source used one. OpenGL combines textures and samplers in
+        ``uniform-buffer``, ``texture``, ``image``, ``sampler`` or
+        ``atomic-counter-buffer``) and binding point, the binding count for
+        arrays and the HLSL register that bound it when the source used one.
+        An atomic counter's record also gives its byte ``offset`` in the
+        buffer (:mod:`.glsl_atomic_counters`). OpenGL combines textures and samplers in
         texture units, so a source sampler that is combined with a texture is
         reported once per texture unit it must be bound to, with ``texture``
         naming that texture.
@@ -298,20 +304,47 @@ class GLSLHlslResourceMixin:
         return None
 
     def collect_glsl_image_usages(self, ast):
-        """Map resource names to how image intrinsics and calls use them."""
-        usages = {}
-        user_functions = {
-            getattr(function, "name", None)
-            for function in getattr(ast, "functions", []) or []
-        }
+        """Map resource names to how image intrinsics and calls use them.
+
+        An image passed to a program function also takes the uses the function makes of that parameter, through
+        any depth of calls: an image that a helper updates atomically needs the single-channel format that image
+        atomics require, and one a helper loads from is not ``writeonly``.
+        """
+        functions = {}
+        for function in self.glsl_image_usage_functions(ast):
+            functions.setdefault(getattr(function, "name", None), []).append(function)
+        functions.pop(None, None)
+        usages = self.glsl_direct_image_usages(ast, functions)
+        parameter_usages = self.glsl_image_parameter_usages(functions)
         for node in self.walk_ast(ast):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            for position, argument in enumerate(getattr(node, "args", None) or []):
+                argument_name = self.expression_name(argument)
+                uses = parameter_usages.get((self.function_call_name(node), position))
+                if argument_name and uses:
+                    usages.setdefault(argument_name, set()).update(uses)
+        return usages
+
+    @staticmethod
+    def glsl_image_usage_functions(ast):
+        """The program's functions, the stage-local ones included, in declaration order."""
+        functions = list(getattr(ast, "functions", None) or [])
+        for stage in (getattr(ast, "stages", None) or {}).values():
+            functions.extend(getattr(stage, "local_functions", None) or [])
+        return functions
+
+    def glsl_direct_image_usages(self, root, functions):
+        """Map the names ``root``'s image intrinsics and program-function calls take to how they use them."""
+        usages = {}
+        for node in self.walk_ast(root):
             if not isinstance(node, FunctionCallNode):
                 continue
             name = self.function_call_name(node)
             arguments = list(getattr(node, "args", None) or [])
             if not name or not arguments:
                 continue
-            if name in user_functions:
+            if name in functions:
                 for argument in arguments:
                     argument_name = self.expression_name(argument)
                     if argument_name:
@@ -327,6 +360,57 @@ class GLSLHlslResourceMixin:
             elif name == "imageStore":
                 usages.setdefault(target, set()).add("store")
         return usages
+
+    def glsl_image_parameter_usages(self, functions):
+        """Map ``(function name, parameter position)`` to the image uses of that parameter, through nested calls."""
+        local_usages = {}
+        parameter_usages = {}
+        for name, overloads in functions.items():
+            for function in overloads:
+                local = self.glsl_direct_image_usages(function, functions)
+                local_usages[id(function)] = local
+                for position, parameter in enumerate(
+                    getattr(function, "parameters", None) or []
+                ):
+                    uses = local.get(getattr(parameter, "name", None), set()) - {"call"}
+                    if uses:
+                        parameter_usages.setdefault((name, position), set()).update(
+                            uses
+                        )
+        changed = True
+        while changed:
+            changed = False
+            for overloads in functions.values():
+                for function in overloads:
+                    changed |= self.glsl_forward_image_parameter_usages(
+                        function, parameter_usages
+                    )
+        return parameter_usages
+
+    def glsl_forward_image_parameter_usages(self, function, parameter_usages):
+        """Give ``function``'s parameters the uses of the parameters it passes them to; whether any grew."""
+        name = getattr(function, "name", None)
+        positions = {
+            getattr(parameter, "name", None): position
+            for position, parameter in enumerate(
+                getattr(function, "parameters", None) or []
+            )
+        }
+        changed = False
+        for node in self.walk_ast(getattr(function, "body", None)):
+            if not isinstance(node, FunctionCallNode):
+                continue
+            callee = self.function_call_name(node)
+            for position, argument in enumerate(getattr(node, "args", None) or []):
+                own = positions.get(self.expression_name(argument))
+                uses = parameter_usages.get((callee, position))
+                if own is None or not uses:
+                    continue
+                current = parameter_usages.setdefault((name, own), set())
+                if not uses <= current:
+                    current.update(uses)
+                    changed = True
+        return changed
 
     def glsl_unknown_format_image(self, image_arg):
         name = self.expression_name(image_arg)

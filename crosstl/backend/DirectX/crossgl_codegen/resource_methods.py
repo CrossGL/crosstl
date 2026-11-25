@@ -172,7 +172,7 @@ class ResourceMethodMixin:
     ):
         member = self.templated_method_base(member)
         drop_trailing_args = descriptor.get("drop_trailing_args", 0)
-        if drop_trailing_args and member != "SampleCmpBias":
+        if drop_trailing_args:
             rendered_args = rendered_args[:-drop_trailing_args]
             if raw_args is not None:
                 raw_args = raw_args[:-drop_trailing_args]
@@ -210,16 +210,11 @@ class ResourceMethodMixin:
             # The explicit level 0 goes between the reference and the offset (textureCompareLod[Offset]).
             sampler, coords, compare = rendered_args[:3]
             method_args = [obj, sampler, coords, compare, "0.0", *rendered_args[3:]]
-        elif member == "SampleCmpBias" and descriptor["function"] == "textureCompare":
-            sampler, coords, compare = rendered_args[:3]
-            method_args = [obj, sampler, coords, compare]
-        elif (
-            member == "SampleCmpBias"
-            and descriptor["function"] == "textureCompareOffset"
-            and len(rendered_args) >= 5
-        ):
-            sampler, coords, compare, _bias, offset = rendered_args[:5]
-            method_args = [obj, sampler, coords, compare, offset]
+        elif member == "SampleCmpBias" and len(rendered_args) >= 4:
+            # SampleCmpBias(S, Location, CompareValue, Bias[, Offset][, Clamp]): the bias goes last in
+            # textureCompare[Offset][Clamp](t, s, P, ref[, offset][, clamp], bias).
+            sampler, coords, compare, bias = rendered_args[:4]
+            method_args = [obj, sampler, coords, compare, *rendered_args[4:], bias]
         elif member in QUERY_LOD_MEMBERS and len(rendered_args) == 2:
             sampler, coords = rendered_args
             coords = self.layered_query_lod_coordinate(

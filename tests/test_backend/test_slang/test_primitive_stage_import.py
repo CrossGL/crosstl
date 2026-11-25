@@ -129,7 +129,7 @@ def test_geometry_entry_keeps_its_primitive_vertex_count_and_instances(tmp_path)
     crossgl = _translate(tmp_path, GEOMETRY, "cgl")
     assert re.search(r"@ maxvertexcount\(1\)\s*@ instance\(2\)", crossgl), crossgl
     assert _entry(crossgl) == (
-        "triangle vec4 position[3] @ in_Position, uint instance @ gl_InvocationID, "
+        "triangle vec4 position[3] @ Position, uint instance @ gl_InvocationID, "
         "inout PointStream<GeometryOut> stream"
     )
     slang = _translate(tmp_path, crossgl, "slang", name="shader.cgl")

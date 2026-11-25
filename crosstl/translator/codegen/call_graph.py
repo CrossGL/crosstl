@@ -1,6 +1,7 @@
 """Static call graph of a CrossGL program, and the recursion refusal for targets that forbid recursion.
 
-Vulkan SPIR-V (VUID-StandaloneSpirv-None-04634) and WGSL (section 5) forbid static recursion. Metal allows recursive
+Vulkan SPIR-V (VUID-StandaloneSpirv-None-04634) and WGSL (section 5) forbid static recursion, and slangc refuses it
+for each GPU target it compiles Slang to (error E55201). Metal allows recursive
 calls only in kernel functions from Metal 2.4, and only to the call-stack depth the host sets on the pipeline
 (``maxCallStackDepth``, default 1); a translated artifact cannot carry that setting, and a deeper recursion hangs the
 GPU (conformance case ``u_recursion``). These targets therefore refuse any cycle in the static call graph with a
@@ -45,6 +46,10 @@ RECURSION_FREE_TARGETS = {
         "Metal allows recursive calls only in kernel functions (MSL 2.4 and later) and only to the call-stack depth "
         "the host sets on the pipeline (maxCallStackDepth, default 1); the translated artifact cannot carry that "
         "depth, and exceeding it hangs the GPU"
+    ),
+    "slang": (
+        "slangc rejects recursion for every GPU target it compiles Slang to, SPIR-V, DXIL, Metal and WGSL among them "
+        "(error E55201, 'recursion not allowed')"
     ),
 }
 

@@ -20,7 +20,8 @@ emitters lower that form. :func:`lower_geometry_streams` rewrites an HLSL-style 
   max_vertices = N) out`` from ``@maxvertexcount(N)``;
 * each user member of the input vertex structure becomes a per-vertex input array, and ``gl_Position`` and
   ``gl_PointSize`` members are read from ``gl_in[i]``. Reads ``input[i].member`` read those directly; any other use of
-  the input array reads a local copy of it;
+  the input array reads a local copy of it. A primitive of plain values (``line float4 position[2] : POSITION``)
+  is one such member: each vertex is one element of its array;
 * ``SV_GSInstanceID`` and ``SV_PrimitiveID`` parameters become locals initialised from ``gl_InvocationID`` and
   ``gl_PrimitiveIDIn``;
 * each user member of the stream's vertex structure becomes a stage output; ``stream.Append(v)`` writes every output
@@ -345,7 +346,8 @@ class _GeometryLowering:
         sources = {}
         allocated = allocated_locations(members)
         for member in members:
-            member_type = _member_type(member)
+            # A primitive of plain values is the array itself; each vertex reads one element.
+            member_type = _member_type(member) if struct is not None else element
             key = member.name if struct is not None else None
             builtin = _builtin(member)
             if builtin in _INPUT_BUILTINS:
