@@ -54,9 +54,7 @@ class MojoFunctionMixin:
             param_type = self.function_parameter_type_name(p)
             if shader_type is not None:
                 # An entry point's structured or byte-address buffer parameter is a kernel pointer argument.
-                param_type = self.mojo_entry_buffer_object_parameter_type(
-                    p, param_type
-                )
+                param_type = self.mojo_entry_buffer_object_parameter_type(p, param_type)
             param_infos.append((p, param_type))
             self.register_variable_type(getattr(p, "name", None), param_type)
 
