@@ -103,3 +103,99 @@ def test_targets_with_builtin_globals_keep_reading_them(tmp_path, backend):
 
     assert "gl_SampleID" in code
     assert "cgl_SampleID" not in code
+
+
+LAYER_VIEW_SAMPLE_MASK = """#version 460
+#extension GL_EXT_multiview : require
+layout(location = 0) out vec4 o_color;
+float layers() { return float(gl_Layer + gl_ViewportIndex); }
+float coverage() { return float(gl_SampleMaskIn[0]); }
+void main() {
+    o_color = vec4(layers(), coverage(), float(gl_ViewIndex), float(gl_Layer));
+}
+"""
+
+
+@pytest.mark.parametrize(
+    ("backend", "bindings"),
+    [
+        (
+            "metal",
+            (
+                r"uint \w+ \[\[render_target_array_index\]\]",
+                r"uint \w+ \[\[viewport_array_index\]\]",
+                r"uint \w+ \[\[amplification_id\]\]",
+                r"uint \w+ \[\[sample_mask\]\]",
+            ),
+        ),
+        (
+            "directx",
+            (
+                r"uint \w+ : SV_RenderTargetArrayIndex",
+                r"uint \w+ : SV_ViewportArrayIndex",
+                r"uint \w+ : SV_ViewID",
+                r"uint \w+ : SV_Coverage",
+            ),
+        ),
+        (
+            "slang",
+            (
+                r"uint \w+ : SV_RenderTargetArrayIndex",
+                r"uint \w+ : SV_ViewportArrayIndex",
+                r"uint \w+ : SV_ViewID",
+                r"uint \w+ : SV_Coverage",
+            ),
+        ),
+    ],
+)
+def test_layer_viewport_view_and_sample_mask_reads_become_entry_parameters(
+    tmp_path, backend, bindings
+):
+    code = _translate(tmp_path, LAYER_VIEW_SAMPLE_MASK, backend)
+
+    assert not re.search(r"\bgl_\w+", code), code
+    for binding in bindings:
+        assert len(re.findall(binding, code)) == 1, (binding, code)
+    # Each arrives as uint and is GLSL's int once, at the start of the entry point.
+    for name in ("Layer", "ViewportIndex", "ViewIndex", "SampleMaskIn"):
+        assert re.search(rf"int cgl_{name} = int\(cgl_{name}_bits\);", code), code
+    # gl_SampleMaskIn[0] is the one coverage word, a scalar.
+    assert re.search(r"float coverage\(int \w+\)", code), code
+    assert re.search(r"float layers\(int \w+, int \w+\)", code), code
+    assert not re.search(r"cgl_SampleMaskIn\w*\[", code), code
+    if backend == "metal":
+        _compile_metal(tmp_path, code)
+
+
+def test_wgsl_reads_the_sample_mask_and_refuses_the_layer(tmp_path):
+    source = LAYER_VIEW_SAMPLE_MASK.replace("float(gl_Layer)", "0.0")
+    source = source.replace("gl_Layer + gl_ViewportIndex", "0")
+    source = source.replace("float(gl_ViewIndex)", "0.0")
+    wgsl = _translate(tmp_path, source, "wgsl")
+    assert re.search(r"@builtin\(sample_mask\) \w+: u32", wgsl), wgsl
+    assert not re.search(r"\bgl_\w+", wgsl), wgsl
+
+    # WGSL has no render-target array index built-in (WGSL section 13.3.1.1).
+    with pytest.raises(Exception, match="gl_Layer") as refused:
+        _translate(tmp_path, LAYER_VIEW_SAMPLE_MASK, "wgsl")
+    assert "wgsl-stage-io-unsupported" in str(refused.value)
+
+
+@pytest.mark.parametrize("read", ["gl_SampleMaskIn[1]", "gl_SampleMaskIn[index]"])
+@pytest.mark.parametrize("backend", ["metal", "directx", "slang", "wgsl"])
+def test_a_sample_mask_word_other_than_zero_is_refused(tmp_path, backend, read):
+    source = LAYER_VIEW_SAMPLE_MASK.replace(
+        "float coverage() { return float(gl_SampleMaskIn[0]); }",
+        f"float coverage() {{ int index = 1; return float({read}); }}",
+    )
+    with pytest.raises(BuiltinValueUnsupportedError, match="gl_SampleMaskIn\\[0\\]"):
+        _translate(tmp_path, source.replace("float(gl_Layer)", "0.0"), backend)
+
+
+@pytest.mark.parametrize("backend", ["opengl", "vulkan"])
+def test_targets_with_builtin_globals_keep_the_layer_and_sample_mask(
+    tmp_path, backend
+):
+    code = _translate(tmp_path, LAYER_VIEW_SAMPLE_MASK, backend)
+
+    assert "cgl_" not in code
