@@ -1,0 +1,199 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-sdpa-vjp-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/scaled_dot_product_attention_vjp.metal",
+    "sourceSha256": "e4939faab6c21b0e733d60bb828338696ecafe737db4bbe63e819bd69f186661",
+    "hostSource": {
+      "path": "mlx/backend/metal/scaled_dot_product_attention.cpp",
+      "sha256": "c8a29b3ee6e5e0f29f247f36c57bcc54c0f99e0f6358de6195889c258a05676f"
+    },
+    "recipe": "demos/integrations/mlx/portable_host/sdpa_vjp_packages.py"
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "sdpa_vjp_odo_float_64",
+    "sdpa_vjp_odo_float_72",
+    "sdpa_vjp_odo_float_80",
+    "sdpa_vjp_odo_float_96",
+    "sdpa_vjp_odo_float_128",
+    "sdpa_vjp_odo_float_192",
+    "sdpa_vjp_odo_float_256",
+    "sdpa_vjp_odo_float_512",
+    "sdpa_vjp_odo_float16_t_64",
+    "sdpa_vjp_odo_float16_t_72",
+    "sdpa_vjp_odo_float16_t_80",
+    "sdpa_vjp_odo_float16_t_96",
+    "sdpa_vjp_odo_float16_t_128",
+    "sdpa_vjp_odo_float16_t_192",
+    "sdpa_vjp_odo_float16_t_256",
+    "sdpa_vjp_odo_float16_t_512",
+    "sdpa_vjp_odo_bfloat16_t_64",
+    "sdpa_vjp_odo_bfloat16_t_72",
+    "sdpa_vjp_odo_bfloat16_t_80",
+    "sdpa_vjp_odo_bfloat16_t_96",
+    "sdpa_vjp_odo_bfloat16_t_128",
+    "sdpa_vjp_odo_bfloat16_t_192",
+    "sdpa_vjp_odo_bfloat16_t_256",
+    "sdpa_vjp_odo_bfloat16_t_512",
+    "sdpa_vjp_ds_float",
+    "sdpa_vjp_ds_float16_t",
+    "sdpa_vjp_ds_bfloat16_t",
+    "sdpa_vjp_reduce_add_float",
+    "sdpa_vjp_reduce_set_float",
+    "sdpa_vjp_reduce_add_float16_t",
+    "sdpa_vjp_reduce_set_float16_t",
+    "sdpa_vjp_reduce_add_bfloat16_t",
+    "sdpa_vjp_reduce_set_bfloat16_t"
+  ],
+  "artifacts": {
+    "sdpa_vjp_odo_float_64": {"metal": "da389bc9fff662a52d281c5de78fe3e9be5e27a79b547035361083d6d92b4450:1681", "opengl": "5f0a7bacebfccf696f1199bbd75157dd50d65d016258d069c61edb249a895222:3683", "directx": "044bf41403871272413c4652a4deff306664f876b79ae1c2ebeed7740c09b9a6:2868"},
+    "sdpa_vjp_odo_float_72": {"metal": "f2872bee3d202f465a3ffb37a17a7ec53fd3f5cdba12de10529fefab134c19e8:1681", "opengl": "04d9186346e8aff7219274257a358e08562462187639bee3df0f767b7146b950:3683", "directx": "6b9b36d980d386d6b1e441bc53ce2ea6e908527a97512c01d1abbdceb6f137aa:2868"},
+    "sdpa_vjp_odo_float_80": {"metal": "fffc244c1bb069a2862060081724fe08e8cb7ea9ea60f38d72f6532408d1ba76:1681", "opengl": "ea1137e4d40653a4e87b7eac4cf7091e5be64bcd77a8aadaf92c7c0f9ef01996:3683", "directx": "3fa87e6e0f18a1b0cf8f08877ed38050e85449bc1576c3c865871ae6ed8861e7:2868"},
+    "sdpa_vjp_odo_float_96": {"metal": "dc02512abab6b6ff9c608390a38a187b9f72d3ab0ebde27248f90ee3c28f5505:1681", "opengl": "55ff1f1f4342d81989bb42f207832856b2d876323624fb31fd6b0cd6788a3313:3683", "directx": "19022c923f5ed7c0ee33d7815579ef953689932c4675ccc4e8d0c9929df4d129:2868"},
+    "sdpa_vjp_odo_float_128": {"metal": "d208873e4644db9dcc12db22cbec12a6a6c3fb06c7cf6acc7f03bd3660722e10:1693", "opengl": "6df9b7d85d622fc408fa51c62a61ff8b7fd51f66670379fb3a1214ed4b7a2630:3692", "directx": "6230ed4e8a92d606aa87384b95d040b7f0cdb08f27eda024980d6d297f47fcdb:2880"},
+    "sdpa_vjp_odo_float_192": {"metal": "611b0a1089509e6273d598e79e0f94fb3dc46208205e59c29628fb44ae204a18:1693", "opengl": "aec7c153451a069da9b3396dce965fe5412422d3ab6ecd9b951a4807182e768c:3692", "directx": "56323613540476a393b8d9cd1d03dbef638350073d4dbd489be18d7156b40afc:2880"},
+    "sdpa_vjp_odo_float_256": {"metal": "27df7f4761cdb0dc05b6f15c0ee4e9da877e40850485259bdfa7dc2a2ff63798:1693", "opengl": "95609fb9e7da571f7d53ee5882900e93ea76c16cefe7af021e598538e4d960cd:3692", "directx": "4a9b1a5b1831ce87929054fa1838378a97d394865fb1f521889348f992816d65:2880"},
+    "sdpa_vjp_odo_float_512": {"metal": "d74808e94027c9c2be7dac78a1c8931e47278405587f153190c72a03686e19b3:1693", "opengl": "a3400e47b6cf2d6cfba5c9fca801753292c3316221d79c7b96190cf8b3ac69c6:3692", "directx": "c9f0b1c626d583774923205764ab073e1549d93db6745aaa20d80ba87efaa29a:2880"},
+    "sdpa_vjp_odo_float16_t_64": {"metal": "ccd0a2fd108dec09857ebfef7a68ef7205a24ce41bf7879bcc7bc29efd67997a:1713", "opengl": "b5b70c853b49cebf34fed50c37933f881f64a56299ba5acc3924ac19807c024c:3707", "directx": "196e8fc54eb26cb6120d6395529feae8a43e2e977ac64fb220d20763196a624e:4502"},
+    "sdpa_vjp_odo_float16_t_72": {"metal": "01a1d8d2063bf0b2962ea02ec64a98ee874542107c130294b262e2957a292581:1713", "opengl": "30dbf2d95aa246783b4b12be5bb13ae604284181dc2d994f00f1e54777872288:3707", "directx": "12054d390fe6aba2f7bf7be512657e0cf5dad4b67502a5ed8819fae2bc8c938f:4502"},
+    "sdpa_vjp_odo_float16_t_80": {"metal": "85fc247fc7280bfa89c1aff5a26a846e8eb5c5d68c10429d98beee14c35f06e0:1713", "opengl": "f4b4be0c20d15a6ff788bda4d6c6dac89d2a4a24438c7210fb47a6c6e35b3f80:3707", "directx": "3bbad1a2baad97b4d3bf53eb00874f8919b4bf623fc97cfff45286d975256efc:4502"},
+    "sdpa_vjp_odo_float16_t_96": {"metal": "4ba54e08a04567319fc91710e8f35a7614fcbaca198c57d4e452ecd4d33e2ffb:1713", "opengl": "cb43643c20d219db60de70d5b345d8684fb645ee2801d4796183ad131467f282:3707", "directx": "03e0c2066e6d005240a22272d0da2514f5e7b96b74ce8b6ac11ef17339690ae9:4502"},
+    "sdpa_vjp_odo_float16_t_128": {"metal": "2e6e1a53b9a726e4848b3d98da181d0d3c4ddf5b72c38d07e89f8cab75ca1146:1725", "opengl": "1c3425e4d8589a4e8ec5a5a2b0f253fcbd4bbb4e927284c1e53ca4f2f81f11b0:3716", "directx": "3056771bbfbb0c6740d7b3549888a0b8f8b8e0fa200da0dcbf480b84c2f98ce7:4514"},
+    "sdpa_vjp_odo_float16_t_192": {"metal": "ae1fdad87a0747d4b5108afb58df67b7ffcea1226cf731a5740c05ce53eca5a7:1725", "opengl": "18ec793f29c398b95776631b0a77afa5afa290e8777593c14f0709b037e13a81:3716", "directx": "d8b40dd91ca12e84d4c47226f2e9cb4488c7deb3ac160e70e25a278918cc5e33:4514"},
+    "sdpa_vjp_odo_float16_t_256": {"metal": "2ac969721f5e35c8d08854b53a3d98553df5ce9cba58fe2d6dcf81b656daf222:1725", "opengl": "41f61b92b7c30fda01ba8a7a51b68885e81da260f38a53b60c2374153ae3d733:3716", "directx": "4e7d00f79441238ed9985dce74458d43fe315e9ffb1aee50f736673d76e4eb1b:4514"},
+    "sdpa_vjp_odo_float16_t_512": {"metal": "3c32796ee1744628bad579c8a77118d13f864f32a87c1156e1f2f33d5013574d:1725", "opengl": "7893cb2915e86024d1b2b54726963e6323506d74b0110ac6103a19cdf4101dac:3716", "directx": "e9d6fe5f6e1cf5826715b8320faa855009f643592654a3a7f04af84bbf3ab357:4514"},
+    "sdpa_vjp_odo_bfloat16_t_64": {"metal": "198a6194647f6682c7fdeb3a4486276f2ca25cec0d74f5bf560859127cc18c95:1730", "opengl": "dc130f43985b4c5337b47e0d600eb2981e400444d778ab07c52614799422b43e:3713", "directx": "f0dcd1386da271187e2a9f7e91d269fa624883e57c93dbc60e1113fc693b3152:3223"},
+    "sdpa_vjp_odo_bfloat16_t_72": {"metal": "faa1742a9dc29ae97b80e07422f1d45f815427cd04e8f5770163c17873cae8ee:1730", "opengl": "086779b05d8c0e7945c5638b6bbc48a2699835ffd75253f891f68a70aa0ce5e8:3713", "directx": "ee4a4ef429a6419a5a7bc0087b0498adc1732d61c0d3ae2d77268ee941e3510b:3223"},
+    "sdpa_vjp_odo_bfloat16_t_80": {"metal": "7b37881787ec5d6cbb16bd5587f3bdeac4751597a0124504a381cf186096ce1b:1730", "opengl": "18633750e658ba19dd926f19110871b360aa867199431dea3ef107284310bf00:3713", "directx": "0276d6f75966dccb52a201dadd93ece8526cae73e634e9cf786bd96ee93db004:3223"},
+    "sdpa_vjp_odo_bfloat16_t_96": {"metal": "95273898a6341a8017bf2cb9e8a1c95a2acb202d3038dfbae51906bc3ece11cf:1730", "opengl": "b305c9d81ff3b3c12c3338ea30eaa7b07c4a2af110951a00c7da275deeee7886:3713", "directx": "1367839379283b3441ebeaab5d91b7837c1e87e15db29ea3727ca50d75b01161:3223"},
+    "sdpa_vjp_odo_bfloat16_t_128": {"metal": "4580368f12e8af893e3610ab5068625676f96f5a871b12843a5ef1df8ba8459a:1742", "opengl": "524b06345925508685d5443fd5e7de3b61bb9d99a59ee95db05d8dfcb19ac502:3722", "directx": "aea80a4c58b7be91d68b26dc11b53c4c7da84e720fa77c0456c7a300d282e6d4:3235"},
+    "sdpa_vjp_odo_bfloat16_t_192": {"metal": "b7b73039a88fa4c1453137a9c1499638ce97908e5d7b49d50833a9928ac4cce1:1742", "opengl": "95cbd317ea94de875096f58e1a049697367bd3ef3c74a4d2e45c075bff249fa3:3722", "directx": "a53e56e66062c382517054fae011483891a758d63c3d186dd6bb21cb4ab41a24:3235"},
+    "sdpa_vjp_odo_bfloat16_t_256": {"metal": "301c881d1f68d08afc23697a2a69bf072bc51ce8113d17e19326abd3222196e1:1742", "opengl": "0035e778eb620b25d89d84ce6f49b1a29bfaa72437ed70670df2f31f8173f03e:3722", "directx": "ef143187837b2a4a4ccbf6db0af63a4c7253447d1c3987b144bcd344cc3a4353:3235"},
+    "sdpa_vjp_odo_bfloat16_t_512": {"metal": "ce1eebe5452913832139a2c4a2f27fe3a1a6686da7b626a5399b9320ea258be3:1742", "opengl": "6eff2e4c7fa84713905f4d1beb0d6921b8f3f733c7704a5f09bb29fa07242202:3722", "directx": "87ad4a78263045c61cd67503a87f1e1d9a55535ea45b561e0bd0342ee2d398ff:3235"},
+    "sdpa_vjp_ds_float": {"metal": "aa6f94a7789ae43dafb2cba3f3ebb6d47f4267fc858d708b6f9d9f50acca21fd:2724", "opengl": "688aab91ece644f28b01fc214718e03536808734a365cd11f80f8dceb6e5f370:3905", "directx": "4efd654ae1e12bffc816d7ea67aa0cceac271a861453cd17d9caa34e55fdea0f:3645"},
+    "sdpa_vjp_ds_float16_t": {"metal": "f5e17b969c22bb10ba63c80d832a709a0b993d0ed34570ab3bea3b1744560474:2778", "opengl": "599510d82e3bf15f635aa6161e2d328a87a747dbc822a133e83043762ccb9dae:5304", "directx": "600434aaa065a5e92e92192ee3d727032c812d982f7ed4db4e7af5bd0b6c6503:6532"},
+    "sdpa_vjp_ds_bfloat16_t": {"metal": "50309e26999ff065ba4998a0326c911f37c4ee72196669ce90e564aba514a159:2805", "opengl": "d35410585debb03d6d70e49ed22bbcd0efd42b455fa903074d6c9c5658f4b19d:4297", "directx": "a57ef8415c5f3bb50fd464fcc78323a71eeb2da9630ed00cd5623218c3aa90a0:4435"},
+    "sdpa_vjp_reduce_add_float": {"metal": "a86602f63d23096d18ce767817810128dfe8913dd8ece8b227537684a24c5a0e:2892", "opengl": "2f5ffe4c29e2eea77cae7e7ad71d1019538a24a2ab3d739e26698e28069bbaf7:4448", "directx": "e2375905e54d31f3fd7687d78771f3d1ffd72810a7df6a246e70f7bc18a4e1a0:4652"},
+    "sdpa_vjp_reduce_set_float": {"metal": "56782c32fbe89fb3fb9a223c3a2c4c0ebc6a8628caed2759bbf292dac36f039b:2893", "opengl": "4167485c5620da5ec0b490f87f68238a21191f8d41c60db4d5a296632d07e1b3:4449", "directx": "b99d67fa68de5ac5082916be9d7b48a7262377acbb2ca496638840b1109d1be7:4653"},
+    "sdpa_vjp_reduce_add_float16_t": {"metal": "7e7e35160ea59319bbed24509848f284c5d024cec2a2a856908bc27dc88f79f5:2957", "opengl": "3f4443e4baa19c0cb4197a405f28049950f68d4c000d6d6f3939e7c61c80f5bf:5870", "directx": "a7e33b3be2e93a861649893e34fcc710fbb239ee71d58fa06789b40e58349904:7433"},
+    "sdpa_vjp_reduce_set_float16_t": {"metal": "5da06c46925a6dba0175fa04768eae46d4d261a4f9e9f0ba4fbddc500d87f58b:2958", "opengl": "d43ddf48e8282c2f0f8a4de2bed4142753162dafd7da8750c6c1c5ea50e6b051:5871", "directx": "e147425c4649b27110588413484a352fef0e2530cd7a958295db7d162fcf01bc:7434"},
+    "sdpa_vjp_reduce_add_bfloat16_t": {"metal": "0cf509313ee7b24c7e8460306f761322c78b715e5202628233fda91ac9028e6b:2980", "opengl": "e2a46f0e880685e57d4b7cbc9e5a605f7e75081e189a18e9d2f734331a006d13:4872", "directx": "72bd0d1646e62701c73d4728735875fb3954f80d53feedbab65f1a265077e059:5502"},
+    "sdpa_vjp_reduce_set_bfloat16_t": {"metal": "516ac94ca537a2a4501655f2be0c1d3342eaa111918415838522aa25c47c2d00:2981", "opengl": "cd131266c224b04a6b9d2403ce6502efb0c06f8c6ffd165f073967f7c9a26cae:4873", "directx": "7098299cb68950cf95cb4b8177aa0cd387a1e4726b333605db173dea096067af:5503"}
+  },
+  "validationContract": {
+    "workgroups": {
+      "odo": [
+        32,
+        1,
+        1
+      ],
+      "ds": [
+        32,
+        8,
+        1
+      ],
+      "reduce": [
+        32,
+        8,
+        1
+      ]
+    },
+    "cases": {
+      "odo": [
+        {
+          "label": "rows-6",
+          "heads": 2,
+          "qL": 3
+        },
+        {
+          "label": "rows-15",
+          "heads": 3,
+          "qL": 5
+        }
+      ],
+      "ds": [
+        {
+          "label": "block",
+          "heads": 2,
+          "qL": 20,
+          "bq": 12,
+          "bk": 40,
+          "i0": 8,
+          "j0": 24,
+          "scale": 0.125,
+          "diag_off": 0,
+          "causal": 0,
+          "dead": [
+            1,
+            3
+          ]
+        },
+        {
+          "label": "causal",
+          "heads": 1,
+          "qL": 9,
+          "bq": 9,
+          "bk": 33,
+          "i0": 0,
+          "j0": 4,
+          "scale": 0.5,
+          "diag_off": 5,
+          "causal": 1,
+          "dead": null
+        }
+      ],
+      "reduce": [
+        {
+          "label": "window",
+          "heads": 2,
+          "group": 3,
+          "rows": 10,
+          "dim": 40,
+          "acc_rows": 16,
+          "row_off": 4
+        },
+        {
+          "label": "whole",
+          "heads": 1,
+          "group": 1,
+          "rows": 8,
+          "dim": 64,
+          "acc_rows": 8,
+          "row_off": 0
+        }
+      ]
+    },
+    "reference": "float64 from the stored inputs",
+    "bounds": {
+      "odo": "gamma(Dv + 1) * sum |o * cot_o|",
+      "ds": "2u(|S scale| + |x|) + 2^-21 + (3 + 2|x|) 2^-23 relative for P, 3u more for dS, then one ULP of the storage type; masked elements exactly zero",
+      "reduce": "gamma(group + 1) * (|acc| + sum |src|) for acc; out is acc rounded to nearest even, exactly"
+    },
+    "guards": "32 guards after every output and every accumulator row outside the window stay untouched; inputs unchanged",
+    "metalUpstreamComparison": "the unchanged upstream kernel, word for word over every buffer"
+  },
+  "scope": {
+    "instantiatedEntryCount": 33,
+    "coveredEntryCount": 33,
+    "artifactCountByTarget": {
+      "metal": 33,
+      "opengl": 33,
+      "directx": 33
+    },
+    "dispatchCountByTarget": {
+      "metal": 66,
+      "opengl": 66,
+      "directx": 66
+    },
+    "completeCorpusEntryCount": 17832,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

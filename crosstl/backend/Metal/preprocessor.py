@@ -5,7 +5,18 @@ import re
 from copy import deepcopy
 from dataclasses import replace
 from functools import lru_cache
-from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Set, Tuple
+from typing import (
+    Any,
+    Callable,
+    Dict,
+    FrozenSet,
+    List,
+    Mapping,
+    Optional,
+    Sequence,
+    Set,
+    Tuple,
+)
 
 from crosstl.backend.DirectX.macro_expansion import HAS_INCLUDE_MACROS, METAL_MACROS
 from crosstl.backend.DirectX.preprocessor import HLSLPreprocessor, Macro
@@ -279,6 +290,10 @@ class MetalPreprocessor(
         ] = {}
         self._materialized_function_names: Set[str] = set()
         self._materialized_function_templates: Set[Tuple[str, str]] = set()
+        # Concrete functions that are reachable although no entry point calls
+        # them yet: a helper defined before the member body that calls it is
+        # lowered (see post_member_helpers.py).
+        self._additional_reachability_roots: FrozenSet[str] = frozenset()
         # Explicit free-function template calls materialized by `preprocess`,
         # shared by its passes so a call first reached after member lowering
         # reuses the helper an earlier pass emitted instead of redefining it.
@@ -3558,7 +3573,11 @@ class MetalPreprocessor(
         if not functions:
             return None
 
-        roots = [function for function in functions if function.is_entry]
+        roots = [
+            function
+            for function in functions
+            if function.is_entry or function.name in self._additional_reachability_roots
+        ]
         if not roots:
             return None
 

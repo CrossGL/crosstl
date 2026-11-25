@@ -15,7 +15,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import (
+    region_dispatch,
     row_reduction_layout,
     runtime,
     small_row_packages,
@@ -318,7 +320,7 @@ def test_small_row_host_dispatch_checks_before_writeback(
         runtime, "build_native_loader_dispatch_request", prepare_request
     )
     monkeypatch.setattr(
-        runtime, "prepare_native_loader_dispatch_regions", prepare_regions
+        region_dispatch, "prepare_native_loader_dispatch_regions", prepare_regions
     )
     if fault == "metadata":
         memory["row_size"][0] = 65
@@ -650,7 +652,7 @@ def test_small_row_ci_requires_native_execution_on_all_targets():
     assert job is workflow["jobs"]["small-row-reductions"]
     assert job["needs"] == ["ci-plan", "portable-host"]
     assert (
-        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
+        job["if"] == job_condition("small-row-reductions")
         and "continue-on-error" not in job
     )
     assert {
@@ -680,7 +682,6 @@ def test_small_row_ci_requires_native_execution_on_all_targets():
         600,
         600,
         2200,
-        1680,
     ]
     assert sum(deadlines) + 1800 < job["timeout-minutes"] * 60 <= 360 * 60
     triggers = workflow.get("on", workflow.get(True))
@@ -701,7 +702,7 @@ def test_small_row_ci_requires_native_execution_on_all_targets():
     retained = next(
         step
         for step in job["steps"]
-        if step.get("uses", "").startswith("actions/upload-artifact@")
+        if step.get("uses") == "./demos/integrations/mlx/actions/upload-evidence"
     )
     assert retained["if"] == "always()"
     assert retained["with"]["include-hidden-files"] is True

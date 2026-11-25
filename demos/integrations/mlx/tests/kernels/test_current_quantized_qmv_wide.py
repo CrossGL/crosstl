@@ -54,6 +54,11 @@ from demos.integrations.mlx.tests.kernels.current_gate import (
     require_pinned_checkout,
     row_major,
 )
+from demos.integrations.mlx.tests.kernels.quantized_scope import (
+    EXCLUDED_KERNELS,
+    GATE_ENTRY_COUNTS,
+    shared_scope,
+)
 from demos.integrations.mlx.tests.kernels.test_current_arg_reduce import (
     _metal_library,
     _run,
@@ -81,8 +86,6 @@ from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
     ENTRIES as QMV_FAST_ENTRIES,
 )
 from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
-    EXCLUDED_KERNELS,
-    GATHER_QMM_ENTRY_COUNT,
     GROUP_SIZES,
     GUARD_COUNT,
     INDEX_BOUND,
@@ -93,16 +96,7 @@ from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
 )
 from demos.integrations.mlx.tests.kernels.test_current_quantized_qmv import (
     POISON,
-    QMM_N_ENTRY_COUNT,
-    QMM_T_ENTRY_COUNT,
-    QMM_T_SPLITK_ENTRY_COUNT,
     QMV_HEADERS,
-    QMV_QUAD_ENTRY_COUNT,
-    QMV_UNALIGNED_ENTRY_COUNT,
-    QMV_WIDE_ENTRY_COUNT,
-    QUANTIZE_ENTRY_COUNT,
-    QVM_ENTRY_COUNT,
-    QVM_SPLIT_K_ENTRY_COUNT,
     ROWS_PER_GROUP,
     SENTINEL,
     SIMD_SIZE,
@@ -884,37 +878,10 @@ def _expected_validation_contract():
 
 
 def _expected_scope():
-    covered = (
-        QUANTIZE_ENTRY_COUNT
-        + len(QMV_FAST_ENTRIES)
-        + QMV_UNALIGNED_ENTRY_COUNT
-        + len(ENTRIES)
-        + QVM_ENTRY_COUNT
-        + QVM_SPLIT_K_ENTRY_COUNT
-        + QMM_T_ENTRY_COUNT
-        + QMM_N_ENTRY_COUNT
-        + QMM_T_SPLITK_ENTRY_COUNT
-        + GATHER_QMM_ENTRY_COUNT
-        + QMV_QUAD_ENTRY_COUNT
-    )
     return {
         "instantiatedEntryCount": UNIT_ENTRY_COUNT,
         "coveredEntryCount": len(ENTRIES),
-        "quantizeGateEntryCount": QUANTIZE_ENTRY_COUNT,
-        "qmvFastGateEntryCount": len(QMV_FAST_ENTRIES),
-        "qmvUnalignedGateEntryCount": QMV_UNALIGNED_ENTRY_COUNT,
-        "qvmGateEntryCount": QVM_ENTRY_COUNT,
-        "qvmSplitKGateEntryCount": QVM_SPLIT_K_ENTRY_COUNT,
-        "qmmTGateEntryCount": QMM_T_ENTRY_COUNT,
-        "qmmNGateEntryCount": QMM_N_ENTRY_COUNT,
-        "qmmTSplitKGateEntryCount": QMM_T_SPLITK_ENTRY_COUNT,
-        "gatherQmmGateEntryCount": GATHER_QMM_ENTRY_COUNT,
-        "qmvQuadGateEntryCount": QMV_QUAD_ENTRY_COUNT,
-        "excludedEntries": {
-            "kernels": list(EXCLUDED_KERNELS),
-            "count": UNIT_ENTRY_COUNT - covered,
-            "reason": "the gather_qmm_rhs matrix-matrix kernels are not gated yet",
-        },
+        **shared_scope("qmvWide"),
         "runtimeCoveredEntryCount": len(ENTRIES),
         "artifactCountByTarget": len(ENTRIES),
         "dispatchCountByTarget": _dispatch_count(),
@@ -966,7 +933,7 @@ def test_current_mlx_quantized_qmv_wide_contract_is_exact():
 def test_quantized_qmv_wide_entries_follow_mlx_instantiation():
     readme = (ROOT / "demos/integrations/mlx/README.md").read_text(encoding="utf-8")
     assert "quantized_qmv_wide.current-tree.translation.json" in readme
-    assert len(ENTRIES) == 432 == len(set(ENTRIES)) == QMV_WIDE_ENTRY_COUNT
+    assert len(ENTRIES) == 432 == len(set(ENTRIES)) == GATE_ENTRY_COUNTS["qmvWide"]
     assert Counter(info["variant"] for info in INFO.values()) == {
         "batch_0": 216,
         "batch_1": 216,
@@ -982,21 +949,7 @@ def test_quantized_qmv_wide_entries_follow_mlx_instantiation():
     assert ENTRIES[-1] == "affine_qmv_wide_bfloat16_t_gs_32_b_8_nv_5_kl_8_batch_1"
     assert KERNEL not in EXCLUDED_KERNELS
     assert not set(ENTRIES) & set(QMV_FAST_ENTRIES)
-    assert (
-        QUANTIZE_ENTRY_COUNT
-        + len(QMV_FAST_ENTRIES)
-        + QMV_UNALIGNED_ENTRY_COUNT
-        + len(ENTRIES)
-        + QVM_ENTRY_COUNT
-        + QVM_SPLIT_K_ENTRY_COUNT
-        + QMM_T_ENTRY_COUNT
-        + QMM_N_ENTRY_COUNT
-        + QMM_T_SPLITK_ENTRY_COUNT
-        + GATHER_QMM_ENTRY_COUNT
-        + QMV_QUAD_ENTRY_COUNT
-        + 108
-        == UNIT_ENTRY_COUNT
-    )
+    assert sum(GATE_ENTRY_COUNTS.values()) == UNIT_ENTRY_COUNT
 
 
 def test_quantized_qmv_wide_shards_partition_the_entries(monkeypatch):
@@ -1517,9 +1470,6 @@ def test_ci_requires_native_quantized_qmv_wide_parity():
         f"{SHARD_INDEX_ENV}: ${{{{ matrix.shard }}}}",
         f'{SHARD_COUNT_ENV}: "{CI_SHARD_COUNT}"',
         "CROSTL_MLX_CURRENT_ROOT: ${{ github.workspace }}/mlx-current-tree-upstream",
-        "Linux) export CROSTL_MLX_CURRENT_TARGET=opengl",
-        "Windows) export CROSTL_MLX_CURRENT_TARGET=directx",
-        "macOS) export CROSTL_MLX_CURRENT_TARGET=metal",
         "pytest -q -n auto",
         "--basetemp=mlx-current-results/${{ matrix.group }}",
         "--junitxml=mlx-current-results/${{ matrix.group }}.xml",

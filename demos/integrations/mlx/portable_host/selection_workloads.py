@@ -5,6 +5,11 @@ from collections import Counter
 from demos.integrations.mlx.portable_host.binary_workloads import mlx_operand
 from demos.integrations.mlx.portable_host.packages import BOOLEAN_COPY_ENTRY, COPY_ENTRY
 
+# The host runs a selection as consecutive v_Select launches of at most this
+# many elements; the chunked case spans three of them.
+CHUNK = 65535
+CHUNKED_SIZE = 2 * CHUNK + 7
+
 
 def cases():
     for dtype in ("float32", "int32", "uint32", "bool_"):
@@ -40,11 +45,17 @@ def cases():
         }
     for layout in ("numeric-condition", "promotion"):
         yield {"id": layout, "dtype": "float32", "layout": layout, "mask": "mixed"}
+    yield {
+        "id": "float32-chunked",
+        "dtype": "float32",
+        "layout": "chunked",
+        "mask": "mixed",
+    }
 
 
 def operands(np, case):
     dtype, layout = case["dtype"], case["layout"]
-    values = np.arange(96, dtype="uint32")
+    values = np.arange(CHUNKED_SIZE if layout == "chunked" else 96, dtype="uint32")
     if dtype == "bool_":
         left, right = values % 2 == 0, values % 2 != 0
     elif dtype == "float32":
@@ -83,7 +94,7 @@ def operands(np, case):
             dtype="uint32",
         )
         left, right = words.view("float32"), words[::-1].copy().view("float32")
-    else:
+    elif layout != "chunked":
         size = 33 if layout == "tail" else 5
         left, right = left[:size], right[:size]
     shape = np.broadcast_shapes(left.shape, right.shape)
@@ -146,7 +157,8 @@ def expected_entries(np, case):
         for value in converted
         if not value.flags.c_contiguous
     )
-    return entries + ["v_Select" + case["dtype"]]
+    chunks = -(-int(np.prod(shape)) // CHUNK)
+    return entries + ["v_Select" + case["dtype"]] * chunks
 
 
 def validate(records, trace, *, native):
@@ -181,40 +193,46 @@ def validate(records, trace, *, native):
         if Counter(event["entry"] for event in events) != Counter(entries):
             raise ValueError("Selection dispatch sequence differs")
         if entries:
-            event = events[-1]
-            from demos.integrations.mlx.portable_host.runtime import (
-                BOOLEAN_GUARD,
-                COPY_GUARD,
-                DISPATCH_VERSION,
-            )
-
-            guard = BOOLEAN_GUARD if case["dtype"] == "bool_" else COPY_GUARD
-            if case["dtype"] == "float32":
-                guard = np.asarray(guard, dtype="uint32").view("float32").tolist()
-            elif case["dtype"] == "bool_" and event.get("target") != "metal":
-                guard = [int(value) for value in guard]
-            actual = (
-                np.asarray(
-                    [float(value) for value in event["selectionValues"]],
-                    dtype="float32",
-                )
-                if case["dtype"] == "float32"
-                else np.asarray(event["selectionValues"], dtype=case["dtype"])
-            )
-            if (
-                event["entry"] != entries[-1]
-                or event["threads"] != expected.size
-                or event.get("dispatchVersion") != DISPATCH_VERSION
-                or event.get("selectionGuardValues") != guard
-                or event["workgroupCount"] != [expected.size, 1, 1]
-                or event["workgroupSize"] != [1, 1, 1]
-                or not equal_words(
-                    words(np, actual), words(np, expected), case["dtype"]
-                )
-            ):
-                raise ValueError("Selection native readback differs")
+            _validate_chunks(np, case, events, entries, expected)
     if cursor != len(trace):
         raise ValueError("Selection trace contains unexpected dispatches")
+
+
+def _validate_chunks(np, case, events, entries, expected):
+    """Each v_Select launch reads back its consecutive chunk of the result."""
+    from demos.integrations.mlx.portable_host.runtime import (
+        BOOLEAN_GUARD,
+        COPY_GUARD,
+        DISPATCH_VERSION,
+    )
+
+    flat = expected.reshape(-1)
+    chunks = -(-flat.size // CHUNK)
+    for index, event in enumerate(events[len(events) - chunks :]):
+        part = flat[index * CHUNK : (index + 1) * CHUNK]
+        guard = BOOLEAN_GUARD if case["dtype"] == "bool_" else COPY_GUARD
+        if case["dtype"] == "float32":
+            guard = np.asarray(guard, dtype="uint32").view("float32").tolist()
+        elif case["dtype"] == "bool_" and event.get("target") != "metal":
+            guard = [int(value) for value in guard]
+        actual = (
+            np.asarray(
+                [float(value) for value in event["selectionValues"]],
+                dtype="float32",
+            )
+            if case["dtype"] == "float32"
+            else np.asarray(event["selectionValues"], dtype=case["dtype"])
+        )
+        if (
+            event["entry"] != entries[-1]
+            or event["threads"] != part.size
+            or event.get("dispatchVersion") != DISPATCH_VERSION
+            or event.get("selectionGuardValues") != guard
+            or event["workgroupCount"] != [part.size, 1, 1]
+            or event["workgroupSize"] != [1, 1, 1]
+            or not equal_words(words(np, actual), words(np, part), case["dtype"])
+        ):
+            raise ValueError("Selection native readback differs")
 
 
 def run(mx, np, host, save):

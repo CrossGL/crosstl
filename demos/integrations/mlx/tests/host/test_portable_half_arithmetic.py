@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import half_arithmetic_workloads as workloads
 from demos.integrations.mlx.portable_host import (
     half_storage,
@@ -333,10 +334,7 @@ def test_half_arithmetic_ci_requires_native_execution_and_unchanged_upstream_tes
         Path(".github/workflows/demo-project-testing.yml").read_text()
     )
     job = workflow["jobs"]["half-host"]
-    assert (
-        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
-        and "continue-on-error" not in job
-    )
+    assert job["if"] == job_condition("half-host") and "continue-on-error" not in job
     assert {item["target"] for item in job["strategy"]["matrix"]["include"]} == {
         "metal",
         "directx",

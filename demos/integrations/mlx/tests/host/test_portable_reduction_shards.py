@@ -17,6 +17,7 @@ from demos.integrations.mlx.portable_host.reduction_packages import (
     ROW_ENTRIES,
     ROW_WIDTHS,
 )
+from demos.integrations.mlx.tests.upstream_checkouts import upstream_fetches
 from tests.ci_helpers import assert_paths_covered
 
 
@@ -26,7 +27,7 @@ def test_partition_keeps_all_entries_and_widths_without_overlap():
     assert max(map(len, parts)) == 4
     assert sum(len(part) * len(ROW_ENTRIES) for part in parts) == 1456
     cases = list(row_workloads.cases(ROW_WIDTHS))
-    assert len(cases) == 1870
+    assert len(cases) == 1876
     assert len({(case["entry"], case["width"]) for case in cases}) == 896
 
 
@@ -446,9 +447,7 @@ def test_ci_requires_shards_and_complete_native_gates():
         steps["Retain row translation evidence"]["with"]["include-hidden-files"] is True
     )
     checkout = steps["Check out pinned MLX kernels"]["run"]
-    assert checkout.index("config core.autocrlf false") < checkout.index(
-        "checkout --detach"
-    )
+    assert upstream_fetches(checkout) == [("mlx-upstream", "$MLX_COMMIT", ())]
     job = workflow["jobs"]["reductions"]
     assert job["needs"] == ["ci-plan", "portable-host", "row-packages"]
     native = {step.get("name"): step for step in job["steps"]}

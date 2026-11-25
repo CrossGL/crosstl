@@ -46,6 +46,7 @@ _SCALAR_LAYOUTS = {
     "uint32": ScalarStorageLayout("uint", "integer", 32),
     "uint32_t": ScalarStorageLayout("uint", "integer", 32),
     "half": ScalarStorageLayout("float16", "floating", 16),
+    "f16": ScalarStorageLayout("float16", "floating", 16),
     "float16": ScalarStorageLayout("float16", "floating", 16),
     "float16_t": ScalarStorageLayout("float16", "floating", 16),
     "bfloat": ScalarStorageLayout("bfloat16", "floating", 16),

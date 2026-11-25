@@ -1,0 +1,118 @@
+{
+  "schemaVersion": 1,
+  "kind": "crosstl-mlx-current-tree-fence-contract",
+  "provenance": {
+    "repository": "https://github.com/ml-explore/mlx.git",
+    "commit": "9c3d35571ac450a8ecf5c17b4d0e3fac52c08bc8",
+    "source": "mlx/backend/metal/kernels/fence.metal",
+    "sourceSha256": "6d3f3c27dd038a0f731054f7466f951b02134ce4124b1c1bbbdabfd9498d1913",
+    "hostSource": {
+      "path": "mlx/backend/metal/fence.cpp",
+      "sha256": "8eaaaf3cdaf3bca2b51b5098a5cc903898e8fcc83f17c8e38a2d663c6adcf8c4"
+    }
+  },
+  "corpusCensus": {
+    "metalUnitCount": 49,
+    "entryCount": 17832,
+    "discoveryDiagnosticCount": 0
+  },
+  "entries": [
+    "input_coherent",
+    "fence_update",
+    "fence_wait"
+  ],
+  "artifacts": {
+    "input_coherent": {"metal": "4a0727e84f2f0ac91383da6879854dfdfd7b30d1c703d9c1a295a58470ffdb8b:699", "opengl": "refused:project.translate.opengl-atomic-fence-unsupported", "directx": "refused:project.translate.directx-atomic-fence-unsupported"},
+    "fence_update": {"metal": "2706db32d0fc6a209a95a65a4245d4751f82ba96eaf6b3322f0e153cfa6bbe5f:621", "opengl": "refused:project.translate.opengl-atomic-fence-unsupported", "directx": "refused:project.translate.directx-atomic-fence-unsupported"},
+    "fence_wait": {"metal": "010c97526c6852e1690e5a222f7807aedfc2c6d2463714d542147725028c0534:685", "opengl": "refused:project.translate.opengl-atomic-fence-unsupported", "directx": "refused:project.translate.directx-atomic-fence-unsupported"}
+  },
+  "validationContract": {
+    "workgroups": {
+      "input_coherent": [
+        1024,
+        1,
+        1
+      ],
+      "fence_update": [
+        1,
+        1,
+        1
+      ],
+      "fence_wait": [
+        1,
+        1,
+        1
+      ]
+    },
+    "fence": [
+      "mem_device",
+      "memory_order_seq_cst",
+      "thread_scope_system"
+    ],
+    "storage": "volatile coherent(system) device uint",
+    "cases": {
+      "input_coherent": [
+        1,
+        1024,
+        1027
+      ],
+      "fence_update": [
+        [
+          0,
+          7
+        ],
+        [
+          7,
+          7
+        ],
+        [
+          4294967294,
+          4294967295
+        ]
+      ],
+      "fence_wait": [
+        [
+          5,
+          5
+        ],
+        [
+          9,
+          5
+        ],
+        [
+          4294967295,
+          1
+        ]
+      ]
+    },
+    "guards": "32 guards after every buffer stay untouched",
+    "metalUpstreamComparison": "the unchanged upstream kernel, word for word over every buffer",
+    "refusals": {
+      "opengl": "project.translate.opengl-atomic-fence-unsupported",
+      "directx": "project.translate.directx-atomic-fence-unsupported"
+    },
+    "refusalReason": "HLSL and GLSL memory barriers reach device scope at most; fence.metal fences at thread_scope_system"
+  },
+  "scope": {
+    "instantiatedEntryCount": 3,
+    "coveredEntryCount": 3,
+    "artifactCountByTarget": {
+      "metal": 3,
+      "opengl": 0,
+      "directx": 0
+    },
+    "refusedCountByTarget": {
+      "metal": 0,
+      "opengl": 3,
+      "directx": 3
+    },
+    "dispatchCountByTarget": {
+      "metal": 9,
+      "opengl": 0,
+      "directx": 0
+    },
+    "completeCorpusEntryCount": 17832,
+    "upstreamMlxTestSuiteExecuted": false,
+    "mlxHostRuntimeRedirectionImplemented": false
+  }
+}

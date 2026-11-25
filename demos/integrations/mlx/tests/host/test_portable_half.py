@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import (
     half_storage,
     packages,
@@ -49,6 +50,46 @@ def test_half_transport_rejects_invalid_logical_words(target, value):
 def test_half_transport_rejects_inexact_carriers(value):
     with pytest.raises(ValueError):
         half_storage.unpack([value], "opengl")
+
+
+def test_bulk_half_conversion_matches_the_element_wise_functions():
+    words = list(range(65536))
+    carriers = [half_storage.widen(word) for word in words]
+    assert half_storage.widen_all(words) == carriers
+    assert half_storage.widen_all(iter(words)) == carriers
+    assert half_storage.narrow_all(carriers) == words
+    assert [half_storage.narrow(word) for word in carriers] == words
+    assert half_storage.widen_all([]) == half_storage.narrow_all([]) == []
+
+
+@pytest.mark.parametrize("value", (-1, 65536, True, 1.0, None))
+@pytest.mark.parametrize("target", ("metal", "directx", "opengl"))
+def test_half_transport_rejects_an_invalid_word_after_valid_ones(target, value):
+    with pytest.raises(ValueError, match="unsigned 16-bit words"):
+        half_storage.pack([0, 0x3C00, value, 0x7BFF], target)
+    if target != "opengl":
+        with pytest.raises(ValueError, match="unsigned 16-bit words"):
+            half_storage.unpack([0x3C00, value], target)
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    (
+        (0x3F800001, "exact binary16"),
+        (0x47800000, "exact binary16"),
+        (1, "exact binary16"),
+        (2**32, "unsigned 32-bit words"),
+        (-1, "unsigned 32-bit words"),
+        (True, "unsigned 32-bit words"),
+        (1.0, "unsigned 32-bit words"),
+    ),
+)
+def test_half_carriers_reject_an_invalid_word_after_valid_ones(value, message):
+    carriers = [0, 0x3F800000, value, 0xBF800000]
+    with pytest.raises(ValueError, match=message):
+        half_storage.unpack(carriers, "opengl")
+    with pytest.raises(ValueError, match=message):
+        half_storage.narrow_all(carriers)
 
 
 @pytest.fixture(scope="module", params=("metal", "directx", "opengl"))
@@ -571,10 +612,7 @@ def test_half_ci_requires_every_target_and_retained_evidence():
     )
     job = workflow["jobs"]["half-host"]
     assert job["needs"] == ["ci-plan", "portable-host"]
-    assert (
-        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
-        and "continue-on-error" not in job
-    )
+    assert job["if"] == job_condition("half-host") and "continue-on-error" not in job
     assert {
         item["target"]: item["os"] for item in job["strategy"]["matrix"]["include"]
     } == {"metal": "macos-26", "directx": "windows-2025", "opengl": "ubuntu-24.04"}

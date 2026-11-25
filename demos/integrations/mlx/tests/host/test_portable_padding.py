@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import packages
 from demos.integrations.mlx.portable_host import padding_workloads as workloads
 from demos.integrations.mlx.portable_host import verify_padding as proof
@@ -38,9 +39,7 @@ def evidence(target="metal", *, native=True):
                 "dispatchCount": len(operations),
             }
         )
-        dtype = (
-            case["dtype"] if case["dtype"] in {"bool_", "int64", "uint64"} else "uint32"
-        )
+        dtype = workloads.copy_type(case["dtype"])
         for operation in operations:
             source, _, _, _, output = operation
             info = workloads.metadata(*operation)
@@ -68,15 +67,20 @@ def evidence(target="metal", *, native=True):
 @pytest.mark.parametrize("native", [True, False])
 def test_complete_padding_cases(target, native):
     records, trace = evidence(target, native=native)
-    assert len(records) == 102
+    assert len(records) == 126
     assert {item["dtype"] for item in records} == set(workloads.DTYPES)
     assert any(item["resultShape"] == [255, 257] for item in records)
+    assert any(item["resultShape"] == [257, 257] for item in records)
     workloads.validate(records, trace, native=native)
 
 
 @pytest.fixture
 def small_evidence(monkeypatch):
-    selected = [case for case in workloads.cases() if case["layout"] != "limit"]
+    selected = [
+        case
+        for case in workloads.cases()
+        if case["layout"] not in {"limit", "over-limit"}
+    ]
     monkeypatch.setattr(workloads, "cases", lambda: iter(selected))
     return evidence()
 
@@ -194,8 +198,7 @@ def test_padding_ci_requires_native_execution_and_retained_evidence():
     job = workflow["jobs"]["integer64-host"]
     assert job["needs"] == ["ci-plan", "portable-host"]
     assert (
-        job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
-        and "continue-on-error" not in job
+        job["if"] == job_condition("integer64-host") and "continue-on-error" not in job
     )
     assert {
         (item["target"], item["os"]) for item in job["strategy"]["matrix"]["include"]

@@ -32,11 +32,12 @@ BY_NAME = {record["name"]: record for record in RECORDS}
 FLAGS = ("has_batch", "align_M", "align_N", "align_K")
 
 
-def host_entry(transpose, dtype, flags):
+def host_entry(transpose, dtype, flags, epilogue="nn"):
     has_batch, align_m, align_n, align_k = ("t" if value else "n" for value in flags)
+    use_out_source, do_axpby = epilogue
     return (
         f"steel_gemm_fused_{transpose}_{dtype}_{dtype}_bm64_bn64_bk16_wm2_wn2"
-        f"_has_batch_{has_batch}_use_out_source_n_do_axpby_n"
+        f"_has_batch_{has_batch}_use_out_source_{use_out_source}_do_axpby_{do_axpby}"
         f"_align_M_{align_m}_align_N_{align_n}_align_K_{align_k}"
     )
 
@@ -92,27 +93,35 @@ def native_buffers(record, data=None):
 
 
 def test_signature_accepts_exactly_the_host_tile_entries():
+    # Matmul's entries without C, and AddMM's with C added or scaled.
     entries = {
-        host_entry(transpose, dtype, flags)
+        host_entry(transpose, dtype, flags, epilogue)
         for transpose in ("nn", "nt", "tn", "tt")
-        for dtype in layout.DTYPES
+        for dtype in layout.ELEMENT_DTYPES
         for flags in itertools.product((False, True), repeat=4)
+        for epilogue in ("nn", "tn", "tt")
     }
-    assert len(entries) == 192
+    assert len(entries) == 768
     for entry in entries:
         info = layout.signature(entry)
         assert info["source"] in model.BY_NAME
         assert model.BY_NAME[info["source"]].workgroup_size == (32, 2, 2)
         assert layout.workgroup_size(entry) == (32, 2, 2)
-        assert info["constants"]["use_out_source"] is False
+        use_out_source = "_use_out_source_t" in entry
+        assert info["constants"]["use_out_source"] is use_out_source
+        assert info["constants"]["do_axpby"] is ("_do_axpby_t" in entry)
         assert set(info["constants"]) == set(layout.CONSTANT_IDS)
+        assert set(layout.host_parameters(entry)) == set(
+            layout.HOST_PARAMETERS
+            + (layout.EPILOGUE_PARAMETERS if use_out_source else ())
+        )
     base = host_entry("nn", "float32", (False,) * 4)
     for entry in (
         base.replace("_bm64_bn64_bk16_wm2_wn2", "_bm32_bn32_bk16_wm2_wn2"),
         base.replace("_bm64_bn64_bk16_wm2_wn2", "_bm64_bn64_bk16_wm1_wn2"),
-        base.replace("float32_float32", "complex64_complex64"),
+        base.replace("float32_float32", "complex64_float32"),
         base.replace("float32_float32", "float32_float16"),
-        base.replace("use_out_source_n", "use_out_source_t"),
+        # steel_matmul_regular_axpby scales C only when it reads C.
         base.replace("do_axpby_n", "do_axpby_t"),
         base.replace("_has_batch_n", ""),
         "steel_gemm_fused_nn_float32_float32_bm64_bn64_bk16_wm2_wn2",
@@ -144,8 +153,12 @@ def test_selection_names_matmul_cpp_hash():
     entry = layout.select("bfloat16", False, True, 128, 70, 48, 2)
     assert entry == host_entry("nt", "bfloat16", (True, True, False, True))
     assert layout.signature(entry)["transposeB"]
+    # GEMM_TPARAM_MACRO gives complex64 the medium-device tile too.
+    assert layout.select("complex64", False, False, 16, 32, 50, 1) == host_entry(
+        "nn", "complex64", (False,) * 4
+    )
     with pytest.raises(ValueError):
-        layout.select("complex64", False, False, 64, 64, 64, 1)
+        layout.select("float64", False, False, 64, 64, 64, 1)
 
 
 def test_routes_mirror_matmul_eval_gpu():
@@ -183,8 +196,7 @@ def test_routes_mirror_matmul_eval_gpu():
             layout.route("float32", *a, *b)
     assert layout.matmul_route("float32", [4, 8], [8, 1], [8, 5], [5, 1])[0] == "gemm"
     assert layout.matmul_route("float32", [1, 8], [8, 1], [8, 5], [5, 1])[0] == "gemv"
-    with pytest.raises(ValueError, match="dot products"):
-        layout.matmul_route("float32", [1, 16], [16, 1], [16, 1], [1, 1])
+    assert layout.matmul_route("float32", [1, 16], [16, 1], [16, 1], [1, 1])[0] == "dot"
 
 
 @pytest.mark.parametrize("record", RECORDS, ids=lambda record: record["name"])
@@ -269,6 +281,45 @@ def test_plan_rejects_launches_that_differ_from_mlx(fault, name):
         layout.plan(record["entry"], counts, parameters, counts["D"], execution)
 
 
+@pytest.mark.parametrize(
+    "a, b, accepted",
+    (
+        # test_matrix_vector_attn: K == 1 gives B's single row stride zero.
+        (([256, 1], [1, 1]), ([1, 16], [0, 1]), True),
+        # test_matrix_vector_broadcast: a broadcast vector folds into M with
+        # row stride zero.
+        (([32, 64], [0, 1]), ([64, 64], [64, 1]), True),
+        # Overlapping row strides stay rejected: the host fails closed on them.
+        (([32, 64], [1, 1]), ([64, 64], [64, 1]), False),
+    ),
+)
+def test_plan_accepts_matmul_cpp_leading_strides(a, b, accepted):
+    selected = layout.route("float32", *a, *b)
+    params = selected["params"]
+    assert (params["lda"], params["ldb"]) == (a[1][0], b[1][0])
+    m, n, k = params["M"], params["N"], params["K"]
+    counts = {
+        "A": (m - 1) * params["lda"] + k,
+        "B": (k - 1) * params["ldb"] + n,
+        "D": m * n,
+    }
+    parameters = {
+        "params": params,
+        "batch_shape": selected["batchShape"],
+        "batch_strides": selected["batchStrides"],
+    }
+    execution = {
+        "workgroupCount": [params["tiles_n"], params["tiles_m"], 1],
+        "workgroupSize": list(layout.workgroup_size(selected["entry"])),
+    }
+    if accepted:
+        metadata = layout.plan(selected["entry"], counts, parameters, m * n, execution)
+        assert (metadata["lda"], metadata["ldb"]) == (params["lda"], params["ldb"])
+    else:
+        with pytest.raises(ValueError, match="differ from matmul.cpp"):
+            layout.plan(selected["entry"], counts, parameters, m * n, execution)
+
+
 def test_plan_rejects_entries_mlx_would_not_select():
     record = BY_NAME["gemm-nn-aligned"]
     counts, parameters, execution = native_binding(record)
@@ -348,7 +399,9 @@ def struct_layout(name):
     "fault",
     (None, "guard", "missing", "shape", "trace", "unbound", "readonly", "duplicate"),
 )
-@pytest.mark.parametrize("name", ("gemm-two-batch-axes", "gemm-tn"))
+@pytest.mark.parametrize(
+    "name", ("gemm-two-batch-axes", "gemm-tn", "complex-gemm-tn-batched")
+)
 def test_dispatch_commits_the_output_only_after_validation(
     tmp_path, monkeypatch, target, fault, name
 ):
@@ -395,13 +448,20 @@ def test_dispatch_commits_the_output_only_after_validation(
         "pack_storage_records",
         lambda layout_, records: [len(layout_["structMembers"])] + [0] * 5,
     )
-    one = {"float32": 0x3F800000, "float16": 0x3C00, "bfloat16": 0x3F80}[dtype]
+    # complex64 (1, 0.5): the real part in the low word.
+    one = {
+        "float32": 0x3F800000,
+        "float16": 0x3C00,
+        "bfloat16": 0x3F80,
+        "complex64": 0x3F000000_3F800000,
+    }[dtype]
+    parts = 2 if dtype == "complex64" else 1
 
     def execute(host, outputs):
         outputs = json.loads(json.dumps(outputs))
         value = outputs["binding_D"]
         count = len(memory["D"])
-        value["values"][:count] = dispatch.encode_binding(
+        value["values"][: count * parts] = dispatch.encode_binding(
             dtype, [one] * count, target, physical_layout(target, dtype), "buffer"
         )["values"]
         if fault == "guard":
@@ -435,11 +495,11 @@ def test_dispatch_commits_the_output_only_after_validation(
     assert kwargs["expected_target"] == target
     assert set(kwargs["observe_inputs"]) == set(inputs) - {"binding_D"}
     for parameter in ("A", "B"):
-        assert len(inputs[f"binding_{parameter}"]["values"]) == (
+        assert len(inputs[f"binding_{parameter}"]["values"]) == parts * (
             len(memory[parameter]) + dispatch.GUARD_COUNT
         )
     # C is never read without use_out_source, so it holds only poison.
-    assert len(inputs["binding_C"]["values"]) == dispatch.GUARD_COUNT
+    assert len(inputs["binding_C"]["values"]) == parts * dispatch.GUARD_COUNT
     assert inputs["binding_params"]["dtype"] == "uint32"
     assert inputs["binding_params"]["values"][0] == len(layout.PARAMS_FIELDS)
     assert inputs["binding_addmm_params"]["values"][0] == 5
@@ -497,11 +557,17 @@ def test_package_configs_match_the_gemm_gate(tmp_path, record):
 def test_package_builds_cover_the_verification_entries(tmp_path, monkeypatch):
     import concurrent.futures
 
-    from demos.integrations.mlx.portable_host import matmul_packages
+    from demos.integrations.mlx.portable_host import matmul_packages, verify_addmm
 
     entries = gemm_packages.verification_entries()
-    assert entries == [record["entry"] for record in RECORDS]
-    assert len(set(entries)) == 9
+    addmm = [verify_addmm.case_record(case) for case in verify_addmm.CASES]
+    assert entries == list(
+        dict.fromkeys(
+            [record["entry"] for record in RECORDS]
+            + [record["entry"] for record in addmm if record["family"] == "gemm"]
+        )
+    )
+    assert len(entries) == 18
     calls = []
 
     def build(root, directory, target, entry):
@@ -548,15 +614,17 @@ def test_backend_mirrors_steel_matmul():
     for text in (
         "void dispatch_steel_gemm(",
         "split_tiles <= 1024 && K / 16 >= 8 && K >= std::max(M, N)",
-        "dispatch_steel_gemm_splitk(a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b);",
+        "a, b, out, M, N, K, lda, ldb, transpose_a, transpose_b, epilogue);",
         "constexpr int bm = 64, bn = 64, bk = 16, wm = 2, wn = 2;",
-        '"_use_out_source_n_do_axpby_n_align_M_"',
+        '"_use_out_source_" +',
+        "epilogue && (epilogue->alpha != 0.0f || epilogue->beta != 1.0f);",
+        "use_out_source && (epilogue->alpha != 1.0f || epilogue->beta != 1.0f);",
         "A_batch_stride.back(),",
         "{32, uint32_t(wn), uint32_t(wm)}",
         "{uint32_t(tiles_n), uint32_t(tiles_m), uint32_t(batch_size_out)}",
     ):
         assert text in backend, text
-    for name in layout.HOST_PARAMETERS:
+    for name in layout.HOST_PARAMETERS + layout.EPILOGUE_PARAMETERS:
         assert f'{{"{name}", ' in backend, name
 
 

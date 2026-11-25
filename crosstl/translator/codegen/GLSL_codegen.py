@@ -132,6 +132,11 @@ from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
 from .glsl_invariant_builtins import invariant_builtin_redeclarations
+from .glsl_lane_symmetry import (
+    GLSLHelperSymmetry,
+    OpenGLLaneSymmetryExitMixin,
+    validating_function,
+)
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
 from .glsl_program_requirements import finish_glsl_program_requirements
 from .glsl_quad_lane_reads import glsl_quad_lane_read_call, quad_lane_read_needs_helper
@@ -328,6 +333,7 @@ from .workgroup_size_extents import glsl_workgroup_size_declaration_layout
 
 class GLSLCodeGen(
     OpenGLTableMixin,
+    OpenGLLaneSymmetryExitMixin,
     OpenGLProgramOptionMixin,
     OpenGLSubgroupControlFlowMixin,
     OpenGLProgramStructureMixin,
@@ -1226,6 +1232,18 @@ class GLSLCodeGen(
             call = self.glsl_software_subgroup_top_level_call(statement)
             if call is not None:
                 call_ids.add(id(call))
+            if id(statement) not in getattr(
+                self, "glsl_software_subgroup_constant_guards", {}
+            ):
+                # Candidates only: the argument facts admit a call under a
+                # short-circuit or conditional operator once its condition
+                # is proven uniform.
+                call_ids.update(
+                    id(call)
+                    for call in self.glsl_software_subgroup_condition_calls(
+                        statement, uniform=lambda _condition: True
+                    )
+                )
             if isinstance(statement, BlockNode):
                 call_ids.update(
                     self.glsl_software_subgroup_uniform_top_level_call_ids(statement)
@@ -1446,6 +1464,7 @@ class GLSLCodeGen(
             self.glsl_software_subgroup_uniform_call_ids,
             self.structs_by_name,
             storage_loads,
+            reachable=self.glsl_software_subgroup_reachable_nodes,
         )
         self.glsl_software_subgroup_uniform_returns = analysis
         constant_source_types = {
@@ -1548,7 +1567,20 @@ class GLSLCodeGen(
                 entry_function, entry_seeds
             )
         )
-        entry_arguments = self.glsl_software_subgroup_uniform_arguments(
+        lane_symmetry = GLSLHelperSymmetry(
+            self,
+            functions_by_id,
+            self.glsl_software_subgroup_workgroup_invocation_count,
+        )
+        lane_symmetry.analyze_entry(entry_function, entry_seeds)
+
+        def lane_symmetric_arguments(function, seeds, **options):
+            with lane_symmetry.validating(function):
+                return self.glsl_software_subgroup_uniform_arguments(
+                    function, seeds, **options
+                )
+
+        entry_arguments = lane_symmetric_arguments(
             entry_function, entry_seeds, entry=True
         )
         self.glsl_software_subgroup_counter_loops = (
@@ -1706,6 +1738,7 @@ class GLSLCodeGen(
                     uniform_parameters[target_id] = set(facts)
                 else:
                     uniform_parameters[target_id].intersection_update(facts)
+                lane_symmetry.record_call(function_id, call, target_id)
 
         propagate(entry_id, entry_arguments)
         for function_id in ordered:
@@ -1725,7 +1758,8 @@ class GLSLCodeGen(
                 )
             )
             self.glsl_software_subgroup_function_uniform_seeds[function_id] = seeds
-            arguments = self.glsl_software_subgroup_uniform_arguments(
+            lane_symmetry.analyze_helper(function_id, function, seeds)
+            arguments = lane_symmetric_arguments(
                 function,
                 seeds,
                 entry=False,
@@ -1781,6 +1815,10 @@ class GLSLCodeGen(
         self.glsl_software_subgroup_result_overrides = {}
         self.glsl_software_subgroup_constant_guards = {}
         self.glsl_software_subgroup_dead_node_ids = set()
+        # Lane-symmetry facts per function, and those of the function whose
+        # body is under validation.
+        self.glsl_software_subgroup_symmetries = {}
+        self.glsl_software_subgroup_symmetry = None
         if self.software_subgroup_width is None:
             return
         for function in self.glsl_software_subgroup_functions(ast):
@@ -2009,24 +2047,27 @@ class GLSLCodeGen(
                 function is entry_function
                 or id(function) in self.glsl_software_subgroup_helper_function_ids
             ):
-                self.validate_glsl_software_subgroup_exits(
-                    getattr(function, "body", None),
-                    operation=all_records[0][0],
-                    **self.glsl_software_subgroup_exit_facts(
-                        function,
-                        (
-                            self.glsl_software_subgroup_immutable_uniform_names
-                            if function is entry_function
-                            else self.glsl_software_subgroup_function_uniform_seeds.get(
-                                id(function), set()
-                            )
+                with validating_function(self, function):
+                    self.validate_glsl_software_subgroup_exits(
+                        getattr(function, "body", None),
+                        operation=all_records[0][0],
+                        **self.glsl_software_subgroup_exit_facts(
+                            function,
+                            (
+                                self.glsl_software_subgroup_immutable_uniform_names
+                                if function is entry_function
+                                else self.glsl_software_subgroup_function_uniform_seeds.get(
+                                    id(function), set()
+                                )
+                            ),
+                            function is entry_function,
                         ),
-                        function is entry_function,
-                    ),
-                )
+                    )
 
     def glsl_software_subgroup_exit_uniform_expression(self, node, names, components):
         if isinstance(node, LiteralNode):
+            return True
+        if self.glsl_software_subgroup_collective_uniform(node):
             return True
         if isinstance(node, IdentifierNode):
             return node.name in names
@@ -2182,6 +2223,21 @@ class GLSLCodeGen(
                             dict(components),
                         )
                         continue
+                    for call in self.glsl_software_subgroup_condition_calls(
+                        statement,
+                        uniform=lambda condition, names=names, components=components: (
+                            self.glsl_software_subgroup_exit_uniform_expression(
+                                condition, names, components
+                            )
+                        ),
+                    ):
+                        arguments[id(call)] = {
+                            index
+                            for index, argument in enumerate(call.arguments)
+                            if self.glsl_software_subgroup_exit_uniform_expression(
+                                argument, names, components
+                            )
+                        }
                     conditions = [
                         statement.condition,
                         *(getattr(statement, "else_if_conditions", []) or []),
@@ -2311,6 +2367,16 @@ class GLSLCodeGen(
                 for node in self.glsl_software_subgroup_reachable_nodes(root)
             )
 
+        def exits_uniform(root):
+            # Every invocation takes each exit together, so all of them reach
+            # the same later work.
+            return all(
+                self.glsl_software_subgroup_uniform_exit(node)
+                for node in self.glsl_software_subgroup_reachable_nodes(root)
+                if isinstance(node, (ReturnNode, BreakNode, ContinueNode))
+                and id(node) not in dead_ids
+            )
+
         statements = self.glsl_software_subgroup_statement_list(body)
         uniform_names = set(uniform_names or ())
         uniform_components = dict(uniform_components or {})
@@ -2433,7 +2499,11 @@ class GLSLCodeGen(
                     MatchNode,
                 ),
             ):
-                if has_exit and (subsequent_work or has_work):
+                if (
+                    has_exit
+                    and (subsequent_work or has_work)
+                    and not exits_uniform(statement)
+                ):
                     raise self.glsl_software_subgroup_error(
                         "OpenGL software subgroup barriers require proven "
                         "participation across loop and switch exits",
@@ -2659,7 +2729,7 @@ class GLSLCodeGen(
             else set()
         )
         return self.glsl_software_subgroup_loop_controls_preserved(
-            node, bound_names | stride_names | {loop_name}
+            node, bound_names | stride_names | {loop_name}, uniform_exits=True
         )
 
     def glsl_software_subgroup_static_for(self, node, constants):
@@ -2688,14 +2758,24 @@ class GLSLCodeGen(
         controls = {initializer.name}
         for part in (node.condition, node.update):
             controls |= self.glsl_software_subgroup_expression_identifier_names(part)
-        return self.glsl_software_subgroup_loop_controls_preserved(node, controls)
+        return self.glsl_software_subgroup_loop_controls_preserved(
+            node, controls, uniform_exits=True
+        )
 
-    def glsl_software_subgroup_loop_controls_preserved(self, node, control_names):
-        """Whether ``node``'s body leaves its counter, bound and stride alone."""
+    def glsl_software_subgroup_loop_controls_preserved(
+        self, node, control_names, *, uniform_exits=False
+    ):
+        """Whether ``node``'s body leaves its counter, bound and stride alone.
+
+        With ``uniform_exits``, an exit every invocation takes together keeps
+        the trips of all invocations equal.
+        """
         for child, visible in walk_control_scopes(
             getattr(node, "body", None), control_names
         ):
             if isinstance(child, (BreakNode, ContinueNode, ReturnNode)):
+                if uniform_exits and self.glsl_software_subgroup_uniform_exit(child):
+                    continue
                 return False
             if isinstance(child, VariableNode):
                 if child.name in visible:

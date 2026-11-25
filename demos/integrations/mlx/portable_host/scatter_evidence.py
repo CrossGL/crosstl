@@ -1,10 +1,24 @@
-"""Reconstruct general-scatter results from retained uploads and native readbacks."""
+"""Reconstruct general-scatter results from retained uploads and native readbacks.
 
+A complex64 sum uploads its updates as ``element_storage`` float32 lane pairs
+and its output as two raw 32-bit atomic words per element, which the audit
+reads back as complex64 values. A float16 or bfloat16 scatter uploads its
+updates as exact 16-bit carriers and its output as packed atomic words, two
+elements per word, whose unused high lane keeps the padding word.
+"""
+
+import ctypes
 import hashlib
 import math
 
 from crosstl.project.runtime_value_encoding import FLOAT32_BITS
+from crosstl.translator.resource_storage import encoded_storage_dtype
+from demos.integrations.mlx.portable_host import bfloat_storage, half_storage
 from demos.integrations.mlx.portable_host import scatter_workloads as workloads
+from demos.integrations.mlx.portable_host.element_storage import (
+    COMPLEX,
+    reflected_layout_matches,
+)
 from demos.integrations.mlx.portable_host.gather_evidence import (
     audit_input_bindings,
     audit_native_execution,
@@ -12,19 +26,82 @@ from demos.integrations.mlx.portable_host.gather_evidence import (
     view,
 )
 from demos.integrations.mlx.portable_host.gather_workloads import words
-from demos.integrations.mlx.portable_host.runtime import COPY_GUARD
+from demos.integrations.mlx.portable_host.runtime import (
+    BFLOAT_COPY_ENTRY,
+    COPY_GUARD,
+    HALF_COPY_ENTRY,
+    TYPES,
+    physical_dtype,
+)
 from demos.integrations.mlx.portable_host.scatter_layout import (
+    ATOMIC_LANES,
     ATOMIC_TYPES,
+    ENCODINGS,
     METADATA,
+    PACKED_TYPES,
+    PADDING,
     atomic_storage_dtype,
     signature,
+    storage_count,
+    unpack_lanes,
 )
+
+# The 16-bit general copies that initialize packed outputs keep their
+# retained native modules and report their storage beside the readback.
+WORD_COPIES = {
+    HALF_COPY_ENTRY: ("float16", "halfStorage", half_storage),
+    BFLOAT_COPY_ENTRY: ("bfloat16", "bfloatStorage", bfloat_storage),
+}
+
+
+def audit_word_copy(event):
+    """Check a 16-bit copy's compilation and its exact logical words."""
+    dtype, key, storage = WORD_COPIES[event["entry"]]
+    target = event["target"]
+    audit_input_bindings(event)
+    audit_native_execution(event)
+    record = event.get(key)
+    require(
+        isinstance(record, dict)
+        and record.get("logicalType") == dtype
+        and record.get("physicalType") == physical_dtype(dtype, target)
+        and record.get("encoding") == storage.encoding(target)
+        and isinstance(record.get("values"), list)
+        and len(record["values"]) == event["threads"],
+        "Scatter 16-bit copy storage changed",
+    )
+    try:
+        logical = storage.unpack(record["values"], target)
+        guard = storage.unpack(record["guardValues"], target)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("Scatter 16-bit copy carriers changed") from error
+    require(
+        logical == record.get("logicalWords") and guard == storage.GUARD,
+        "Scatter 16-bit copy readback or guard changed",
+    )
+
+
+def update_lanes(dtype, value, target):
+    """Recover raw 16-bit update words from their exact native carriers."""
+    storage = half_storage if dtype == "float16" else bfloat_storage
+    try:
+        return storage.unpack(value["values"], target)
+    except (TypeError, ValueError) as error:
+        raise ValueError("Scatter 16-bit update carriers changed") from error
+
+
+def raw_words(value):
+    """Whether ``value`` holds only raw 32-bit words."""
+    return isinstance(value["values"], list) and all(
+        type(word) is int and 0 <= word <= 0xFFFFFFFF for word in value["values"]
+    )
 
 
 def audit_event(np, event):
     dtype, index_dtype, count, operation, contiguous, work = signature(event["entry"])
     target = event["target"]
     require(target in {"metal", "directx", "opengl"}, "Unknown scatter target")
+    packed = dtype in PACKED_TYPES
     request = event["details"]["request"]
     audit_input_bindings(event)
     inputs = {}
@@ -34,18 +111,44 @@ def audit_event(np, event):
         member = layout.get("memberName", name).removeprefix(event["entry"] + "_")
         member = "out" if member == "out_" else member
         require(member not in inputs, "Duplicate scatter binding")
+        if dtype == COMPLEX and member == "updates":
+            require(
+                binding["dtype"] == value["dtype"]
+                and binding["shape"] == value["shape"] == [len(value["values"])]
+                and binding.get("encoding") == FLOAT32_BITS
+                and reflected_layout_matches(layout, value, COMPLEX),
+                "Scatter binding layout changed",
+            )
+            inputs[member] = value
+            continue
         require(
-            binding["dtype"] == value["dtype"] == layout["elementType"]
+            value["dtype"] == "bool" or value["dtype"] in TYPES,
+            "Scatter storage type changed",
+        )
+        try:
+            reflected = encoded_storage_dtype(
+                layout,
+                target=target,
+                resource_kind=binding["binding"].get("kind", ""),
+                logical_dtype=value["dtype"],
+            )
+        except ValueError as error:
+            raise ValueError("Scatter binding storage encoding changed") from error
+        encoding = ENCODINGS.get(value["dtype"])
+        require(
+            binding["dtype"] == value["dtype"]
+            and layout["elementType"] == reflected
             and binding["shape"] == value["shape"]
-            and binding.get("encoding")
-            == (FLOAT32_BITS if value["dtype"] == "float32" else None)
+            and binding.get("encoding") == encoding
             and (
-                value.get("encoding") == FLOAT32_BITS
-                if value["dtype"] == "float32"
+                value.get("encoding") == encoding
+                if encoding
                 else "encoding" not in value
             )
             and layout["elementStrideBytes"]
-            == (1 if value["dtype"] == "bool" else np.dtype(value["dtype"]).itemsize),
+            == (
+                1 if value["dtype"] == "bool" else ctypes.sizeof(TYPES[value["dtype"]])
+            ),
             "Scatter binding layout changed",
         )
         require(
@@ -71,9 +174,14 @@ def audit_event(np, event):
                 "Scatter atomic storage layout changed",
             )
         inputs[member] = value
+    if dtype == COMPLEX:
+        # complex64 updates travel as float32 lane pairs.
+        update_storage = "float32"
+    else:
+        update_storage = physical_dtype(dtype, target) if packed else dtype
     dtypes = {
         **METADATA,
-        "updates": dtype,
+        "updates": update_storage,
         "out": atomic_storage_dtype(dtype, target),
         **{f"idx{i}": index_dtype for i in range(count)},
     }
@@ -87,16 +195,21 @@ def audit_event(np, event):
     )
     arrays = {}
     for name, value in inputs.items():
-        if dtype == "float32" and name in {"out", "updates"}:
+        if packed and name == "out":
+            # Validated as packed words once the output extent is known.
+            arrays[name] = value["values"]
+        elif packed and name == "updates":
+            arrays[name] = np.array(update_lanes(dtype, value, target), dtype=np.uint16)
+        elif dtype in {"float32", COMPLEX} and name in {"out", "updates"}:
             require(
-                isinstance(value["values"], list)
-                and all(
-                    type(word) is int and 0 <= word <= 0xFFFFFFFF
-                    for word in value["values"]
-                ),
-                "Scatter float upload is not raw binary32 storage",
+                raw_words(value), "Scatter float upload is not raw binary32 storage"
             )
-            arrays[name] = np.array(value["values"], dtype=np.uint32).view(np.float32)
+            arrays[name] = np.array(value["values"], dtype=np.uint32)
+            # The output keeps its words so its trailing guard stays exact.
+            if name == "updates" or dtype == "float32":
+                arrays[name] = arrays[name].view(
+                    np.complex64 if dtype == COMPLEX else np.float32
+                )
         else:
             arrays[name] = np.array(value["values"], dtype=value["dtype"])
     scalar_names = ("upd_ndim", "upd_size", "out_ndim", "idx_ndim", "idx_size")
@@ -161,10 +274,37 @@ def audit_event(np, event):
         steps == [math.prod(shape[i + 1 :]) for i in range(rank)],
         "Scatter output strides changed",
     )
-    require(
-        arrays["out"].size == size + len(COPY_GUARD), "Scatter output extent changed"
-    )
-    initial = arrays["out"][:size].reshape(shape).copy()
+    # One atomic word per element, two per complex64 element, or one per two
+    # packed 16-bit elements.
+    words_count = storage_count(dtype, size)
+    if packed:
+        uploaded = arrays["out"]
+        require(
+            isinstance(uploaded, list)
+            and len(uploaded) == words_count + len(COPY_GUARD),
+            "Scatter output extent changed",
+        )
+        try:
+            lanes, padding = unpack_lanes(uploaded[:words_count], size)
+        except ValueError as error:
+            raise ValueError("Scatter packed output upload changed") from error
+        require(
+            padding == [PADDING[dtype]] * len(padding),
+            "Scatter packed padding lane changed",
+        )
+        guard_words = uploaded[words_count:]
+        arrays["out"] = np.array(lanes, dtype=np.uint16)
+        initial = arrays["out"]
+    else:
+        require(
+            arrays["out"].size == words_count + len(COPY_GUARD),
+            "Scatter output extent changed",
+        )
+        guard_words = words(np, arrays["out"][words_count:])
+        initial = arrays["out"][:words_count]
+        if dtype == COMPLEX:
+            initial = initial.view(np.complex64)
+    initial = initial.reshape(shape).copy()
     expected = initial.copy()
     updates = view(np, arrays["updates"], update_shape, update_steps)
     require(
@@ -201,7 +341,11 @@ def audit_event(np, event):
         for offset in np.ndindex(tuple(slices)):
             destination = tuple(start + step for start, step in zip(starts, offset))
             value = updates[coordinate + offset]
-            if operation == "none":
+            if packed:
+                expected[destination] = workloads.combine(
+                    np, dtype, operation, expected[destination], value
+                )
+            elif operation == "none":
                 expected[destination] = value
             elif operation == "sum":
                 expected[destination] += value
@@ -234,29 +378,43 @@ def audit_event(np, event):
         "workPerThread": work,
         "updateCount": index_size * slice_size,
         "outputCount": size,
+        # A complex64 output's atomic words are its largest index space; a
+        # packed 16-bit output indexes no further than its elements.
         "maximumIndex": (
-            max(value.size if name != "out" else size for name, value in arrays.items())
+            max(
+                value.size if name != "out" else size * ATOMIC_LANES.get(dtype, 1)
+                for name, value in arrays.items()
+            )
             - 1
         ),
     }
     readback = event["scatterValues"]
-    limits = np.iinfo("uint32" if dtype == "float32" else dtype)
+    storage = "uint32" if dtype in {"float32", COMPLEX} or packed else dtype
+    limits = np.iinfo(storage)
     require(
         isinstance(readback, list)
-        and len(readback) == size
+        and len(readback) == words_count
         and all(
             type(value) is int and limits.min <= value <= limits.max
             for value in readback
         ),
         "Scatter readback is outside its storage type",
     )
-    raw = np.array(readback, dtype="uint32" if dtype == "float32" else dtype)
-    actual = words(np, raw)
+    if packed:
+        lanes, padding = unpack_lanes(readback, size)
+        require(
+            padding == [PADDING[dtype]] * len(padding),
+            "Scatter native readback changed its packed padding lane",
+        )
+        raw = np.array(lanes, dtype=np.uint16)
+    else:
+        raw = np.array(readback, dtype=storage)
+    actual = words(np, raw.view(np.complex64) if dtype == COMPLEX else raw)
     require(
         actual == words(np, expected), "Scatter native readback disagrees with uploads"
     )
     require(
-        event["scatterGuardValues"] == words(np, arrays["out"][size:]) == COPY_GUARD,
+        event["scatterGuardValues"] == guard_words == COPY_GUARD,
         "Scatter output guards changed",
     )
     require(
@@ -288,7 +446,7 @@ def audit_event(np, event):
     return initial, indices, updates, actual
 
 
-def validate(np, records, trace, upstream, *, float32=False):
+def validate(np, records, trace, upstream, *, float32=False, half=False):
     from demos.integrations.mlx.portable_host.verify_bitwise import (
         verify_native_identity,
     )
@@ -298,10 +456,10 @@ def validate(np, records, trace, upstream, *, float32=False):
         validate_records,
     )
 
-    validate_records(np, records, native=True, float32=float32)
+    validate_records(np, records, native=True, float32=float32, half=half)
     validate_upstream(upstream, native=True, tests=UPSTREAM_TESTS)
     cursor, count, targets = 0, 0, set()
-    cases = workloads.float_cases() if float32 else workloads.cases()
+    cases = workloads.profile_cases(float32=float32, half=half)
     for case, record in zip(cases, records):
         end = cursor + record["dispatchCount"]
         require(end <= len(trace), "Scatter trace ends before its workload")
@@ -364,8 +522,17 @@ def validate(np, records, trace, upstream, *, float32=False):
         "Scatter target or upstream dispatch evidence missing",
     )
     target = targets.pop()
+    copies = [event for event in trace if event["entry"] in WORD_COPIES]
+    for event in copies:
+        audit_word_copy(event)
     verify_native_identity(
-        [event for event in trace if not event["entry"].startswith("scatter")], target
+        [
+            event
+            for event in trace
+            if not event["entry"].startswith("scatter")
+            and event["entry"] not in WORD_COPIES
+        ],
+        target,
     )
     return {
         "target": target,

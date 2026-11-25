@@ -8,22 +8,35 @@ from pathlib import Path
 import pytest
 import yaml
 
-from demos.integrations.mlx import ci_legs, smoke_canary
+from demos.integrations.mlx import ci_conditions, ci_legs, smoke_canary
 from demos.integrations.mlx.ci_plan import (
     PLAN_JOB,
+    QUEUE_EVENTS,
     _without_plan_job,
     changed_legs,
     changed_paths,
     classify_workflow_change,
+    is_upstream_leg,
     main,
     validation_plan,
 )
 from demos.integrations.mlx.tests.test_ci_legs import DEMO_WORKFLOW
 from demos.integrations.mlx.tests.test_ci_legs import TREE as DEMO_TREE
+from demos.integrations.mlx.tests.upstream_checkouts import (
+    KERNEL_TREE,
+    upstream_fetches,
+)
 
 ROOT = Path(__file__).resolve().parents[4]
 WORKFLOW = ROOT / ".github/workflows/demo-project-testing.yml"
-EVERY_LEG = sorted(ci_legs.workflow_legs(yaml.safe_load(WORKFLOW.read_text())))
+REAL_WORKFLOW = yaml.safe_load(WORKFLOW.read_text())
+EVERY_LEG = sorted(ci_legs.workflow_legs(REAL_WORKFLOW))
+UPSTREAM_GROUPS = REAL_WORKFLOW["jobs"]["upstream-ops-host"]["strategy"]["matrix"][
+    "group"
+]
+UPSTREAM_LEGS = [f"upstream-ops-host[{group}]" for group in UPSTREAM_GROUPS]
+# A queue group or a push runs no upstream op group.
+QUEUE_LEGS = [leg for leg in EVERY_LEG if leg not in UPSTREAM_LEGS]
 
 
 @pytest.fixture(autouse=True)
@@ -33,16 +46,25 @@ def _planned_workflow(monkeypatch):
 
 
 def _outputs(path):
-    """Return the step outputs a plan wrote, with ``legs`` decoded."""
+    """Return the step outputs a plan wrote, with ``legs`` and ``jobs`` decoded."""
     outputs = dict(line.split("=", 1) for line in path.read_text().splitlines())
     outputs["legs"] = json.loads(outputs["legs"])
+    outputs["jobs"] = json.loads(outputs["jobs"])
     return outputs
 
 
 def _tier(heavy, smoke, legs=None):
     if legs is None:
         legs = EVERY_LEG if heavy == "true" else []
-    return {"heavy": heavy, "smoke": smoke, "legs": legs}
+    jobs = ci_legs.selected_jobs(REAL_WORKFLOW, legs) if legs else []
+    return {"heavy": heavy, "smoke": smoke, "legs": legs, "jobs": jobs}
+
+
+def _queue_tier(heavy, smoke):
+    """Return the plan of a queue group or a push that selects every leg."""
+    if heavy != "true":
+        return _tier(heavy, smoke)
+    return _tier(heavy, smoke, QUEUE_LEGS)
 
 
 @pytest.mark.parametrize("event", ["pull_request", "push"])
@@ -132,6 +154,7 @@ def test_full_events_do_not_require_changed_paths(tmp_path, event, capsys):
         "heavy": True,
         "smoke": False,
         "legs": len(EVERY_LEG),
+        "jobs": sorted({ci_legs.job_of(leg) for leg in EVERY_LEG}),
     }
 
 
@@ -243,13 +266,18 @@ def test_push_whose_old_tip_is_absent_gets_full_validation(tmp_path, monkeypatch
         )
         == 0
     )
-    assert _outputs(output) == _tier("true", "true")
+    assert _outputs(output) == _queue_tier("true", "true")
 
 
-def test_new_branch_gets_full_validation(tmp_path):
+def test_new_branch_gets_full_validation(tmp_path, capsys):
     output = tmp_path / "output"
     assert main(["--event", "push", "--base", "0" * 40, "--output", str(output)]) == 0
-    assert _outputs(output) == _tier("true", "true")
+    assert _outputs(output) == _queue_tier("true", "true")
+    assert (
+        f"::notice title=MLX upstream op groups::{len(UPSTREAM_GROUPS)} selected "
+        "groups run in the nightly tier only: upstream-ops-host["
+        in capsys.readouterr().err
+    )
 
 
 @pytest.mark.parametrize("base,head", [("", "a" * 40), ("a" * 40, "--help")])
@@ -307,7 +335,7 @@ def test_merge_group_reads_the_diff_from_its_base(tmp_path, monkeypatch, path, h
     output = tmp_path.parent / f"{tmp_path.name}-output"
     arguments = ["--event", "merge_group", "--base", base, "--head", head]
     assert main([*arguments, "--output", str(output)]) == 0
-    assert _outputs(output) == _tier(heavy, "true")
+    assert _outputs(output) == _queue_tier(heavy, "true")
 
 
 def test_merge_group_without_its_base_gets_full_validation(tmp_path, monkeypatch):
@@ -318,7 +346,7 @@ def test_merge_group_without_its_base_gets_full_validation(tmp_path, monkeypatch
     output = tmp_path.parent / f"{tmp_path.name}-output"
     arguments = ["--event", "merge_group", "--base", "c" * 40, "--head", head]
     assert main([*arguments, "--output", str(output)]) == 0
-    assert _outputs(output) == _tier("true", "true")
+    assert _outputs(output) == _queue_tier("true", "true")
 
 
 def test_merge_group_without_revisions_fails(tmp_path):
@@ -391,7 +419,7 @@ def test_planner_changes_need_only_the_smoke_tier(event, path):
 def test_plan_job_split_removes_exactly_the_plan_job():
     text = WORKFLOW.read_text()
     workflow = yaml.safe_load(text)
-    remaining = yaml.safe_load("\n".join(_without_plan_job(text)) + "\n")
+    remaining = _without_plan_job(text)
     del workflow["jobs"]["ci-plan"]
     assert remaining == workflow
 
@@ -452,6 +480,73 @@ def test_workflow_change_confined_to_plan_job_skips_full_tier(
     assert _outputs(output) == _tier(heavy, "true", legs)
 
 
+_ANCHORED_WORKFLOW = """name: Demo
+on:
+  push:
+    branches: [main]
+jobs:
+  ci-plan:
+    runs-on: ubuntu-24.04
+    steps:
+      - &step-shared
+        run: echo {shared}
+  native:
+    needs: ci-plan
+    if: needs.ci-plan.outputs.heavy == 'true'
+    runs-on: windows-2025
+    steps:
+      - *step-shared
+"""
+
+
+@pytest.mark.parametrize(
+    "plan,shared,heavy,legs",
+    [
+        # A comment in the plan job changes nothing outside it.
+        ("# planner", "shared", "false", []),
+        # The plan job anchors a step that another job reuses: editing the
+        # anchor edits that job too.
+        ("", "shared-two", "true", ["native"]),
+    ],
+)
+def test_anchored_plan_job_step_reaches_the_jobs_that_alias_it(
+    tmp_path, monkeypatch, plan, shared, heavy, legs
+):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    workflow = tmp_path / ".github/workflows/demo-project-testing.yml"
+    monkeypatch.setenv("MLX_CI_WORKFLOW", str(workflow))
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(_ANCHORED_WORKFLOW.format(shared="shared"))
+    base = _commit("Start")
+    changed = _ANCHORED_WORKFLOW.format(shared=shared)
+    workflow.write_text(
+        changed.replace("    steps:\n", f"    steps:\n      {plan}\n", 1)
+    )
+    head = _commit("Edit workflow")
+    paths = classify_workflow_change(base, head, changed_paths(base, head))
+    assert paths == (
+        (PLAN_JOB,) if heavy == "false" else (str(WORKFLOW.relative_to(ROOT)),)
+    )
+    output = tmp_path.parent / f"{tmp_path.name}-output"
+    arguments = ["--event", "merge_group", "--base", base, "--head", head]
+    assert main([*arguments, "--output", str(output)]) == 0
+    assert _outputs(output) == _tier(heavy, "true", legs)
+
+
+def test_unparsable_workflow_keeps_the_full_tier(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init", "-q"], check=True)
+    workflow = tmp_path / ".github/workflows/demo-project-testing.yml"
+    workflow.parent.mkdir(parents=True)
+    workflow.write_text(_PLANNED_WORKFLOW.format(plan="planner", native="native"))
+    base = _commit("Start")
+    workflow.write_text(workflow.read_text() + "  broken: [\n")
+    head = _commit("Break workflow")
+    paths = changed_paths(base, head)
+    assert classify_workflow_change(base, head, paths) == paths
+
+
 def test_added_workflow_keeps_the_full_tier(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     subprocess.run(["git", "init", "-q"], check=True)
@@ -488,8 +583,12 @@ def test_every_heavy_job_obeys_the_full_tier():
             continue
         needs = job["needs"]
         assert "ci-plan" in (needs if isinstance(needs, list) else [needs]), name
+        if name == "upstream-ops-host":
+            # The plan names the upstream op job only for the nightly run, a
+            # dispatch and a ci:full pull request; it runs every group then.
+            assert "exclude" not in job["strategy"]["matrix"]
         if name != "mlx-full-corpus-scout":
-            assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'", name
+            assert job["if"] == ci_conditions.job_condition(name), name
     assert workflow[True]["schedule"] == [{"cron": "31 4 * * *"}]
     plan = jobs["ci-plan"]
     tier = next(step for step in plan["steps"] if step.get("id") == "plan")
@@ -497,7 +596,8 @@ def test_every_heavy_job_obeys_the_full_tier():
         "${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}"
     )
     assert plan["runs-on"] == "ubuntu-24.04"
-    assert plan["outputs"].keys() == {"heavy", "smoke", "legs"}
+    assert plan["outputs"].keys() == {"heavy", "smoke", "legs", "jobs"}
+    assert plan["outputs"]["jobs"] == "${{ steps.plan.outputs.jobs }}"
     assert plan["outputs"]["legs"] == "${{ steps.plan.outputs.legs }}"
     checkout = next(
         step
@@ -543,10 +643,10 @@ def test_smoke_runs_the_complete_family_canary():
     canary = job["steps"][names.index("Run complete-family canary")]
     assert names.index("Install pinned Linux DXC") < names.index(canary["name"])
     assert names.index(canary["name"]) < names.index("Upload smoke diagnostics")
-    assert 'fetch --depth=1 origin "$MLX_CORPUS_COMMIT"' in checkout["run"]
-    assert "sparse-checkout set mlx/backend/metal/kernels" in checkout["run"]
     directory = "mlx-canary-upstream"
-    assert f"git init {directory}" in checkout["run"]
+    assert upstream_fetches(checkout["run"]) == [
+        (directory, "$MLX_CORPUS_COMMIT", KERNEL_TREE)
+    ]
     assert canary["env"] == {
         smoke_canary.ROOT_ENV: f"${{{{ github.workspace }}}}/{directory}"
     }
@@ -661,3 +761,30 @@ def test_real_tree_harness_change_selects_only_the_job_that_runs_it(monkeypatch)
     legs = ci_legs.workflow_legs(workflow)
     path = f"{ci_legs.MLX}/run_porting.py"
     assert changed_legs(workflow, legs, head, head, [path]) == {"mlx-metal-porting"}
+
+
+def test_upstream_legs_are_the_upstream_op_job_groups():
+    assert all(is_upstream_leg(leg) for leg in UPSTREAM_LEGS)
+    assert not is_upstream_leg("portable-host")
+    assert not is_upstream_leg("upstream-ops-host-summary")
+    assert set(UPSTREAM_LEGS) <= set(EVERY_LEG)
+
+
+@pytest.mark.parametrize("event", sorted(QUEUE_EVENTS))
+def test_queue_groups_and_pushes_run_no_upstream_group(tmp_path, event, capsys):
+    # Without a diff every leg is selected; the plan still runs no upstream
+    # op group, and every other heavy leg stays.
+    output = tmp_path / "output"
+    assert main(["--event", event, "--base", "0" * 40, "--output", str(output)]) == 0
+    assert _outputs(output)["legs"] == QUEUE_LEGS
+    assert QUEUE_LEGS and len(QUEUE_LEGS) == len(EVERY_LEG) - len(UPSTREAM_LEGS)
+    notice = capsys.readouterr().err
+    assert f"::notice title=MLX upstream op groups::{len(UPSTREAM_LEGS)} " in notice
+
+
+@pytest.mark.parametrize("event", ["schedule", "workflow_dispatch"])
+def test_nightly_and_dispatched_runs_run_every_upstream_group(tmp_path, event):
+    output = tmp_path / "output"
+    assert main(["--event", event, "--output", str(output)]) == 0
+    outputs = _outputs(output)
+    assert set(UPSTREAM_LEGS) <= set(outputs["legs"])

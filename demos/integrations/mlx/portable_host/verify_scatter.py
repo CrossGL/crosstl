@@ -18,8 +18,12 @@ from demos.integrations.mlx.portable_host.verify_gather import validate_upstream
 UPSTREAM_TESTS = ("test_array.TestArray.test_setitem_with_list",)
 
 
-def validate_records(np, records, *, native, float32=False):
-    cases = list(workloads.float_cases() if float32 else workloads.cases())
+def profile(args):
+    return "half" if args.half else "float32" if args.float32 else "integer"
+
+
+def validate_records(np, records, *, native, float32=False, half=False):
+    cases = list(workloads.profile_cases(float32=float32, half=half))
     if len(records) != len(cases):
         raise ValueError("Scatter evidence does not cover every workload")
     cursor = 0
@@ -54,23 +58,28 @@ def worker(args):
             args.output_dir / "dispatch.jsonl",
             mlx_root=args.mlx_root,
             integer64=args.integer64,
+            half=args.half_packages,
+            bfloat=args.bfloat_packages,
         )
         host.install()
     else:
         mx.set_default_device(mx.cpu)
     os.environ["DEVICE"] = "gpu" if host else "cpu"
     records = []
-    for case in workloads.float_cases() if args.float32 else workloads.cases():
+    for case in workloads.profile_cases(float32=args.float32, half=args.half):
         start = host.dispatch_count if host else 0
         source, result = workloads.expression(mx, np, case)
         expected_source, _, _, expected = workloads.reference(np, case)
-        actual = np.array(result)
+        actual = workloads.host_array(mx, np, result)
         record = {
             **case,
             "actual": words(np, actual),
             "shape": list(actual.shape),
             "resultDtype": str(result.dtype),
-            "inputUnchanged": words(np, np.array(source)) == words(np, expected_source),
+            "inputUnchanged": (
+                words(np, workloads.host_array(mx, np, source))
+                == words(np, expected_source)
+            ),
             "dispatchStart": start,
             "dispatchCount": host.dispatch_count - start if host else 0,
         }
@@ -83,7 +92,9 @@ def worker(args):
         ):
             raise RuntimeError(f"Scatter numerical mismatch: {case['id']}")
         print(case["id"], flush=True)
-    validate_records(np, records, native=host is not None, float32=args.float32)
+    validate_records(
+        np, records, native=host is not None, float32=args.float32, half=args.half
+    )
     sys.path.insert(0, str(args.mlx_root / "python/tests"))
     suite = unittest.defaultTestLoader.loadTestsFromNames(UPSTREAM_TESTS)
     start = host.dispatch_count if host else 0
@@ -124,13 +135,22 @@ def verify(args):
             "--worker",
             mode,
         ]
-        for name in ("mlx_root", "packages", "integer64"):
-            command.extend(
-                ["--" + name.replace("_", "-"), str(getattr(args, name).resolve())]
-            )
+        for name in (
+            "mlx_root",
+            "packages",
+            "integer64",
+            "half_packages",
+            "bfloat_packages",
+        ):
+            if getattr(args, name) is not None:
+                command.extend(
+                    ["--" + name.replace("_", "-"), str(getattr(args, name).resolve())]
+                )
         command.extend(["--output-dir", str(args.output_dir.resolve() / mode)])
         if args.float32:
             command.append("--float32")
+        if args.half:
+            command.append("--half")
         with (args.output_dir / f"{mode}.stdout").open("w") as stdout, (
             args.output_dir / f"{mode}.stderr"
         ).open("w") as stderr:
@@ -144,7 +164,11 @@ def verify(args):
             (args.output_dir / mode / "results.json").read_text()
         )
         validate_records(
-            np, records[mode], native=mode == "native", float32=args.float32
+            np,
+            records[mode],
+            native=mode == "native",
+            float32=args.float32,
+            half=args.half,
         )
         upstream[mode] = json.loads(
             (args.output_dir / mode / "upstream.json").read_text()
@@ -155,7 +179,12 @@ def verify(args):
         for line in (args.output_dir / "native/dispatch.jsonl").read_text().splitlines()
     ]
     audit = validate(
-        np, records["native"], trace, upstream["native"], float32=args.float32
+        np,
+        records["native"],
+        trace,
+        upstream["native"],
+        float32=args.float32,
+        half=args.half,
     )
     if (
         verify_prepared(args.mlx_root) != before
@@ -170,7 +199,7 @@ def verify(args):
         "upstreamTests": list(UPSTREAM_TESTS),
         "upstreamTestsPerPath": len(UPSTREAM_TESTS),
         "casesPerPath": len(records["native"]),
-        "workloadProfile": "float32" if args.float32 else "integer",
+        "workloadProfile": profile(args),
         "numericalParity": True,
         "fullTranslatedBackend": False,
         "fullUpstreamSuite": False,
@@ -183,7 +212,14 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("mlx-root", "packages", "integer64", "output-dir"):
         parser.add_argument("--" + name, type=Path, required=True)
+    # The half profile copies binary16 and bfloat16 sources into outputs.
+    parser.add_argument("--half-packages", type=Path)
+    parser.add_argument("--bfloat-packages", type=Path)
     parser.add_argument("--worker", choices=("cpu", "native"))
-    parser.add_argument("--float32", action="store_true")
+    profiles = parser.add_mutually_exclusive_group()
+    profiles.add_argument("--float32", action="store_true")
+    profiles.add_argument("--half", action="store_true")
     args = parser.parse_args()
+    if args.half and None in (args.half_packages, args.bfloat_packages):
+        parser.error("--half requires --half-packages and --bfloat-packages")
     worker(args) if args.worker else verify(args)

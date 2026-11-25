@@ -14,7 +14,11 @@ from demos.integrations.mlx.portable_host.random_layout import (
     RandomOutputLayout,
 )
 from demos.integrations.mlx.portable_host.random_packages import ENTRIES
-from demos.integrations.mlx.portable_host.trace_records import write_trace
+from demos.integrations.mlx.portable_host.trace_records import (
+    compact_trace_values,
+    retains_values,
+    write_trace,
+)
 
 GUARD = [91] * GUARD_COUNT
 INT_TYPES = frozenset({int})
@@ -203,6 +207,21 @@ def dispatch(host, entry, buffers, count, byte_count, launch):
     ):
         raise RuntimeError("Native random readback or its guard differs")
     logical = layout.unpack(readback[: layout.native_byte_count])
+    native_values = readback[: layout.native_byte_count]
+    recorded_inputs = inputs
+    if not retains_values(host, entry):
+        # The audit recomputes the native storage and its guard initialization
+        # from the keys, so those keep only their digests; keys and counters
+        # stay whole.
+        native_values = compact_trace_values(native_values)
+        recorded_inputs = {
+            name: (
+                {**value, "values": compact_trace_values(value["values"])}
+                if name in outputs
+                else value
+            )
+            for name, value in inputs.items()
+        }
     event = {
         "entry": entry,
         "target": host.target,
@@ -213,11 +232,11 @@ def dispatch(host, entry, buffers, count, byte_count, launch):
         "packageRoot": str(directory),
         "details": result.details,
         "randomMetadata": metadata,
-        "inputs": inputs,
-        "randomValues": readback[: layout.native_byte_count],
+        "inputs": recorded_inputs,
+        "randomValues": native_values,
         "randomGuardValues": readback[layout.native_byte_count :],
         "outputHash": hashlib.sha256(logical).hexdigest(),
     }
-    write_trace(host, event)
+    write_trace(host, event, prepared=True)
     ctypes.memmove(supplied["out"].data, logical, len(logical))
     host.dispatch_count += 1
