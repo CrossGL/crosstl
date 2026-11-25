@@ -10870,7 +10870,7 @@ class TestCudaCodeGen:
         assert "cudaSurfaceObject_t target;" in cuda_code
         assert "cudaSurfaceObject_t syncImage;" in cuda_code
         assert "cudaSurfaceObject_t scopeImage;" in cuda_code
-        assert "int* orderedValues;" in cuda_code
+        assert "__device__ volatile int* orderedValues;" in cuda_code
         assert "unsigned char* __restrict__ linearRaw;" in cuda_code
         assert "int value = readOnlyValues[index];" in cuda_code
         assert "int attrValue = attrReadValues[index];" in cuda_code
@@ -10939,7 +10939,8 @@ class TestCudaCodeGen:
         assert "readwrite StructuredBuffer" not in cuda_code
         assert "coherent" not in cuda_code
         assert "globallycoherent" not in cuda_code
-        assert "volatile" not in cuda_code
+        # @volatile is the only buffer written volatile.
+        assert cuda_code.count("volatile") == 1
         assert "restrict" not in cuda_code.replace("__restrict__", "")
         assert "access(" not in cuda_code
 
