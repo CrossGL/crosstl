@@ -90,11 +90,9 @@ class HipExpressionMixin:
         crossgl_func = self.convert_hip_builtin_function(operation)
         expression = f"{crossgl_func}({args_str})"
         if scope == "system":
-            return self.refuse_import(
-                f"{self.IMPORT_REFUSAL_TYPE.label} {node.operation}: CrossGL atomics are device-scoped, and a system-scoped atomic is also "
-                "atomic for the host and peer devices",
-                expression,
-            )
+            # A system-scoped atomic is also atomic for the host and peer devices. CrossGL keeps its CUDA name, which
+            # CUDA and HIP output write back and the other generators refuse with a typed diagnostic.
+            return f"{node.operation}({args_str})"
         # A block-scoped atomic is atomic for its block; the device-scoped CrossGL atomic is atomic for every
         # thread on the device, which includes the block.
         return expression

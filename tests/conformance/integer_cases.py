@@ -9,6 +9,10 @@ the 64-bit product.
 ``char`` and ``uchar`` scalars and vectors count and reverse the bits of the value's own width, whatever register
 width a target computes them in.
 
+``x_integer_combinatorics``: CrossGL's ``gcd``, ``lcm``, ``factorial``, ``comb`` and ``perm``
+(``crosstl/translator/semantics/integer_math.py``) are exact where their results fit the type: Python's ``math``
+functions of the same names, with ``comb`` and ``perm`` 0 for a negative ``k``.
+
 ``s_integer_signedness``: SPIR-V takes the signedness of an integer instruction from its opcode, not from its operand
 types (SPIR-V 1.6 section 3.3.6), so a logical shift of an ``int``, an unsigned comparison of ``int`` values or a
 signed division of ``uint`` values reads the operand bits with the opcode's signedness. Every input word is used both
@@ -16,6 +20,8 @@ as a ``uint`` and, reinterpreted, as an ``int``.
 """
 
 from __future__ import annotations
+
+import math
 
 import numpy as np
 
@@ -205,3 +211,73 @@ def narrow_bit_function_reference(inputs):
         out += [_reverse(x, 8) | (_reverse(x >> 24, 8) << 8)]
         out += [_popcount(x >> 4, 16), _popcount(x >> 16, 8)]
     return np.array(out, np.uint32)
+
+
+# Edge words of x_integer_combinatorics: zeros, ones, signs, the extremes, shared factors and large primes. The most
+# negative word is paired only with operands whose gcd with it fits ``int``.
+_COMBINATORICS_EDGES = [
+    (0, 0),
+    (0, 7),
+    (7, 0),
+    (1, 1),
+    (-1, 1),
+    (12, 18),
+    (-12, 18),
+    (12, -18),
+    (-12, -18),
+    (0x7FFFFFFF, 0x7FFFFFFF),
+    (0x7FFFFFFF, -0x7FFFFFFF),
+    (-(2**31), 6),
+    (-(2**31), -(2**30)),
+    (2147483629, 2147483587),
+    (1 << 30, 3 << 28),
+    (0x7FFFFFF0, 21),
+    (63, 31),
+    (62, 33),
+    (20, 20),
+    (15, 15),
+    (31, 17),
+    (5, 9),
+]
+
+
+def combinatorics_inputs():
+    """``a = inp[i]`` and ``b = inp[i + 64]``: the edge pairs, then random words."""
+    rng = np.random.default_rng(20261121)
+    first = rng.integers(-(2**31) + 1, 2**31, THREADS, dtype=np.int64)
+    second = rng.integers(-(2**31) + 1, 2**31, THREADS, dtype=np.int64)
+    for thread, (a, b) in enumerate(_COMBINATORICS_EDGES):
+        first[thread], second[thread] = a, b
+    return np.concatenate([first, second]).astype(np.int32)
+
+
+def _comb(n, k):
+    return math.comb(n, k) if 0 <= k <= n else 0
+
+
+def _perm(n, k):
+    return math.perm(n, k) if 0 <= k <= n else 0
+
+
+def combinatorics_reference(inputs):
+    """Sixteen words per thread, in the order ``x_integer_combinatorics`` stores them."""
+    words = [int(word) for word in inputs]
+    out = []
+    for a, b in zip(words[:THREADS], words[THREADS:]):
+        ua, ub = a & _MASK, b & _MASK
+        wide = math.lcm(a, b)
+        product = math.factorial(ua % 21)
+        binomial = _comb(ua & 63, ub & 63)
+        arranged = _perm(ua & 15, ub & 15)
+        out += [math.gcd(a, b), math.gcd(ua, ub), math.lcm(a >> 20, b >> 20)]
+        out += [wide, wide >> 32, product, product >> 32, binomial, binomial >> 32]
+        out += [arranged, arranged >> 32, math.factorial(ua & 7)]
+        out += [_comb(ua & 31, (ub & 31) - 2), math.gcd(a, 12), math.gcd(b, 18)]
+        narrow = math.gcd(_signed16(a >> 17), _signed16(b >> 17))
+        out += [narrow | math.gcd(ua & 0xFF, 12) << 16 | math.gcd(ub & 0xFF, 18) << 24]
+    return np.array([value & _MASK for value in out], np.uint32)
+
+
+def _signed16(value):
+    value &= 0xFFFF
+    return value - 0x10000 if value & 0x8000 else value

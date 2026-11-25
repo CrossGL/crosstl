@@ -8,6 +8,11 @@ check, so a merge-group run could not hold a pull request back:
   once. When the changed paths cannot be determined, every path counts as changed.
 * Pull requests run only the Linux legs; macOS and Windows runners are scarce and shared, so their legs run only
   while the pull request is labelled ``ci:full``.
+* A corpus pull request leg also skips the slices whose source language is in ``LEAN_SKIPPED_LANGUAGES``: the
+  Metal-source slices take about 97 % of the corpus CPU time (455 of 468 CPU minutes in the nightly run
+  44900545251), which held a Linux runner for over two hours on every pull request push. The nightly schedule,
+  manual dispatch and ``ci:full`` run every slice. The planned slices travel in each leg's ``slices`` key, which is
+  empty for every slice.
 * Pushes to main (conformance only), the nightly schedule and manual dispatch run every leg.
 
 The legs themselves are JSON lists in the workflow (``LINUX_LEGS`` and ``HOSTED_LEGS``), read from the
@@ -63,6 +68,26 @@ LEAN_EVENTS = {
     "conformance": ("pull_request",),
     "corpus": ("pull_request",),
 }
+
+# Corpus source languages whose slices a lean run skips.
+LEAN_SKIPPED_LANGUAGES = {
+    "conformance": (),
+    "corpus": ("metal",),
+}
+
+CORPUS_MANIFEST = os.path.join(os.path.dirname(__file__), "corpus", "manifest.json")
+
+
+def lean_slices(workflow, manifest=CORPUS_MANIFEST):
+    """The comma-separated slices a lean run of ``workflow`` measures; None when it measures every slice."""
+    skipped = LEAN_SKIPPED_LANGUAGES[workflow]
+    if not skipped:
+        return None
+    with open(manifest, encoding="utf-8") as handle:
+        slices = json.load(handle)["slices"]
+    return ",".join(
+        name for name, entry in slices.items() if entry["language"] not in skipped
+    )
 
 
 def _pattern(glob):
@@ -123,7 +148,14 @@ def plan(workflow, event, full, linux_legs, hosted_legs, paths=None):
     else:
         reason = f"{event} runs every leg"
     if event in LEAN_EVENTS[workflow] and not full:
-        return list(linux_legs), f"{reason}; Linux legs only"
+        slices = lean_slices(workflow)
+        if slices is None:
+            return list(linux_legs), f"{reason}; Linux legs only"
+        skipped = ", ".join(LEAN_SKIPPED_LANGUAGES[workflow])
+        return (
+            [{**leg, "slices": slices} for leg in linux_legs],
+            f"{reason}; Linux legs only, without the {skipped}-source slices",
+        )
     return list(linux_legs) + list(hosted_legs), reason
 
 

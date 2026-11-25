@@ -501,7 +501,6 @@ def test_source_registry_recognizes_opencl_real_world_extensions(extension):
         (".spirv", BINARY_SPIRV_UNSUPPORTED_MESSAGE),
         (".air", METAL_BINARY_UNSUPPORTED_MESSAGE),
         (".metallib", METAL_BINARY_UNSUPPORTED_MESSAGE),
-        (".wgsl", WGSL_SOURCE_UNSUPPORTED_MESSAGE),
         (".wesl", WGSL_SOURCE_UNSUPPORTED_MESSAGE),
         (".webgl.glsl", WEBGL_SOURCE_UNSUPPORTED_MESSAGE),
         (".cso", DIRECTX_BINARY_UNSUPPORTED_MESSAGE),

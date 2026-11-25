@@ -168,10 +168,7 @@ def test_d3d12_byte_address_buffers_reproduce_the_oracle(tmp_path):
     assert runtime.expect in record["execution"]["device"]
 
 
-@pytest.mark.parametrize(
-    "name",
-    [name for name, runtime in RUNTIMES.items() if runtime.target != "hlsl"],
-)
+@pytest.mark.parametrize("name", RUNTIMES)
 @pytest.mark.parametrize("input_count", [2, 3])
 def test_native_mixed_inputs_reproduce_the_oracle(tmp_path, name, input_count):
     runtime = RUNTIMES[name]
@@ -180,9 +177,8 @@ def test_native_mixed_inputs_reproduce_the_oracle(tmp_path, name, input_count):
         if name in REQUIRED:
             pytest.fail(provided.reason)
         pytest.skip(provided.reason)
-    case = make_case(
-        tmp_path, "metal" if runtime.target == "metal" else "glsl", input_count
-    )
+    language = runtime.target if runtime.target in ("metal", "hlsl") else "glsl"
+    case = make_case(tmp_path, language, input_count)
     if runtime.target == "spirv":
         compiler, disassembler = tool("glslangValidator"), tool("spirv-dis")
         if not compiler.available or not disassembler.available:

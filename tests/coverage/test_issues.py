@@ -2,7 +2,9 @@
 
 from dataclasses import replace
 
-from tools.coverage import decorations, issues
+from tools.coverage import decorations
+from tools.coverage import github as issues_github
+from tools.coverage import issues
 
 from .issue_cases import (
     Repository,
@@ -23,6 +25,19 @@ def test_keys_are_marker_safe_and_round_trip():
     assert issues.marker_key("text\n" + issues.MARKER.format(key) + "\nmore") == key
     assert issues.marker_key("an ordinary issue") == ""
     assert issues.marker_key(None) == ""
+
+
+def test_gles_issues_carry_the_glsl_backend_label():
+    # The GLSL generator writes GLSL ES, and the label taxonomy has no backend:gles.
+    row = backend_row("gles", "output", [feature_entry("x", "wrong")])
+    assert issues.bug_labels(row) == (
+        "bug",
+        issues.LABEL,
+        "backend:glsl",
+        "direction:output",
+        "area:codegen",
+    )
+    assert "backend:webgl" in issues.tracking_labels(backend_row("webgl", "output", []))
 
 
 def test_first_run_files_tracking_and_bug_issues():
@@ -311,6 +326,81 @@ def test_bug_issues_reopen_when_the_result_is_wrong_again():
         issues.plan(coverage_report(hlsl_row(b="supported")), state), state
     )
     actions = issues.plan(coverage_report(hlsl_row()), state)
+    assert ("reopen", bug_for("hlsl", "b")) in kinds(actions)
+
+
+def _closed_bug():
+    """The issues after a run filed the HLSL bug for ``b`` and a later one closed it, and that bug's number."""
+    state = issues_after(issues.plan(coverage_report(hlsl_row()), []))
+    state = issues_after(
+        issues.plan(coverage_report(hlsl_row(b="supported")), state), state
+    )
+    bug = next(i for i in state if i.key == bug_for("hlsl", "b"))
+    assert bug.state == "closed"
+    return state, bug.number
+
+
+def test_a_report_older_than_the_fix_that_closed_a_bug_leaves_it_closed():
+    # The pull request that fixed b merged as commit "fix" after the measured commit, so the report predates the fix.
+    state, number = _closed_bug()
+    repository = Repository(state, closers={number: "fix"})
+    logged = []
+    actions = issues.reconcile(
+        coverage_report(hlsl_row()), repository, log=logged.append
+    )
+    assert ("reopen", bug_for("hlsl", "b")) not in kinds(actions)
+    assert next(i for i in repository.issues if i.number == number).state == "closed"
+    assert (
+        f"skip   #{number:<9} HLSL output: B failed (closed by fix, which the measured commit "
+        "0123456789ab does not contain)"
+    ) in logged
+    # A dry run plans the same, and asks GitHub once per issue.
+    repository.asked.clear()
+    dry = issues.reconcile(
+        coverage_report(hlsl_row()), repository, dry_run=True, log=lambda line: None
+    )
+    assert ("reopen", bug_for("hlsl", "b")) not in kinds(dry)
+    assert repository.asked == [number]
+
+
+def test_a_report_that_contains_the_fix_reopens_the_bug():
+    state, number = _closed_bug()
+    report = coverage_report(hlsl_row())
+    repository = Repository(
+        state, closers={number: "fix"}, history={report["commit"]: {"fix"}}
+    )
+    actions = issues.reconcile(report, repository, log=lambda line: None)
+    assert ("reopen", bug_for("hlsl", "b")) in kinds(actions)
+    assert next(i for i in repository.issues if i.number == number).state == "open"
+
+
+def test_a_bug_closed_without_a_commit_or_by_an_unmeasured_commit_reopens():
+    state, number = _closed_bug()
+    # Nothing names a fix: a person or the reconciler closed the issue.
+    repository = Repository(state)
+    actions = issues.reconcile(
+        coverage_report(hlsl_row()), repository, log=lambda line: None
+    )
+    assert ("reopen", bug_for("hlsl", "b")) in kinds(actions)
+    # A local report records no commit, so there is nothing to compare and GitHub is not asked.
+    repository = Repository(state, closers={number: "fix"})
+    local = coverage_report(hlsl_row()) | {"commit": ""}
+    actions = issues.reconcile(local, repository, log=lambda line: None)
+    assert ("reopen", bug_for("hlsl", "b")) in kinds(actions)
+    assert repository.asked == []
+
+
+def test_a_bug_reopens_when_github_cannot_compare_the_commits():
+    state, number = _closed_bug()
+
+    class Unknown(Repository):
+        def contains(self, head, commit):
+            raise issues_github.GitHubError("gh api GET compare: HTTP 404")
+
+    repository = Unknown(state, closers={number: "elsewhere"})
+    actions = issues.reconcile(
+        coverage_report(hlsl_row()), repository, log=lambda line: None
+    )
     assert ("reopen", bug_for("hlsl", "b")) in kinds(actions)
 
 

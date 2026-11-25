@@ -30,6 +30,7 @@ from .rust_global_declarations import RustGlobalDeclarationMixin
 from .rust_gpu_constants import rust_integer_constants
 from .rust_gpu_entry_buffers import normalize_rust_gpu_buffers
 from .rust_gpu_interface import RUST_GPU_PRELUDE
+from .rust_gpu_math_calls import rust_gpu_math_result_type
 from .rust_gpu_slice_length import RustGpuSliceLengthMixin
 from .rust_gpu_spec_constants import spec_constant_infos
 from .rust_gpu_spelling import glam_spelling
@@ -59,6 +60,7 @@ from .rust_tables import (
 )
 from .rust_type_definitions import RustTypeDefinitionMixin
 from .rust_values import RustValueMixin
+from .rust_vector_elements import RustVectorElementMixin
 from .rust_workgroup_references import RustWorkgroupReferenceMixin
 from .sampler_pairs import canonicalize_separate_textures
 from .stage_utils import is_fragment_output_parameter, normalize_stage_name
@@ -97,6 +99,7 @@ class RustCodeGen(
     LoweringRefusalMixin,
     RustBuiltinResultTypeMixin,
     RustWorkgroupReferenceMixin,
+    RustVectorElementMixin,
 ):
     """Emit rust-gpu shader crates from the shared CrossGL AST."""
 
@@ -320,6 +323,9 @@ class RustCodeGen(
         self.glsl_buffer_block_layouts = {}
         self.rust_resource_binding_cursors = {}
         self.rust_used_resource_bindings = {}
+        self.rust_emitted_binding_cursors = {}
+        self.rust_used_emitted_bindings = set()
+        self.rust_emitted_binding_by_node = {}
         self.rust_resource_binding_infos = {}
         self.rust_entry_resource_params_by_function_id = {}
         self.rust_promoted_resource_node_ids = set()
@@ -402,6 +408,9 @@ class RustCodeGen(
         self.glsl_buffer_block_layouts = {}
         self.rust_resource_binding_cursors = {}
         self.rust_used_resource_bindings = {}
+        self.rust_emitted_binding_cursors = {}
+        self.rust_used_emitted_bindings = set()
+        self.rust_emitted_binding_by_node = {}
         self.rust_resource_binding_infos = {}
         self.rust_entry_resource_params_by_function_id = {}
         self.rust_promoted_resource_node_ids = set()
@@ -1056,6 +1065,9 @@ class RustCodeGen(
             atomic_type = rust_memory_atomic_result_type(self, func_name, arguments)
             if atomic_type is not None:
                 return atomic_type
+            math_type = rust_gpu_math_result_type(self, func_name, arguments)
+            if math_type is not None:
+                return math_type
 
         mapped_name = self.mapped_function_name(func_name, len(arguments), arguments)
         arg_types = [self.expression_result_type(arg) for arg in arguments]

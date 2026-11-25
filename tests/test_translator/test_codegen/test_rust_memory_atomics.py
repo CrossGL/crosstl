@@ -1,9 +1,9 @@
 """CrossGL atomics in the rust-gpu output.
 
-The Rust generator used to write ``atomicAdd(counter.total, 1u)`` as a call into a host ``gpu`` runtime that no
-rust-gpu crate has. The rust-gpu output does not lower CrossGL atomics yet (``spirv_std::arch::atomic_*`` takes the
-scope and memory semantics as const generic arguments), so each atomic call is refused by name. A program function
-that shares an atomic's name is still called as declared.
+The Rust generator writes each CrossGL atomic on a storage buffer or workgroup memory as the spirv_std::arch function
+of the same operation, with the Device or Workgroup scope and relaxed semantics as constant generic arguments. An
+atomic on memory no other invocation shares, a write to a read-only buffer and a type SPIR-V has no atomic for are
+refused by name. A program function that shares an atomic's name is still called as declared.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ shader AtomicUse {
         layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
         buffer uint* slots;
         buffer int* signedSlots;
+        buffer float* sums;
         void main() {
             uint previous = atomicAdd(slots[0], 1u);
             int low = atomicMin(signedSlots[0], -3);
@@ -35,13 +36,19 @@ shader AtomicUse {
             uint flipped = atomicXor(slots[3], 8u);
             uint swapped = atomicCompSwap(slots[4], previous, 7u);
             uint replaced = atomicExchange(slots[5], 5u);
-            uint tally = 2u;
-            uint before = atomicAdd(tally, 3u);
-            slots[6] = previous + masked + joined + flipped + swapped + replaced + before + uint(low + high);
+            float total = atomicAdd(sums[0], 1.5);
+            float smallest = atomicMin(sums[1], total);
+            uint seen = atomicLoad(slots[7]);
+            atomicStore(slots[8], seen);
+            uint loaded = atomic_load(slots[9]);
+            atomic_store(slots[10], loaded);
+            slots[6] = previous + masked + joined + flipped + swapped + replaced + uint(low + high) + uint(smallest);
         }
     }
 }
 """
+
+_DEVICE = "{ spirv_std::memory::Scope::Device as u32 }, { spirv_std::memory::Semantics::NONE.bits() }"
 
 
 def _rust(source):
@@ -54,50 +61,121 @@ def _translate(tmp_path, source, name="shader.cgl"):
     return crosstl.translate(str(path), backend="rust", format_output=False)
 
 
-def test_buffer_and_local_atomics_are_refused_by_name():
+def test_buffer_atomics_are_spirv_std_atomics(tmp_path):
+    code = _rust(BUFFER_ATOMICS)
+    for call in (
+        f"let previous: u32 = unsafe {{ spirv_std::arch::atomic_i_add::<_, {_DEVICE}>(&mut slots[0], 1) }};",
+        f"spirv_std::arch::atomic_s_min::<_, {_DEVICE}>(&mut signedSlots[0], (-3))",
+        f"spirv_std::arch::atomic_s_max::<_, {_DEVICE}>(&mut signedSlots[1], 9)",
+        f"spirv_std::arch::atomic_and::<_, {_DEVICE}>(&mut slots[1], 3)",
+        f"spirv_std::arch::atomic_or::<_, {_DEVICE}>(&mut slots[2], 4)",
+        f"spirv_std::arch::atomic_xor::<_, {_DEVICE}>(&mut slots[3], 8)",
+        f"spirv_std::arch::atomic_exchange::<_, {_DEVICE}>(&mut slots[5], 5)",
+        f"spirv_std::arch::atomic_f_add::<_, {_DEVICE}>(&mut sums[0], 1.5)",
+        f"spirv_std::arch::atomic_f_min::<_, {_DEVICE}>(&mut sums[1], total)",
+        f"spirv_std::arch::atomic_load::<_, {_DEVICE}>(&slots[7])",
+        f"spirv_std::arch::atomic_store::<_, {_DEVICE}>(&mut slots[8], seen)",
+        f"spirv_std::arch::atomic_load::<_, {_DEVICE}>(&slots[9])",
+        f"spirv_std::arch::atomic_store::<_, {_DEVICE}>(&mut slots[10], loaded)",
+    ):
+        assert call in code, (call, code)
+    # spirv_std takes the value to store before the comparator, CrossGL's atomicCompSwap after it.
+    assert (
+        "spirv_std::arch::atomic_compare_exchange::<_, { spirv_std::memory::Scope::Device as u32 }, "
+        "{ spirv_std::memory::Semantics::NONE.bits() }, { spirv_std::memory::Semantics::NONE.bits() }>"
+        "(&mut slots[4], 7, previous)" in code
+    ), code
+    assert_generated_rust_smoke_compiles(code, tmp_path)
+
+
+def test_workgroup_atomics_use_the_workgroup_scope(tmp_path):
+    code = _rust("""
+        shader SharedCounter {
+            compute {
+                layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* outp;
+                shared uint counts[4];
+                void main() {
+                    uint i = gl_LocalInvocationID.x;
+                    uint before = atomicAdd(counts[i % 4u], 1u);
+                    barrier();
+                    outp[gl_GlobalInvocationID.x] = before + counts[i % 4u];
+                }
+            }
+        }
+        """)
+    assert (
+        "spirv_std::arch::atomic_i_add::<_, { spirv_std::memory::Scope::Workgroup as u32 }, "
+        "{ spirv_std::memory::Semantics::NONE.bits() }>(&mut counts[(i % 4) as usize], 1)"
+        in code
+    ), code
+    assert_generated_rust_smoke_compiles(code, tmp_path)
+
+
+@pytest.mark.parametrize(
+    ("body", "reason"),
+    [
+        (
+            "uint tally = 2u; slots[0] = atomicAdd(tally, 3u);",
+            "atomic: atomicAdd's location is not in a storage buffer or workgroup memory, so no other invocation "
+            "shares it",
+        ),
+        (
+            "atomicAdd(frozen[0], 1u);",
+            "atomic: atomicAdd writes to the read-only storage buffer 'frozen'",
+        ),
+        (
+            "atomicAnd(sums[0], 1.0);",
+            "atomic: atomicAnd on a f32 location has no spirv_std atomic",
+        ),
+    ],
+)
+def test_atomics_without_shared_memory_or_a_spirv_form_are_refused(body, reason):
+    source = f"""
+        shader Refused {{
+            compute {{
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* slots;
+                buffer float* sums;
+                readonly buffer uint* frozen;
+                void main() {{
+                    {body}
+                }}
+            }}
+        }}
+        """
     with pytest.raises(RustLoweringRefused) as refused:
-        _rust(BUFFER_ATOMICS)
+        _rust(source)
     assert refused.value.code == "project.translate.rust-lowering-unsupported"
-    assert refused.value.reasons == tuple(
-        f"function: '{name}' has no rust-gpu lowering for these operands"
-        for name in (
-            "atomicAdd",
-            "atomicMin",
-            "atomicMax",
-            "atomicAnd",
-            "atomicOr",
-            "atomicXor",
-            "atomicCompSwap",
-            "atomicExchange",
-        )
-    )
+    assert reason in refused.value.reasons, refused.value.reasons
 
 
 def test_hlsl_style_atomics_are_canonicalized_before_rust_generation(tmp_path):
-    # HLSL's out-argument forms reach the Rust generator as the CrossGL atomics, which it refuses by name.
-    with pytest.raises(RustLoweringRefused) as refused:
-        _translate(
-            tmp_path,
-            """
-            shader OutArgument {
-                compute {
-                    layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
-                    buffer uint* slots;
-                    void main() {
-                        uint original;
-                        atomicAdd(slots[0], 2u, original);
-                        uint exchanged;
-                        atomicCompSwap(slots[1], 1u, original, exchanged);
-                        slots[2] = original + exchanged;
-                    }
+    # HLSL's out-argument forms reach the Rust generator as the CrossGL atomics that return the previous value.
+    code = _translate(
+        tmp_path,
+        """
+        shader OutArgument {
+            compute {
+                layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+                buffer uint* slots;
+                void main() {
+                    uint original;
+                    atomicAdd(slots[0], 2u, original);
+                    uint exchanged;
+                    atomicCompSwap(slots[1], 1u, original, exchanged);
+                    slots[2] = original + exchanged;
                 }
             }
-            """,
-        )
-    assert refused.value.reasons == (
-        "function: 'atomicAdd' has no rust-gpu lowering for these operands",
-        "function: 'atomicCompSwap' has no rust-gpu lowering for these operands",
+        }
+        """,
     )
+    assert (
+        f"spirv_std::arch::atomic_i_add::<_, {_DEVICE}>(&mut slots[0], 2)" in code
+    ), code
+    assert "atomic_compare_exchange::" in code, code
+    assert "(&mut slots[1], original, 1)" in code, code
+    assert_generated_rust_smoke_compiles(code, tmp_path)
 
 
 def test_program_functions_with_atomic_names_are_called_as_declared(tmp_path):
