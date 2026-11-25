@@ -95,6 +95,7 @@ class MetalTemplateStructArgumentMixin:
                 matching_partials: List[Tuple[_MetalTemplateStruct, Dict[str, str]]] = (
                     []
                 )
+                matching_patterns: List[List[str]] = []
                 has_unmaterializable_partial = False
                 for (
                     partial_template,
@@ -130,8 +131,14 @@ class MetalTemplateStructArgumentMixin:
                         has_unmaterializable_partial = True
                     else:
                         matching_partials.append((partial_template, bindings))
-                self._require_unique_constrained_struct_partial(
-                    name, arguments, matching_partials
+                        matching_patterns.append(canonical_specialization_arguments)
+                matching_partials = self._most_specialized_struct_partials(
+                    name,
+                    arguments,
+                    matching_partials,
+                    matching_patterns,
+                    code=source_code,
+                    position=source_position,
                 )
                 if has_unmaterializable_partial or len(matching_partials) > 1:
                     position = angle_start + 1

@@ -87,7 +87,7 @@ METAL_RECEIVER_DECLARATION_RE = re.compile(
     r"(?<![A-Za-z0-9_:])"
     r"(?P<leading>(?:(?:const|volatile|thread|threadgroup|"
     r"threadgroup_imageblock|device|constant)\s+)*)"
-    r"(?P<type>[A-Za-z_]\w*)"
+    r"(?P<type>(?:::\s*)?(?:[A-Za-z_]\w*\s*::\s*)*[A-Za-z_]\w*)"
     r"(?P<trailing>(?:\s+(?:const|volatile|thread|threadgroup|"
     r"threadgroup_imageblock|device|constant))*)\s*"
     r"(?P<indirection>\*+|&&|&)?"
