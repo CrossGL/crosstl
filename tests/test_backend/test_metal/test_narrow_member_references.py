@@ -194,3 +194,66 @@ def test_narrow_field_references_compute_the_source_results_on_the_gpu(tmp_path,
     native = _run(SOURCE, "byte_conversions")
     assert native == _expected()
     assert _run(metal, _entry(metal)) == native
+
+
+# Vector fields: the widened temporary (uint4) and the stored field (uchar4) convert only explicitly in Metal, for a
+# reference argument, for the lane write with a side-effecting index the importer lowers to one, and for a call in a
+# for update, whose copies are sequenced inside the update expression.
+VECTOR_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+uint next_index(thread uint& count) { uint old = count; count += 1u; return old; }
+int bump(thread uchar4& lanes) { lanes += uchar4(1, 2, 3, 250); return int(lanes.w); }
+void widen(thread ushort2& halves) { halves.x += 65535; }
+struct Lanes { uchar4 bytes[2]; ushort2 halves; };
+kernel void vector_fields(const device int* inputs [[buffer(0)]],
+                          device int* results [[buffer(1)]],
+                          uint tid [[thread_position_in_grid]]) {
+    int input_value = inputs[tid];
+    Lanes lanes;
+    lanes.bytes[0] = uchar4(uchar(input_value), uchar(input_value >> 8), 7, 9);
+    lanes.bytes[1] = uchar4(0);
+    lanes.halves = ushort2(ushort(input_value), 3);
+    uint count = 0u;
+    lanes.bytes[0][next_index(count)] = uchar(input_value + 1);
+    int first = bump(lanes.bytes[1]);
+    widen(lanes.halves);
+    results[4u * tid] = int(lanes.bytes[0].x) + int(lanes.bytes[0].y) * 256 + int(count) * 65536;
+    results[4u * tid + 1u] = first + bump(lanes.bytes[0]);
+    results[4u * tid + 2u] = int(lanes.halves.x) + int(lanes.halves.y);
+    int total = 0;
+    for (int i = 0; i < 3; i += 1, bump(lanes.bytes[1])) { total += int(lanes.bytes[1].w); }
+    results[4u * tid + 3u] = int(lanes.bytes[1].w) + int(lanes.bytes[0].w) + total;
+}
+"""
+
+
+def _assert_converts_vector_fields(metal):
+    for widened, stored, field in (
+        ("uint4", "uchar4", r"lanes\.bytes\[0\]"),
+        ("uint4", "uchar4", r"lanes\.bytes\[1\]"),
+        ("uint2", "ushort2", r"lanes\.halves"),
+    ):
+        copies = re.findall(
+            rf"\b{widened} (__crossgl_ref\d+) = {widened}\({field}\);", metal
+        )
+        assert copies, metal
+        for name in copies:
+            assert re.search(rf"{field} = {stored}\({name}\);", metal), metal
+    assert re.search(
+        r"(__crossgl_ref\d+) = uint4\(lanes\.bytes\[1\]\), bump\(\1\),\s*lanes\.bytes\[1\] = uchar4\(\1\)",
+        metal,
+    ), metal
+    assert not re.search(r"__crossgl_ref\d+ = lanes\.", metal), metal
+
+
+@pytest.mark.parametrize("route", ["direct", "crossgl"])
+def test_narrow_vector_field_copies_convert_explicitly(tmp_path, route):
+    if route == "direct":
+        metal = _translate(tmp_path, VECTOR_SOURCE, "lanes.metal", "metal")
+    else:
+        crossgl = _translate(tmp_path, VECTOR_SOURCE, "lanes.metal", "cgl")
+        metal = _translate(tmp_path, crossgl, "lanes.cgl", "metal")
+    _assert_converts_vector_fields(metal)
+    _compile(tmp_path, VECTOR_SOURCE, "lanes_native")
+    _compile(tmp_path, metal, "lanes_out")
+    assert _run(metal, _entry(metal)) == _run(VECTOR_SOURCE, "vector_fields")
