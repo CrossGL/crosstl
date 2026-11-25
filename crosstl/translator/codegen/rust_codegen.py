@@ -1,5 +1,6 @@
 """CrossGL-to-Rust code generator."""
 
+import copy
 import re
 
 from ..ast import (
@@ -37,12 +38,21 @@ from .rust_gpu_geometry import (
 )
 from .rust_gpu_interface import RUST_GPU_PRELUDE
 from .rust_gpu_math_calls import rust_gpu_math_result_type
+from .rust_gpu_mesh import (
+    MESH_STAGES,
+    lower_rust_mesh_stages,
+    rust_mesh_stage_attribute,
+)
 from .rust_gpu_slice_length import RustGpuSliceLengthMixin
 from .rust_gpu_spec_constants import spec_constant_infos
 from .rust_gpu_spelling import glam_spelling
 from .rust_gpu_stage_io import GRAPHICS_STAGES, RustGpuStageIoMixin
 from .rust_gpu_storage import PADDED_ELEMENTS, RustGpuPaddedSliceMixin
-from .rust_gpu_subset import refuse_host_only_rust, refuse_outside_rust_gpu_subset
+from .rust_gpu_subset import (
+    program_stage_names,
+    refuse_host_only_rust,
+    refuse_outside_rust_gpu_subset,
+)
 from .rust_match_lowering import RustMatchMixin
 from .rust_memory_atomics import rust_memory_atomic_result_type
 from .rust_narrow_integers import RUST_EXACT_WIDTH_INTEGER_TYPES
@@ -339,8 +349,9 @@ class RustCodeGen(
         self.rust_resource_capture_params = {}
         self.rust_spec_constant_infos = {}
         self.rust_entry_resource_infos = {}
-        self.rust_geometry_interface = {}
+        self.rust_stage_values = {}
         self.rust_geometry_modes = []
+        self.rust_mesh_modes = {}
         self.struct_member_types = {}
         self.struct_member_semantics = {}
         self.struct_generic_params = {}
@@ -374,7 +385,6 @@ class RustCodeGen(
         self.non_copy_type_names = set()
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
-        self.required_mesh_helpers = set()
         self.swizzle_temp_counter = 0
         self.vector_arg_temp_counter = 0
         self.matrix_arg_temp_counter = 0
@@ -397,6 +407,9 @@ class RustCodeGen(
         # Rust GPU images are separate from their samplers: a separate CrossGL texture is the same image.
         refuse_cooperative_matrices(ast, label="Rust", target="rust")
         refuse_precise_evaluation(ast, label="Rust", target="rust")
+        if program_stage_names(ast) & MESH_STAGES:
+            # The mesh lowering rewrites the entry points it writes (rust_gpu_mesh), so it works on a copy.
+            ast = copy.deepcopy(ast)
         ast = canonicalize_separate_textures(ast)
         return glam_spelling(self.refusals.run(self.generate_program, ast))
 
@@ -408,7 +421,9 @@ class RustCodeGen(
         self.rust_referenced_names = referenced_identifier_names(ast)
         self.struct_member_types = {}
         self.collect_rust_gpu_struct_nodes(ast)
+        self.rust_stage_values = {}
         plan_rust_geometry_interface(self, ast, self.rust_gpu_program_stages)
+        lower_rust_mesh_stages(self, ast)
         refuse_outside_rust_gpu_subset(self, ast)
         self.variable_types = {}
         self.local_variable_names = set()
@@ -462,7 +477,6 @@ class RustCodeGen(
         self.rust_integer_constant_values = rust_integer_constants(ast)
         self.current_mutated_names = set()
         self.required_generic_math_traits = set()
-        self.required_mesh_helpers = set()
         self.swizzle_temp_counter = 0
         self.vector_arg_temp_counter = 0
         self.matrix_arg_temp_counter = 0
@@ -656,87 +670,11 @@ class RustCodeGen(
 
                 self.variable_types = saved_variable_types
 
-        code += self.generate_required_rust_mesh_helpers()
         code += self.generate_required_generic_math_traits()
         refuse_host_only_rust(self, code)
         if re.search(r"\bf16\b", code):
             # f16 is a nightly primitive type, which rust-gpu's toolchain enables per crate.
             code = code.replace("#![no_std]\n", "#![no_std]\n#![feature(f16)]\n", 1)
-        return code
-
-    def generate_rust_mesh_stage_comments(
-        self, func, parameters, shader_type, stage_node=None
-    ):
-        lines = [f"// CrossGL mesh/task stage: stage={shader_type}\n"]
-        numthreads = self.rust_mesh_stage_numthreads(func, shader_type)
-        if numthreads is not None:
-            lines.append(f"// CrossGL mesh/task numthreads: {', '.join(numthreads)}\n")
-        local_size = self.rust_mesh_stage_layout_local_size(stage_node, shader_type)
-        if local_size is not None:
-            lines.append(f"// CrossGL mesh/task local size: {', '.join(local_size)}\n")
-
-        if shader_type == "mesh":
-            topology = self.rust_mesh_output_topology(func, shader_type, required=True)
-            lines.append(f"// CrossGL mesh output topology: {topology}\n")
-        max_vertices = self.rust_mesh_stage_positive_attribute(
-            func, shader_type, "maxvertices", "max_vertices"
-        )
-        if max_vertices is not None:
-            lines.append(f"// CrossGL mesh max vertices: {max_vertices}\n")
-        max_primitives = self.rust_mesh_stage_positive_attribute(
-            func, shader_type, "maxprimitives", "max_primitives"
-        )
-        if max_primitives is not None:
-            lines.append(f"// CrossGL mesh max primitives: {max_primitives}\n")
-
-        role_comments = self.generate_rust_mesh_parameter_role_comments(
-            self.rust_mesh_param_infos(parameters)
-        )
-        if role_comments:
-            lines.append(role_comments)
-        return "".join(lines)
-
-    def generate_rust_mesh_op_expression(self, expr):
-        operation = getattr(expr, "operation", "mesh intrinsic")
-        arguments = list(getattr(expr, "arguments", []) or [])
-        stage_name = self.current_shader_type
-        self.validate_rust_mesh_op_stage(operation, stage_name)
-        self.validate_rust_mesh_op_arguments(operation, arguments, stage_name)
-
-        args = [self.generate_expression(argument) for argument in arguments]
-        if operation == "SetMeshOutputCounts":
-            self.required_mesh_helpers.add("set_mesh_output_counts")
-            return f"_crossgl_set_mesh_output_counts({', '.join(args)})"
-        if operation == "DispatchMesh":
-            self.required_mesh_helpers.add("dispatch_mesh")
-            if len(args) == 3:
-                return f"_crossgl_dispatch_mesh_without_payload({', '.join(args)})"
-            return f"_crossgl_dispatch_mesh({', '.join(args)})"
-
-        raise RustRefusal(f"Unsupported Rust mesh intrinsic {operation}")
-
-    def generate_required_rust_mesh_helpers(self):
-        if not self.required_mesh_helpers:
-            return ""
-        code = "// CrossGL mesh/task placeholders\n"
-        if "set_mesh_output_counts" in self.required_mesh_helpers:
-            code += (
-                "pub fn _crossgl_set_mesh_output_counts("
-                "vertices: u32, primitives: u32) {\n"
-                "    let _ = (vertices, primitives);\n"
-                "}\n\n"
-            )
-        if "dispatch_mesh" in self.required_mesh_helpers:
-            code += (
-                "pub fn _crossgl_dispatch_mesh<T>("
-                "x: u32, y: u32, z: u32, payload: T) {\n"
-                "    let _ = (x, y, z, payload);\n"
-                "}\n\n"
-                "pub fn _crossgl_dispatch_mesh_without_payload("
-                "x: u32, y: u32, z: u32) {\n"
-                "    let _ = (x, y, z);\n"
-                "}\n\n"
-            )
         return code
 
     def rust_stage_attribute_arguments(self, func, attribute_name):
@@ -857,7 +795,9 @@ class RustCodeGen(
             refuse_rust_geometry_entry(self, func, param_list, return_type)
         if shader_type in {"tessellation_control", "tessellation_evaluation"}:
             self.validate_rust_tessellation_stage(func, param_list, shader_type)
-        if shader_type in self.rust_mesh_stage_names():
+        if shader_type in self.rust_mesh_stage_names() and (
+            id(func) not in self.rust_mesh_modes
+        ):
             self.validate_rust_mesh_stage(func, param_list, shader_type, stage_node)
         self.validate_rust_return_semantic(shader_type, return_type, return_semantic)
         self.validate_rust_struct_return_semantics(shader_type, return_type)
@@ -960,11 +900,8 @@ class RustCodeGen(
                 param_list,
                 shader_type,
             )
-        elif shader_type in self.rust_mesh_stage_names():
-            code += f"// CrossGL shader stage: {shader_type}\n"
-            code += self.generate_rust_mesh_stage_comments(
-                func, param_list, shader_type, stage_node
-            )
+        elif id(func) in self.rust_mesh_modes:
+            code += rust_mesh_stage_attribute(self, func)
         elif shader_type in self.rust_ray_stage_names():
             code += (
                 "// CrossGL ray stage: "

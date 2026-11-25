@@ -226,7 +226,7 @@ class RustProgramAnalysisMixin:
         for name, info in builtin_input_infos(ast).items():
             if name not in declared:
                 resources[name] = info
-        for name, info in sorted(self.rust_geometry_interface.items()):
+        for name, info in sorted(self.rust_stage_values.items()):
             if name not in declared:
                 resources[name] = info
         for name, info in self.rust_spec_constant_infos.items():
@@ -236,8 +236,8 @@ class RustProgramAnalysisMixin:
     def rust_gpu_interface_info(self, node, type_name):
         """The entry-parameter record of a storage buffer pointer, uniform value, workgroup variable or geometry
         input or output (:mod:`.rust_gpu_geometry`), else None."""
-        geometry = getattr(self, "rust_geometry_interface", None) or {}
-        record = geometry.get(getattr(node, "name", None))
+        stage_values = getattr(self, "rust_stage_values", None) or {}
+        record = stage_values.get(getattr(node, "name", None))
         if record is not None and record["node"] is node:
             return record
         slice_parts = storage_slice_parts(node)

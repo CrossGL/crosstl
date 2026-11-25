@@ -244,13 +244,12 @@ def _crossgl_type(type_name):
 
 
 def plan_rust_geometry_interface(generator, ast, stage_names) -> None:
-    """Record the entry-parameter records of ``ast``'s geometry interface on ``generator``, refusing what it cannot.
+    """Add the entry-parameter records of ``ast``'s geometry interface to ``generator``, refusing what it cannot.
 
-    ``generator.rust_geometry_interface`` maps each interface value's name to its record (``node``, ``type_name``,
+    ``generator.rust_stage_values`` maps each interface value's name to its record (``node``, ``type_name``,
     ``kind`` and the ``attribute`` inside ``#[spirv(...)]``); ``generator.rust_geometry_modes`` lists the execution
     modes of the stage attribute.
     """
-    generator.rust_geometry_interface = {}
     generator.rust_geometry_modes = []
     if GEOMETRY_STAGE not in stage_names:
         return
@@ -304,7 +303,7 @@ def plan_rust_geometry_interface(generator, ast, stage_names) -> None:
             if name in referenced and name not in interface:
                 builtin, type_name = builtins[name]
                 interface[name] = _builtin_record(name, builtin, type_name, kind)
-    generator.rust_geometry_interface = interface
+    generator.rust_stage_values.update(interface)
 
 
 def rust_geometry_stage_attribute(generator) -> str:

@@ -24,6 +24,7 @@ from .comma_expressions import (
 from .rust_exact_lookups import rust_foreign_call_reason
 from .rust_gpu_builtins import generate_rust_gpu_builtin_call
 from .rust_gpu_geometry import generate_rust_geometry_call
+from .rust_gpu_mesh import generate_rust_mesh_call
 from .rust_memory_atomics import generate_rust_memory_atomic_call
 from .shader_clock_refusals import (
     SHADER_CLOCK_BUILTINS,
@@ -80,7 +81,10 @@ class RustExpressionMixin:
         elif isinstance(expr, RayQueryOpNode):
             return self.generate_ray_query_op_expression(expr)
         elif isinstance(expr, MeshOpNode):
-            return self.generate_rust_mesh_op_expression(expr)
+            return generate_rust_mesh_call(self, expr) or self.refuse_lowering(
+                f"function: '{expr.operation}' has no rust-gpu lowering for these operands",
+                "()",
+            )
         elif isinstance(expr, LambdaNode):
             return self.generate_lambda_node_expression(expr)
         elif isinstance(expr, MatchNode):
@@ -163,9 +167,11 @@ class RustExpressionMixin:
             memory_atomic = generate_rust_memory_atomic_call(self, func_name, args)
             if memory_atomic is not None:
                 return memory_atomic
-            rust_gpu_call = generate_rust_gpu_builtin_call(
-                self, func_name, args
-            ) or generate_rust_geometry_call(self, func_name, args)
+            rust_gpu_call = (
+                generate_rust_gpu_builtin_call(self, func_name, args)
+                or generate_rust_geometry_call(self, func_name, args)
+                or generate_rust_mesh_call(self, expr)
+            )
             if rust_gpu_call is not None:
                 return rust_gpu_call
             if not self.is_rust_gpu_constructor_call(
