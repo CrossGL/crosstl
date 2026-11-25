@@ -12,6 +12,7 @@ from ..ast import (
     ForNode,
     IdentifierNode,
     IfNode,
+    LoopNode,
     MatchNode,
     ReturnNode,
     SwitchNode,
@@ -182,6 +183,8 @@ class SlangStatementsMixin:
             return self.generate_while(node)
         elif isinstance(node, DoWhileNode):
             return self.generate_do_while(node)
+        elif isinstance(node, LoopNode):
+            return self.generate_loop(node)
         elif isinstance(node, MatchNode):
             return self.generate_match(node)
         elif isinstance(node, SwitchNode):
