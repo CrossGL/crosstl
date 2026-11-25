@@ -29,8 +29,18 @@ class GitHub:
             time.sleep(max(0.0, self._changed + self.PAUSE - time.monotonic()))
             self._changed = time.monotonic()
         command = ["gh", "api", "--method", method, f"repos/{self.repository}/{path}"]
+        return self._gh(command, payload, f"{method} {path}")
+
+    def _query(self, query: str, variables: dict) -> dict:
+        """The ``data`` of a GraphQL query, which only reads."""
+        payload = {"query": query, "variables": variables}
+        found = self._gh(["gh", "api", "graphql"], payload, "graphql")
+        return found["data"]
+
+    @staticmethod
+    def _gh(command: list[str], payload: dict | None, what: str):
         if payload is not None:
-            command += ["--input", "-"]
+            command = [*command, "--input", "-"]
         done = subprocess.run(
             command,
             input=None if payload is None else json.dumps(payload),
@@ -39,8 +49,39 @@ class GitHub:
             check=False,
         )
         if done.returncode:
-            raise GitHubError(f"gh api {method} {path}: {done.stderr.strip()}")
+            raise GitHubError(f"gh api {what}: {done.stderr.strip()}")
         return json.loads(done.stdout) if done.stdout.strip() else None
+
+    # The pull request or commit behind an issue's latest closing; REST issue events leave it out for pull requests.
+    _CLOSER = """query($owner: String!, $name: String!, $number: Int!) {
+  repository(owner: $owner, name: $name) {
+    issue(number: $number) {
+      timelineItems(last: 1, itemTypes: [CLOSED_EVENT]) {
+        nodes { ... on ClosedEvent { closer {
+          ... on PullRequest { mergeCommit { oid } }
+          ... on Commit { oid }
+        } } }
+      }
+    }
+  }
+}"""
+
+    def closing_commit(self, number: int) -> str:
+        """The commit that closed issue ``number`` last: the merge commit of the pull request that fixed it, or the
+        commit whose message did; ``""`` when a person or a workflow closed it without one.
+        """
+        owner, name = self.repository.split("/", 1)
+        data = self._query(
+            self._CLOSER, {"owner": owner, "name": name, "number": number}
+        )
+        nodes = data["repository"]["issue"]["timelineItems"]["nodes"]
+        closer = (nodes[-1].get("closer") if nodes else None) or {}
+        return (closer.get("mergeCommit") or {}).get("oid") or closer.get("oid") or ""
+
+    def contains(self, head: str, commit: str) -> bool:
+        """Whether ``commit`` is ``head`` or one of its ancestors."""
+        found = self._api("GET", f"compare/{commit}...{head}?per_page=1")
+        return found["status"] in ("ahead", "identical")
 
     def managed(self) -> list[Issue]:
         """Every issue, open or closed, that has the ``coverage`` label and a marker."""

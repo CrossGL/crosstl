@@ -642,6 +642,7 @@ def test_only_the_languages_with_8_bit_arithmetic_list_integer_promotion():
     }
     assert listing == {
         "cuda",
+        "gles",
         "glsl",
         "hip",
         "metal",

@@ -14,6 +14,7 @@ from .array_utils import (
     split_array_type_suffix,
 )
 from .fragment_output_targets import frag_data_attachment_index
+from .metal_argument_tables import metal_argument_tables
 from .metal_buffer_arrays import expand_entry_buffer_array
 from .metal_conservative_depth import metal_conservative_depth_semantic
 from .metal_entry_return import (
@@ -969,6 +970,8 @@ class MetalStageInterfaceMixin:
         if self.cbuffer_variables:
             for cbuffer in self.cbuffer_variables:
                 cbuffer_name = getattr(cbuffer, "name", None)
+                if not self.metal_current_entry_takes(cbuffer):
+                    continue
                 if (
                     cbuffer_dependencies is not None
                     and cbuffer_name not in cbuffer_dependencies
@@ -988,6 +991,8 @@ class MetalStageInterfaceMixin:
                 address_space,
             ) in self.metal_buffer_resource_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if not self.metal_current_entry_takes(buffer_variable):
+                    continue
                 if dependencies is not None and buffer_name not in dependencies:
                     continue
                 declaration = self.format_metal_buffer_resource_parameter(
@@ -1009,6 +1014,8 @@ class MetalStageInterfaceMixin:
                 array_size,
             ) in self.texture_variables:
                 texture_name = getattr(texture_variable, "name", None)
+                if not self.metal_current_entry_takes(texture_variable):
+                    continue
                 if (
                     texture_dependencies is not None
                     and texture_name not in texture_dependencies
@@ -1034,6 +1041,8 @@ class MetalStageInterfaceMixin:
                 acceleration_structure_name = getattr(
                     acceleration_structure_variable, "name", None
                 )
+                if not self.metal_current_entry_takes(acceleration_structure_variable):
+                    continue
                 if (
                     dependencies is not None
                     and acceleration_structure_name not in dependencies
@@ -1055,6 +1064,8 @@ class MetalStageInterfaceMixin:
                 visible_function_table_name = getattr(
                     visible_function_table_variable, "name", None
                 )
+                if not self.metal_current_entry_takes(visible_function_table_variable):
+                    continue
                 if (
                     dependencies is not None
                     and visible_function_table_name not in dependencies
@@ -1074,6 +1085,10 @@ class MetalStageInterfaceMixin:
                 intersection_function_table_name = getattr(
                     intersection_function_table_variable, "name", None
                 )
+                if not self.metal_current_entry_takes(
+                    intersection_function_table_variable
+                ):
+                    continue
                 if (
                     dependencies is not None
                     and intersection_function_table_name not in dependencies
@@ -1093,6 +1108,8 @@ class MetalStageInterfaceMixin:
                 array_size,
             ) in self.structured_buffer_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if not self.metal_current_entry_takes(buffer_variable):
+                    continue
                 if dependencies is not None and buffer_name not in dependencies:
                     continue
                 declaration = self.format_structured_buffer_parameter(
@@ -1115,6 +1132,8 @@ class MetalStageInterfaceMixin:
                 array_size,
             ) in self.structured_buffer_length_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if not self.metal_current_entry_takes(buffer_variable):
+                    continue
                 if dependencies is not None and buffer_name not in dependencies:
                     continue
                 declaration = self.format_structured_buffer_length_parameter(
@@ -1136,6 +1155,8 @@ class MetalStageInterfaceMixin:
                 array_size,
             ) in self.structured_buffer_counter_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if not self.metal_current_entry_takes(buffer_variable):
+                    continue
                 if dependencies is not None and buffer_name not in dependencies:
                     continue
                 declaration = self.format_structured_buffer_counter_parameter(
@@ -1157,6 +1178,8 @@ class MetalStageInterfaceMixin:
                 array_size,
             ) in self.glsl_buffer_block_variables:
                 buffer_name = getattr(buffer_variable, "name", None)
+                if not self.metal_current_entry_takes(buffer_variable):
+                    continue
                 if dependencies is not None and buffer_name not in dependencies:
                     continue
                 declaration = self.format_glsl_buffer_block_parameter(
@@ -1174,6 +1197,8 @@ class MetalStageInterfaceMixin:
         if self.sampler_variables:
             for sampler_variable, i, array_size in self.sampler_variables:
                 sampler_name = getattr(sampler_variable, "name", None)
+                if not self.metal_current_entry_takes(sampler_variable):
+                    continue
                 if (
                     sampler_dependencies is not None
                     and sampler_name not in sampler_dependencies
@@ -1188,6 +1213,12 @@ class MetalStageInterfaceMixin:
         if params_str:
             return f"{params_str}, {', '.join(resource_params)}"
         return ", ".join(resource_params)
+
+    def metal_current_entry_takes(self, node):
+        """Whether the function being generated takes ``node``: an entry takes its own argument table only."""
+        tables = metal_argument_tables(node)
+        table = self.current_metal_argument_table
+        return tables is None or table is None or table in tables
 
     def entry_point_global_resource_dependencies(self, func):
         dependencies = set(self.direct_global_resource_dependencies(func))

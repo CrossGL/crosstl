@@ -38,6 +38,7 @@ from ..function_templates import (
 )
 from ..struct_methods import method_local_names
 from ..vk_locations import VK_LOCATION_ATTRIBUTE, check_function_return_vk_location
+from ..work_graph_import import NODE_STAGE, crossgl_node_entry_attributes
 
 
 class FunctionStatementMixin:
@@ -53,6 +54,8 @@ class FunctionStatementMixin:
     ):
         """Render one HLSL function node as a CrossGL function block."""
         attributes = getattr(func, "attributes", []) or []
+        if getattr(func, "qualifier", None) == NODE_STAGE:
+            attributes = crossgl_node_entry_attributes(attributes)
         early_tests = any(
             str(getattr(attribute, "name", "")).lower() == "earlydepthstencil"
             for attribute in attributes

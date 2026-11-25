@@ -10,6 +10,7 @@ from ..ast import (
     FunctionCallNode,
     MeshOpNode,
 )
+from .spirv_quad_lane_reads import lower_spirv_quad_lane_read
 from .spirv_subgroup_barriers import emit_spirv_subgroup_barrier
 from .spirv_values import (
     SPIRVAtomicFenceLoweringError,
@@ -1445,9 +1446,11 @@ class SpirvGroupOperationMixin:
 
         result_type = self.ensure_registered_type(args[0].type)
         lane_value = self.literal_integer_value(argument_exprs[1], "uint")
-        if lane_value is None or not 0 <= lane_value <= 3:
+        if lane_value is None:
+            return lower_spirv_quad_lane_read(self, args[0], args[1])
+        if not 0 <= lane_value <= 3:
             self.refuse_lowering(
-                "QuadReadLaneAt requires a literal lane index " "between 0 and 3"
+                "a literal QuadReadLaneAt lane index must be between 0 and 3"
             )
             return self.wave_result_default(operation, args)
 

@@ -1,0 +1,1 @@
+Metal output copies an 8- or 16-bit integer struct field passed to an `out` or `inout` parameter through a widened thread temporary and stores it back, where it bound the `uchar` field to the `thread uint&` parameter, which the Metal compiler rejects (#2102).

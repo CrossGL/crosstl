@@ -211,6 +211,7 @@ _HLSL_TYPES = (
     "RayDesc",
     "RayQuery",
     "BuiltInTriangleIntersectionAttributes",
+    "BuiltInTrianglePositions",
     "HitObject",
     "InputPatch",
     "OutputPatch",

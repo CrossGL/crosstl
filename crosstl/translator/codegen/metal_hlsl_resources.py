@@ -752,12 +752,13 @@ class MetalHlslResourceMixin:
                 name,
                 stage_scope=self.metal_source_binding_stage_scope(node),
             )
-            target_binding = self.next_available_resource_binding(
-                used_bindings, namespace, register_index, count
-            )
-            self.reserve_resource_binding_range(
-                used_bindings, "Metal", namespace, target_binding, count, name
-            )
+            with self.metal_binding_tables_of(node):
+                target_binding = self.next_available_resource_binding(
+                    used_bindings, namespace, register_index, count
+                )
+                self.reserve_resource_binding_range(
+                    used_bindings, "Metal", namespace, target_binding, count, name
+                )
             self.metal_resource_binding_indices_by_id[id(node)] = target_binding
             self.metal_hlsl_register_bindings_by_id[id(node)] = (
                 f"{register_class}{register_index}"
