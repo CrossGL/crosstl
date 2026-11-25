@@ -29,6 +29,7 @@ from __future__ import annotations
 from ..refusals import VulkanRefusal
 from .glsl_hlsl_resources import HlslRegisterOverlapError
 from .spirv_argument_tables import argument_table_index, place_argument_table_slots
+from .spirv_entry_resources import spirv_entry_scope, spirv_entry_scopes_meet
 
 __all__ = [
     "HLSL_REGISTER_CLASS_ORDER",
@@ -150,24 +151,36 @@ def _combined_sampler_half(node):
 def reserve_exact_binding(codegen, key, node, name):
     """Reserve the exact ``(set, binding)`` slot ``key`` for ``node``.
 
-    A second claimant is accepted only as the other half of a combined image sampler; both claimants are then
-    recorded in ``codegen.shared_binding_nodes`` so the slot can be handed out to each of them.
+    A second claimant is accepted as the other half of a combined image sampler, or when no entry point takes both
+    claimants (:mod:`.spirv_entry_resources`); the claimants are then recorded in ``codegen.shared_binding_nodes``
+    so the slot can be handed out to each of them.
     """
     occupants = codegen.binding_occupants
     shared = codegen.shared_binding_nodes
     half = _combined_sampler_half(node)
+    scope = spirv_entry_scope(node)
     if key in codegen.reserved_resource_bindings:
         claim = occupants.get(key)
-        halves = [] if claim is None else [occupant_half for occupant_half, _ in claim]
-        if half is None or not halves or None in halves or half in halves:
+        rivals = (
+            None
+            if claim is None
+            else [
+                occupant_half
+                for occupant_half, _, occupant_scope in claim
+                if spirv_entry_scopes_meet(occupant_scope, scope)
+            ]
+        )
+        if rivals is None or (
+            rivals and (half is None or None in rivals or half in rivals)
+        ):
             raise VulkanRefusal(
                 f"Duplicate SPIR-V resource binding set {key[0]} binding {key[1]} ({name})"
             )
-        claim.append((half, id(node)))
-        shared.update(node_id for _, node_id in claim)
+        claim.append((half, id(node), scope))
+        shared.update(node_id for _, node_id, _ in claim)
         return
     codegen.reserved_resource_bindings.add(key)
-    occupants[key] = [(half, id(node))]
+    occupants[key] = [(half, id(node), scope)]
 
 
 def _next_free_binding(codegen, descriptor_set, start):

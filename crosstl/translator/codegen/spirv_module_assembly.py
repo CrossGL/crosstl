@@ -24,6 +24,7 @@ from .generic_function_utils import (
     generic_function_parameters,
     iter_function_nodes,
 )
+from .generic_pointer_spaces import assign_generic_pointer_spaces
 from .relational_builtins import lower_relational_builtins
 from .resource_aggregates import lower_resource_aggregates
 from .spirv_builtin_overloads import separate_builtin_overloads
@@ -35,6 +36,7 @@ from .spirv_compute_derivative_groups import (
 from .spirv_conservative_depth import depth_layout_execution_modes
 from .spirv_dead_types import drop_unused_runtime_array_structs
 from .spirv_entry_interfaces import complete_entry_point_interfaces
+from .spirv_entry_resources import scope_spirv_entry_resources
 from .spirv_entry_workgroup_sizes import emit_entry_local_size_id
 from .spirv_fragment_interlock import fragment_interlock_execution_mode
 from .spirv_geometry_streams import (
@@ -478,6 +480,8 @@ class SpirvModuleAssemblyMixin:
             ),
         )
         ast = fold_workgroup_size_extents(ast, "SPIR-V", self.refuse_lowering)
+        ast = assign_generic_pointer_spaces(ast, self.refuse_lowering)
+        ast = scope_spirv_entry_resources(ast)
         self.spirv_program_ast = ast
         self.per_vertex_program_stages = list(
             (getattr(ast, "stages", None) or {}).items()
