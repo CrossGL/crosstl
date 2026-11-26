@@ -425,6 +425,84 @@ def test_non_main_compute_shader_entry_codegen_preserves_stage_entry():
     assert not compute_stage.local_functions
 
 
+def test_non_main_graphics_shader_entries_preserve_stage_entry():
+    code = """
+    struct VOut { float4 pos : SV_Position; };
+
+    [shader("vertex")]
+    VOut vsMain(uint iid : SV_InstanceID) {
+        VOut o;
+        o.pos = float4(float(iid), 0.0, 0.0, 1.0);
+        return o;
+    }
+
+    [shader("fragment")]
+    float4 fsMain(VOut i) : SV_Target {
+        return float4(1.0, 0.0, 0.0, 1.0);
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "VOut vsMain(uint iid @ gl_InstanceID) @ stage_entry" in generated_code
+    assert "vec4 fsMain(VOut i) @ gl_FragColor @ stage_entry" in generated_code
+    parsed = cgl_translator.parse(generated_code)
+    assert parsed.stages[ShaderStage.VERTEX].entry_point.name == "vsMain"
+    assert parsed.stages[ShaderStage.FRAGMENT].entry_point.name == "fsMain"
+
+
+def test_explicit_stage_attribute_keeps_result_semantic_helper_local():
+    code = """
+    float4 shade(float4 color) : SV_Target {
+        return color;
+    }
+
+    [shader("fragment")]
+    float4 fsMain() : SV_Target {
+        return shade(float4(1.0));
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert generated_code.count("fragment {") == 1
+    assert "vec4 shade(vec4 color) {" in generated_code
+    assert "vec4 fsMain() @ gl_FragColor @ stage_entry" in generated_code
+    parsed = cgl_translator.parse(generated_code)
+    assert parsed.stages[ShaderStage.FRAGMENT].entry_point.name == "fsMain"
+
+
+def test_explicit_vertex_stage_drops_result_semantic_from_helper():
+    code = """
+    struct VOut {
+        float4 pos : SV_Position;
+        float4 col : COLOR0;
+    };
+
+    float4 place(float3 p) : SV_Position {
+        return float4(p, 1.0);
+    }
+
+    [shader("vertex")]
+    VOut vsMain(float3 p : POSITION, float4 c : COLOR0) {
+        VOut o;
+        o.pos = place(p);
+        o.col = c;
+        return o;
+    }
+    """
+
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "vec4 place(vec3 p) {" in generated_code
+    assert (
+        "VOut vsMain(vec3 p @ Position, vec4 c @ Color0) @ stage_entry"
+        in generated_code
+    )
+    parsed = cgl_translator.parse(generated_code)
+    assert parsed.stages[ShaderStage.VERTEX].entry_point.name == "vsMain"
+
+
 def test_name_first_property_codegen_from_generated_interface_sample():
     code = """
     struct IntProperty
