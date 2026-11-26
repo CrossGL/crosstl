@@ -33,6 +33,7 @@ from ..semantics.shader_records import (
 )
 from ..vulkan_memory_scope import needs_device_coherence
 from .memory_qualifier_names import memory_qualifier_name
+from .spirv_entry_resources import spirv_entry_scope
 from .spirv_exact_lookups import SPIRV_MEMORY_QUALIFIERS
 from .spirv_placed_blocks import (
     SCALAR_BLOCK_LAYOUT_SOURCE_EXTENSION,
@@ -133,10 +134,22 @@ class SpirvBufferLayoutMixin:
             self.global_variables[cbuffer_node.name] = var_id
         self.cbuffer_variables[cbuffer_node.name] = var_id
         self.uniform_buffers.append(var_id)
+        # A constant block of one kernel's entry point names its members in that entry only (spirv_entry_resources).
+        scope = spirv_entry_scope(cbuffer_node)
+        if scope is None:
+            tables = [self.cbuffer_members]
+            seen = [self.cbuffer_members, *self.entry_cbuffer_members.values()]
+        else:
+            tables = [
+                self.entry_cbuffer_members.setdefault(entry, {})
+                for entry in sorted(scope)
+            ]
+            seen = [self.cbuffer_members, *tables]
         for member_index, (member_type, member_name) in enumerate(members):
-            if member_name in self.cbuffer_members:
+            if any(member_name in table for table in seen):
                 raise VulkanRefusal(f"Ambiguous SPIR-V cbuffer member {member_name}")
-            self.cbuffer_members[member_name] = (var_id, member_type, member_index)
+            for table in tables:
+                table[member_name] = (var_id, member_type, member_index)
 
         return var_id
 

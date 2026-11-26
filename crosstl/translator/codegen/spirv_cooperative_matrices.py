@@ -474,7 +474,9 @@ class SpirvCooperativeMatrixMixin:
         actual_element_type = self.normalize_signature_type_name(
             actual_info.get("element_type_name")
         )
-        if declared_element_type != actual_element_type:
+        if declared_element_type != actual_element_type and not (
+            self.same_storage_element_type(declared_element_type, actual_element_type)
+        ):
             return False
 
         if (
@@ -490,6 +492,21 @@ class SpirvCooperativeMatrixMixin:
         if declared_kind == "RWStructuredBuffer":
             return actual_kind in {"StructuredBuffer", "RWStructuredBuffer"}
         return declared_kind == actual_kind
+
+    def same_storage_element_type(self, first, second) -> bool:
+        """Whether two spellings of a buffer element (``f32`` and ``float``, ``vec4<f32>`` and ``float4``) agree."""
+        if not first or not second:
+            return False
+        try:
+            first_type, second_type = (
+                self.map_crossgl_type(first),
+                self.map_crossgl_type(second),
+            )
+        except (TypeError, ValueError, KeyError):
+            return False
+        return getattr(first_type, "id", None) is not None and getattr(
+            first_type, "id", None
+        ) == getattr(second_type, "id", None)
 
     def function_storage_buffer_parameters(self, function_node) -> set:
         return {

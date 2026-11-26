@@ -46,6 +46,7 @@ from .spirv_entry_locations import (
     restore_interface_location_state,
 )
 from .spirv_entry_point_parameters import SpirvEntryPointParameterMixin
+from .spirv_entry_selection import SpirvEntrySelectionMixin
 from .spirv_enums_and_structs import SpirvEnumStructMixin
 from .spirv_exact_lookups import spirv_builtin_call_key
 from .spirv_expression_kinds import SpirvExpressionKindMixin
@@ -129,6 +130,7 @@ class VulkanSPIRVCodeGen(
     SpirvFunctionPhaseMixin,
     SpirvFunctionParameterMixin,
     SpirvModulePhaseMixin,
+    SpirvEntrySelectionMixin,
 ):
     """Generates SPIR-V code from a CrossGL shader AST."""
 
@@ -540,6 +542,15 @@ class VulkanSPIRVCodeGen(
         entry_interface_locations = (
             interface_location_state(self) if is_entry_point else None
         )
+        program_cbuffer_members = self.cbuffer_members
+        entry_cbuffer_members = (
+            self.entry_cbuffer_members.get(function_node.name, {})
+            if is_entry_point
+            else {}
+        )
+        if entry_cbuffer_members:
+            # The members of this kernel's own constant blocks (spirv_entry_resources).
+            self.cbuffer_members = {**program_cbuffer_members, **entry_cbuffer_members}
         if execution_model_hint is None and is_entry_point and stage is None:
             execution_model_hint = self.spirv_execution_model(
                 self.get_function_qualifier(function_node)
@@ -621,6 +632,11 @@ class VulkanSPIRVCodeGen(
             self.restore_resource_binding_state(previous_entry_resource_binding_state)
         if entry_interface_locations is not None:
             restore_interface_location_state(self, entry_interface_locations)
+        if entry_cbuffer_members:
+            for name, member in self.cbuffer_members.items():
+                if name not in entry_cbuffer_members:
+                    program_cbuffer_members.setdefault(name, member)
+            self.cbuffer_members = program_cbuffer_members
         self.local_variables.clear()
         self.precise_local_variables.clear()
         self.resource_alias_variables.clear()

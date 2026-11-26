@@ -1,0 +1,1 @@
+SPIR-V output selects one entry point: `crosstl.translate(path, "vulkan", entry_point="name")` and a project's `entry_points` selection write a module that holds only the named stage or kernel, its helpers and its own resources, instead of reporting `project.translate.entry-point-target-unsupported`. An entry the program does not declare is refused with the available names.

@@ -1464,7 +1464,6 @@ def test_project_config_rejects_invalid_entry_point_lists(
         "mojo",
         "rust",
         "slang",
-        "vulkan",
         "wgsl",
     ),
 )

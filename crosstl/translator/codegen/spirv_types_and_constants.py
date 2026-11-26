@@ -239,6 +239,7 @@ class SpirvTypeConstantMixin:
         self.current_struct_members = {}
         self.cbuffer_variables = {}
         self.cbuffer_members = {}
+        self.entry_cbuffer_members = {}
         self.push_constant_block_name = None
 
         self.inputs = []
