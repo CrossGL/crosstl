@@ -149,10 +149,10 @@ def _run(metal, kernel, inputs, count):
 
 def test_readonly_buffer_pointer_is_a_const_device_argument(tmp_path):
     metal = _translate(tmp_path, COPY)
-    assert re.search(r"const device float \*fin \[\[buffer\(0\)\]\]", metal), metal
-    assert re.search(r"(?<!const )device float \*outp \[\[buffer\(1\)\]\]", metal)
+    assert re.search(r"const device float\s*\*\s*fin \[\[buffer\(0\)\]\]", metal), metal
+    assert re.search(r"(?<!const )device float\s*\*\s*outp \[\[buffer\(1\)\]\]", metal)
     # The helper the global is passed to takes it as const device too.
-    assert re.search(r"float twice\(uint i, const device float \*fin\)", metal), metal
+    assert re.search(r"float twice\(uint i, const device float\s*\*\s*fin\)", metal), metal
 
 
 def test_readonly_buffer_pointer_reflects_as_read_only(tmp_path):
