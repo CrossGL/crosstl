@@ -14,6 +14,7 @@ from typing import (
 
 from ..overload_ranking import shared_template_parameter_positions
 from ..reference_binding import argument_binds_parameter
+from .member_typedef_receivers import member_typedef_target, names_library_template
 from .qualified_receivers import qualified_struct_receiver
 from .support import (
     IDENTIFIER_RE,
@@ -134,6 +135,26 @@ class MetalReceiverMethodMixin:
         return (
             receiver_declaration is None
             or receiver_declaration.declaration_position < nearest
+        )
+
+    def _receiver_member_typedef_names_library_type(
+        self,
+        receiver_declaration: Optional[_MetalReceiverDeclaration],
+        structs_by_name: Dict[str, _MetalStructDefinition],
+    ) -> bool:
+        """Whether ``receiver_declaration`` spells a struct member alias of a Metal library template.
+
+        ``Frag::mat_type val_mat;`` where ``Frag`` declares ``typedef metal::simdgroup_matrix<float, 8, 8>
+        mat_type;`` declares a library object (:mod:`.member_typedef_receivers`), so its member calls are left to
+        the frontend like those of a receiver spelled with the template itself.
+        """
+        if receiver_declaration is None:
+            return False
+        target = member_typedef_target(
+            receiver_declaration.declared_type, structs_by_name
+        )
+        return target is not None and names_library_template(
+            target, METAL_BUILTIN_MEMBER_RECEIVER_TEMPLATE_RE
         )
 
     def _builtin_member_receiver_template_references(

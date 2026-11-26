@@ -379,24 +379,27 @@ def test_metal_reproduces_hlsl_cbuffer_matrices(tmp_path):
     compile_metal(metal, tmp_path, checks)
 
 
-def test_metal_rejects_partial_stores_to_register_matrices(tmp_path):
-    with pytest.raises(ValueError, match="part of HLSL constant-buffer matrix 'm'"):
-        translate(
-            tmp_path,
-            """
-            struct Inner { float2x3 m; float k; };
-            cbuffer Params : register(b0) { Inner inner; }
-            RWStructuredBuffer<float> o : register(u0);
-            [numthreads(1, 1, 1)]
-            void main(uint3 id : SV_DispatchThreadID)
-            {
-                Inner copy = inner;
-                copy.m[1][2] = 4.0;
-                o[id.x] = copy.m[1][2] + copy.k;
-            }
-            """,
-            "metal",
-        )
+def test_metal_stores_register_matrix_elements_in_place(tmp_path):
+    # A local copy keeps the register-word storage; an element store writes its word. The file packs matrices
+    # row_major, so HLSL m[1][2] is component 2 of register 1, word 4 * 1 + 2.
+    metal = translate(
+        tmp_path,
+        """
+        struct Inner { float2x3 m; float k; };
+        cbuffer Params : register(b0) { Inner inner; }
+        RWStructuredBuffer<float> o : register(u0);
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID)
+        {
+            Inner copy = inner;
+            copy.m[1][2] = 4.0;
+            o[id.x] = copy.m[1][2] + copy.k;
+        }
+        """,
+        "metal",
+    )
+    assert "copy.m.v[6] = 4.0;" in metal
+    assert "crosstl_hlsl_cbuffer_float2x3_load(copy.m)[1][2] + copy.k" in metal
 
 
 def test_hlsl_cbuffer_layouts_execute_on_metal(tmp_path):

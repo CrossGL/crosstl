@@ -17,8 +17,8 @@ pinned upstream specifications and compiler tables. Every feature gets a probe: 
 language's reference compiler or validator checks the result. Where CI has a runtime for the language, on a GPU, on
 Mesa's software drivers or on Direct3D 12 WARP, the translated compute probes also run and must compute what the
 native probes compute.
-CI has no runtime for CUDA, HIP, OpenCL C, Mojo or WebGL, so the chart marks those rows compile-only. The score is
-supported / (supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
+CI has no runtime for CUDA, HIP, OpenCL C, Mojo, GLSL ES or WebGL, so the chart marks those rows compile-only. The
+score is supported / (supported + refused + wrong). [COVERAGE.md](https://github.com/CrossGL/crosstl/blob/coverage/COVERAGE.md)
 defines each outcome and lists every gap behind each bar.
 
 ## Install
@@ -98,8 +98,9 @@ each language has [a page of its own](https://github.com/CrossGL/crosstl/blob/co
 scores by category, the language pairs it translates to and from, and every gap.
 CrossTL has no OpenCL C generator, so the OpenCL C input row checks the HLSL that CrossTL writes from each OpenCL C
 probe. The language names `glsl`, `hlsl`, `msl` and `spirv` work as backend names too, and `cgl` writes the CrossGL a
-native source imports to. CrossGL has its own coverage row, CrossGL IR, which measures how many of the features of
-all the measured output languages CrossGL can express.
+native source imports to. `backend="gles"` writes GLSL ES 3.x for OpenGL ES, which has rows of its own in both
+directions. CrossGL has its own coverage row, CrossGL IR, which measures how many of the features of all the measured
+output languages CrossGL can express.
 
 CrossTL is meant to fail closed: a construct it cannot translate raises a diagnostic that names the construct and
 the target, instead of emitting a placeholder. Output that the reference tool rejects, or that has a comment saying

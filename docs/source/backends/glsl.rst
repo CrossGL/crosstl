@@ -52,9 +52,12 @@ such as a compute stage or a geometry shader.
 
     gles = crosstl.translate("saxpy.cgl", backend="gles")
 
-The coverage report has a GLSL ES row for this target. Its feature list is the
+The coverage report has GLSL ES rows for this target. Their feature list is the
 GLSL ES 3.20 text of the same specification source the GLSL row reads, and
-glslang checks each translation as GLSL ES. The WebGL row measures GLSL ES 3.00
+glslang checks each translation as GLSL ES. The output row translates each
+CrossGL probe to GLSL ES; the input row imports each GLSL ES probe, which the
+GLSL frontend reads under its ``#version 3x0 es`` line, and writes it back as
+GLSL ES. The WebGL row measures GLSL ES 3.00
 output for WebGL 2.
 
 Half-Precision Values
