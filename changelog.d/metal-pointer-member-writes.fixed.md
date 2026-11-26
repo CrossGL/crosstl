@@ -1,1 +1,0 @@
-Metal input keeps a pointer member in its struct when a method advances, reassigns or takes the address of it (`src += 2;`, `++src;`, `src = p;`), where direct pointer-member promotion passed the member to each method by value and dropped the advance on every target (#2501).

@@ -1,1 +1,0 @@
-Metal input lowers a functor local whose type is a template argument (`Op op; return op(a, b);`) in a class template first instantiated from a member-template body, where the call was left unlowered and the output did not compile (#3530).

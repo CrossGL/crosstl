@@ -1,1 +1,0 @@
-CUDA, HIP, Rust and Mojo output no longer treat HLSL resources in different register classes (such as ``register(b0)`` and ``register(u0)``) as binding conflicts. Conflicts are reported when two resources share the same register class and number, or when a classless binding overlaps an explicit register (#4764).

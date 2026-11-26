@@ -1,1 +1,0 @@
-HIP input imports `__shfl`, `__shfl_up`, `__shfl_down` and `__shfl_xor` whose width the kernel computes at run time, with HIP's own segment arithmetic, and `__ballot` as the 64-bit mask of the CrossGL wave ballot. Both were refused before. A lane, width or predicate operand with a side effect, and a literal width that is not a power of two up to 64, are still refused.
