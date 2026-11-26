@@ -18,7 +18,6 @@ from types import SimpleNamespace
 
 import pytest
 
-import crosstl
 import crosstl.project as project_api
 from crosstl.translator.ast import VariableNode
 from crosstl.translator.codegen.spirv_entry_resources import (
@@ -29,6 +28,7 @@ from crosstl.translator.codegen.spirv_entry_selection import (
 )
 from crosstl.translator.codegen.spirv_hlsl_registers import reserve_exact_binding
 from crosstl.translator.refusals import VulkanRefusal
+from tests.spirv_friendly_names import friendly_spirv, translate_spirv
 
 SAME_PARAMETERS = """
 __global__ void a(float* o, const float* i, int w) { o[threadIdx.x] = i[threadIdx.x] * w; }
@@ -84,7 +84,7 @@ TWO_STAGE_BLOCKS = textwrap.dedent("""
 def _translate(tmp_path, source, suffix=".cu", **options):
     path = tmp_path / f"kernels{suffix}"
     path.write_text(source, encoding="utf-8")
-    return crosstl.translate(str(path), backend="vulkan", **options)
+    return translate_spirv(path, **options)
 
 
 def _validate(tmp_path, code):
@@ -209,7 +209,7 @@ def test_project_entry_selection_writes_a_module_of_the_selected_stage(tmp_path)
     assert artifact["path"] == "out/vulkan/multi/second.spvasm"
     assert artifact["entryPoint"]["source"] == "second"
     assert artifact["provenance"]["pipeline"] == "entry-scoped-translate"
-    code = (repo / artifact["path"]).read_text(encoding="utf-8")
+    code = friendly_spirv((repo / artifact["path"]).read_text(encoding="utf-8"))
     assert [name for _function, name in _entry_points(code)] == ["second"]
     assert sorted(_slots(code).values()) == [(0, 0), (0, 1)]
     assert "OpFunctionCall" in code

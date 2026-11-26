@@ -13,7 +13,7 @@ import re
 import shutil
 import subprocess
 
-import crosstl
+from tests.spirv_friendly_names import translate_spirv
 
 HELPERS = """
 __device__ float get(const float* a, int i) { return a[i] * 2.0f; }
@@ -57,7 +57,7 @@ def _validate(tmp_path, code):
 def test_helpers_taking_generic_pointers_read_the_memory_they_are_given(tmp_path):
     path = tmp_path / "helpers.cu"
     path.write_text(HELPERS, encoding="utf-8")
-    code = crosstl.translate(str(path), backend="vulkan")
+    code = translate_spirv(path)
     assert "ptr<" not in code
     # put(c + 1, i, 3) stores 3 into c[(0 + 1) + i].
     store = re.search(
