@@ -1037,12 +1037,22 @@ class VectorArithmeticMixin:
             return None
         left_type = self.expression_result_type(left_node)
         right_type = self.expression_result_type(right_node)
+        left_info = self.vector_type_info(left_type)
+        right_info = self.vector_type_info(right_type)
         if operator in {"%", "mod"}:
-            left_info = self.arithmetic_vector_type_info(left_type)
-            right_info = self.arithmetic_vector_type_info(right_type)
-        else:
-            left_info = self.vector_type_info(left_type)
-            right_info = self.vector_type_info(right_type)
+            # Native half2 is deliberately absent from vector_type_info. Only
+            # half2 combined with a half scalar needs a vector helper here;
+            # half2 against half2 is handled by the dedicated remainder helper.
+            left_mapped = (
+                self.map_vector_arithmetic_type(left_type) if left_type else None
+            )
+            right_mapped = (
+                self.map_vector_arithmetic_type(right_type) if right_type else None
+            )
+            if left_mapped == "half2" and right_mapped == "half":
+                left_info = self.arithmetic_vector_type_info(left_type)
+            elif right_mapped == "half2" and left_mapped == "half":
+                right_info = self.arithmetic_vector_type_info(right_type)
         if not left_info and not right_info:
             return None
         if left_info and right_info:
