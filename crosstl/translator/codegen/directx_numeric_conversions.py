@@ -33,6 +33,7 @@ from .directx_values import (
     DirectXContextualConversionError,
     DirectXRecursiveFunctionError,
 )
+from .hlsl_pointer_comparisons import refuse_hlsl_pointer_truth_value
 
 
 class DirectXNumericConversionMixin:
@@ -476,6 +477,10 @@ class DirectXNumericConversionMixin:
     def generate_expression_with_expected(
         self, expr, expected_type, *, source_location=None
     ):
+        if self.type_name_string(expected_type) == "bool":
+            refused = refuse_hlsl_pointer_truth_value(self, expr)
+            if refused is not None:
+                return refused
         previous_expected_type = self.current_expression_expected_type
         self.current_expression_expected_type = self.type_name_string(expected_type)
         try:
