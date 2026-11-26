@@ -2719,6 +2719,28 @@ class TestCudaCodeGen:
         assert "fmodf(a, b)" not in cuda_code
         assert "fmodf(v, w)" not in cuda_code
 
+    def test_native_half2_remainder_with_half_scalar_uses_float_helpers(self):
+        source_code = """
+        shader Mod {
+            f16vec2 p(f16vec2 v, half s) { return v % s; }
+            f16vec2 q(f16vec2 v, half s) { return mod(v, s); }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        cuda_code = CudaCodeGen().generate(ast)
+
+        # Native half2 has no % operator and cannot be passed to fmodf. Both
+        # lanes must be converted to float, reduced, and packed again.
+        assert (
+            "__float2half(fmodf(__half2float(lhs.x), __half2float(rhs)))" in cuda_code
+        )
+        assert "return __halves2half2(" in cuda_code
+        assert "return cgl_half2_mod_scalar(v, s);" in cuda_code
+        assert "return cgl_half2_glsl_mod_scalar(v, s);" in cuda_code
+        assert "return (v % s);" not in cuda_code
+        assert "return fmodf(v, s);" not in cuda_code
+
     def test_half_vector_mix_fract_step_atan_fma_use_float_helpers(self):
         source_code = """
         shader M {
