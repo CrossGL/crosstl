@@ -23,6 +23,10 @@ from .stage_utils import (
     requests_early_fragment_tests,
 )
 
+# The interpolation modifier an implicit entry parameter needs besides its system value: SV_Barycentrics is the
+# perspective-correct barycentric unless the parameter is noperspective.
+SLANG_IMPLICIT_PARAMETER_MODIFIERS = {"gl_BaryCoordNoPerspEXT": "noperspective "}
+
 
 class SlangFunctionPartsMixin:
     """Function-rendering members of ``SlangCodeGen.generate_function``."""
@@ -262,7 +266,10 @@ class SlangFunctionPartsMixin:
             body_statements, shader_type, effective_param_list, stage_role=stage_role
         ):
             self.register_variable_type(param_name, param_type)
-            params.append(f"{self.convert_type(param_type)} {param_name} : {semantic}")
+            modifier = SLANG_IMPLICIT_PARAMETER_MODIFIERS.get(param_name, "")
+            params.append(
+                f"{modifier}{self.convert_type(param_type)} {param_name} : {semantic}"
+            )
 
         if shader_type is None:
             existing_param_names = {

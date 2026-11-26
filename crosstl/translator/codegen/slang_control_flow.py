@@ -6,6 +6,7 @@ from ..ast import (
     AssignmentNode,
     AtomicOpNode,
     BinaryOpNode,
+    BlockNode,
     BreakNode,
     CaseNode,
     ConstructorPatternNode,
@@ -38,6 +39,7 @@ from .match_utils import (
     infer_match_expression_result_type,
     is_switch_lowerable_match,
 )
+from .slang_switch_cases import slang_case_needs_scope
 
 
 class SlangControlFlowMixin:
@@ -273,7 +275,8 @@ class SlangControlFlowMixin:
         result = f"switch ({expression})\n{{\n"
 
         self.indent_level += 1
-        for case in getattr(node, "cases", []):
+        cases = list(getattr(node, "cases", []) or [])
+        for position, case in enumerate(cases):
             if not isinstance(case, CaseNode):
                 continue
 
@@ -284,8 +287,13 @@ class SlangControlFlowMixin:
                 result += self.indent() + f"case {case_value}:\n"
 
             self.indent_level += 1
-            for stmt in self.get_statements(case.statements):
-                result += self.emit_statement(stmt) + "\n"
+            if slang_case_needs_scope(self, cases, position):
+                # The case's own locals end with its braces (slang_switch_cases.py).
+                block = BlockNode(list(self.get_statements(case.statements)))
+                result += self.indent() + self.generate_block_statement(block) + "\n"
+            else:
+                for stmt in self.get_statements(case.statements):
+                    result += self.emit_statement(stmt) + "\n"
             self.indent_level -= 1
         self.indent_level -= 1
 

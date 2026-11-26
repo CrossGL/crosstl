@@ -27,10 +27,11 @@ has no clamp overload, and an explicit level of ``max(0, clamp)`` would apply th
 instead of before it.
 
 Mesh and task stages are left unchanged: their implicit-LOD semantics depend on derivative groups, which the
-emitters decide on their own. The compute stage is too, except for DirectX and Rust: SPIR-V's emitter already samples
-the base level there, while DXC accepts an implicit-LOD ``Sample`` in a compute shader only under Shader Model 6.6
-with a derivative-capable thread-group shape, and then takes quad derivatives instead of the base level, and rust-gpu
-rejects an ``ImplicitLod`` instruction in the GLCompute execution model. For those targets the implicit-LOD samples a
+emitters decide on their own. The compute stage is too, except for DirectX, Slang and Rust: SPIR-V's emitter already
+samples the base level there, while DXC accepts an implicit-LOD ``Sample`` in a compute shader only under Shader Model
+6.6 with a derivative-capable thread-group shape, and then takes quad derivatives instead of the base level, slangc
+does the same for every target (error E31211 or E31210 for any other thread group), and rust-gpu rejects an
+``ImplicitLod`` instruction in the GLCompute execution model. For those targets the implicit-LOD samples a
 compute stage reaches are therefore rewritten to level 0 as well; nothing is refused there, because derivative
 functions in compute shaders remain the emitter's decision.
 """
@@ -74,7 +75,7 @@ EXPLICIT_LOD_TARGETS = frozenset(
 )
 
 # Targets whose compute-stage samples are rewritten to the base level, without the base-level stages' refusals.
-_COMPUTE_BASE_LEVEL_TARGETS = frozenset({"directx", "hlsl", "rust"})
+_COMPUTE_BASE_LEVEL_TARGETS = frozenset({"directx", "hlsl", "slang", "rust"})
 _COMPUTE_STAGES = frozenset({"compute"})
 
 # Targets that print CrossGL itself and keep the program unchanged.

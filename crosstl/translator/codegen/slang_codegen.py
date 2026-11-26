@@ -29,6 +29,9 @@ from ..ast import (
 from ..host_workgroup_size import function_entry_execution_config
 from ..renames import renamed
 from ..semantics.builtin_values import glsl_builtin_name
+from ..semantics.structured_buffer_counters import (
+    materialize_structured_buffer_counters,
+)
 from .array_utils import (
     collect_literal_int_constants,
     collect_struct_member_types,
@@ -112,6 +115,10 @@ from .slang_expression_nodes import (
     SlangExpressionNodeMixin,
 )
 from .slang_expression_parts import SlangExpressionPartsMixin
+from .slang_foreign_types import (
+    record_slang_type_name,
+    refuse_written_slang_foreign_types,
+)
 from .slang_function_parts import SlangFunctionPartsMixin
 from .slang_geometry_stages import SlangGeometryStagesMixin
 from .slang_glsl_buffer_access import SlangGlslBufferAccessMixin
@@ -485,7 +492,15 @@ class SlangCodeGen(
         """Generate the program with its generic pointers specialized, refusing any the output still spells."""
         ast = assign_generic_pointer_spaces(ast, self.refuse_lowering)
         refuse_slang_pointer_declarations(ast, self.refuse_lowering)
-        code = self.generate_program(ast)
+        # Slang declares RWStructuredBuffer.IncrementCounter for its HLSL target only (hlsl.meta.slang
+        # [require(hlsl)]), so the counter is an explicit buffer, as DXC binds it for SPIR-V.
+        ast = materialize_structured_buffer_counters(ast, self.refuse_lowering)
+        self.slang_foreign_type_names = set()
+        try:
+            code = self.generate_program(ast)
+            refuse_written_slang_foreign_types(self, code)
+        finally:
+            self.slang_foreign_type_names = None
         refuse_written_generic_pointers(code, self.refuse_lowering, "Slang")
         return code
 
@@ -1824,6 +1839,11 @@ class SlangCodeGen(
             "i64": "int64_t",
             "u64": "uint64_t",
             "int8": "int8_t",
+            # C and MSL's 8- and 16-bit integers; Slang has no char or short (CUDA and MSL char is signed).
+            "char": "int8_t",
+            "uchar": "uint8_t",
+            "short": "int16_t",
+            "ushort": "uint16_t",
             "uint8": "uint8_t",
             "int64": "int64_t",
             "uint64": "uint64_t",
@@ -2002,4 +2022,4 @@ class SlangCodeGen(
         if generic_resource_type is not None:
             return generic_resource_type
 
-        return type_name
+        return record_slang_type_name(self, type_name)

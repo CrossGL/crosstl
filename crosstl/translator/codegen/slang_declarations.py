@@ -167,6 +167,9 @@ class SlangDeclarationsMixin:
         return self.generate_expression(expr)
 
     def format_declaration(self, type_name, name, node=None):
+        if type_name == "auto":
+            # A declaration whose type is inferred from its initializer, such as a lambda's; Slang spells it var.
+            return f"var {name}"
         mapped_type = self.map_resource_type_with_format(type_name, node)
         # Only the declaration names the rasterizer-ordered view; its accesses are those of the RW type.
         declared_type = slang_rasterizer_ordered_type(self, mapped_type, node)
@@ -229,6 +232,12 @@ class SlangDeclarationsMixin:
                 mapped = self.slang_interpolation_qualifier(normalized)
             else:
                 mapped = None
+            if mapped and mapped not in seen:
+                seen.add(mapped)
+                qualifiers.append(mapped)
+        # A parameter's ``@ centroid`` annotation (``vec2 uv @ TexCoord0 @ centroid``) is its interpolation too.
+        for attr in getattr(node, "attributes", []) or []:
+            mapped = self.slang_interpolation_qualifier(getattr(attr, "name", attr))
             if mapped and mapped not in seen:
                 seen.add(mapped)
                 qualifiers.append(mapped)

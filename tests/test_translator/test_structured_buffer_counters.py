@@ -1,4 +1,4 @@
-"""Hidden ``RWStructuredBuffer`` counters reach Metal and GLSL as explicit counter buffers.
+"""Hidden ``RWStructuredBuffer`` counters reach Metal, GLSL and Slang as explicit counter buffers.
 
 HLSL ``IncrementCounter()`` returns the counter before the increment and ``DecrementCounter()`` the counter after
 the decrement. Neither target has a hidden counter, so each counted buffer gets a ``<name>Counter`` buffer that the
@@ -292,10 +292,17 @@ def test_cuda_and_hip_counters_use_a_counter_buffer(tmp_path, backend):
         )
 
 
-def test_slang_keeps_the_counter_methods(tmp_path):
+def test_slang_counter_methods_use_a_counter_buffer(tmp_path):
+    # Slang declares IncrementCounter and DecrementCounter for its HLSL target only (hlsl.meta.slang
+    # [require(hlsl)]); slangc rejects them for SPIR-V, so Slang binds the counter as DXC does for SPIR-V.
     slang = translate(tmp_path, HLSL_HELPERS, "hlsl", "slang")
-    assert "uint i = q.IncrementCounter();" in slang
-    assert "return q.DecrementCounter();" in slang
+    assert "IncrementCounter" not in slang and "DecrementCounter" not in slang
+    assert "RWStructuredBuffer<uint> upsCounter" in slang
+    assert "RWStructuredBuffer<uint> downsCounter" in slang
+    assert "InterlockedAdd(qCounter[0u], 1u, cgl_atomicAdd_original);" in slang
+    assert "InterlockedAdd(qCounter[0u], 4294967295u, cgl_atomicAdd_original);" in slang
+    assert "return cgl_atomicAdd_original - 1u;" in slang
+    assert "forward(ups, upsCounter, tid.x + 1u);" in slang
     with pytest.raises(Exception, match="requires a read-write RWStructuredBuffer"):
         translate(
             tmp_path,

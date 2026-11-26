@@ -644,6 +644,11 @@ ADVANCED_SMOKE_REFUSALS = {
     "vulkan": (SPIRVBuiltinLoweringError, "no function pointers"),
     # rust-gpu has no function tables or indirect command buffers: the calls through them are refused by name.
     "rust": (LoweringRefused, r"'vft\[0\]' has no rust-gpu lowering"),
+    # Slang has no function tables either; its output refuses the foreign type by name instead of copying it.
+    "slang": (
+        LoweringRefused,
+        "the built-in type 'visible_function_table' of another language has no Slang spelling",
+    ),
     **{
         backend: (
             LoweringRefused,

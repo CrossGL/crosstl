@@ -16,12 +16,19 @@ from .generic_function_utils import (
     generic_function_call_name,
     reject_unresolved_generic_function_call,
 )
+from .slang_binary64_math import slang_binary64_math_refusal
 from .slang_buffer_lengths import (
     slang_glsl_buffer_block_length,
     slang_structured_buffer_length,
 )
+from .slang_buffer_out_arguments import slang_buffer_out_argument_refusal
 from .slang_core_functions import generate_slang_core_function_call
 from .slang_shader_clocks import generate_slang_shader_clock_call
+from .slang_value_calls import (
+    generate_slang_double_word_call,
+    generate_slang_sincos_call,
+    slang_empty_value_constructor,
+)
 from .slang_value_resizes import slang_resize_constructor
 from .slang_wave_shuffles import (
     as_type_target,
@@ -194,6 +201,17 @@ class SlangCallExpressionMixin:
                 for argument in (condition, true_value, false_value)
             )
             return f"select({args})"
+        if callee == "sincos" and callee not in self.user_function_names:
+            sincos_call = generate_slang_sincos_call(self, node.args)
+            if sincos_call is not None:
+                return sincos_call
+        if isinstance(callee, str) and callee not in self.user_function_names:
+            double_word_call = generate_slang_double_word_call(self, callee, node.args)
+            if double_word_call is not None:
+                return double_word_call
+            binary64_refusal = slang_binary64_math_refusal(self, callee, node.args)
+            if binary64_refusal is not None:
+                return binary64_refusal
         if callee == "inverse" and callee not in self.user_function_names:
             if len(node.args) != 1:
                 fallback_type = self.current_expression_expected_type or "float"
@@ -230,6 +248,9 @@ class SlangCallExpressionMixin:
             return f"{self.convert_type(callee)}({args})"
         bitcast_callee = self.slang_bitcast_intrinsic_callee(callee)
         if isinstance(callee, str) and callee in self.user_function_names:
+            buffer_argument_refusal = slang_buffer_out_argument_refusal(self, node)
+            if buffer_argument_refusal is not None:
+                return buffer_argument_refusal
             args = self.generate_user_function_arguments(callee, node.args)
         elif bitcast_callee is not None:
             args = ", ".join(
@@ -272,4 +293,8 @@ class SlangCallExpressionMixin:
             if core_call is not None:
                 return core_call
             callee = self.slang_callee_name(callee)
+            if not node.args:
+                zero_value = slang_empty_value_constructor(callee)
+                if zero_value is not None:
+                    return zero_value
         return f"{callee}({args})"

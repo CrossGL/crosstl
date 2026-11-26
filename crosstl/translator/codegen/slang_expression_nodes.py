@@ -3,6 +3,7 @@
 from ..ast import (
     BinaryOpNode,
     IdentifierNode,
+    MemberAccessNode,
 )
 from .c_family_operands import (
     postfix_operand,
@@ -18,6 +19,7 @@ from .slang_cull_distance import (
     slang_cull_distance_argument,
     slang_is_scalar_cull_distance_member,
 )
+from .slang_value_calls import slang_empty_value_constructor
 from .slang_value_resizes import slang_resize_constructor
 
 HIT_TRIANGLE_VERTEX_POSITIONS = "gl_HitTriangleVertexPositionsEXT"
@@ -86,6 +88,15 @@ class SlangExpressionNodeMixin:
             object_type, node.member
         )
         if member_info is not None:
+            if not isinstance(node.object, (IdentifierNode, MemberAccessNode)):
+                # One global per member stands for a single structure; an element of an array or buffer of them
+                # (Metal's ``slots[k].tex``) would lose its index.
+                return self.refuse_lowering(
+                    f"Slang structure resource member '{object_type}.{node.member}': the generator writes the "
+                    "member as one global resource, so an element of an array or buffer of these structures "
+                    "has no resource of its own",
+                    member_info["global_name"],
+                )
             return member_info["global_name"]
         obj = postfix_operand(self.generate_expression_without_expected(node.object))
         if slang_is_scalar_cull_distance_member(self, object_type, node.member):
@@ -127,6 +138,11 @@ class SlangExpressionNodeMixin:
         if matrix_constructor is not None:
             return matrix_constructor
         callee = self.convert_type(constructor_type)
+        if not node.arguments:
+            # ``vec4{}`` is the zero value; Slang has no empty scalar, vector or matrix constructor.
+            zero_value = slang_empty_value_constructor(callee)
+            if zero_value is not None:
+                return zero_value
         args = ", ".join(self.generate_expression(arg) for arg in node.arguments)
         return f"{callee}({args})"
 
