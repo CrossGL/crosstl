@@ -16,6 +16,7 @@ import subprocess
 import pytest
 
 from crosstl.backend.usage_slots import UsageSlots
+from crosstl.translator.refusals import WGSLRefusal
 from tests.test_translator.test_metal_stage_varyings import metal_compiler
 from tests.test_translator.test_spirv_separate_textures import (
     _image_shape,
@@ -244,15 +245,18 @@ def test_hlsl_hoists_a_msl_comparison_sampler_array_from_the_entry(tmp_path):
 )
 def test_wgsl_and_slang_declare_comparison_samplers(tmp_path, source, suffix):
     unused = "unusedCs" if suffix == ".hlsl" else "unusedCmp"
-    wgsl = _translate(tmp_path, source, suffix, "wgsl")
     slang = _translate(tmp_path, source, suffix, "slang")
 
-    assert re.search(rf"var {unused}: sampler_comparison;", wgsl)
     assert re.search(rf"SamplerComparisonState {unused}\b", slang)
     assert not re.search(rf"SamplerState {unused}\b", slang)
-    if "csArr" not in source:
-        # Core WGSL has no sampler arrays, so only the array-free source can validate.
-        _validate_wgsl(tmp_path, wgsl)
+    if "csArr" in source:
+        # Core WGSL has no sampler arrays (binding_array is a language extension), so the array is refused.
+        with pytest.raises(WGSLRefusal, match="resource array csArr"):
+            _translate(tmp_path, source, suffix, "wgsl")
+        return
+    wgsl = _translate(tmp_path, source, suffix, "wgsl")
+    assert re.search(rf"var {unused}: sampler_comparison;", wgsl)
+    _validate_wgsl(tmp_path, wgsl)
 
 
 @pytest.mark.parametrize(

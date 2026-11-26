@@ -327,6 +327,13 @@ class WGSLValueTypeMixin:
     def vector_component_count(self, vtype):
         if isinstance(vtype, VectorType):
             return vtype.size
+        if isinstance(vtype, NamedType) and not vtype.generic_args:
+            # Imported sources name vectors by their spelling (``float3``), which the parser keeps as a NamedType.
+            lower = str(vtype.name).strip().lower()
+            match = self.VECTOR_TYPE_RE.match(
+                lower
+            ) or self.FLOAT16_VECTOR_TYPE_RE.match(lower)
+            return int(match.group(1)) if match else None
         if isinstance(vtype, str):
             match = re.fullmatch(r"vec([234])<[^>]+>", self.map_type_name(vtype))
             if match:

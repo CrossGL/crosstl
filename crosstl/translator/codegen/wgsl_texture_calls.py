@@ -20,6 +20,7 @@ from .wgsl_texture_bias import (
     WGSLTextureBiasUnsupportedError,
     has_texture_sample_bias,
 )
+from .wgsl_texture_grad_1d import wgsl_texture_1d_grad_call
 
 
 class WGSLTextureCallMixin:
@@ -482,6 +483,11 @@ class WGSLTextureCallMixin:
             self.refuse_comparison_sampler(
                 args[1], function_name, args[0], "textureSampleGrad"
             )
+        one_dimensional = wgsl_texture_1d_grad_call(
+            self, function_name, args, offset=False
+        )
+        if one_dimensional is not None:
+            return one_dimensional
         return self.generate_texture_builtin_call(
             "textureSampleGrad", function_name, args, implicit=4, explicit=5
         )
@@ -491,6 +497,7 @@ class WGSLTextureCallMixin:
             self.refuse_comparison_sampler(
                 args[1], function_name, args[0], "textureSampleGrad"
             )
+        wgsl_texture_1d_grad_call(self, function_name, args, offset=True)
         return self.generate_texture_builtin_call(
             "textureSampleGrad", function_name, args, implicit=5, explicit=6
         )

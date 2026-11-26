@@ -11,6 +11,11 @@ from .wgsl_foreign_calls import (
     WGSLForeignBuiltinCallError,
     is_foreign_wgsl_call,
 )
+from .wgsl_non_finite_constants import (
+    constant_integer_value,
+    is_non_finite_f32_bits,
+    wgsl_runtime_f32_from_bits,
+)
 
 
 class WGSLCallLoweringMixin:
@@ -161,7 +166,12 @@ class WGSLCallLoweringMixin:
         argument = node.arguments[0]
         lanes = self.vector_component_count(self.expression_type(argument))
         target = scalar if lanes is None else f"vec{lanes}<{scalar}>"
-        return f"bitcast<{target}>({self.generate_expression(argument)})"
+        rendered = self.generate_expression(argument)
+        if target == "f32" and is_non_finite_f32_bits(
+            constant_integer_value(self, argument)
+        ):
+            return wgsl_runtime_f32_from_bits(self, rendered)
+        return f"bitcast<{target}>({rendered})"
 
     def generate_half_conversion_helpers(self):
         """The helper functions used for half float vector packing/unpacking."""

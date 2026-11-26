@@ -83,12 +83,18 @@ ATOMIC_MODIFY_NAMES = frozenset(
     }
 )
 ATOMIC_COMPARE_NAMES = frozenset({"atomicCompSwap", "atomicCompareExchange"})
+# CrossGL's weak compare-exchange, which MSL's atomic_compare_exchange_weak_explicit imports to: it returns whether
+# it exchanged and, when it did not, writes the value it found to its l-value second argument.
+WEAK_COMPARE_NAME = "atomicCompareExchangeWeak"
 ATOMIC_NAMES = (
-    ATOMIC_MODIFY_NAMES | ATOMIC_COMPARE_NAMES | {"atomicLoad", "atomicStore"}
+    ATOMIC_MODIFY_NAMES
+    | ATOMIC_COMPARE_NAMES
+    | {WEAK_COMPARE_NAME, "atomicLoad", "atomicStore"}
 )
 ATOMIC_ARITY = {
     **{name: 2 for name in ATOMIC_MODIFY_NAMES},
     **{name: 3 for name in ATOMIC_COMPARE_NAMES},
+    WEAK_COMPARE_NAME: 3,
     "atomicLoad": 1,
     "atomicStore": 2,
 }
@@ -145,13 +151,16 @@ class AtomicSlot:
 class WGSLCompareExchangeLoop(StatementNode):
     """A strong compare-exchange as a retry loop of ``atomicCompareExchangeWeak``; see the module docstring."""
 
-    def __init__(self, target, compare, value, slot, name, **kwargs):
+    def __init__(self, target, compare, value, slot, name, expected=None, **kwargs):
         super().__init__(**kwargs)
         self.target = target
         self.compare = compare
         self.value = value
         self.slot = slot
         self.name = name
+        # For CrossGL's weak compare-exchange, the l-value that receives the found value when the exchange fails;
+        # the statement is then one attempt rather than a retry loop.
+        self.expected = expected
 
 
 def _set(node, **fields):
@@ -898,6 +907,8 @@ class _Rewriter:
                 f"{name} needs an integer in a storage buffer or workgroup variable as its first "
                 "argument (WGSL section 6.2.8)"
             )
+        if name == WEAK_COMPARE_NAME:
+            return self.weak_compare_exchange(call, slot, prelude, conditional)
         arguments[0] = self.location(arguments[0], prelude, conditional)
         for index in range(1, len(arguments)):
             arguments[index] = self.expr(arguments[index], prelude, conditional)
@@ -923,6 +934,51 @@ class _Rewriter:
         prelude.append(old_value)
         self.declare(old_value.name, slot.scalar)
         return IdentifierNode(old_value.name)
+
+    def weak_compare_exchange(self, call, slot, prelude, conditional):
+        """``atomicCompareExchangeWeak(target, expected, desired)`` as one WGSL attempt before its statement.
+
+        WGSL's ``atomicCompareExchangeWeak`` returns the value it found and whether it exchanged (section 17.8.5),
+        so the statement before the call's own stores the found value to ``expected`` when it did not exchange,
+        and the call's value is whether it did. Both may fail spuriously, so one attempt keeps the meaning.
+        """
+        target, expected, desired = call.arguments
+        if prelude is None or conditional:
+            raise WGSLAtomicLoweringError(
+                f"{WEAK_COMPARE_NAME} writes its expected value before its statement in WGSL; a "
+                "conditionally evaluated operand, a for-loop update or a do-while condition has no such place"
+            )
+        if self.slot_at(expected) is not None:
+            raise WGSLAtomicLoweringError(
+                f"{WEAK_COMPARE_NAME} takes atomic memory as its expected value, which WGSL cannot write "
+                "with an ordinary store"
+            )
+        if not isinstance(
+            expected, (IdentifierNode, MemberAccessNode, ArrayAccessNode)
+        ) or not _repeatable(expected):
+            raise WGSLAtomicLoweringError(
+                f"{WEAK_COMPARE_NAME} needs a variable or a side-effect-free l-value as its expected value"
+            )
+        target = self.location(target, prelude, conditional)
+        compare = self.expr(copy.deepcopy(expected), prelude, conditional)
+        desired = self.expr(desired, prelude, conditional)
+        program = self.program
+        result = f"{COMPARE_PREFIX}{program.compare_count}"
+        program.compare_count += 1
+        prelude.append(
+            WGSLCompareExchangeLoop(
+                target, compare, desired, slot, result, expected=expected
+            )
+        )
+        exchanged = VariableNode(
+            f"{result}_exchanged",
+            PrimitiveType("bool"),
+            MemberAccessNode(IdentifierNode(result), "exchanged"),
+            is_mutable=False,
+        )
+        prelude.append(exchanged)
+        self.declare(exchanged.name, exchanged.var_type)
+        return IdentifierNode(exchanged.name)
 
 
 def _needs_plan(ast):
@@ -1054,6 +1110,19 @@ class WGSLBufferAtomicsMixin:
         exchange = (
             f"atomicCompareExchangeWeak({name}_ptr, {name}_compare, {name}_value)"
         )
+        if stmt.expected is not None:
+            expected = self.generate_expression(stmt.expected)
+            return "\n".join(
+                [
+                    f"{pad}let {name}_ptr = &{target};",
+                    f"{pad}let {name}_compare: {scalar} = {compare};",
+                    f"{pad}let {name}_value: {scalar} = {value};",
+                    f"{pad}let {name} = {exchange};",
+                    f"{pad}if (!{name}.exchanged) {{",
+                    f"{inner}{expected} = {name}.old_value;",
+                    f"{pad}}}",
+                ]
+            )
         return "\n".join(
             [
                 f"{pad}let {name}_ptr = &{target};",

@@ -92,6 +92,7 @@ class WGSLProgramSectionMixin:
         self._function_signature_identifier_names = {}
         self._function_overloads_by_name = {}
         self._type_identifier_names = {}
+        self.written_foreign_wgsl_types = {}
         self._struct_member_identifier_names = {}
         self._structs_by_name = {}
         self._struct_member_types = {}

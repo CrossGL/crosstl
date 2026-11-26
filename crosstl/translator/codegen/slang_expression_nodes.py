@@ -49,7 +49,9 @@ class SlangExpressionNodeMixin:
         ):
             # GL_EXT_ray_tracing_position_fetch's array; Slang reads one vertex position at a time.
             return f"HitTriangleVertexPosition({index})"
-        array = postfix_operand(self.generate_expression(array_expr))
+        # The subscript's expected type is the element's, not the subscripted value's: ``textureLod(...)[0]``
+        # stored to a float reads a float4.
+        array = postfix_operand(self.generate_expression_without_expected(array_expr))
         return f"{array}[{index}]"
 
     def generate_slang_array_literal_expression(

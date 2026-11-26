@@ -325,7 +325,10 @@ class WGSLTypeNameMixin:
             rows = matrix_match.group(2) or columns
             return f"mat{columns}x{rows}<f32>"
 
-        return self.type_identifier_name(normalized)
+        written = self.type_identifier_name(normalized)
+        if normalized not in self._type_identifier_names:
+            self.record_foreign_wgsl_type(normalized, written)
+        return written
 
     def generic_vector_type_name(self, vtype):
         if not isinstance(vtype, NamedType):
@@ -462,7 +465,10 @@ class WGSLTypeNameMixin:
             return None
         element_type = self.array_element_type(vtype)
         resource_type = self.resource_type_name(element_type)
-        if resource_type is not None and self.is_resource_type_name(resource_type):
+        if resource_type is not None and (
+            self.is_resource_type_name(resource_type)
+            or resource_type in self.COMPARISON_SAMPLER_TYPE_NAMES
+        ):
             return self.type_display_name(element_type)
         return self.storage_buffer_like_type_name(element_type)
 
