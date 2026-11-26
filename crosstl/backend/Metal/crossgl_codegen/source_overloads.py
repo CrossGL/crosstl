@@ -12,6 +12,7 @@ from ..namespaced_functions import (
     METAL_LIBRARY_MATH_FUNCTIONS,
     declared_in_several_namespaces,
 )
+from ..portable_builtins import renamed_metal_function
 from ..using_declared_library_names import using_declared_library_names
 from .support import (
     _PLAIN_TYPE_NAME,
@@ -34,6 +35,9 @@ class MetalSourceOverloadMixin:
                 if metal_math_name is not None:
                     return metal_math_name
                 return self.sanitize_identifier(name)
+            renamed = renamed_metal_function(self, name)
+            if renamed is not None:
+                return renamed
             precise_math_name = self.map_metal_precise_math_function_name(name, args)
             if precise_math_name is not None:
                 return precise_math_name
