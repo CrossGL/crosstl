@@ -29,6 +29,7 @@ from contextvars import ContextVar
 
 from .. import ast as A
 from ..diagnostics import CODE_PREFIX, TranslationDiagnostic
+from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .builtin_type_names import BUILTIN_TYPE_NAMES
 from .feedback_textures import FEEDBACK_TEXTURE_TYPES, is_sampler_feedback_kind
 
@@ -189,7 +190,7 @@ def _referenced_names(node, skip):
     return names
 
 
-def _dead_functions(program):
+def _dead_functions(program, function_entries=False):
     """Ids of the functions no stage entry reaches; none when there is no entry.
 
     A function is live when it is a stage's entry point, or when a live function, a stage or a module-level
@@ -197,16 +198,18 @@ def _dead_functions(program):
     passes read every function regardless, because no generator drops a plain function or an explicit
     specialization no stage entry reaches; only the
     passes that specifically model reachability consume this. A program without a stage entry is a library, so
-    every function is live.
+    every function is live. With ``function_entries``, a module-level function with a stage qualifier or attribute
+    (``@compute fn k``, the form the CUDA, HIP and OpenCL C importers write) is an entry as well.
     Inside :func:`shared_dead_functions` the answer is computed once per program.
     """
     cache = _DEAD_FUNCTIONS.get()
     if cache is None:
-        return _find_dead_functions(program)
-    entry = cache.get(id(program))
+        return _find_dead_functions(program, function_entries)
+    key = (id(program), function_entries)
+    entry = cache.get(key)
     if entry is None or entry[0] is not program:
-        entry = (program, frozenset(_find_dead_functions(program)))
-        cache[id(program)] = entry
+        entry = (program, frozenset(_find_dead_functions(program, function_entries)))
+        cache[key] = entry
     return set(entry[1])
 
 
@@ -224,7 +227,20 @@ def shared_dead_functions():
         _DEAD_FUNCTIONS.reset(token)
 
 
-def _find_dead_functions(program):
+def _is_function_form_entry(function) -> bool:
+    """Whether a module-level function is a stage entry by its own stage qualifier or attribute."""
+    names = list(getattr(function, "qualifiers", None) or [])[:1]
+    names.extend(
+        getattr(attribute, "name", attribute)
+        for attribute in getattr(function, "attributes", None) or []
+    )
+    return any(
+        isinstance(name, str) and normalize_stage_name(name) in STAGE_QUALIFIER_NAMES
+        for name in names
+    )
+
+
+def _find_dead_functions(program, function_entries=False):
     """:func:`_dead_functions`, computed."""
     helpers = {}
     # A call to a generic primary is routed by the generators to its explicit
@@ -245,6 +261,13 @@ def _find_dead_functions(program):
         for stage in (getattr(program, "stages", None) or {}).values()
         if isinstance(getattr(stage, "entry_point", None), A.FunctionNode)
     ]
+    if function_entries:
+        entry_functions.extend(
+            function
+            for function in getattr(program, "functions", None) or []
+            if isinstance(function, A.FunctionNode)
+            and _is_function_form_entry(function)
+        )
     if not entry_functions:
         return set()
     entry_ids = {id(function) for function in entry_functions}
@@ -289,11 +312,13 @@ def entry_dropped_function_ids(program, entry_point=None) -> set:
     specialization, so none is skipped. A translation that selects one entry writes only the functions that entry
     reaches (``entry_scoped_ast`` of the DirectX, Metal and OpenGL generators, the only ones that select entries),
     so the functions no stage entry reaches are skipped: importers leave a call they cannot resolve in such a body
-    unchanged, because no entry evaluates it.
+    unchanged, because no entry evaluates it. A module-level function with a stage attribute is an entry here too:
+    the OpenGL generator selects such entries without moving them into stages, and drops the host code of a CUDA
+    file that none of them calls.
     """
     if entry_point is None:
         return set()
-    return _dead_functions(program)
+    return _dead_functions(program, function_entries=True)
 
 
 def _type_references(node, skip):

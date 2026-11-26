@@ -170,9 +170,9 @@ def test_shared_dead_functions_computes_once_and_returns_copies(monkeypatch):
     calls = []
     find = D._find_dead_functions
 
-    def counting(program):
+    def counting(program, *args, **kwargs):
         calls.append(program)
-        return find(program)
+        return find(program, *args, **kwargs)
 
     monkeypatch.setattr(D, "_find_dead_functions", counting)
     with D.shared_dead_functions():
