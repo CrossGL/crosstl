@@ -47,6 +47,7 @@ from .glsl_stage_builtin_members import (
     refuse_unmapped_vertex_output,
 )
 from .glsl_stage_distances import (
+    distance_array_redeclaration,
     distance_input_alias,
     distance_output_epilogue,
     distance_output_name,
@@ -115,6 +116,11 @@ class OpenGLStageMemberMixin:
         for member in getattr(node, "members", []) or []:
             output_name = self.vertex_output_member_name(member)
             if self.is_vertex_stage_builtin_output(output_name):
+                redeclaration = distance_array_redeclaration(self, member, "out")
+                if redeclaration is not None and self.reserve_stage_io_declaration(
+                    "vertex", "output", redeclaration.split()[2], redeclaration
+                ):
+                    entries.append((None, None, redeclaration))
                 continue
             private_distance = distance_private_output_declaration(self, member)
             if private_distance is not None:
@@ -180,9 +186,15 @@ class OpenGLStageMemberMixin:
             else {}
         )
         entries = []
+        code = ""
         for member in getattr(node, "members", []) or []:
             input_name = self.fragment_input_member_name(member, node.name)
             if input_name is None:
+                redeclaration = distance_array_redeclaration(self, member, "in")
+                if redeclaration is not None and self.reserve_stage_io_declaration(
+                    "fragment", "input", redeclaration.split()[2], redeclaration
+                ):
+                    code += redeclaration
                 continue
             refuse_nested_stage_builtins(self, member, "fragment", "input")
 
@@ -219,7 +231,6 @@ class OpenGLStageMemberMixin:
         locations = spirv_struct_varying_locations(
             self, [member for member, _name, _code in entries], "fragment", "in"
         )
-        code = ""
         for member, input_name, declaration in entries:
             declaration = spirv_location_prefixed(
                 self, declaration, locations.get(member.name)

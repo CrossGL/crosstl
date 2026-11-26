@@ -16,6 +16,18 @@ from .float_remainder_assignment import float_remainder_assignment
 from .glsl_half_conversions import glsl_half_conversion_call
 
 
+def _one_group(text):
+    """Whether ``text`` is one parenthesized group, ``(a + b)``, so a swizzle applies to all of it."""
+    if not (text.startswith("(") and text.endswith(")")):
+        return False
+    depth = 0
+    for index, character in enumerate(text):
+        depth += {"(": 1, ")": -1}.get(character, 0)
+        if depth == 0 and index < len(text) - 1:
+            return False
+    return True
+
+
 class GLSLHlslValueMixin:
     """HLSL value-conversion and intrinsic members of ``GLSLCodeGen``."""
 
@@ -371,6 +383,43 @@ class GLSLHlslValueMixin:
             return f"{value}.0" if target_type != "uint" else f"{value}u"
         return f"{target_type}({self.generate_expression(argument)})"
 
+    def generate_glsl_vector_asdouble(self, arguments):
+        """``asdouble(uintN low, uintN high)`` as a ``dvecN`` of per-component ``packDouble2x32`` calls.
+
+        HLSL and Slang join each component pair into one double; GLSL's ``packDouble2x32`` takes one ``uvec2``
+        pair, so ``packDouble2x32(uvec2(low, high))`` of two vectors was a conversion glslang refuses. Each
+        operand is read once per component, so an operand with side effects is refused instead of repeated.
+        """
+        infos = [
+            self.glsl_value_type_info(self.glsl_source_expression_type(argument))
+            for argument in arguments
+        ]
+        width = max((info["width"] for info in infos if info is not None), default=1)
+        if width == 1:
+            return None
+        if not all(
+            self.glsl_side_effect_free_expression(argument) for argument in arguments
+        ):
+            return self.refuse_lowering(
+                "asdouble of two uint vectors reads each operand once per component; "
+                "an operand with side effects would repeat them",
+                "dvec2(0.0)",
+            )
+        operands = []
+        for argument, info in zip(arguments, infos):
+            rendered = self.generate_expression(argument)
+            if info is None or info["family"] != "uint" or info["width"] != width:
+                rendered = f"uvec{width}({rendered})"
+            elif not re.fullmatch(r"\w+", rendered) and not _one_group(rendered):
+                rendered = f"({rendered})"
+            operands.append(rendered)
+        low, high = operands
+        components = ", ".join(
+            f"packDouble2x32(uvec2({low}.{lane}, {high}.{lane}))"
+            for lane in "xyzw"[:width]
+        )
+        return f"dvec{width}({components})"
+
     def generate_glsl_converted_builtin_call(self, func_name, args):
         """Spell the operand conversions of builtins GLSL does not convert itself."""
         arguments = list(args or [])
@@ -390,6 +439,9 @@ class GLSLHlslValueMixin:
                 return None
             return f"{replacement}({rendered_argument})"
         if func_name == "asdouble" and len(arguments) == 2:
+            vector_form = self.generate_glsl_vector_asdouble(arguments)
+            if vector_form is not None:
+                return vector_form
             low, high = (
                 (
                     self.glsl_converted_operand(argument, "uint")

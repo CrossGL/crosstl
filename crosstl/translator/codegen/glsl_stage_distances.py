@@ -6,7 +6,10 @@ instead carry several distance members, each a float, a float vector or a float 
 every member in the array; this module names the member accordingly:
 
 - a float member is the array element at its offset, ``gl_ClipDistance[2]``;
-- a float array member at offset 0 is the array itself;
+- a float array member at offset 0 is the array itself, which the vertex output and the fragment input redeclare
+  with the size of the interface's distances, ``out float gl_ClipDistance[2];`` (:func:`distance_array_redeclaration`): the built-in is
+  predeclared unsized (GLSL 4.60 section 7.1.1), and an unsized array can be neither assigned whole nor indexed
+  with a non-constant index, so ``gl_ClipDistance = float[1](0.0);`` was refused by glslang;
 - a fragment input vector member is read as ``vec2(gl_ClipDistance[0], gl_ClipDistance[1])``;
 - a vertex output vector member is a private global of its type, copied element by element into the array before
   every return of the entry point (:func:`distance_output_epilogue`), because no GLSL lvalue names part of an array
@@ -21,6 +24,7 @@ from ..refusals import TranslatorKeyError
 from .stage_distance_layout import DistanceLayout, distance_layout, distance_semantic
 
 __all__ = [
+    "distance_array_redeclaration",
     "distance_input_alias",
     "distance_output_epilogue",
     "distance_output_name",
@@ -101,6 +105,21 @@ def distance_output_name(codegen, member, builtin):
             else _refuse_offset_array(codegen, member, slot)
         )
     return _private_name(codegen, member)
+
+
+def distance_array_redeclaration(codegen, member, direction):
+    """The sized ``direction`` (``in`` or ``out``) redeclaration of the distance built-in that a stage-structure
+    float array member names, or ``None`` for any other member."""
+    for struct in codegen.structs_by_name.values():
+        if any(
+            candidate is member for candidate in getattr(struct, "members", None) or []
+        ):
+            layout = struct_distance_layout(codegen, struct)
+            slot = layout.slot(member.name)
+            if slot is None or slot.shape != "array" or slot.offset != 0:
+                return None
+            return f"{direction} float {slot.builtin}[{layout.size(slot.builtin)}];\n"
+    return None
 
 
 def distance_private_output_declaration(codegen, member):
