@@ -137,3 +137,33 @@ def test_scalar_and_vector_members_keep_the_predeclared_builtin(
     assert "float gl_ClipDistance[" not in vertex
     assert "float gl_ClipDistance[" not in fragment
     assert_compiles(tmp_path, {"vert": vertex, "frag": fragment})
+
+
+def test_builtin_block_that_lists_the_distance_redeclares_it_once(tmp_path):
+    # GLSL allows one redeclaration of a built-in: a gl_PerVertex output block that lists gl_ClipDistance is it.
+    source = """
+shader Distances {
+    @glsl_interface_block(out) struct gl_PerVertex {
+        vec4 gl_Position;
+        float gl_ClipDistance[2];
+    };
+    struct VertexOutput {
+        vec4 gl_Position;
+        float gl_ClipDistance[2];
+    };
+    vertex {
+        VertexOutput main(vec3 position @location(0)) {
+            VertexOutput output_;
+            output_.gl_Position = vec4(position, 1.0);
+            output_.gl_ClipDistance[0] = position.x;
+            output_.gl_ClipDistance[1] = -position.x;
+            return output_;
+        }
+    }
+}
+"""
+    vertex = generate(source, "vertex")
+
+    assert vertex.count("float gl_ClipDistance[2];") == 1
+    assert "out float gl_ClipDistance[2];" not in vertex
+    assert_compiles(tmp_path, {"vert": vertex})

@@ -107,9 +107,31 @@ def distance_output_name(codegen, member, builtin):
     return _private_name(codegen, member)
 
 
+def _builtin_block_declares(codegen, builtin, direction):
+    """Whether a ``direction`` ``gl_PerVertex`` block of the program already redeclares ``builtin``: GLSL allows
+    one redeclaration of a built-in, so a block that lists it sizes it (GLSL 4.60 section 7.1.1).
+    """
+    for struct in codegen.structs_by_name.values():
+        if not codegen.is_glsl_interface_block_struct(struct):
+            continue
+        if codegen.glsl_interface_block_name(struct) not in (
+            codegen.GLSL_BUILTIN_INTERFACE_BLOCK_NAMES
+        ):
+            continue
+        if direction not in codegen.glsl_interface_block_qualifiers(struct):
+            continue
+        if any(
+            getattr(block_member, "name", None) == builtin
+            for block_member in getattr(struct, "members", None) or []
+        ):
+            return True
+    return False
+
+
 def distance_array_redeclaration(codegen, member, direction):
     """The sized ``direction`` (``in`` or ``out``) redeclaration of the distance built-in that a stage-structure
-    float array member names, or ``None`` for any other member."""
+    float array member names, or ``None`` for any other member and for a built-in that a ``gl_PerVertex`` block
+    of the program redeclares already."""
     for struct in codegen.structs_by_name.values():
         if any(
             candidate is member for candidate in getattr(struct, "members", None) or []
@@ -117,6 +139,8 @@ def distance_array_redeclaration(codegen, member, direction):
             layout = struct_distance_layout(codegen, struct)
             slot = layout.slot(member.name)
             if slot is None or slot.shape != "array" or slot.offset != 0:
+                return None
+            if _builtin_block_declares(codegen, slot.builtin, direction):
                 return None
             return f"{direction} float {slot.builtin}[{layout.size(slot.builtin)}];\n"
     return None
