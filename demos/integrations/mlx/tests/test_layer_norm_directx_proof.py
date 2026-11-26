@@ -330,11 +330,14 @@ def test_case_project_preserves_kernel_body_and_selects_one_instantiation(
     original_prefix = source.partition(module.LAYER_NORM_INSTANTIATION_MARKER)[0]
     projected_prefix = projected.partition("// clang-format off\n")[0]
     assert projected_prefix == original_prefix
-    assert sum(
-        1
-        for line in projected.splitlines()
-        if "instantiate_kernel(" in line and not line.lstrip().startswith("#define")
-    ) == 1
+    assert (
+        sum(
+            1
+            for line in projected.splitlines()
+            if "instantiate_kernel(" in line and not line.lstrip().startswith("#define")
+        )
+        == 1
+    )
     assert (
         f'instantiate_kernel("{case["entryPoint"]}", ' f'{case["templateName"]}, float)'
     ) in projected
