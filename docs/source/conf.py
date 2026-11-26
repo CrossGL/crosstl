@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent / "_ext"))
 project = "CrossGL Translator"
 author = "CrossGL"
 copyright = "2026, CrossGL"
-release = "3.8.0"
+release = "3.9.0"
 
 extensions = [
     "myst_parser",

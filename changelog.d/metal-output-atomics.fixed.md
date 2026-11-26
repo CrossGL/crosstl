@@ -1,1 +1,0 @@
-Metal output now lowers a discarded 64-bit `atomicMax`/`atomicMin` on a GLSL buffer-block member to `atomic_max_explicit`/`atomic_min_explicit` on `atomic_ulong`, and refuses a 64-bit min/max on threadgroup memory, which Metal has no form for (#2337).

@@ -1,1 +1,0 @@
-HLSL output renames a program function whose name DXC resolves as a global intrinsic, such as a helper `float frac(float x)` or `float mad(float a, float b, float c)`, together with the calls its overloads accept, so those calls run the program's function instead of the intrinsic. Calls with another argument count keep the intrinsic.

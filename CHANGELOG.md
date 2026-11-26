@@ -6,6 +6,42 @@ Notable changes to CrossTL for people who install and use it, newest first. Inte
 
 ---
 
+## [3.9.0] - 2026-11-26
+
+The [full 3.9.0 notes](https://github.com/CrossGL/crosstl/blob/39867cf764895cdd115d4680982d636b049b6ad1/CHANGELOG.md#390---2026-11-26) describe each of the release's 297 changes.
+
+### Breaking Changes
+
+- Without `--backend`, the single-file command refuses an output file whose extension names no language CrossTL writes, such as `shader.spv` or `kernel.cl`, where it used to write CrossGL into it; pass `--backend cgl` for that.
+- The target chooses the GLSL profile: `opengl` writes desktop GLSL, also from a GLSL ES source, and the new `gles` target writes GLSL ES 3.x. Each refuses an `#extension` its profile has no form of.
+- Rust output writes `#![no_std]` rust-gpu kernels instead of host Rust, and refuses what it cannot lower yet.
+
+### Added
+
+- CrossTL reads WGSL, and reads GLSL ES 3.00 (WebGL 2) under the source names `webgl`, `webgl2`, `essl` and `glsl-es`.
+- CrossGL has a `node` stage for D3D12 work-graph node shaders, which HLSL input and output translate; workgroup collectives and `workgroupUniformLoad`; partitioned wave reductions and scans (`WaveMulti*`); subgroup rotations; `gcd`, `lcm`, `factorial`, `comb` and `perm`; `powi` and `powif`; and biased depth comparisons, depth-compare gathers of one component and multisample positions.
+- GLSL, SPIR-V and HLSL output compute `exp`, `exp2`, `log`, `log2` and `pow` of `double` values in binary64, within one ulp.
+- CUDA and HIP input translate the `__syncthreads_count`, `__syncthreads_and` and `__syncthreads_or` votes, the directed-rounding intrinsics with their exact IEEE 754 results, and function templates. CUDA and HIP output read texel buffers with `tex1Dfetch`.
+- HLSL output writes debug prints as `printf`, and HLSL input and output carry the Shader Model 6.10 preview `DebugBreak()` and `TriangleObjectPositions()`, `SampleCmpBias`, the one-component `GatherCmp*` forms, `GetSamplePosition`, and residency `Status` reads with `CheckAccessFullyMapped`.
+- Metal output translates fragment shader interlock to raster order groups, tessellation evaluation shaders to post-tessellation vertex functions, and ray intersection stages to bounding-box intersection functions. Metal input imports intersection functions, the quad-group functions and the anonymous union and struct members of ggml's quantized blocks.
+- Rust output lowers constant blocks, textures, samplers, storage images, atomics, inline ray queries and wave operations to rust-gpu. Mojo output lowers wave and subgroup operations and writes more of `std.math`, `std.bit` and `std.atomic`.
+- Slang output writes more of the built-ins, system values, wave functions and clock reads of Slang's core module, and Slang input imports `InterlockedCompare*FloatBitwise` and rasterizer-ordered views.
+- SPIR-V output lowers KHR cooperative matrices, `interpolateAt*` and `QuadReadLaneAt` lanes chosen at run time. WGSL output writes clip distances, pointer locals, subgroup and quad built-ins, texture gathers and queries, and multisampled textures. GLSL output writes `QuadAll` and `QuadAny`.
+- The coverage report has a GLSL ES row and validates WGSL output with Tint as well as naga, and the documentation and the `coverage` branch have a page per language.
+
+### Improved
+
+- `crosstl shader.metal -o shader.hlsl` takes the target from the output file's extension, and `crosstl.translate_artifacts` imports a source once for all the artifacts its target needs.
+- Translation takes less time, with byte-identical output, Metal input most: on 154 corpus units the import takes 22 % less CPU time.
+- OpenGL output's software subgroups accept more loop shapes, such as a strided loop that starts from a workgroup-uniform value plus the subgroup index.
+- Coverage runs more compute probes on a GPU and on Direct3D 12 WARP, and compares the host interface of each Metal translation with the native probe's.
+
+### Fixed
+
+- 229 fixes, mainly to Metal, GLSL, CUDA, HIP, HLSL, Slang and WGSL output and to Metal, CUDA, HIP and OpenCL C input. Many keep the shared storage of C unions, the width of 8- and 16-bit integer arithmetic and the order of rasterizer-ordered resources; others concern bindings and argument tables, module-scope variables and constants, array constructors, atomics and atomic counters, wave and quad operations, deeply nested calls, and tessellation, mesh and ray tracing stages.
+
+---
+
 ## [3.8.0] - 2026-11-20
 
 The [full 3.8.0 notes](https://github.com/CrossGL/crosstl/blob/0beb48b8bde7d3b6c50dbd2926c968c87bc19cc4/CHANGELOG.md#380---2026-11-20) describe each of the release's 69 changes.

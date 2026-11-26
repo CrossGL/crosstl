@@ -1,1 +1,0 @@
-HLSL output accepts an entry input structure whose members read `gl_HelperInvocation`, `gl_NumSamples` or a subgroup built-in. The entry takes a signature structure with the other members and builds the program's structure from it, reading each such member through its intrinsic (`IsHelperLane()`, `GetRenderTargetSampleCount()`, `WaveGetLaneCount()`, `WaveGetLaneIndex()`).

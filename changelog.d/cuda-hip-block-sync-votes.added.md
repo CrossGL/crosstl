@@ -1,1 +1,0 @@
-CUDA and HIP input translate `__syncthreads_count`, `__syncthreads_and` and `__syncthreads_or`. Each calls one CrossGL function that counts the predicate in a workgroup variable between barriers, so every target computes the block-wide vote; the importers refused the three votes before.

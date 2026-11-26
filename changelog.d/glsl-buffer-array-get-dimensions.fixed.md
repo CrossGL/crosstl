@@ -1,1 +1,0 @@
-GLSL output lowers `GetDimensions(count, stride)` on one buffer of a structured buffer array to the length of that block's element member and the std430 stride, as for a single buffer, instead of refusing the call (#3809).

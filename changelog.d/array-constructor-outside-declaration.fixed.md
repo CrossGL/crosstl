@@ -1,1 +1,0 @@
-GLSL output spells the element type of an array constructor outside a declaration as GLSL does (`int[3](7, 8, 9)`, not `i32[3](7, 8, 9)`). CUDA and HIP output builds an indexed array constructor in a local array and refuses one assigned to an array, instead of copying the CrossGL spelling into code nvcc and hipcc reject (#4697).

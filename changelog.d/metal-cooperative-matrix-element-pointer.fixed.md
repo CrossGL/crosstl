@@ -1,1 +1,0 @@
-Metal output takes the address of an array element passed as the pointer operand of `cooperative_matrix_load` and `cooperative_matrix_store`, so `input[64]` is written as `&input[64]`. It used to pass the element value to `simdgroup_load`, which the Metal compiler rejected (#4708).
