@@ -372,6 +372,7 @@ class MetalPreciseMathMixin:
 
     def generate_metal_precise_math_support_code(self, indent=0):
         independent_code = self.generate_metal_precise_trig_support_code(indent)
+        independent_code += self.generate_metal_sincos_support_code(indent)
         independent_code += self.generate_metal_precise_acosh_support_code(indent)
         independent_code += self.generate_metal_precise_atan_support_code(indent)
         independent_code += self.generate_metal_precise_atan2_support_code(indent)

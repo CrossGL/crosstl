@@ -330,6 +330,9 @@ class MetalExpressionMixin:
         round_call = self.generate_metal_round_call(expr, is_main)
         if round_call is not None:
             return round_call
+        sincos_call = self.generate_metal_sincos_call(expr, is_main)
+        if sincos_call is not None:
+            return sincos_call
         fused_call = self.generate_metal_fma_call(expr, is_main)
         if fused_call is not None:
             return fused_call

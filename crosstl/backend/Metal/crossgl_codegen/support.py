@@ -136,6 +136,21 @@ class MetalRoundLoweringError(ValueError):
         )
 
 
+class MetalSincosLoweringError(ValueError):
+    """Raised when a Metal ``sincos`` call cannot be written as the CrossGL helper."""
+
+    project_diagnostic_code = "project.translate.metal-sincos-unsupported"
+    missing_capabilities = ("metal.sincos-lowering",)
+
+    def __init__(self, operand_type, reason, source_location=None):
+        self.operand_type = operand_type
+        self.reason = reason
+        self.source_location = source_location
+        super().__init__(
+            f"Cannot import Metal sincos for '{operand_type or '<unknown>'}': {reason}"
+        )
+
+
 class MetalDivisionProfileError(ValueError):
     """Raised when a selected division profile cannot be applied faithfully."""
 

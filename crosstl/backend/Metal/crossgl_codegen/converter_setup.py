@@ -370,6 +370,7 @@ class MetalConverterSetupMixin:
         self.required_metal_precise_sqrt_widths = set()
         self.required_metal_precise_rsqrt_widths = set()
         self.required_metal_precise_trig_widths = {"sin": set(), "cos": set()}
+        self.required_metal_sincos_helpers = {}
         self.required_metal_fma_widths = set()
         self.required_metal_fmuladd_widths = set()
         self.required_metal_division_widths = set()
