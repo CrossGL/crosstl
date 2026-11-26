@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass
 
 from .. import ast as A
+from ..float_limit_constants import float_limit_constant
 from ..workgroup_operations import WORKGROUP_COLLECTIVES, WORKGROUP_VOTES
 from .rule_table import CONVERSION_SIGNATURES, CONVERT_SAT_GENERIC
 
@@ -171,8 +172,29 @@ _SAME_AS_ARGUMENTS = frozenset(
         "reversebits",
         "bitfieldReverse",
         "roundEven",
+        "asin",
+        "acos",
+        "sinh",
+        "cosh",
+        "tanh",
+        "asinh",
+        "acosh",
+        "atanh",
+        "exp10",
+        "log10",
+        "degrees",
+        "radians",
+        "step",
+        "smoothstep",
+        "sinpi",
+        "cospi",
+        "fdim",
+        "nextafter",
+        "copysign",
     }
 )
+# Calls whose result has the first operand's type: ldexp(x, exponent) and frexp(x, out exponent).
+_SAME_AS_FIRST = frozenset({"ldexp", "frexp"})
 _CONVERSION_RESULTS = {
     name: {"int": INT32, "uint": UINT32}[result]
     for name, result in [
@@ -363,6 +385,9 @@ class TypeScope:
             if declared is not None:
                 return type_from_node(declared)
             if not self.is_declared(expr.name):
+                if float_limit_constant(expr.name) is not None:
+                    # INFINITY, NAN, FLT_MAX, ...: binary32 constants of the source environments.
+                    return FLOAT32
                 return _BUILTIN_VARIABLES.get(expr.name)
             return None
         if isinstance(expr, A.BinaryOpNode):
@@ -479,6 +504,10 @@ class TypeScope:
             return first.scalar if first is not None else None
         if name == "dot":
             return first.scalar if first is not None else None
+        if name in _SAME_AS_FIRST and name not in self.functions:
+            return first
+        if name == "ilogb" and name not in self.functions:
+            return INT32.with_lanes(lanes)
         if name in _SAME_AS_ARGUMENTS and arguments:
             result = first
             for argument in arguments[1:]:
@@ -535,6 +564,7 @@ def is_pure_callee(name: str) -> bool:
         or name in ("asint", "asuint", "asfloat", "floatBitsToInt", "floatBitsToUint")
         or name in ("intBitsToFloat", "uintBitsToFloat", "dot", "length", "distance")
         or name in _SAME_AS_ARGUMENTS
+        or name in ("ldexp", "ilogb")
     )
 
 

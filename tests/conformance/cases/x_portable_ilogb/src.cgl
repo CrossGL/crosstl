@@ -1,0 +1,18 @@
+// ilogb(x) is the unbiased exponent of x (a subnormal's as if normalised); zero and NaN give INT_MIN and
+// infinities INT_MAX, as the CUDA math library's ilogbf.
+shader PortableIlogb {
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+        buffer float* inp;
+        buffer int* outp;
+
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float x = inp[i];
+            ivec2 e = ilogb(vec2(x, -x));
+            outp[i * 2u] = ilogb(x);
+            outp[i * 2u + 1u] = e.y;
+        }
+    }
+}
