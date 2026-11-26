@@ -180,7 +180,7 @@ def test_hlsl_declares_a_cbuffer_as_a_spirv_push_constant_block(tmp_path):
     assert "static float scale;\nstatic float bias;\n" in spirv
     assert "    scale = Constants.scale;\n    bias = Constants.bias;\n" in spirv
     assert "register" not in spirv
-    assert "cbuffer Constants : register(b0)" in direct3d
+    assert "cbuffer Constants : register(b1)" in direct3d
     assert re.search(r"void __crossgl_load_Constants\(\)\s*\{\s*\}", direct3d)
     assert "__crossgl_load_Constants();" in entry
     assembly = _dxc_spirv(tmp_path, hlsl)
@@ -267,7 +267,7 @@ def test_hlsl_declares_a_constant_buffer_variable_as_a_push_constant_block(
     assert "static Constants pc;\n" in spirv
     assert "    pc.dir = pc_block.pc.dir;\n" in spirv
     # HLSL packing would read bias from byte 28 as well, but dir must not start at byte 4.
-    assert "cbuffer pc_block : register(b0)" in direct3d
+    assert "cbuffer pc_block : register(b1)" in direct3d
     if declaration.startswith("ConstantBuffer"):
         assembly = _dxc_spirv(tmp_path, hlsl)
         if assembly is not None:
@@ -388,4 +388,4 @@ def test_hlsl_cbuffer_without_push_constant_is_unchanged(tmp_path):
     hlsl = _translate(tmp_path, CBUFFER.replace(" @push_constant", ""))
     assert "__spirv__" not in hlsl
     assert "vk::push_constant" not in hlsl
-    assert "cbuffer Constants : register(b0)" in hlsl
+    assert "cbuffer Constants : register(b1)" in hlsl

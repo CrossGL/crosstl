@@ -257,6 +257,7 @@ from .hlsl_texture_residency import (
     hlsl_texture_resident_call,
 )
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
+from .hlsl_register_slots import SharedResourceSlots
 from .hlsl_vk_locations import hlsl_vk_location_prefix
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
@@ -1830,10 +1831,9 @@ class HLSLCodeGen(
         implicit_member_samplers = self.collect_implicit_member_texture_samplers(ast)
         self.implicit_member_texture_samplers = implicit_member_samplers
 
-        texture_registers = {}
+        # Buffers, textures and constant buffers take their implicit registers from one slot sequence.
+        texture_registers = uav_registers = cbuffer_registers = SharedResourceSlots()
         sampler_registers = {}
-        uav_registers = {}
-        cbuffer_registers = {}
         used_resource_registers = self.new_directx_resource_register_allocator()
         self.reserve_explicit_global_resource_registers(
             global_vars, used_resource_registers, cbuffers

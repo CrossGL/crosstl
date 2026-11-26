@@ -32,6 +32,7 @@ from .directx_values import (
     DirectXTextureOffsetError,
     _DirectXResourceRegisterAllocator,
 )
+from .hlsl_register_slots import next_shared_resource_slot
 from .image_access_contracts import (
     is_projected_texture_basic_offset_operation,
     is_projected_texture_grad_offset_operation,
@@ -305,8 +306,8 @@ class DirectXRegisterBindingMixin:
         count = max(count or 1, 1)
         binding = self.next_resource_register(register_cursors, space)
         if isinstance(used_registers, _DirectXResourceRegisterAllocator):
-            return used_registers.next_available(
-                (register_prefix, space), binding, count
+            return next_shared_resource_slot(
+                used_registers, register_prefix, register_cursors, space, binding, count
             )
 
         ranges = used_registers.get((register_prefix, space), [])
