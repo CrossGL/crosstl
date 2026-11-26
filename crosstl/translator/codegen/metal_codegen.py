@@ -63,7 +63,6 @@ from .comma_expressions import (
     comma_result_operand,
     is_comma_expression,
 )
-from .device_globals import device_global_refusal_reason, is_mutable_device_global
 from .enum_utils import (
     infer_enum_constructor_type,
 )
@@ -1585,8 +1584,6 @@ class MetalCodeGen(
                 f"{self.type_name_string(vtype)}; subpassInput resources require "
                 "Vulkan subpass lowering"
             )
-        elif is_mutable_device_global(node):
-            self.refuse_lowering(device_global_refusal_reason(node, "Metal"))
         else:
             return self.declare_metal_value_variable(
                 emission, node, array_suffix, var_name, vtype

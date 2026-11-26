@@ -20,17 +20,10 @@ from crosstl.backend.OpenCL.target_lowering import (
     validate_opencl_intermediate_for_target,
 )
 from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
-from crosstl.translator.codegen.GLSL_codegen import GLSLCodeGen
-from crosstl.translator.codegen.glsl_refusals import OpenGLLoweringRefused
-from crosstl.translator.codegen.hlsl_refusals import DirectXLoweringRefused
-from crosstl.translator.codegen.metal_codegen import MetalCodeGen
-from crosstl.translator.codegen.metal_refusals import MetalLoweringRefused
-from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
-from crosstl.translator.codegen.wgsl_codegen import WGSLCodeGen
 from crosstl.translator.diagnostics import TranslationDiagnostic
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
-from crosstl.translator.refusals import VulkanRefusal, WGSLRefusal
+from crosstl.translator.semantics import DeviceVariableUnsupportedError
 
 
 def parse_crossgl_from_opencl(source):
@@ -78,50 +71,48 @@ def test_opencl_kernel_codegen_reparses_and_lowers_builtin_ids():
     assert "var lid: u32 = gl_LocalInvocationID.x;" in crossgl
 
 
+DEVICE_GLOBAL_KERNEL = """
+__global float acc[64] = {1.0f, 2.0f, 4.0f};
+kernel void probe(global float *outp) {
+    uint i = get_global_id(0);
+    acc[i & 63] = acc[i & 63] * 2.0f;
+    outp[i] = acc[i & 63];
+}
+"""
+
+
 def test_opencl_program_scope_global_keeps_device_memory():
-    cgl_ast, crossgl = parse_crossgl_from_opencl("""
-        __global float acc[64] = {1.0f, 2.0f, 4.0f};
-        kernel void probe(global float *outp) {
-            uint i = get_global_id(0);
-            acc[i & 63] = acc[i & 63] * 2.0f;
-            outp[i] = acc[i & 63];
-        }
-        """)
+    _cgl_ast, crossgl = parse_crossgl_from_opencl(DEVICE_GLOBAL_KERNEL)
 
     assert "var<device> acc: array<f32, 64> = {1.0f, 2.0f, 4.0f};" in crossgl
-    with pytest.raises(
-        DirectXLoweringRefused,
-        match="device-global declaration.*acc.*HLSL cannot represent",
-    ):
-        HLSLCodeGen().generate(cgl_ast)
+
+
+@pytest.mark.parametrize("target", ["cuda", "hip"])
+def test_opencl_program_scope_global_is_a_device_variable_in_cuda_and_hip(
+    tmp_path, target
+):
+    source = tmp_path / "probe.cl"
+    source.write_text(DEVICE_GLOBAL_KERNEL)
+
+    code = crosstl.translate(str(source), backend=target)
+
+    assert "__device__ float acc[64] = {1.0f, 2.0f, 4.0f};" in code
 
 
 @pytest.mark.parametrize(
-    ("codegen", "error_type", "target"),
-    [
-        (MetalCodeGen, MetalLoweringRefused, "Metal"),
-        (GLSLCodeGen, OpenGLLoweringRefused, "GLSL"),
-        (WGSLCodeGen, WGSLRefusal, "WGSL"),
-        (VulkanSPIRVCodeGen, VulkanRefusal, "SPIR-V"),
-    ],
+    "target",
+    ["directx", "metal", "opengl", "wgsl", "vulkan", "slang", "rust", "mojo"],
 )
-def test_opencl_program_scope_device_global_is_refused_by_unsupported_targets(
-    codegen, error_type, target
+def test_opencl_program_scope_global_is_refused_without_device_variables(
+    tmp_path, target
 ):
-    cgl_ast, _crossgl = parse_crossgl_from_opencl("""
-        __global float acc[64] = {1.0f, 2.0f, 4.0f};
-        kernel void probe(global float *outp) {
-            uint i = get_global_id(0);
-            acc[i & 63] = acc[i & 63] * 2.0f;
-            outp[i] = acc[i & 63];
-        }
-        """)
+    # One acc is shared by every work-item; these targets would give each
+    # invocation its own copy, so the device-variable check refuses it.
+    source = tmp_path / "probe.cl"
+    source.write_text(DEVICE_GLOBAL_KERNEL)
 
-    with pytest.raises(
-        error_type,
-        match=rf"device-global declaration.*acc.*{target} cannot represent",
-    ):
-        codegen().generate(cgl_ast)
+    with pytest.raises(DeviceVariableUnsupportedError, match="'acc'"):
+        crosstl.translate(str(source), backend=target)
 
 
 def test_opencl_explicit_atomics_drop_memory_order_and_scope():

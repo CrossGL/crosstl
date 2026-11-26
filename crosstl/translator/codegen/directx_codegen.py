@@ -76,7 +76,6 @@ from .constant_guards import (
 )
 from .constant_ordering import partition_constants_by_struct_dependency
 from .counter_loops import any_start_counter_loops
-from .device_globals import device_global_refusal_reason, is_mutable_device_global
 from .directx_aggregate_initializers import DirectXAggregateInitializerMixin
 from .directx_atomic_resources import DirectXAtomicResourceMixin
 from .directx_call_expressions import DirectXCallExpressionMixin
@@ -1902,15 +1901,6 @@ class HLSLCodeGen(
                 var_name = node.variable_name
             else:
                 var_name = f"var{i}"
-
-            if is_mutable_device_global(node) and not (
-                self.is_resource_parameter_type(vtype)
-                or self.is_hlsl_readonly_buffer_type(vtype)
-                or self.is_hlsl_uav_buffer_type(vtype)
-                or self.is_hlsl_constant_buffer_type(vtype)
-            ):
-                self.refuse_lowering(device_global_refusal_reason(node, "HLSL"))
-                continue
 
             if id(node) in self.directx_omitted_compile_time_global_node_ids:
                 continue

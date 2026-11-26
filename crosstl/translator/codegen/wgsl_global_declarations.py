@@ -3,7 +3,6 @@
 import re
 
 from ..refusals import WGSLRefusal
-from .device_globals import device_global_refusal_reason, is_mutable_device_global
 from .wgsl_uniform_registers import wgsl_register_block_lines
 from .wgsl_workgroup_locals import WORKGROUP_QUALIFIERS
 
@@ -94,8 +93,6 @@ class WGSLGlobalDeclarationMixin:
             return self.generate_buffer_pointer_global_variable(node)
         if self.is_glsl_buffer_block_variable(node):
             return self.generate_glsl_buffer_block_global_variable(node)
-        if is_mutable_device_global(node):
-            raise WGSLRefusal(device_global_refusal_reason(node, "WGSL"))
 
         qualifier_names = {str(qualifier).lower() for qualifier in node.qualifiers}
         address_space = "private"
