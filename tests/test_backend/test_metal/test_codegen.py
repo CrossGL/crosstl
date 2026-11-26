@@ -1721,9 +1721,8 @@ def test_codegen_writable_c_array_parameter_preserves_aliasing():
         in TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
     )
     assert (
-        "void fill(inout float values[4], float source[4])" in GLSLCodeGen().generate(
-            parse_crossgl(crossgl)
-        )
+        "void fill(inout float values[4], float source[4])"
+        in GLSLCodeGen().generate(parse_crossgl(crossgl))
     )
     assert (
         "void fill(thread float values[4], thread float source[4])"
@@ -12277,9 +12276,8 @@ def test_codegen_keeps_metal_stdlib_wrappers_as_non_emitted_builtin_metadata():
     )
     assert (
         "uint simd_result = __crossgl_bfloat16_from_float("
-        "float(WaveActiveMax(__crossgl_bfloat16_to_float(uint(value)))));" in normalize(
-            generated_targets["directx"]
-        )
+        "float(WaveActiveMax(__crossgl_bfloat16_to_float(uint(value)))));"
+        in normalize(generated_targets["directx"])
     )
     assert (
         "float simd_result = crossgl_round_bfloat1(float(subgroupMax(float(value))));"
@@ -12352,10 +12350,11 @@ def test_codegen_canonicalizes_qualified_rint_stdlib_wrapper(namespace):
     hlsl = TranslatorHLSLCodeGen().generate(ast)
     glsl = GLSLCodeGen().generate(ast)
 
-    assert "bfloat16 wrapper_result = bfloat16(rint(float(value)));" in normalize(
+    # Metal rint rounds halfway cases to even, which is CrossGL roundEven.
+    assert "bfloat16 wrapper_result = bfloat16(roundEven(float(value)));" in normalize(
         crossgl
     )
-    assert "vec4 vector_result = rint(values);" in normalize(crossgl)
+    assert "vec4 vector_result = roundEven(values);" in normalize(crossgl)
     assert (
         "uint wrapper_result = __crossgl_bfloat16_from_float("
         "float(round(__crossgl_bfloat16_to_float(uint(value)))));" in normalize(hlsl)
