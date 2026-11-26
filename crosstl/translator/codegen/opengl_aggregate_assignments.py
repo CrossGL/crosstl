@@ -171,8 +171,9 @@ class OpenGLAggregateAssignmentMixin:
                 expected_element_count=expected_count,
             )
         rendered = [
-            widened_integer_literal(self, element, element_types[index])
-            or self.generate_expression_with_expected(element, element_types[index])
+            self.glsl_aggregate_initializer_element(
+                element, element_types[index]
+            )
             for index, element in enumerate(elements)
         ]
         rendered.extend(
@@ -182,6 +183,25 @@ class OpenGLAggregateAssignmentMixin:
         if not rendered and self.glsl_struct_node(constructor) is not None:
             return f"{constructor}(0)"
         return f"{constructor}({', '.join(rendered)})"
+
+    def glsl_aggregate_initializer_element(self, element, element_type):
+        """One array or structure initializer element, converted to its own type.
+
+        A scalar written for a matrix element is not a matrix, so the element
+        type's constructor makes the conversion explicit: ``mat4 a[3] =
+        mat4[3](1.0)`` becomes ``mat4[3](mat4(1.0), ...)`` and glslang no longer
+        rejects it with "not enough data provided for construction". A vector
+        element is already converted by ``generate_expression_with_expected``.
+        """
+        rendered = widened_integer_literal(
+            self, element, element_type
+        ) or self.generate_expression_with_expected(element, element_type)
+        if (
+            self.glsl_matrix_dimensions(element_type) is not None
+            and self.glsl_vector_initializer_component_count(element) == 1
+        ):
+            return f"{element_type}({rendered})"
+        return rendered
 
     def signed_compute_builtin_member_cast(self, object_name, member_name):
         expected_type = self.map_type(self.current_expression_expected_type)
