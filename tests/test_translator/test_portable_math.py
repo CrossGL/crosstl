@@ -103,14 +103,12 @@ def test_metal_keeps_the_calls(tmp_path):
 
 
 @pytest.mark.parametrize("backend", ["cuda", "hip"])
-def test_cuda_and_hip_call_their_scalar_functions_per_component(tmp_path, backend):
+def test_cuda_and_hip_keep_their_library_calls(tmp_path, backend):
     code = _translate(tmp_path, ALL_CALLS, backend)
     for name in ("fdim", "nextafter", "ilogb", "copysign"):
-        lift = P.native_lift_name(name, ("f", 32), 3)
-        assert lift in code
-        body = code[code.index(lift + "(float3 x0") :].split("}", 1)[0]
-        assert f"{name}(x0.z" in body
-    # Scalars and the pi functions, which the generators write per component, keep the library calls.
+        # The generator writes a vector call per component with the library's scalar function; no lift is added.
+        assert P.native_lift_name(name, ("f", 32), 3) not in code, name
+        assert f"cgl_float3_{name}(" in code, name
     assert f"{P.PREFIX}fdim(" not in code and f"{P.PREFIX}sinpi" not in code
 
 

@@ -104,12 +104,10 @@ _NATIVE: dict[str, dict[str, frozenset | None]] = {
 
 
 # Target -> the native functions it declares for scalars only: a vector call becomes a helper that calls the native
-# function on each component. The CUDA and HIP math libraries overload fdim, nextafter, ilogb and copysign on float
-# and double only (their generators already write sinpi and cospi per component).
-_SCALAR_ONLY: dict[str, set[str]] = {
-    "cuda": {"fdim", "nextafter", "ilogb", "copysign"},
-    "hip": {"fdim", "nextafter", "ilogb", "copysign"},
-}
+# function on each component. A backend registers these with register_native_portable_math(..., vectors=False). The
+# CUDA and HIP math libraries overload fdim, nextafter, ilogb and copysign on float and double only, but their
+# generators write every vector math call per component themselves, so they need no lift here.
+_SCALAR_ONLY: dict[str, set[str]] = {}
 # Target -> the native pi functions whose zeros lose their sign, so the call goes through a helper that keeps the
 # native value and gives a zero result its C sign. Apple's Metal compiler, even with -fno-fast-math, returns
 # sinpi(-0) = +0, sinpi(1) = -0 and cospi(1.5) = -0 on an Apple M2 Max (conformance case x_portable_pi); the nonzero
