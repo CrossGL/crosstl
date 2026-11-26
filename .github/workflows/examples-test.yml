@@ -11,7 +11,17 @@ on:
   # Nightly, the installed package is checked on every operating system and Python version.
   schedule:
     - cron: "11 5 * * *"
+  # A dispatch with a release version checks that published release instead:
+  # gh workflow run examples-test.yml -f release=3.9.0 installs crosstl==3.9.0
+  # from PyPI on every operating system and Python version, and follows the
+  # README and quickstart guide of the tag v3.9.0.
   workflow_dispatch:
+    inputs:
+      release:
+        description: "A published version (such as 3.9.0) to install from PyPI instead of building the wheel"
+        required: false
+        default: ""
+        type: string
   merge_group:
 
 permissions:
@@ -81,7 +91,8 @@ jobs:
   test-examples:
     name: Examples - Python ${{ matrix.python-version }} on ${{ matrix.os }}
     needs: python-versions
-    if: needs.python-versions.outputs.tested != 'true'
+    # A release check tests the published package, not the checkout's examples.
+    if: needs.python-versions.outputs.tested != 'true' && !inputs.release
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -141,6 +152,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
 
       - name: Build the wheel
+        if: ${{ !inputs.release }}
         run: python -m pip wheel . --no-deps --wheel-dir "$RUNNER_TEMP/dist"
         shell: bash
 
@@ -148,7 +160,32 @@ jobs:
       # without any native validator, then runs the README quickstart and
       # `crosstl shader.metal -o shader.hlsl` from an empty directory.
       - name: Run the documented commands from a clean install
+        if: ${{ !inputs.release }}
         run: python tools/install_smoke.py "$RUNNER_TEMP/dist"
+        shell: bash
+
+      # A release is checked against the README and the guide it was published with.
+      - name: Check out the release's README and quickstart guide
+        if: inputs.release
+        uses: actions/checkout@v7
+        with:
+          ref: v${{ inputs.release }}
+          path: released
+          persist-credentials: false
+          sparse-checkout: |
+            README.md
+            docs/source/quickstart.rst
+          sparse-checkout-cone-mode: false
+
+      # The same checks, with crosstl==RELEASE installed from PyPI without
+      # pip's cache, as a new user installs it.
+      - name: Run the documented commands from a clean install of the release
+        if: inputs.release
+        env:
+          RELEASE: ${{ inputs.release }}
+        run: >-
+          python tools/install_smoke.py --release "$RELEASE"
+          --readme released/README.md --guide released/docs/source/quickstart.rst
         shell: bash
 
   result:

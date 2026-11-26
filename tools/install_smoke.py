@@ -14,11 +14,15 @@ environment, then works in an empty directory outside the checkout, as a new use
 - ``crosstl --help``, ``python -m crosstl --help`` and ``crosstl doctor`` run, and ``import crosstl`` loads the
   installed package rather than the checkout.
 
-No native validator is installed: CrossTL must work without one. Usage::
+No native validator is installed: CrossTL must work without one. ``--release VERSION`` installs
+``crosstl==VERSION`` from PyPI instead of a wheel, without pip's cache, and checks that the installed version is
+VERSION, so a published release can be checked the way a new user installs it. Usage::
 
     python tools/install_smoke.py dist/crosstl-3.8.0-py3-none-any.whl
     python tools/install_smoke.py dist/
     python tools/install_smoke.py dist/ --readme README.md --guide docs/source/quickstart.rst
+    python tools/install_smoke.py --release 3.9.0 --readme released/README.md \\
+        --guide released/docs/source/quickstart.rst
 """
 
 from __future__ import annotations
@@ -79,8 +83,10 @@ kernel void add(device float* a [[buffer(0)]], device const float* b [[buffer(1)
 
 # The sections of docs/source/quickstart.rst whose steps run. The others need a checkout or a repository to port.
 GUIDE_SECTIONS = ("Install", "Translate a native shader", "Write CrossGL")
-# The installation the check has already done with the wheel it tests.
+# The installation the check has already done with the wheel or the release it tests.
 INSTALL = ["pip", "install", "crosstl"]
+# The index ``--release`` installs from: PyPI itself, not a mirror a runner may be configured with.
+PYPI = "https://pypi.org/simple/"
 # A ``crosstl.translate(..., backend="B", save_shader="F")`` call in a Python block: F must hold language B.
 SAVED = re.compile(r'backend="(\w+)",\s*save_shader="([^"]+)"')
 UNDERLINE = re.compile(r"([=\-~^])\1+")
@@ -362,9 +368,19 @@ class Smoke:
                 self.check_output(argv, self.run(argv))
 
 
-def install(wheel: Path, env: Path) -> None:
+def install(package: Path | str, env: Path) -> None:
+    """Install ``package`` into a new environment at ``env``.
+
+    ``package`` is a wheel, or a requirement such as ``crosstl==3.9.0`` that is installed from :data:`PYPI` without
+    pip's cache, as a new user's first install would be.
+    """
     venv.EnvBuilder(with_pip=True, clear=True).create(env)
     python = env / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+    source = (
+        [str(package)]
+        if isinstance(package, Path)
+        else ["--no-cache-dir", "--index-url", PYPI, package]
+    )
     subprocess.run(
         [
             str(python),
@@ -373,21 +389,48 @@ def install(wheel: Path, env: Path) -> None:
             "install",
             "--disable-pip-version-check",
             "--quiet",
-            str(wheel),
+            *source,
         ],
         check=True,
     )
 
 
+def release_requirement(version: str) -> str:
+    """The requirement that installs release ``version`` of CrossTL, refusing anything but a version number."""
+    if not re.fullmatch(r"\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?", version):
+        raise ValueError(f"{version!r} is not a CrossTL version number")
+    return f"crosstl=={version}"
+
+
 def smoke(
-    wheel: Path, readme: Path, root: Path, guide_path: Path | None = None
+    package: Path | str,
+    readme: Path,
+    root: Path,
+    guide_path: Path | None = None,
+    version: str | None = None,
 ) -> list[str]:
-    """Install ``wheel`` under ``root`` and run every check; return the failures."""
+    """Install ``package`` under ``root`` and run every check; return the failures.
+
+    ``package`` is a wheel or a PyPI requirement (:func:`install`). With ``version``, the installed distribution
+    must have that version.
+    """
     env, work = root / "env", root / "work"
     steps = guide(guide_path.read_text(encoding="utf-8")) if guide_path else []
     work.mkdir(parents=True)
-    install(wheel, env)
+    install(package, env)
     check = Smoke(env, work)
+    if version is not None:
+        installed = check.run(
+            [
+                "python",
+                "-c",
+                "import importlib.metadata as m; print(m.version('crosstl'))",
+            ]
+        )
+        if installed.returncode == 0 and installed.stdout.strip() != version:
+            check.fail(
+                f"pip installed crosstl {installed.stdout.strip()}, not {version}"
+            )
 
     where = check.run(["python", "-c", "import crosstl; print(crosstl.__file__)"])
     if where.returncode == 0 and not Path(
@@ -448,7 +491,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "wheel",
         type=Path,
+        nargs="?",
         help="the CrossTL wheel to install, or the directory that holds it",
+    )
+    parser.add_argument(
+        "--release",
+        metavar="VERSION",
+        help="install crosstl==VERSION from PyPI instead of a wheel",
     )
     parser.add_argument(
         "--readme",
@@ -463,14 +512,29 @@ def main(argv: list[str] | None = None) -> int:
         help="the quickstart guide whose steps run",
     )
     args = parser.parse_args(argv)
-    wheel = args.wheel.resolve()
-    if wheel.is_dir():
-        wheels = sorted(wheel.glob("crosstl-*.whl"))
-        if len(wheels) != 1:
-            parser.error(f"{wheel} holds {len(wheels)} CrossTL wheels, not one")
-        wheel = wheels[0]
+    if (args.wheel is None) == (args.release is None):
+        parser.error("give either a wheel or --release VERSION")
+    package: Path | str
+    if args.release is not None:
+        try:
+            package = release_requirement(args.release)
+        except ValueError as error:
+            parser.error(str(error))
+    else:
+        package = args.wheel.resolve()
+        if package.is_dir():
+            wheels = sorted(package.glob("crosstl-*.whl"))
+            if len(wheels) != 1:
+                parser.error(f"{package} holds {len(wheels)} CrossTL wheels, not one")
+            package = wheels[0]
     with tempfile.TemporaryDirectory(prefix="crosstl-smoke-") as root:
-        failures = smoke(wheel, args.readme.resolve(), Path(root), args.guide.resolve())
+        failures = smoke(
+            package,
+            args.readme.resolve(),
+            Path(root),
+            args.guide.resolve(),
+            args.release,
+        )
     print(
         f"{len(failures)} failure(s)"
         if failures

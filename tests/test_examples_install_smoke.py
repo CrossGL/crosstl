@@ -138,3 +138,79 @@ def test_a_guide_that_lost_a_section_or_runs_another_tool_is_reported():
         install_smoke.guide("Quickstart\n==========\n\nInstall\n-------\n")
     with pytest.raises(ValueError, match="neither crosstl nor python"):
         install_smoke.rst_steps(".. code-block:: bash\n\n   glslangValidator k.comp\n")
+
+
+@pytest.mark.parametrize("version", ["3.9.0", "4.0.0rc1", "3.9.0.post1", "10.2"])
+def test_a_release_check_installs_that_version_from_pypi(version):
+    assert install_smoke.release_requirement(version) == f"crosstl=={version}"
+
+
+@pytest.mark.parametrize("version", ["", ">=3.9", "3.9.0; echo", "latest", "v3.9.0"])
+def test_a_release_check_refuses_anything_but_a_version_number(version):
+    with pytest.raises(ValueError):
+        install_smoke.release_requirement(version)
+
+
+def _pip_arguments(monkeypatch, tmp_path, package):
+    calls = []
+
+    class Builder:
+        def __init__(self, **kwargs):
+            pass
+
+        def create(self, env):
+            pass
+
+    monkeypatch.setattr(install_smoke.venv, "EnvBuilder", Builder)
+    monkeypatch.setattr(
+        install_smoke.subprocess, "run", lambda argv, check: calls.append(argv)
+    )
+    install_smoke.install(package, tmp_path / "env")
+    (argv,) = calls
+    return argv[argv.index("install") + 1 :]
+
+
+def test_a_wheel_installs_from_its_file(monkeypatch, tmp_path):
+    wheel = tmp_path / "crosstl-3.9.0-py3-none-any.whl"
+    arguments = _pip_arguments(monkeypatch, tmp_path, wheel)
+    assert arguments[-1] == str(wheel)
+    assert "--index-url" not in arguments
+
+
+def test_a_release_installs_from_pypi_without_the_cache(monkeypatch, tmp_path):
+    arguments = _pip_arguments(monkeypatch, tmp_path, "crosstl==3.9.0")
+    assert arguments[-1] == "crosstl==3.9.0"
+    assert "--no-cache-dir" in arguments
+    assert arguments[arguments.index("--index-url") + 1] == install_smoke.PYPI
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [[], ["dist/", "--release", "3.9.0"], ["--release", "3.9.0; echo"]],
+)
+def test_the_check_needs_one_wheel_or_one_release_version(argv):
+    with pytest.raises(SystemExit) as stopped:
+        install_smoke.main(argv)
+    assert stopped.value.code == 2
+
+
+def test_the_release_dispatch_checks_the_published_package_on_every_platform():
+    import yaml
+
+    workflow = yaml.safe_load(
+        (ROOT / ".github" / "workflows" / "examples-test.yml").read_text(
+            encoding="utf-8"
+        )
+    )
+    triggers = workflow.get("on", workflow.get(True))
+    assert triggers["workflow_dispatch"]["inputs"]["release"]["default"] == ""
+    assert "!inputs.release" in workflow["jobs"]["test-examples"]["if"]
+    steps = workflow["jobs"]["installed-package"]["steps"]
+    released = [step for step in steps if step.get("if") == "inputs.release"]
+    checkout, check = released
+    assert checkout["with"]["ref"] == "v${{ inputs.release }}"
+    # The version reaches the shell through the environment, never spliced into the script.
+    assert check["env"]["RELEASE"] == "${{ inputs.release }}"
+    assert "${{" not in check["run"] and '--release "$RELEASE"' in check["run"]
+    built = [step for step in steps if "wheel" in step.get("run", "")]
+    assert built and all(step["if"] == "${{ !inputs.release }}" for step in built)

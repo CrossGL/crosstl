@@ -37,6 +37,9 @@ manual run, only builds and checks them. Pushing a `v*.*.*` tag builds, checks a
    creates the release from them with the version's changelog section as its notes. Zenodo archives the release
    and takes its version from the tag.
 4. Check both files on PyPI and on the GitHub release.
+5. Run `gh workflow run examples-test.yml -f release=<version>`. It installs `crosstl==<version>` from PyPI, without
+   pip's cache, on Linux, macOS and Windows with every supported Python, and runs the README quickstart and the
+   quickstart guide from the tag's own copies (`tools/install_smoke.py --release`).
 
 If a required run is still in progress, the tag workflow fails before publishing; rerun it once the run has passed.
 Rerunning after an interrupted upload is safe: PyPI skips files it already has, and the GitHub job updates the
