@@ -179,10 +179,11 @@ def _run_metal(source, buffers, threads, group):
 def test_device_destinations_compare_bits_through_uint_words(tmp_path):
     metal = _translate(tmp_path, DEVICE)
     flat = _collapsed(metal)
-    assert (
-        "device atomic_uint *atomicTarget = reinterpret_cast<device atomic_uint *>(target);"
-        in flat
-    )
+    assert re.search(
+        r"device atomic_uint\s*\*\s*atomicTarget = "
+        r"reinterpret_cast<device atomic_uint\s*\*>\(target\);",
+        flat,
+    ), flat
     assert "uint compareWord = as_type<uint>(compareValue);" in flat
     assert "return as_type<float>(original);" in flat
     assert re.search(
@@ -225,7 +226,7 @@ def test_device_compare_exchange_matches_bits_on_the_gpu(tmp_path):
 def test_group_shared_destinations_compare_bits_on_the_gpu(tmp_path):
     metal = _translate(tmp_path, GROUP_SHARED)
     assert "__crossgl_threadgroup_atomic_compare_exchange_float(" in metal
-    assert "threadgroup atomic_uint *atomicTarget" in _collapsed(metal)
+    assert re.search(r"threadgroup atomic_uint\s*\*\s*atomicTarget", _collapsed(metal))
     _compile(tmp_path, metal)
     words = _run_metal(metal, {"outp": _pack([0] * 10)}, threads=4, group=4)["outp"]
     # 0.0 never matches the stored -0.0, so no thread exchanges it.
@@ -247,10 +248,11 @@ def test_group_shared_destinations_compare_bits_on_the_gpu(tmp_path):
 def test_buffer_block_members_compare_bits_on_the_gpu(tmp_path, stored, expected):
     metal = _translate(tmp_path, BLOCK_MEMBER, "cgl")
     flat = _collapsed(metal)
-    assert (
-        "device atomic_uint *target = reinterpret_cast<device atomic_uint *>(buffer + offset);"
-        in flat
-    )
+    assert re.search(
+        r"device atomic_uint\s*\*\s*target = "
+        r"reinterpret_cast<device atomic_uint\s*\*>\(buffer \+ offset\);",
+        flat,
+    ), flat
     assert "__crossgl_buffer_atomic_compare_exchange_float(data, 4, -0.0, 2.0)" in flat
     _compile(tmp_path, metal)
     pad = 0x12345678
