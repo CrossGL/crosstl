@@ -3804,7 +3804,9 @@ def test_numeric_alias_constructor_codegen_from_modular_numeric_docs_reparses_cr
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "float fragment_main(uint raw, double alpha) @ stage_entry {" in generated_code
+    assert (
+        "float fragment_main(uint raw, double alpha) @ stage_entry {" in generated_code
+    )
     assert "let normalized = (float(raw) / float(uint(255)));" in generated_code
     assert "return float((normalized + float(alpha)));" in generated_code
     assert "Float32(" not in generated_code
@@ -3815,9 +3817,21 @@ def test_numeric_alias_constructor_codegen_from_modular_numeric_docs_reparses_cr
 @pytest.mark.parametrize(
     ("source", "stage", "entry"),
     [
-        ("fn vertex_shader(x: Float32) -> Float32:", "vertex", "float vertex_shader(float x)"),
-        ("@fragment\nfn shade(x: Float32) -> Float32:", "fragment", "float shade(float x)"),
-        ("fn compute_main(x: Float32) -> Float32:", "compute", "float compute_main(float x)"),
+        (
+            "fn vertex_shader(x: Float32) -> Float32:",
+            "vertex",
+            "float vertex_shader(float x)",
+        ),
+        (
+            "@fragment\nfn shade(x: Float32) -> Float32:",
+            "fragment",
+            "float shade(float x)",
+        ),
+        (
+            "fn compute_main(x: Float32) -> Float32:",
+            "compute",
+            "float compute_main(float x)",
+        ),
     ],
 )
 def test_stage_entry_not_named_main_is_marked_stage_entry(source, stage, entry):
