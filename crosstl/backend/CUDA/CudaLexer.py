@@ -5,6 +5,7 @@ from enum import Enum, auto
 from typing import Dict, Iterator, List, Optional, Tuple
 
 from crosstl.translator.refusals import CudaSyntaxError
+from crosstl.translator.token_dispatch import ordered_pattern_dispatch
 
 from .preprocessor import CudaPreprocessor
 
@@ -525,7 +526,7 @@ class CudaLexer:
             code = preprocessor.preprocess(code, file_path=file_path)
         else:
             code = self._join_line_continuations(code)
-        self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
+        self._token_dispatch = ordered_pattern_dispatch(TOKENS)
         self.code = code
         self._length = len(code)
         self.reserved_keywords = KEYWORDS
@@ -557,8 +558,10 @@ class CudaLexer:
 
         yield ("EOF", "")
 
-    def _next_token(self, pos: int) -> Tuple[int, str, str]:
-        for token_type, pattern in self._token_patterns:
+    def _next_token(self, pos: int) -> Optional[Tuple[int, str, str]]:
+        # Only the patterns that can begin with this character are tried, in
+        # table order, so the first match is the one the whole table picks.
+        for token_type, pattern in self._token_dispatch.candidates(self.code[pos]):
             match = pattern.match(self.code, pos)
             if match:
                 return match.end(0), token_type, match.group(0)

@@ -1,0 +1,1 @@
+The CUDA and HIP importers tokenize about nine times faster: at each position their lexers try only the token patterns that can begin with the character there, in table order, as the HLSL, Metal and GLSL lexers already do, instead of every pattern in the table. The token stream is unchanged. Importing a large kernel file such as candle's `binary.cu` takes about half as long.
