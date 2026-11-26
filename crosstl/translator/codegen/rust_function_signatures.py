@@ -3,6 +3,8 @@
 from ..ast import (
     ArrayAccessNode,
     ArrayLiteralNode,
+    ArrayNode,
+    ArrayType,
     AssignmentNode,
     BinaryOpNode,
     BlockNode,
@@ -475,6 +477,21 @@ class RustFunctionSignatureMixin:
         finally:
             self.assignment_lhs_depth -= 1
 
+    def uninitialized_array_element_name(self, node):
+        """Return the innermost element type name of a local array declaration, or None."""
+        if isinstance(node, ArrayNode):
+            element_type = node.element_type
+        else:
+            element_type = getattr(node, "var_type", None)
+            if not isinstance(element_type, ArrayType):
+                return None
+        while isinstance(element_type, ArrayType):
+            element_type = element_type.element_type
+        name = getattr(element_type, "name", None)
+        if name is None and element_type is not None:
+            name = str(self.convert_type_node_to_string(element_type)).split("[", 1)[0]
+        return name.strip() if isinstance(name, str) else None
+
     def collect_generic_operator_constraints(self, node, generic_names, constraints):
         if node is None:
             return
@@ -498,6 +515,11 @@ class RustFunctionSignatureMixin:
             self.collect_generic_operator_constraints(
                 initial_value, generic_names, constraints
             )
+            if initial_value is None:
+                # An uninitialised local array is filled with Default::default() (#5192).
+                element_base = self.uninitialized_array_element_name(node)
+                if element_base in generic_names:
+                    self.add_generic_constraint(constraints, element_base, "Default")
             declared_type = self.get_variable_type(node)
             variable_type = declared_type or self.expression_result_type(initial_value)
             if variable_type is not None:

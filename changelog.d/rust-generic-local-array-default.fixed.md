@@ -1,0 +1,1 @@
+Rust output of a generic function that declares an uninitialised local array of its type parameter bounds the parameter by `Default` as well as `Copy`, since the array is filled with `Default::default()`, and so does a generic function that passes its own type parameter to one (#5192).
