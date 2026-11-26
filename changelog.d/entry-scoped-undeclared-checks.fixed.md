@@ -1,1 +1,0 @@
-A translation that selects one entry point no longer refuses an undeclared name in a function no stage entry reaches: the DirectX, Metal and OpenGL generators drop those functions from entry-scoped output, so the undeclared type, identifier and function checks skip them again (a regression from #4631). Whole-program translations still refuse such names.

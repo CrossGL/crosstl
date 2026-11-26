@@ -1,1 +1,0 @@
-CUDA and HIP output give each thread its own copy of a module-scope `var` or `var<private>` variable, as they already did for a `static` one, instead of declaring a host variable that nvcc and hipcc refuse in device code (#4825).

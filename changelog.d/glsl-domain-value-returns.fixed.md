@@ -1,1 +1,0 @@
-GLSL and GLSL ES output translate a domain shader that returns a plain value with a semantic, as HLSL and Slang domain shaders may (`float4 main(...) : SV_Position`): the tessellation lowering writes the value to `gl_Position`, or to an evaluation-stage output for another semantic, instead of refusing the `OutputPatch` parameter. SPIR-V output keeps reading such a stage in place.

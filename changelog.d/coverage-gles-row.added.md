@@ -1,1 +1,0 @@
-The coverage report has a GLSL ES row, which measures the `gles` target's GLSL ES 3.x output. Its feature list is the GLSL ES 3.20 text of the GLSL specification source, the built-in functions and language-level features of OpenGL ES 3.2, and glslang checks each translation as the GLSL ES version it names. The nightly translation matrix measures translations into GLSL ES as well.

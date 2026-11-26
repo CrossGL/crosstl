@@ -1,1 +1,0 @@
-Metal input keeps the members of a struct-template functor that a function template instantiates at its own arguments (`Less<T> op; return op(a, b);`): each call of that function template is instantiated, so the functor's members become functions every target calls, and `return op(a, op.twice(b))` no longer reads as a declaration of `op` (#4337).

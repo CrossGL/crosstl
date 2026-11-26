@@ -1,1 +1,0 @@
-The Coverage workflow publishes the page of each language to `languages/` on the `coverage` branch beside `COVERAGE.md`, so it is current after every measurement, and the README links to it. Each page now also lists the translation matrix cells the language is the source or target of, with their scores and a link to each cell's gaps.

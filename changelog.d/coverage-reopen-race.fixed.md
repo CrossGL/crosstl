@@ -1,1 +1,0 @@
-The Coverage workflow no longer reopens a bug issue that a merged fix closed while it measured an older commit. A reopening now waits until a run measures a commit that contains the pull request or commit that closed the issue; a run that still finds the bug there reopens it as before.
