@@ -41,11 +41,15 @@ class ProgramDeclarationMixin:
         return False
 
     def should_emit_stage_entry_attribute(self, func, stage_name, entry_name=None):
+        """Whether the stage block's function keeps its HLSL name through ``@ stage_entry``.
+
+        Every function the importer writes into a stage block is that stage's entry. CrossGL treats a stage
+        function named ``main`` as the entry and needs ``@ stage_entry`` on any other, or it synthesizes an empty
+        entry and the shader computes nothing.
+        """
         if entry_name is not None or getattr(func, "name", None) == "main":
             return False
-        if getattr(func, "is_effect_stage_entry", False):
-            return True
-        return stage_name != "fragment" or str(func.name).lower().startswith("ps")
+        return bool(stage_name)
 
     def collect_flattened_stage_struct_names(self, ast):
         flattened = set()
