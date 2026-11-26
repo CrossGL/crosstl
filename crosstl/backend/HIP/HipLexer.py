@@ -1,9 +1,9 @@
 """Lexer for importing HIP source into CrossGL Translator."""
 
-import re
 from typing import Dict, List, Optional
 
 from crosstl.translator.refusals import HipSyntaxError
+from crosstl.translator.token_dispatch import ordered_pattern_dispatch
 
 from .preprocessor import HipPreprocessor
 
@@ -298,7 +298,7 @@ class HipLexer:
                 max_expansion_depth=max_expansion_depth,
             )
             code = preprocessor.preprocess(code, file_path=file_path)
-        self._token_patterns = [(name, re.compile(pattern)) for name, pattern in TOKENS]
+        self._token_dispatch = ordered_pattern_dispatch(TOKENS)
         self.code = code
         self._length = len(code)
         self.reserved_keywords = KEYWORDS
@@ -340,7 +340,9 @@ class HipLexer:
         self.column = len(text.rsplit("\n", 1)[1]) + 1
 
     def _next_token(self, pos: int):
-        for token_type, pattern in self._token_patterns:
+        # Only the patterns that can begin with this character are tried, in
+        # table order, so the first match is the one the whole table picks.
+        for token_type, pattern in self._token_dispatch.candidates(self.code[pos]):
             match = pattern.match(self.code, pos)
             if match:
                 text = match.group(0)
