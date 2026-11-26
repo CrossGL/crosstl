@@ -27,12 +27,15 @@ from tests.lowering_refusal_helpers import (
     refused_metal_import,
 )
 
+# CrossGL's residency query wraps texture reads only, so a byte-address load's Status has no CrossGL form.
 TILED_STATUS_HLSL = textwrap.dedent("""
-    Texture2D<float4> colorMap : register(t0);
+    ByteAddressBuffer raw : register(t0);
 
-    float4 main(int2 pixel : TEXCOORD0) : SV_Target0 {
+    float4 main(uint offset : TEXCOORD0) : SV_Target0 {
         uint status;
-        float4 color = colorMap.Load(int3(pixel, 0), int2(0, 0), status);
+        uint word = raw.Load(offset, status);
+        uint2 pair = raw.Load2(offset + 4u, status);
+        float4 color = float4(word, pair, 1.0);
         return CheckAccessFullyMapped(status) ? color : float4(1.0, 0.0, 1.0, 1.0);
     }
 """).strip()
@@ -108,8 +111,8 @@ def test_hlsl_import_reports_every_refused_construct_once():
         "status output"
     ) in message
     assert (
-        "DirectX tiled-resource status check CheckAccessFullyMapped: CrossGL has "
-        "no residency status, so the mapped result is unknown"
+        "DirectX tiled-resource status for Load2: CrossGL has no operand for "
+        "status output"
     ) in message
     assert "/*" not in message
 

@@ -10,11 +10,13 @@ none) and a ``Clamp`` of ``0.0f``, which excludes no mip level. A CrossGL query:
 becomes, with a status local the semantic pass declares at the top of the function
 (:func:`crosstl.translator.semantics.texture_residency.declare_hlsl_residency_status`)::
 
-    int code = ((texel = t.Sample(s_sampler, uv, int2(0, 0), 0.0f, status), CheckAccessFullyMapped(status)) ? 0 : 1);
+    int code = ((texel = t.Sample(s_sampler, uv, int2(0, 0), 0.0f, status), true) ? int(status) : 0);
 
-The comma operator sequences the read, and so the copy-out of ``status``, before ``CheckAccessFullyMapped`` reads
-it. ``textureResident(code)`` is ``(code == 0)``, as in MSL. A read whose HLSL form has no Status overload is refused
-with :class:`~crosstl.translator.codegen.texture_residency.TextureResidencyUnsupportedError`.
+The comma operator sequences the read, and so the copy-out of ``status``, before ``int(status)`` reads it. The code
+is the read's own Status, as GLSL's and SPIR-V's codes are their sparse reads' own results, so ``textureResident(code)``
+is ``CheckAccessFullyMapped(uint(code))`` and a Status that HLSL source passed through CrossGL keeps its meaning. A
+read whose HLSL form has no Status overload is refused with
+:class:`~crosstl.translator.codegen.texture_residency.TextureResidencyUnsupportedError`.
 """
 
 from __future__ import annotations
@@ -23,7 +25,6 @@ import re
 
 from .texture_lod_clamp import join_call_text, split_call_text
 from .texture_residency import (
-    _SIMPLE_OPERAND,
     HLSL_RESIDENCY_STATUS_ATTRIBUTE,
     _call_name,
     _refuse,
@@ -80,6 +81,9 @@ def _read_call_parts(base_text, read_name):
 def _shape(codegen, read):
     arguments = list(getattr(read, "arguments", None) or [])
     texture_type = codegen.texture_resource_type(arguments[0]) if arguments else None
+    # A multisample storage image is declared as the Texture2DMS(Array) SRV it is read through.
+    if texture_type is not None:
+        texture_type = codegen.directx_resource_declaration_type(texture_type)
     return texture_type, codegen.sampled_texture_shape_type(texture_type) or ""
 
 
@@ -164,12 +168,10 @@ def hlsl_texture_residency_call(codegen, args, call_node=None):
     texel_text = codegen.generate_expression(texel)
     read_text = join_call_text(callee, arguments)
     # The comma sits in the condition of ?:, where DXC does not mistake it for a constructor list (-Wcomma-in-init).
-    return f"(({texel_text} = {read_text}, CheckAccessFullyMapped({status})) ? 0 : 1)"
+    return f"(({texel_text} = {read_text}, true) ? int({status}) : 0)"
 
 
 def hlsl_texture_resident_call(codegen, args, call_node=None):
-    """HLSL for ``textureResident``: the code is 0 when every texel was resident."""
+    """HLSL for ``textureResident``: the code is a read's Status, which ``CheckAccessFullyMapped`` tests."""
     code = codegen.generate_expression(_resident_code("directx", args, call_node))
-    if not _SIMPLE_OPERAND.fullmatch(code):
-        code = f"({code})"
-    return f"({code} == 0)"
+    return f"CheckAccessFullyMapped(uint({code}))"

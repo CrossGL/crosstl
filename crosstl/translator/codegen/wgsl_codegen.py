@@ -113,6 +113,12 @@ from .wgsl_matrix_inverse import (
     wgsl_matrix_inverse_call,
 )
 from .wgsl_matrix_resize import wgsl_matrix_resize
+from .wgsl_mixed_float_operands import (
+    MIXED_FLOAT_ARITHMETIC_OPERATORS,
+    MIXED_FLOAT_OPERATORS,
+    mixed_float_common_type,
+    wgsl_mixed_float_operands,
+)
 from .wgsl_multisampled_textures import WGSLMultisampledTextureMixin
 from .wgsl_nan_aware_min_max import (
     is_nan_aware_min_max_call,
@@ -1369,6 +1375,12 @@ class WGSLCodeGen(
                 return f"({left} {expr.operator} {right})"
             if expr.operator in MIXED_INTEGER_OPERATORS:
                 left, right = wgsl_mixed_integer_operands(self, expr.left, expr.right)
+                if expr.operator in MIXED_FLOAT_OPERATORS:
+                    # A float operand converts the integer one to f32, as the
+                    # C-style languages do implicitly (see wgsl_mixed_float_operands).
+                    left, right = wgsl_mixed_float_operands(
+                        self, expr.left, expr.right, left, right
+                    )
                 return f"({left} {expr.operator} {right})"
             return (
                 f"({self.generate_expression(expr.left)} {expr.operator} "
@@ -2128,6 +2140,13 @@ class WGSLCodeGen(
                 return left_type
             if right_matrix is not None and left_scalar is not None:
                 return right_type
+        if expr.operator in MIXED_FLOAT_ARITHMETIC_OPERATORS:
+            # A float operand promotes an integer one to f32, so a nested
+            # expression such as `(x / 4) + u` keeps its float type instead
+            # of losing it to None.
+            common_float = mixed_float_common_type(self, expr.left, expr.right)
+            if common_float is not None:
+                return common_float
         if left_vector is not None and right_vector is not None:
             if left_vector == right_vector:
                 return left_type

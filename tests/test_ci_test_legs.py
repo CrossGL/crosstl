@@ -66,7 +66,12 @@ def test_suite_legs_and_the_complete_suite_test_every_python_version_once(
     assert set(queue_versions) | {complete_version} == supported
     assert set(pull_request_versions) <= set(queue_versions)
     ordered = sorted(supported, key=lambda version: tuple(map(int, version.split("."))))
-    assert {ordered[0], ordered[-1]} <= set(pull_request_versions)
+    # A pull request tests the oldest and the newest version on Ubuntu, each once.
+    # The Complete Test Suite runs on every event, so it takes one of them and the
+    # suite's own legs add the other: a third version, or a leg that repeated the
+    # complete suite's, would hold more runners on every push.
+    assert complete_version not in pull_request_versions
+    assert set(pull_request_versions) | {complete_version} == {ordered[0], ordered[-1]}
 
     assert matrix["OS"] == ["ubuntu-latest"]
     (run,) = (

@@ -1555,13 +1555,17 @@ class GLSLToCrossGLConverter(GLSLShaderSectionMixin):
         return bool(return_type and str(return_type) != "void")
 
     def fragment_uses_direct_output_declarations(
-        self, fragment_writes_depth=False, fragment_writes_sample_mask=False
+        self, fragment_writes_builtin_output=False
     ):
+        """Whether the fragment entry keeps its colour outputs as declarations instead of returning one.
+
+        ``fragment_writes_builtin_output`` says whether ``main`` writes depth, the sample mask or the stencil
+        reference; those stay stage-level writes, so the colour outputs must stay stage-level too.
+        """
         return self.shader_type == "fragment" and (
             len(self.outputs) > 1
             or any(getattr(output, "is_array", False) for output in self.outputs)
-            or fragment_writes_depth
-            or fragment_writes_sample_mask
+            or fragment_writes_builtin_output
         )
 
     def main_writes_name(self, node, name, shader_type=None):
