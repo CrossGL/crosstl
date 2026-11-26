@@ -46,7 +46,10 @@ from .generic_pointer_spaces import (
     refuse_written_generic_pointers,
 )
 from .generic_struct_utils import generic_struct_specialized_fields
-from .metal_argument_tables import assign_metal_argument_tables
+from .metal_argument_tables import (
+    assign_metal_argument_tables,
+    drop_other_entry_arguments,
+)
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_draw_base_indices import offset_metal_draw_base_indices
@@ -116,6 +119,7 @@ class MetalProgramEntryMixin:
 
     def prune_entry_scoped_declarations(self, ast, entry_function):
         """Retain only module declarations reachable from one compute entry."""
+        drop_other_entry_arguments(ast, getattr(entry_function, "name", None))
         functions = self.entry_scoped_functions(ast, entry_function)
         function_names = {
             getattr(function, "name", None)

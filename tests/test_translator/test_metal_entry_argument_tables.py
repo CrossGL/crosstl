@@ -7,6 +7,10 @@ resources in its stage block. Metal output passes such a declaration to its own 
 that entry's table. Before, it checked every binding program-wide and passed every resource to every kernel: it
 refused two kernels whose ``<kernel>_Args`` blocks or buffers shared an index, and it bound the second kernel's
 ``out`` at the first kernel's index when two kernels named different buffers ``out``.
+
+An artifact scoped to one entry (``entry_point=``) keeps only that entry's argument table. It used to keep the
+other kernels' ``<kernel>_Args`` blocks whenever they had a member of the same name, and their buffers of the same
+name, and then refused the overlapping binding or the differing declaration.
 """
 
 import re
@@ -136,10 +140,25 @@ shader S {
 """
 
 
-def _translate(tmp_path, name, source):
+# Two kernels whose `part` buffers differ in access, as in a histogram's partial and merge kernels.
+CUDA_SAME_NAME_ACCESS = """
+__global__ void partial(float* part, const float* data) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    part[i] = data[i] + 1.0f;
+}
+__global__ void merge(float* hist, const float* part) {
+    int i = blockIdx.x * blockDim.x + threadIdx.x;
+    hist[i] = part[i] * 2.0f;
+}
+"""
+
+
+def _translate(tmp_path, name, source, entry_point=None):
     path = tmp_path / name
     path.write_text(source)
-    return crosstl.translate(str(path), backend="metal")
+    if entry_point is None:
+        return crosstl.translate(str(path), backend="metal")
+    return crosstl.translate(str(path), backend="metal", entry_point=entry_point)
 
 
 def _kernel(metal, name):
@@ -298,3 +317,52 @@ def test_stage_functions_of_one_name_in_two_stages_stay_two_functions(tmp_path):
     _compile(tmp_path, metal)
     assert _run(metal, "kernel_main", {0: [1.0, 2.0]}, 2)[0] == [2.0, 4.0]
     assert _run(metal, "kernel_main_2", {0: [1.0, 2.0]}, 2)[0] == [2.0, 3.0]
+
+
+@pytest.mark.parametrize("entry, other", [("fill", "scale"), ("scale", "fill")])
+def test_an_entry_artifact_takes_only_its_own_args_block(tmp_path, entry, other):
+    metal = _translate(tmp_path, "k.cu", TWO_SCALAR_KERNELS, entry_point=entry)
+    assert f"constant {entry}_Args &{entry}_Args [[buffer(1)]]" in _kernel(
+        metal, f"kernel_{entry}"
+    )
+    assert f"{other}_Args" not in metal and f"kernel_{other}" not in metal
+    _compile(tmp_path, metal)
+    n = struct.pack("I", 3)
+    result = _run(metal, f"kernel_{entry}", {0: [1.0, 2.0, 3.0, 4.0]}, 4, {1: n})[0]
+    expected = {"fill": [1.0, 1.0, 1.0, 4.0], "scale": [2.0, 4.0, 6.0, 4.0]}
+    assert result == expected[entry]
+
+
+def _binds(kernel, name, index):
+    # clang-format writes "float *part", the unformatted output "float* part".
+    pattern = rf"\*\s*{name} \[\[buffer\({index}\)\]\]"
+    return re.search(pattern, kernel) is not None
+
+
+def test_entry_artifacts_of_kernels_naming_buffers_alike_bind_their_own(tmp_path):
+    path = tmp_path / "k.cu"
+    path.write_text(CUDA_SAME_NAME_ACCESS)
+    artifacts = crosstl.translate_entries(str(path), "metal", ["partial", "merge"])
+    partial, merge = artifacts["partial"], artifacts["merge"]
+    assert partial == _translate(tmp_path, "k.cu", CUDA_SAME_NAME_ACCESS, "partial")
+    partial_kernel = _kernel(partial, "kernel_partial")
+    assert _binds(partial_kernel, "part", 0) and _binds(partial_kernel, "data", 1)
+    merge_kernel = _kernel(merge, "kernel_merge")
+    assert _binds(merge_kernel, "hist", 0)
+    assert _binds(merge_kernel, "part", 1)
+    assert "kernel_merge" not in partial and "kernel_partial" not in merge
+    for metal in (partial, merge):
+        _compile(tmp_path, metal)
+    values = [0.0, 1.0, 2.0, 3.0]
+    assert _run(partial, "kernel_partial", {0: [0.0] * 4, 1: values}, 4)[0] == [
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+    ]
+    assert _run(merge, "kernel_merge", {0: [0.0] * 4, 1: values}, 4)[0] == [
+        0.0,
+        2.0,
+        4.0,
+        6.0,
+    ]

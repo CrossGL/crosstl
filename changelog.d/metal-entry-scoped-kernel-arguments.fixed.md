@@ -1,0 +1,1 @@
+Metal output scoped to one CUDA or OpenCL C kernel (`entry_point=` or `translate_entries`) keeps only that kernel's parameters. It used to keep another kernel's `<kernel>_Args` block when the two shared a value parameter name, and another kernel's buffer of the same name, and then refused the overlapping `[[buffer(n)]]` or the differing declaration.
