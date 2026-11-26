@@ -73,3 +73,68 @@ def test_a_readme_without_a_quickstart_is_reported():
         install_smoke.quickstart(
             "## Quickstart\n\n```bash\ncrosstl a.cgl\n```\n\n## Next\n"
         )
+
+
+GUIDE = (ROOT / "docs" / "source" / "quickstart.rst").read_text(encoding="utf-8")
+
+
+def test_the_quickstart_guide_saves_its_sources_before_it_translates_them():
+    steps = install_smoke.guide(GUIDE)
+    saved = [step.name for step in steps if step.kind == "save"]
+    assert saved == ["shader.metal", "saxpy.cgl"]
+    seen: set[str] = set()
+    for step in steps:
+        if step.kind == "save":
+            seen.add(step.name)
+            continue
+        for name in ("shader.metal", "saxpy.cgl"):
+            if name in step.text:
+                assert name in seen, (name, step.text)
+    commands = [step.text for step in steps if step.kind == "command"]
+    assert "crosstl shader.metal -o shader.hlsl" in commands
+    assert "crosstl doctor" in commands
+    # pip install crosstl is what the check has already done with the wheel it tests.
+    assert not any(command.startswith("pip ") for command in commands)
+
+
+def test_every_quickstart_guide_output_is_checked_for_its_language():
+    for step in install_smoke.guide(GUIDE):
+        if step.kind == "command":
+            output, backend = install_smoke.output_of(step.text.split())
+            if output and output != "-":
+                assert backend in install_smoke.MARKERS, step.text
+        elif step.kind == "python":
+            for backend, _ in install_smoke.SAVED.findall(step.text):
+                assert backend in install_smoke.MARKERS, step.text
+
+
+def test_rst_steps_read_saved_files_python_blocks_and_commands():
+    body = (
+        "Save this kernel as ``k.metal``:\n\n"
+        ".. code-block:: cpp\n\n"
+        "   kernel void k() {}\n\n"
+        "Then run:\n\n"
+        ".. code-block:: bash\n\n"
+        "   pip install crosstl\n"
+        "   # a comment\n"
+        "   crosstl k.metal \\\n"
+        "     -o k.hlsl\n\n"
+        ".. code-block:: python\n\n"
+        "   import crosstl\n"
+    )
+    steps = install_smoke.rst_steps(body)
+    assert [(step.kind, step.name) for step in steps] == [
+        ("save", "k.metal"),
+        ("command", ""),
+        ("python", ""),
+    ]
+    assert steps[0].text == "kernel void k() {}\n"
+    assert steps[1].text.split() == ["crosstl", "k.metal", "-o", "k.hlsl"]
+    assert steps[2].text == "import crosstl\n"
+
+
+def test_a_guide_that_lost_a_section_or_runs_another_tool_is_reported():
+    with pytest.raises(ValueError, match="no section"):
+        install_smoke.guide("Quickstart\n==========\n\nInstall\n-------\n")
+    with pytest.raises(ValueError, match="neither crosstl nor python"):
+        install_smoke.rst_steps(".. code-block:: bash\n\n   glslangValidator k.comp\n")
