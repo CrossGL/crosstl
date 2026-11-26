@@ -22,8 +22,9 @@ the CUDA and HIP generators replaced them with a comment and ``0``, so the opera
 * the shader model 6.6 ``float`` forms ``InterlockedCompareExchangeFloatBitwise(dest, compare, value, original)``
   and ``InterlockedCompareStoreFloatBitwise(dest, compare, value)`` the same way. They compare the bits of the
   values, which is what CrossGL's ``atomicCompSwap`` on a ``float`` does: the OpenGL generator keeps such a
-  destination in ``uint`` words and compares ``floatBitsToUint`` of the operands, and the other generators refuse
-  a ``float`` destination;
+  destination in ``uint`` words and compares ``floatBitsToUint`` of the operands, the Metal generator exchanges the
+  destination's word through ``atomic_uint`` and compares ``as_type<uint>`` of the operands, and the other
+  generators refuse a ``float`` destination;
 * any remaining three-argument ``atomicCompareExchange`` call into ``atomicCompSwap``.
 
 HLSL assigns ``original`` after the operation, as the rewritten assignment does. A call whose name a function of the

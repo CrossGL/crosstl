@@ -112,7 +112,8 @@ def test_compare_store_of_a_structure_member_discards_the_previous_value(tmp_pat
     _glslang(tmp_path, glsl)
 
 
-@pytest.mark.parametrize("backend", ["vulkan", "metal", "cuda", "hip", "rust"])
+# Metal output compares the bits through atomic_uint: tests/test_translator/test_metal_float_bitwise_atomics.py.
+@pytest.mark.parametrize("backend", ["vulkan", "cuda", "hip", "rust"])
 def test_targets_without_float_compare_exchange_refuse_it(tmp_path, backend):
     with pytest.raises(TranslationDiagnostic, match="atomicCompSwap"):
         _translate(tmp_path, COMPARE_EXCHANGE, backend)

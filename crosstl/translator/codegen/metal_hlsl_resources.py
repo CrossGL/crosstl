@@ -41,6 +41,7 @@ from .hlsl_buffer_layout import (
     HLSL_STRUCTURED_LAYOUT,
     HlslLayoutError,
 )
+from .metal_compare_exchange import compare_exchange_loop
 from .metal_hlsl_buffer_layout import LAYOUT_LABELS, MetalHlslBufferLayouts
 from .push_constant_blocks import is_push_constant, push_constant_block_layout
 
@@ -886,29 +887,23 @@ class MetalHlslResourceMixin:
         """Strong compare-exchange returning the original value.
 
         Metal only provides the weak form, which may fail spuriously; retry
-        while the observed value still equals the comparand.
+        while the observed value still equals the comparand. A ``float``
+        target compares bits (``metal_compare_exchange``).
         """
         helpers = []
         for address_space, component_type in sorted(
             getattr(self, "required_pointer_atomic_compare_helpers", set())
         ):
-            atomic_type = f"atomic_{component_type}"
             helper_name = self.pointer_atomic_compare_helper_name(
                 address_space, component_type
             )
             helpers.append(
                 f"{component_type} {helper_name}({address_space} {component_type}* target, "
                 f"{component_type} compareValue, {component_type} value) {{\n"
-                f"    {address_space} {atomic_type}* atomicTarget = "
-                f"reinterpret_cast<{address_space} {atomic_type}*>(target);\n"
-                f"    {component_type} original;\n"
-                "    do {\n"
-                "        original = compareValue;\n"
-                "    } while (!atomic_compare_exchange_weak_explicit(atomicTarget, "
-                "&original, value, memory_order_relaxed, memory_order_relaxed) "
-                "&& original == compareValue);\n"
-                "    return original;\n"
-                "}\n\n"
+                + compare_exchange_loop(
+                    f"{address_space} atomic_", "target", component_type
+                )
+                + "}\n\n"
             )
         return "".join(helpers)
 
