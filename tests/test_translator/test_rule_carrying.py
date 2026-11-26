@@ -141,10 +141,10 @@ def test_compound_assignment_and_increment_statements_wrap(tmp_path):
 
 def test_increment_used_as_a_value_is_refused_where_it_needs_a_polyfill(tmp_path):
     # Targets whose emitters write back inout parameters call a step helper instead
-    # (test_wrapping_step_values.py).
+    # (test_wrapping_step_values.py); the Mojo emitter passes inout parameters by value.
     body = "    int y = x++;\n    o[i] = y;"
     with pytest.raises(RuleInexpressibleError) as refusal:
-        glsl(tmp_path, body, "cuda")
+        glsl(tmp_path, body, "mojo")
     assert (
         refusal.value.project_diagnostic_code == "project.translate.rule-inexpressible"
     )
