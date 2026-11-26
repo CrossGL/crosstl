@@ -1,0 +1,1 @@
+Metal output declares a CrossGL `readonly buffer T* name` as a `const device T*` argument, in the entry and in the helpers it is passed to, so the Metal library reflects it as read-only like the HLSL, GLSL and WGSL read-only inputs, and a store or atomic through it is refused with a typed diagnostic.

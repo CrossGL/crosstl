@@ -35,7 +35,10 @@ from .image_access_contracts import (
     is_texture_sampling_operation,
     supported_image_formats,
 )
-from .metal_buffer_resource_types import metal_buffer_resource_scope_type
+from .metal_buffer_resource_types import (
+    metal_buffer_resource_is_readonly,
+    metal_buffer_resource_scope_type,
+)
 from .metal_reference_parameters import binds_buffer_reference, is_program_scope_object
 from .metal_render_walks import (
     names_identifier_class,
@@ -91,6 +94,8 @@ class MetalFunctionDependencyMixin:
     ):
         mapped_type = self.map_resource_type_with_format(raw_type)
         memory = self.resource_memory_qualifier_prefix(node, raw_type) if node else ""
+        if metal_buffer_resource_is_readonly(node, raw_type, address_space):
+            address_space = f"const {address_space}"
         if str(mapped_type).endswith("*"):
             if array_size is not None:
                 array_size = array_size or "1"
@@ -140,6 +145,9 @@ class MetalFunctionDependencyMixin:
                 self.current_readonly_metal_parameter_reasons[name] = (
                     "constant address space"
                 )
+            elif metal_buffer_resource_is_readonly(node, buffer_type, address_space):
+                self.current_readonly_metal_parameters.add(name)
+                self.current_readonly_metal_parameter_reasons[name] = "readonly"
 
         for node, buffer_type in structured_resources:
             name = getattr(node, "name", getattr(node, "variable_name", None))

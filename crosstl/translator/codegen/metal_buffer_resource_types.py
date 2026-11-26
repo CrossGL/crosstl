@@ -17,9 +17,33 @@ from __future__ import annotations
 from ..ast import PointerType, ReferenceType
 
 __all__ = [
+    "metal_buffer_resource_is_readonly",
     "metal_buffer_resource_scope_type",
     "metal_generic_buffer_resource_types",
 ]
+
+_READONLY_ACCESS = frozenset({"readonly", "read"})
+
+
+def metal_buffer_resource_is_readonly(node, buffer_type, address_space):
+    """Whether a ``device`` buffer-resource global was declared read-only (``readonly buffer float* fin``).
+
+    The parameter is then ``const device float* fin``: Metal reflects the argument as read-only, as HLSL's
+    ``StructuredBuffer``, GLSL's ``readonly buffer`` and WGSL's ``var<storage, read>`` are, and the generator
+    refuses stores through it instead of leaving them to the Metal compiler.
+    """
+    if address_space != "device":
+        return False
+    qualifiers = {
+        str(qualifier).lower() for qualifier in getattr(node, "qualifiers", None) or []
+    }
+    if "readonly" in qualifiers:
+        return True
+    for candidate in (buffer_type, getattr(node, "var_type", None)):
+        access = getattr(candidate, "access_mode", None)
+        if access is not None and str(access).lower() in _READONLY_ACCESS:
+            return True
+    return False
 
 
 def metal_buffer_resource_scope_type(codegen, buffer_type, array_size):
