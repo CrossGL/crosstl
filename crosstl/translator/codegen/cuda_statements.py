@@ -487,16 +487,23 @@ class CudaStatementMixin:
 
     def visit_CaseNode(self, node):
         """Visit switch case/default label"""
+        statements = getattr(node, "statements", []) or []
+        # C++ does not let a jump to a later label cross a declaration ([stmt.dcl]), and two cases may declare
+        # one name, so a case that declares a variable gets a block of its own.
+        scoped = any(isinstance(stmt, VariableNode) for stmt in statements)
+        opening = " {" if scoped else ""
         if getattr(node, "value", None) is None:
-            self.emit("default:")
+            self.emit(f"default:{opening}")
         else:
             value = self.visit(node.value)
-            self.emit(f"case {value}:")
+            self.emit(f"case {value}:{opening}")
 
         self.indent_level += 1
-        for stmt in getattr(node, "statements", []):
+        for stmt in statements:
             self.emit_statement(stmt)
         self.indent_level -= 1
+        if scoped:
+            self.emit("}")
 
     def visit_ReturnNode(self, node):
         """Visit return statement"""

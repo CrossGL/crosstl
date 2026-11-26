@@ -22,6 +22,10 @@ from .slang_core_function_import import (
 )
 from .slang_matrix_import import SlangMatrixImportMixin
 from .slang_narrow_arithmetic import SlangNarrowArithmeticMixin
+from .slang_rasterizer_ordered_import import (
+    import_rasterizer_ordered_views,
+    is_rasterizer_ordered_declaration,
+)
 from .slang_specialization_import import (
     specialization_constant_defaults,
     specialization_ids,
@@ -763,6 +767,7 @@ class SlangToCrossGLConverter(
             *extension_methods,
             *exported_functions,
         ]
+        import_rasterizer_ordered_views(ast, functions)
         local_structs = self.collect_function_local_structs(functions)
         exported_structs = [
             exp.item
@@ -2328,6 +2333,10 @@ class SlangToCrossGLConverter(
                 append_metadata("index", f"@index({arguments[0]})")
             elif name == "vk::push_constant":
                 append_metadata("push_constant", "@push_constant")
+
+        if is_rasterizer_ordered_declaration(node):
+            # HLSL's rasterizer-ordered view, as the HLSL importer writes it.
+            append_metadata("rasterizer_ordered", "@rasterizer_ordered")
 
         for text in self.storage_image_format_metadata(node):
             append_metadata(text.split("(", 1)[0], text)

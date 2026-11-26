@@ -4891,13 +4891,14 @@ class TestCudaCodeGen:
 
         cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
-        assert "__device__ inline uint3 cgl_uint3_bitCount(uint3 value)" in cuda_code
+        # bitCount returns int components (GLSL 4.60, 8.8).
+        assert "__device__ inline int3 cgl_uint3_bitCount(uint3 value)" in cuda_code
         assert (
-            "return make_uint3(__popc(value.x), __popc(value.y), __popc(value.z));" in (
+            "return make_int3(__popc(value.x), __popc(value.y), __popc(value.z));" in (
                 cuda_code
             )
         )
-        assert "__device__ inline uint3 cgl_int3_bitCount(int3 value)" in cuda_code
+        assert "__device__ inline int3 cgl_int3_bitCount(int3 value)" in cuda_code
         assert "__popc(static_cast<unsigned int>(value.x))" in cuda_code
         assert (
             "__device__ inline uint3 cgl_uint3_bitfieldReverse(uint3 value)"
@@ -4914,8 +4915,15 @@ class TestCudaCodeGen:
         assert "__device__ inline int3 cgl_int3_findMSB(int3 value)" in cuda_code
         assert "(31 - __clz(~(value.x)))" in cuda_code
 
-        assert "uint3 counts = cgl_uint3_bitCount(mask);" in cuda_code
-        assert "uint3 signedCounts = cgl_int3_bitCount(signedMask);" in cuda_code
+        # The uvec3 locals take the int3 counts through an implicit conversion.
+        assert (
+            "uint3 counts = cgl_convert_to_uint3(cgl_uint3_bitCount(mask));"
+            in cuda_code
+        )
+        assert (
+            "uint3 signedCounts = cgl_convert_to_uint3(cgl_int3_bitCount(signedMask));"
+            in cuda_code
+        )
         assert "uint3 reversed = cgl_uint3_bitfieldReverse(mask);" in cuda_code
         assert "int3 signedReversed = cgl_int3_bitfieldReverse(signedMask);" in (
             cuda_code

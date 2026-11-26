@@ -1942,6 +1942,8 @@ class MetalPreprocessor(
             if struct_type is None:
                 if self._receiver_has_builtin_member_type_at(
                     code, ident, ident_start, receiver_declaration
+                ) or self._receiver_member_typedef_names_library_type(
+                    receiver_declaration, field_structs_by_name
                 ):
                     return None
                 arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")

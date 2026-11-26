@@ -130,7 +130,10 @@ from .slang_push_constant_structs import (
     slang_member_offset_prefix,
     slang_push_constant_struct_names,
 )
-from .slang_rasterizer_order import slang_rasterizer_ordered_type
+from .slang_rasterizer_order import (
+    rasterizer_ordered_parameters,
+    slang_rasterizer_ordered_type,
+)
 from .slang_ray_tracing import SlangRayTracingMixin
 from .slang_refusals import SlangLoweringRefused
 from .slang_resource_bindings import SlangResourceBindingsMixin
@@ -522,6 +525,9 @@ class SlangCodeGen(
             )
             self.slang_helper_resource_arguments = helper_resource_argument_names(
                 ast, self.user_function_names
+            )
+            self.slang_rasterizer_ordered_parameters = rasterizer_ordered_parameters(
+                ast
             )
             self.generic_function_definitions = {}
             self.generic_function_definition_ordinals = {}
@@ -1465,6 +1471,15 @@ class SlangCodeGen(
             )
             if specialized_func_name in self.user_function_return_types:
                 return self.user_function_return_types[specialized_func_name]
+            if func_name == "select" and len(raw_args) == 3:
+                false_type = self.expression_result_type(raw_args[1])
+                true_type = self.expression_result_type(raw_args[2])
+                if (
+                    false_type is not None
+                    and self.convert_type(false_type) == self.convert_type(true_type)
+                    and self.is_matrix_type(false_type)
+                ):
+                    return false_type
             ray_transform_type = self.slang_ray_transform_call_type(func_name, raw_args)
             if ray_transform_type is not None:
                 return ray_transform_type
