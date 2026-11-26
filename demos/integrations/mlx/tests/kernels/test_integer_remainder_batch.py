@@ -49,6 +49,7 @@ def small_binary_root(tmp_path):
     source.write_text(
         """#include <metal_stdlib>
         using namespace metal;
+        #define instantiate_kernel(name, func, ...) template [[host_name(name)]] [[kernel]] decltype(func<__VA_ARGS__>) func<__VA_ARGS__>;
         template <typename T>
         [[kernel]] void binary(
             const device T* a [[buffer(0)]],

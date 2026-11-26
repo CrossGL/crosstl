@@ -888,6 +888,7 @@ def test_cache_real_package_roundtrip_and_tampering(
     source.parent.mkdir(parents=True)
     source.write_text(
         "#include <metal_stdlib>\nusing namespace metal;\n"
+        "#define instantiate_kernel(name, func, ...) template [[host_name(name)]] [[kernel]] decltype(func<__VA_ARGS__>) func<__VA_ARGS__>;\n"
         "template <typename T>\n[[kernel]] void small_row(device T* out [[buffer(0)]], "
         "uint tid [[thread_position_in_grid]]) { out[tid] = T(simd_sum(tid)); }\n"
         f'instantiate_kernel("{ENTRY}", small_row, float)\n'

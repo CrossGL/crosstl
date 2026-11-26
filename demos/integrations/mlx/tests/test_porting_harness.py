@@ -517,6 +517,8 @@ def _prepare_reduced_rms_norm_checkout(module, tmp_path, monkeypatch):
         """#include <metal_stdlib>
 using namespace metal;
 
+#define instantiate_kernel(name, func, ...) template [[host_name(name)]] [[kernel]] decltype(func<__VA_ARGS__>) func<__VA_ARGS__>;
+
 constant bool has_w [[function_constant(20)]];
 
 template <int TAG>

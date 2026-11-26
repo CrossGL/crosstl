@@ -75,6 +75,8 @@ def _reduced_layer_norm_source():
             #include <metal_stdlib>
             using namespace metal;
 
+            #define instantiate_kernel(name, func, ...) template [[host_name(name)]] [[kernel]] decltype(func<__VA_ARGS__>) func<__VA_ARGS__>;
+
             constant bool has_w [[function_constant(20)]];
 
             template <int N = 1>
@@ -328,7 +330,11 @@ def test_case_project_preserves_kernel_body_and_selects_one_instantiation(
     original_prefix = source.partition(module.LAYER_NORM_INSTANTIATION_MARKER)[0]
     projected_prefix = projected.partition("// clang-format off\n")[0]
     assert projected_prefix == original_prefix
-    assert projected.count("instantiate_kernel(") == 1
+    assert sum(
+        1
+        for line in projected.splitlines()
+        if "instantiate_kernel(" in line and not line.lstrip().startswith("#define")
+    ) == 1
     assert (
         f'instantiate_kernel("{case["entryPoint"]}", ' f'{case["templateName"]}, float)'
     ) in projected
