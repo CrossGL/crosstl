@@ -29,6 +29,7 @@ from .comma_expressions import (
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .cuda_bindings import CudaBindingMixin
 from .cuda_buffer_calls import CudaBufferCallMixin
+from .cuda_componentwise_math import componentwise_math_result_type
 from .cuda_expression_types import CudaExpressionTypeMixin
 from .cuda_expressions import CudaExpressionMixin
 from .cuda_function_calls import CudaFunctionCallMixin
@@ -53,6 +54,7 @@ from .cuda_shared_memory import helper_shared_variables
 from .cuda_stage_attributes import CudaStageAttributeMixin
 from .cuda_stage_checks import CudaStageCheckMixin
 from .cuda_statements import CudaStatementMixin
+from .cuda_subgroup_inputs import is_subgroup_builtin_input
 from .cuda_surface_texels import CudaSurfaceTexelMixin
 from .cuda_tables import (
     CUDA_64BIT_BITCAST_FUNCTIONS,
@@ -565,9 +567,11 @@ class CudaCodeGen(
                     and id(var) not in self.file_scope_shared_variable_ids
                 ):
                     continue
-                if self.cuda_stage_local_builtin_role(stage_name, var) is not None:
-                    # A stage-local input that names a compute built-in is the
-                    # built-in itself, not a variable to declare.
+                if self.cuda_stage_local_builtin_role(
+                    stage_name, var
+                ) is not None or is_subgroup_builtin_input(var):
+                    # A stage-local input that names a compute or subgroup
+                    # built-in is the built-in itself, not a variable to declare.
                     continue
                 var_name = getattr(var, "name", None)
                 var_type = self.type_name_string(self.get_variable_node_type(var))
@@ -1071,7 +1075,7 @@ class CudaCodeGen(
 
     def cuda_half_constructor_expression(self, constructor_type, raw_args, args):
         """Lower CrossGL FP16 constructors to CUDA's documented half intrinsics."""
-        if constructor_type in {"f16", "half", "float16"}:
+        if constructor_type in {"f16", "half", "float16", "float16_t"}:
             if not args:
                 return "half{}"
             return f"__float2half({args[0]})"
@@ -1453,6 +1457,11 @@ class CudaCodeGen(
                 return self.function_return_types[specialized_func_name]
             if self.is_user_defined_function(func_name):
                 return self.function_return_types.get(func_name)
+            componentwise_type = componentwise_math_result_type(
+                self, func_name, raw_args
+            )
+            if componentwise_type is not None:
+                return componentwise_type
             if func_name in CUDA_WAVE_OP_ARITIES:
                 return self.wave_result_type(
                     func_name,
