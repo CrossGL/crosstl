@@ -89,10 +89,12 @@ jobs:
 
       - name: Set up Python
         uses: actions/setup-python@v7
+        # The oldest supported version: on pull requests it is the only 3.11 run of
+        # the translator and backend tests, whose own workflows test 3.15 there.
         with:
           cache: pip
           cache-dependency-path: pyproject.toml
-          python-version: "3.12"
+          python-version: "3.11"
 
       - name: Install dependencies
         run: |

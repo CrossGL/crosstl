@@ -61,11 +61,11 @@ jobs:
         # test_codegen outside the per-generator modules.
         component: ["all-1-of-4", "all-2-of-4", "all-3-of-4", "all-4-of-4"]
         # Pushes to main, merge groups and pull requests labelled ci:full test
-        # every supported version; other pull requests test the oldest and the
-        # newest. The
-        # Complete Test Suite runs every translator test on Python 3.12 on
-        # Ubuntu, so a 3.12 leg here would repeat it.
-        python-version: ${{ fromJSON((github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && '["3.11", "3.13", "3.14", "3.15"]' || '["3.11", "3.15"]') }}
+        # every supported version once with the Complete Test Suite, which
+        # runs every translator test on Python 3.11 on Ubuntu for every event, so
+        # a 3.11 leg here would repeat it. Other pull requests add only the
+        # newest version.
+        python-version: ${{ fromJSON((github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')) && '["3.12", "3.13", "3.14", "3.15"]' || '["3.15"]') }}
         OS: [ubuntu-latest]
         # A K-of-N leg runs shard K of N (tools/pytest_shard.py). Every
         # translator test took 28 minutes on one Windows runner and 15 on

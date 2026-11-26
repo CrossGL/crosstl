@@ -11,6 +11,16 @@ from .OpenglAst import (
     VariableNode,
 )
 
+# The fragment built-ins a shader writes besides its colour outputs: depth, the sample mask and the stencil
+# reference value of GL_ARB_shader_stencil_export (GL_EXT spelling included). A fragment entry that writes one of
+# them keeps its colour outputs as declarations, so that every output stays a stage-level variable.
+FRAGMENT_BUILTIN_OUTPUTS = (
+    "gl_FragDepth",
+    "gl_SampleMask",
+    "gl_FragStencilRefARB",
+    "gl_FragStencilRefEXT",
+)
+
 
 class GLSLShaderSectionMixin:
     """Shader-rendering members of ``GLSLToCrossGLConverter.generate_shader``."""
@@ -65,9 +75,9 @@ class GLSLShaderSectionMixin:
             [*self.inputs, *self.outputs], builtin_redeclaration_qualifiers
         )
 
-        fragment_writes_depth = self.fragment_main_writes_name(node, "gl_FragDepth")
-        fragment_writes_sample_mask = self.fragment_main_writes_name(
-            node, "gl_SampleMask"
+        fragment_writes_builtin_output = any(
+            self.fragment_main_writes_name(node, name)
+            for name in FRAGMENT_BUILTIN_OUTPUTS
         )
         vertex_writes_point_size = self.main_writes_name(
             node, "gl_PointSize", shader_type="vertex"
@@ -141,8 +151,7 @@ class GLSLShaderSectionMixin:
         if (
             self.shader_type == "fragment"
             and not self.outputs
-            and not fragment_writes_depth
-            and not fragment_writes_sample_mask
+            and not fragment_writes_builtin_output
             and fragment_entry_return is None
         ):
             builtin = VariableNode(
@@ -150,7 +159,7 @@ class GLSLShaderSectionMixin:
             )
             self.outputs.append(builtin)
         fragment_uses_direct_outputs = self.fragment_uses_direct_output_declarations(
-            fragment_writes_depth, fragment_writes_sample_mask
+            fragment_writes_builtin_output
         )
 
         for uniform in node.uniforms:
