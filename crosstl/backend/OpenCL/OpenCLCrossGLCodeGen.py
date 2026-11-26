@@ -31,6 +31,7 @@ from ..no_contraction import (
 )
 from ..thread_hierarchy import kernel_workgroup_size_attribute
 from .array_extents import format_opencl_array_extent
+from .builtin_functions import format_opencl_library_call
 from .compare_exchange import OpenCLCompareExchangeMixin, is_compare_exchange
 from .conversions import format_conversion, is_conversion_name
 from .enumerations import OpenCLEnumerationMixin
@@ -1118,6 +1119,9 @@ class OpenCLToCrossGLConverter(
             cross = self.format_opencl_four_component_cross(func_name, raw_args)
             if cross is not None:
                 return cross
+            library_call = format_opencl_library_call(self, func_name, raw_args)
+            if library_call is not None:
+                return library_call
             builtin = self.format_opencl_builtin_call(func_name, raw_args)
             if builtin is not None:
                 return builtin
