@@ -758,8 +758,10 @@ def test_monogame_style_vertex_semantics_generate_valid_glsl_helpers():
     assert "vec4 position layout(location = 0)" not in generated
     assert "vec4 color Color0" not in generated
     assert "vec2 texCoord layout(location = 5)" not in generated
-    assert "vec4 SpritePixelShader(VSOutput input_)" in generated
-    assert "return input_.Color;" in generated
+    # SpritePixelShader is the fragment entry: GLSL main reads the Color varying and writes the colour output.
+    assert ") in vec4 Color;" in generated
+    assert "void main() {\n    fragColor = Color;" in generated
+    assert "void main() {}" not in generated
     assert "VSOutput input)" not in generated
 
 
@@ -1121,7 +1123,9 @@ def test_codegen_shaderlab_fixed_precision_aliases_reparse_and_regenerate_hlsl()
     assert "Texture2D _DetailTex" in hlsl
     assert "SamplerState _MainTexSampler" in hlsl
     assert "SamplerState _DetailTexSampler" in hlsl
-    assert "float4 frag" in hlsl
+    # frag is the pixel entry, so the regenerated HLSL entry holds its body.
+    assert "float4 PSMain(" in hlsl
+    assert "void PSMain()" not in hlsl
     assert "_MainTex.Sample(_MainTexSampler, uv)" in hlsl
     assert "_DetailTex.Sample(_DetailTexSampler, uv)" in hlsl
     assert "fixed" not in hlsl
