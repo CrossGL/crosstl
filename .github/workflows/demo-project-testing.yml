@@ -2004,6 +2004,27 @@ jobs:
               tests/test_translator/test_project_metal_discovery.py \
               tests/test_translator/test_metal_bool_dispatch_callbacks.py \
               2>&1 | tee .mlx-portable-host/argument-inference.log
+      - name: Validate MetalPerformancePrimitives matmul2d lowering
+        if: >-
+          ${{ !cancelled() &&
+              (steps.portable-host-contracts.outcome == 'success' ||
+               (runner.os == 'macOS' && steps.platform-host-abi.outcome == 'success') ||
+               steps.host-warp-identity.outcome == 'success') }}
+        env:
+          CROSTL_REQUIRE_MPP_MATMUL2D_RUNTIME: "1"
+          EGL_PLATFORM: surfaceless
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          PYOPENGL_PLATFORM: egl
+        run: |
+          set -euo pipefail
+          mkdir -p .mlx-portable-host/mpp-matmul2d
+          python tools/run_bounded_command.py --timeout-seconds 150 --label "Native matmul2d lowering" -- \
+            python -m pytest -q -n auto -k natively \
+              --basetemp=.mlx-portable-host/mpp-matmul2d/pytest \
+              --junitxml=.mlx-portable-host/mpp-matmul2d/results.xml \
+              tests/test_translator/test_metal_mpp_matmul2d.py \
+              tests/test_translator/test_metal_simdgroup_lane_queries.py \
+              2>&1 | tee .mlx-portable-host/mpp-matmul2d.log
       - name: Validate native scalar math
         if: >-
           ${{ !cancelled() &&

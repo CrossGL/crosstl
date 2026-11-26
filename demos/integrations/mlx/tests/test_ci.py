@@ -429,6 +429,7 @@ def test_independent_native_batches_require_setup_not_other_numerical_results():
         "Validate generic vector constructors",
         "Validate mixed-width integer arithmetic",
         "Validate Metal argument inference",
+        "Validate MetalPerformancePrimitives matmul2d lowering",
         "Validate native scalar math",
         "Validate DirectX half conversions",
         "Validate DirectX float atomics",

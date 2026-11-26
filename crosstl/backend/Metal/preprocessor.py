@@ -48,6 +48,7 @@ from .method_struct_carriers import (
     lower_late_member_functions,
     method_struct_template_names,
 )
+from .mpp_matmul2d import lower_matmul2d_operations, validate_cooperative_tensor_layout
 from .namespaced_specializations import place_in_namespace, specialization_reference
 from .narrow_float_constants import metal_predefined_constant_type
 from .operator_argument_types import infer_conditional_type, infer_unary_sign_type
@@ -227,6 +228,7 @@ class MetalPreprocessor(
         template_specialization_limit_source: Optional[str] = None,
         promote_derived_pointer_members: bool = False,
         group_non_type_template_substitutions: bool = True,
+        cooperative_tensor_layout: Optional[str] = None,
     ):
         super().__init__(
             include_paths=include_paths,
@@ -239,6 +241,10 @@ class MetalPreprocessor(
                 "Metal promote_derived_pointer_members must be a boolean"
             )
         self.promote_derived_pointer_members = promote_derived_pointer_members
+        # The lane layout of matmul2d cooperative tensors (mpp_matmul2d.py).
+        self.cooperative_tensor_layout = validate_cooperative_tensor_layout(
+            cooperative_tensor_layout
+        )
         if not isinstance(group_non_type_template_substitutions, bool):
             raise MetalSourceRefusal(
                 "Metal group_non_type_template_substitutions must be a boolean"
@@ -391,6 +397,7 @@ class MetalPreprocessor(
         # Generic-lambda callbacks of a Boolean dispatch helper become their two
         # instantiations, so `p.value` is a constant for the passes below.
         processed = expand_bool_dispatch_callbacks(self, processed)
+        processed = lower_matmul2d_operations(self, processed)
         # Assertions over constexpr aggregates and operators, such as MLX's
         # `(complex_t<half>{1, 2} * complex_t<half>{3, 4}).real == -5`, are decided while the struct templates and
         # their operators are still spelled as in the source, as template materialization decides them; an

@@ -133,6 +133,7 @@ from .glsl_hlsl_resources import GLSLHlslResourceMixin
 from .glsl_hlsl_structured import GLSLHlslStructuredBuffers
 from .glsl_hlsl_values import GLSLHlslValueMixin
 from .glsl_invariant_builtins import invariant_builtin_redeclarations
+from .glsl_lane_queries import LANE_QUERY, is_lane_query, lane_query_expression
 from .glsl_narrow_vectors import GLSLNarrowVectorMixin, narrow_scalars_promote
 from .glsl_program_requirements import finish_glsl_program_requirements
 from .glsl_quad_lane_reads import glsl_quad_lane_read_call, quad_lane_read_needs_helper
@@ -1214,6 +1215,8 @@ class GLSLCodeGen(
                     records.append((name, node))
                     continue
                 operation = self.glsl_wave_operation_name(name)
+            if operation == LANE_QUERY:
+                continue
             if operation in self.GLSL_WAVE_INTRINSIC_ARITIES:
                 records.append((operation, node))
         return records
@@ -1224,6 +1227,7 @@ class GLSLCodeGen(
         return any(
             self.semantic_from_node(node) in inputs
             or (isinstance(node, IdentifierNode) and node.name in inputs)
+            or is_lane_query(self, node)
             for node in self.walk_ast(root)
         )
 
@@ -10780,6 +10784,9 @@ class GLSLCodeGen(
         diagnostic_operation=None,
         source_location=None,
     ):
+        lane = lane_query_expression(self, operation, arguments)
+        if lane is not None:
+            return lane
         if self.software_subgroup_width is not None:
             return self.generate_glsl_software_subgroup_operation(
                 operation,
