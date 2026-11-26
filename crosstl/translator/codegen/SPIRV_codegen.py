@@ -46,6 +46,7 @@ from .spirv_entry_locations import (
     restore_interface_location_state,
 )
 from .spirv_entry_point_parameters import SpirvEntryPointParameterMixin
+from .spirv_entry_selection import SpirvEntrySelectionMixin
 from .spirv_enums_and_structs import SpirvEnumStructMixin
 from .spirv_exact_lookups import spirv_builtin_call_key
 from .spirv_expression_kinds import SpirvExpressionKindMixin
@@ -129,6 +130,7 @@ class VulkanSPIRVCodeGen(
     SpirvFunctionPhaseMixin,
     SpirvFunctionParameterMixin,
     SpirvModulePhaseMixin,
+    SpirvEntrySelectionMixin,
 ):
     """Generates SPIR-V code from a CrossGL shader AST."""
 

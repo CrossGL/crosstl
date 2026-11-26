@@ -4,7 +4,8 @@ Each kernel binds its own parameters from binding 0, and its plain values become
 kernels of one file give different buffers, or blocks with the same member names, one descriptor slot. A Vulkan
 compute pipeline holds one entry point and only lays out the resources that entry point uses, so the module keeps
 both kernels: their resources may share a slot, a block member resolves in its own kernel, and a parameter whose
-name the other kernel declares differently gets a name of its own.
+name the other kernel declares differently gets a name of its own. ``entry_point=`` writes a module that holds only
+the named kernel, and a project's entry-point selection writes such a module per selected entry.
 """
 
 from __future__ import annotations
@@ -12,14 +13,19 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import textwrap
 from types import SimpleNamespace
 
 import pytest
 
 import crosstl
+import crosstl.project as project_api
 from crosstl.translator.ast import VariableNode
 from crosstl.translator.codegen.spirv_entry_resources import (
     SPIRV_ENTRY_SCOPE_ANNOTATION,
+)
+from crosstl.translator.codegen.spirv_entry_selection import (
+    VulkanEntryPointSelectionError,
 )
 from crosstl.translator.codegen.spirv_hlsl_registers import reserve_exact_binding
 from crosstl.translator.refusals import VulkanRefusal
@@ -43,6 +49,36 @@ __kernel void a(__global float* o, __global const float* i, int n) {
 }
 __kernel void b(__global int* o, int n) { size_t g = get_global_id(0); if (g < n) o[g] = n; }
 """
+
+HELPER_READING_PARAMETER = """
+__device__ float twice(float v) { return v * 2.0f; }
+__global__ void a(float* o) { o[threadIdx.x] = twice(1.0f); }
+__global__ void b(int* o) { o[threadIdx.x] = 3; }
+"""
+
+TWO_STAGE_BLOCKS = textwrap.dedent("""
+    shader TwoComputeStages {
+        uint scaled(uint value) {
+            return value * 3u;
+        }
+
+        compute first {
+            void main(RWStructuredBuffer<uint> out_ @buffer(0), uint index @gl_GlobalInvocationID) {
+                out_[index] = index;
+            }
+        }
+
+        compute second {
+            void main(
+                constant uint& start @buffer(0),
+                RWStructuredBuffer<uint> out_ @buffer(1),
+                uint index @gl_GlobalInvocationID
+            ) {
+                out_[index] = scaled(start + index);
+            }
+        }
+    }
+    """).strip()
 
 
 def _translate(tmp_path, source, suffix=".cu", **options):
@@ -99,7 +135,7 @@ def _accessed_variables(body):
 
 def test_kernels_with_the_same_parameters_share_their_resources(tmp_path):
     code = _translate(tmp_path, SAME_PARAMETERS)
-    entries = dict((name, function) for function, name in _entry_points(code))
+    entries = {name: function for function, name in _entry_points(code)}
     assert sorted(entries) == ["a", "b"]
     slots = _slots(code)
     assert slots["o"] == (0, 0) and slots["i"] == (0, 1)
@@ -120,7 +156,7 @@ def test_kernels_with_different_parameters_bind_their_own_resources(
     tmp_path, source, suffix
 ):
     code = _translate(tmp_path, source, suffix)
-    entries = dict((name, function) for function, name in _entry_points(code))
+    entries = {name: function for function, name in _entry_points(code)}
     slots = _slots(code)
     a_body = _function_body(code, entries["a"])
     b_body = _function_body(code, entries["b"])
@@ -131,6 +167,52 @@ def test_kernels_with_different_parameters_bind_their_own_resources(
     assert re.search(rf"OpAccessChain %_ptr_\w+_int %{b_buffer} ", b_body)
     # Both blocks declare n; each kernel reads its own.
     assert slots["a_Args_0"] == (0, 2) and slots["b_Args_0"] == (0, 1)
+    _validate(tmp_path, code)
+
+
+def test_one_kernel_of_a_file_is_a_module_of_its_own(tmp_path):
+    code = _translate(tmp_path, DIFFERENT_PARAMETERS, entry_point="b")
+    assert [name for _function, name in _entry_points(code)] == ["b"]
+    assert "a_Args" not in code
+    assert _slots(code) == {"b_Args_0": (0, 1), "o": (0, 0)}
+    _validate(tmp_path, code)
+
+
+def test_selected_kernel_keeps_its_program_helpers(tmp_path):
+    code = _translate(tmp_path, HELPER_READING_PARAMETER, entry_point="a")
+    assert [name for _function, name in _entry_points(code)] == ["a"]
+    assert "OpFunctionCall" in code
+    _validate(tmp_path, code)
+
+
+def test_selecting_a_missing_kernel_is_refused(tmp_path):
+    with pytest.raises(VulkanEntryPointSelectionError) as error:
+        _translate(tmp_path, SAME_PARAMETERS, entry_point="c")
+    assert error.value.reason == "not-found"
+    assert error.value.available_entry_points == ("a", "b")
+
+
+def test_project_entry_selection_writes_a_module_of_the_selected_stage(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    (repo / "multi.cgl").write_text(TWO_STAGE_BLOCKS, encoding="utf-8")
+    config = project_api.ProjectConfig(
+        root=repo,
+        include_patterns=("multi.cgl",),
+        targets=("vulkan",),
+        output_dir="out",
+        entry_points={"multi.cgl": "second"},
+    )
+    payload = project_api.translate_project(config, format_output=False).to_json()
+    (artifact,) = payload["artifacts"]
+    assert artifact["status"] == "translated"
+    assert artifact["path"] == "out/vulkan/multi/second.spvasm"
+    assert artifact["entryPoint"]["source"] == "second"
+    assert artifact["provenance"]["pipeline"] == "entry-scoped-translate"
+    code = (repo / artifact["path"]).read_text(encoding="utf-8")
+    assert [name for _function, name in _entry_points(code)] == ["second"]
+    assert sorted(_slots(code).values()) == [(0, 0), (0, 1)]
+    assert "OpFunctionCall" in code
     _validate(tmp_path, code)
 
 
