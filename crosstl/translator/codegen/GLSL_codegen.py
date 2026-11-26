@@ -10026,9 +10026,14 @@ class GLSLCodeGen(
         by a compile-time integer constant, ``float[N](x)``, is read as the
         constant's value; a specialization constant is not one. A constructor
         with more arguments than elements is refused, since that section allows
-        no extra argument. A constructor that has exactly enough arguments, or
-        an extent that is unsized or not a compile-time integer at any level,
-        is left exactly as it was.
+        no extra argument. Each argument is also written as the element type's
+        constructor when it is a scalar and the element type is a vector or
+        matrix, so ``vec3[2](1.0, 2.0)`` becomes ``vec3[2](vec3(1.0), vec3(2.0))``
+        and ``mat2[2](1.0, 2.0)`` becomes ``mat2[2](mat2(1.0), mat2(2.0))``: a
+        scalar is not a vector or matrix, and glslang rejects both. A
+        constructor that has exactly enough arguments is still element-wise
+        converted, and an extent that is unsized or not a compile-time integer
+        at any level is left exactly as it was.
         """
         if func_name is None:
             func_name = self.glsl_array_of_arrays_constructor_name(
@@ -10061,14 +10066,39 @@ class GLSLCodeGen(
                 reason="element-count-mismatch",
                 source_location=getattr(expr, "source_location", None),
             )
-        if extent <= 0 or len(call_args) >= extent:
+        if extent <= 0:
             return call_args
-        padded = list(call_args)
+        padded = [
+            self.glsl_array_constructor_element_argument(argument, element_type)
+            for argument in call_args
+        ]
+        if len(padded) >= extent:
+            return padded
         padded.extend(
             self.glsl_value_initialized_expression(expr, element_type)
             for _ in range(extent - len(padded))
         )
         return padded
+
+    def glsl_array_constructor_element_argument(self, argument, element_type):
+        """Write a scalar array-constructor argument as its element type's constructor.
+
+        An array constructor takes one value of the element type per element
+        (GLSL 4.60 section 5.4.4), and a scalar is not a vector or matrix, so
+        ``vec3[2](1.0, 2.0)`` and ``mat2[2](1.0, 2.0)`` are rejected with
+        "not enough data provided for construction". The element type's
+        constructor makes the conversion explicit. An argument that is already
+        the element type, or of an element type the argument's width cannot be
+        told for, is left as it was.
+        """
+        if not (
+            self.is_vector_value_type(element_type)
+            or self.glsl_matrix_dimensions(element_type) is not None
+        ):
+            return argument
+        if self.glsl_vector_initializer_component_count(argument) != 1:
+            return argument
+        return f"{element_type}({self.generate_expression(argument)})"
 
     @staticmethod
     def glsl_array_of_arrays_constructor_name(callee):
