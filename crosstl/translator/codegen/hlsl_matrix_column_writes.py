@@ -98,6 +98,10 @@ def dynamic_matrix_column(generator, expr, *, buffers=False):
         if swizzle is None:
             break
         node, inner = swizzle
+        if indices is not None and any(index >= len(inner) for index in indices):
+            # A struct member spelled like a swizzle (``s.b.zx``): a matrix column is a vector, so every link of
+            # a chain that ends at one is a swizzle that selects among the components of the link inside it.
+            return None
         # An outer swizzle selects among the components the inner one selected.
         indices = inner if indices is None else tuple(inner[i] for i in indices)
     if not isinstance(node, ArrayAccessNode):

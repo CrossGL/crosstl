@@ -221,3 +221,25 @@ def test_buffer_block_column_increments_and_arguments_store_bytes(tmp_path):
     ), code
     assert not LOST_WRITE.search(flat), code
     _dxc(tmp_path, code)
+
+
+SWIZZLE_NAMED_MEMBERS = """
+struct P { float3 b; float2 r; float4 x; };
+RWStructuredBuffer<P> ps : register(u0);
+[numthreads(1, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    ps[id.x].b.zx = float2(1.0, 2.0);
+    ps[id.x].r.yx += float2(3.0, 4.0);
+    ps[id.x].x.w++;
+}
+"""
+
+
+def test_struct_members_spelled_like_swizzles_are_not_matrix_columns(tmp_path):
+    # ``b``, ``r`` and ``x`` are struct members here, so ``ps[i].b.zx`` is no swizzle of a swizzle.
+    path = tmp_path / "members.hlsl"
+    path.write_text(SWIZZLE_NAMED_MEMBERS, encoding="utf-8")
+    flat = _flat(crosstl.translate(str(path), backend="directx", format_output=False))
+    assert "ps[id.x].b.zx = float2(1.0, 2.0);" in flat
+    assert "ps[id.x].r.yx += float2(3.0, 4.0);" in flat
+    assert "ps[id.x].x.w++;" in flat
