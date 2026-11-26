@@ -665,7 +665,9 @@ class RustResourceAttributeMixin:
             self.reserve_rust_resource_binding(
                 namespace, set_index, source_binding, validation_count, name
             )
-            preferred = self.rust_emitted_binding_cursors.get(set_index, 0)
+            # The lowest free slot, as the other generators number automatic resources: a block with an explicit
+            # binding past them must not push them up, or the host binds other buffers than the source declares.
+            preferred = source_binding
         else:
             binding_source = "explicit"
             self.reserve_rust_resource_binding(

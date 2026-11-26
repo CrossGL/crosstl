@@ -150,6 +150,56 @@ def test_storage_buffers_take_the_lowest_free_bindings(tmp_path):
     assert_generated_rust_smoke_compiles(code, tmp_path)
 
 
+def test_a_block_bound_past_the_storage_buffers_leaves_them_at_the_first_slots(
+    tmp_path,
+):
+    # The host binds a kernel's storage buffers at slots 0..n and its constants block where the source puts it, as
+    # the GLSL, HLSL and Metal outputs number them; a block at binding 3 must not push the buffers to 4 and 5.
+    code = _rust("""
+        shader Probe {
+            cbuffer Params @binding(3) { float scale; };
+            compute {
+                layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+                buffer float* fin;
+                buffer float* outp;
+                void main() {
+                    uint i = gl_GlobalInvocationID.x;
+                    outp[i] = fin[i] * scale;
+                }
+            }
+        }
+        """)
+    flat = _flat(code)
+    assert "#[spirv(uniform, descriptor_set = 0, binding = 3)] params: &Params" in flat
+    assert "#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] fin:" in flat
+    assert "#[spirv(storage_buffer, descriptor_set = 0, binding = 1)] outp:" in flat
+    assert_generated_rust_smoke_compiles(code, tmp_path)
+
+
+def test_automatic_resources_fill_the_slots_an_explicit_block_leaves_free(tmp_path):
+    code = _rust("""
+        shader Probe {
+            cbuffer Params @binding(1) { float scale; };
+            compute {
+                layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+                buffer float* fin;
+                buffer float* outp;
+                buffer float* extra;
+                void main() {
+                    uint i = gl_GlobalInvocationID.x;
+                    outp[i] = fin[i] * scale + extra[i];
+                }
+            }
+        }
+        """)
+    flat = _flat(code)
+    assert "#[spirv(uniform, descriptor_set = 0, binding = 1)] params: &Params" in flat
+    assert "#[spirv(storage_buffer, descriptor_set = 0, binding = 0)] fin:" in flat
+    assert "#[spirv(storage_buffer, descriptor_set = 0, binding = 2)] outp:" in flat
+    assert "#[spirv(storage_buffer, descriptor_set = 0, binding = 3)] extra:" in flat
+    assert_generated_rust_smoke_compiles(code, tmp_path)
+
+
 @pytest.mark.parametrize(
     "block, body, message",
     [
