@@ -1,0 +1,1 @@
+CUDA and HIP output compute `%` and `mod` on `half` scalars and native `half2` vectors on the values converted to `float`, as for `float`, instead of writing `%` or `fmodf`, which do not compile on halves (#3119).

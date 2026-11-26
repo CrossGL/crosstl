@@ -96,6 +96,11 @@ class CudaMathCallMixin:
         if vector_call is not None:
             return vector_call
 
+        half_type = self.half_remainder_type(raw_args[0], raw_args[1])
+        if half_type is not None:
+            helper_name = self.require_half_remainder_helper(half_type, glsl_mod=True)
+            return f"{helper_name}({args[0]}, {args[1]})"
+
         scalar_type = self.cuda_mod_scalar_type(raw_args[0], raw_args[1])
         if scalar_type is None:
             return None
