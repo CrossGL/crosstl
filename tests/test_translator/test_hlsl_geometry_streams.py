@@ -477,3 +477,19 @@ def test_stream_zero_alone_keeps_the_single_stream_form(tmp_path):
     flat = _flat(_translate(tmp_path, source, "zero.cgl"))
     assert _entry_streams(flat) == [("TriangleStream", "GeometryOutput", "stream")]
     assert "stream.Append(output); stream.RestartStrip();" in flat
+
+
+@pytest.mark.parametrize("emit", ["EmitVertex();", "EndPrimitive();"])
+def test_a_program_that_reads_no_input_takes_an_empty_input_vertex(tmp_path, emit):
+    # The GLSL coverage probe: no per-vertex input and no gl_in. The input vertex declares no signature
+    # element, so a padding member (which would need a semantic DXC requires) must not appear.
+    source = (
+        "#version 460\nlayout(points) in;\nlayout(points, max_vertices = 1) out;\n"
+        "layout(std430, binding = 0) buffer B0 { uint outp[]; };\n"
+        f"void main() {{\n    uint i = 0u;\n    {emit}\n    outp[i] = 0u;\n}}\n"
+    )
+    code = _translate(tmp_path, source, "empty.geom")
+    assert re.search(r"struct GeometryInput\s*\{\s*\};", code), code
+    assert "_crossgl_empty" not in code
+    assert "point GeometryInput input[1]" in _flat(code)
+    _dxc(tmp_path, code)

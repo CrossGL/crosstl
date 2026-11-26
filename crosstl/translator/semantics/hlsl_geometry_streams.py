@@ -72,8 +72,9 @@ __all__ = [
     "raise_glsl_geometry_streams",
 ]
 
-# Marks the vertex structure of a stream with no outputs. The DirectX emitter keeps it empty: a padding member would
-# need a semantic, since the structure is part of the entry's signature, and an empty one declares none.
+# Marks the vertex structure of a stream with no outputs, and the input vertex of a program that reads no input.
+# The DirectX emitter keeps it empty: a padding member would need a semantic, since the structure is part of the
+# entry's signature, and an empty one declares none.
 EMPTY_STREAM_VERTEX_ATTRIBUTE = "crossgl_empty_stream_vertex"
 
 _HLSL_TARGETS = frozenset(
@@ -568,7 +569,15 @@ class _GeometryRaising:
                     attributes=[A.AttributeNode("gl_Position")],
                 )
             )
-        return members, A.StructNode(name, nodes)
+        # A program that reads no input still takes the input primitive; its vertex has no members, and a
+        # placeholder member would need a semantic the previous stage does not write.
+        return members, A.StructNode(
+            name,
+            nodes,
+            attributes=(
+                [] if nodes else [A.AttributeNode(EMPTY_STREAM_VERTEX_ATTRIBUTE)]
+            ),
+        )
 
     def output_structures(self, streams, outputs, stream_of, used):
         """Each stream's vertex structure, and ``{output: (stream, member, HLSL type or None)}``."""
