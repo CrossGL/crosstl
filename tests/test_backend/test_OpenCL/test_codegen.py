@@ -23,6 +23,7 @@ from crosstl.translator.codegen.directx_codegen import HLSLCodeGen
 from crosstl.translator.diagnostics import TranslationDiagnostic
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from crosstl.translator.semantics import DeviceVariableUnsupportedError
 
 
 def parse_crossgl_from_opencl(source):
@@ -68,6 +69,50 @@ def test_opencl_kernel_codegen_reparses_and_lowers_builtin_ids():
     assert "@group(0) @binding(0) var<storage, read_write> out: array<f32>" in crossgl
     assert "var gid: u32 = gl_GlobalInvocationID.x;" in crossgl
     assert "var lid: u32 = gl_LocalInvocationID.x;" in crossgl
+
+
+DEVICE_GLOBAL_KERNEL = """
+__global float acc[64] = {1.0f, 2.0f, 4.0f};
+kernel void probe(global float *outp) {
+    uint i = get_global_id(0);
+    acc[i & 63] = acc[i & 63] * 2.0f;
+    outp[i] = acc[i & 63];
+}
+"""
+
+
+def test_opencl_program_scope_global_keeps_device_memory():
+    _cgl_ast, crossgl = parse_crossgl_from_opencl(DEVICE_GLOBAL_KERNEL)
+
+    assert "var<device> acc: array<f32, 64> = {1.0f, 2.0f, 4.0f};" in crossgl
+
+
+@pytest.mark.parametrize("target", ["cuda", "hip"])
+def test_opencl_program_scope_global_is_a_device_variable_in_cuda_and_hip(
+    tmp_path, target
+):
+    source = tmp_path / "probe.cl"
+    source.write_text(DEVICE_GLOBAL_KERNEL)
+
+    code = crosstl.translate(str(source), backend=target)
+
+    assert "__device__ float acc[64] = {1.0f, 2.0f, 4.0f};" in code
+
+
+@pytest.mark.parametrize(
+    "target",
+    ["directx", "metal", "opengl", "wgsl", "vulkan", "slang", "rust", "mojo"],
+)
+def test_opencl_program_scope_global_is_refused_without_device_variables(
+    tmp_path, target
+):
+    # One acc is shared by every work-item; these targets would give each
+    # invocation its own copy, so the device-variable check refuses it.
+    source = tmp_path / "probe.cl"
+    source.write_text(DEVICE_GLOBAL_KERNEL)
+
+    with pytest.raises(DeviceVariableUnsupportedError, match="'acc'"):
+        crosstl.translate(str(source), backend=target)
 
 
 def test_opencl_explicit_atomics_drop_memory_order_and_scope():

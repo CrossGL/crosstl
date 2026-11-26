@@ -1,4 +1,4 @@
-"""OpenCL C variables in the global address space: writable ones are refused, read-only ones keep their import."""
+"""OpenCL C variables in the global address space preserve or refuse their sharing semantics."""
 
 import pytest
 
@@ -35,9 +35,6 @@ def kernel(declaration, write="counter = 7", read="counter"):
 @pytest.mark.parametrize(
     "declaration",
     [
-        "global int counter = 3;",
-        "__global int counter = 3;",
-        "__global int counter;",
         "int counter = 3;",
         "static int counter = 3;",
         "extern global int counter;",
@@ -53,15 +50,33 @@ def test_writable_program_scope_global_is_refused(declaration):
         to_crossgl(kernel(declaration))
 
 
-def test_program_scope_global_array_and_pointer_are_refused():
-    with pytest.raises(OpenCLGlobalVariableUnsupportedError, match="'acc'"):
-        to_crossgl(
-            kernel(
-                "__global float acc[64] = {1.0f, 2.0f, 4.0f};",
-                write="acc[0] = acc[0] * 2.0f",
-                read="(int)acc[0]",
-            )
+@pytest.mark.parametrize(
+    ("declaration", "expected"),
+    [
+        ("global int counter = 3;", "var<device> counter: i32 = 3;"),
+        ("__global int counter = 3;", "var<device> counter: i32 = 3;"),
+        ("__global int counter;", "var<device> counter: i32;"),
+    ],
+)
+def test_explicit_program_scope_device_globals_keep_their_address_space(
+    declaration, expected
+):
+    assert expected in to_crossgl(kernel(declaration))
+
+
+def test_program_scope_global_array_keeps_its_address_space():
+    crossgl = to_crossgl(
+        kernel(
+            "__global float acc[64] = {1.0f, 2.0f, 4.0f};",
+            write="acc[0] = acc[0] * 2.0f",
+            read="(int)acc[0]",
         )
+    )
+
+    assert "var<device> acc: array<f32, 64>" in crossgl
+
+
+def test_program_scope_global_pointer_is_refused():
     with pytest.raises(OpenCLGlobalVariableUnsupportedError, match="'cursor'"):
         to_crossgl(
             kernel("global const int *cursor;", write="cursor = out", read="cursor[0]")

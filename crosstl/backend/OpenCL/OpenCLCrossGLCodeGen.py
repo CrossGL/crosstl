@@ -34,7 +34,10 @@ from .array_extents import format_opencl_array_extent
 from .compare_exchange import OpenCLCompareExchangeMixin, is_compare_exchange
 from .conversions import format_conversion, is_conversion_name
 from .enumerations import OpenCLEnumerationMixin
-from .global_variables import refuse_writable_global_variable
+from .global_variables import (
+    is_read_only_global_variable,
+    refuse_writable_global_variable,
+)
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
 from .pointer_qualifiers import (
     opencl_pointee_qualifiers,
@@ -912,6 +915,9 @@ class OpenCLToCrossGLConverter(
             self.emit(f"// skipped host OpenCL source string: {node.name}")
             return
         self.register_opencl_sizeof_symbol(node)
+        if self.is_opencl_program_scope_device_global(node):
+            self.visit_opencl_program_scope_device_global(node)
+            return
         if self.is_opencl_fixed_sampler_declaration(node):
             # A sampler_t constant fixes its state in source with CLK_* flags,
             # as a CrossGL sampler(...) constructor does.
@@ -950,6 +956,30 @@ class OpenCLToCrossGLConverter(
                 node.qualifiers = qualifiers
             return
         super().visit_VariableNode(node)
+
+    def is_opencl_program_scope_device_global(self, node):
+        """Whether ``node`` is an OpenCL program-scope object in global memory."""
+        return (
+            self.indent_level == 0
+            and "__global__" in (getattr(node, "qualifiers", None) or [])
+            and "extern" not in (getattr(node, "qualifiers", None) or [])
+            and "*" not in str(getattr(node, "vtype", ""))
+            and not is_read_only_global_variable(node)
+        )
+
+    def visit_opencl_program_scope_device_global(self, node):
+        raw_name = node.name
+        output_name = self.register_variable_declaration_name(raw_name)
+        var_type = self.convert_hip_variable_type_to_crossgl(node.vtype, raw_name)
+        self.register_variable_type(raw_name, var_type)
+        if output_name != raw_name:
+            self.register_variable_type(output_name, var_type)
+
+        declaration = f"var<device> {output_name}: {var_type}"
+        if getattr(node, "value", None) is not None:
+            value = self.format_variable_initializer_value(node.value)
+            declaration += f" = {value}"
+        self.emit(f"{declaration};")
 
     def is_opencl_fixed_sampler_declaration(self, node):
         return (
