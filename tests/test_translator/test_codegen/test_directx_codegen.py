@@ -5213,7 +5213,7 @@ def test_hlsl_codegen_widens_native_uint16_shuffle_and_fill_up_delta():
     )
 
     assert "StructuredBuffer<uint16_t> input : register(t0);" in generated
-    assert "RWStructuredBuffer<uint16_t> output : register(u0);" in generated
+    assert "RWStructuredBuffer<uint16_t> output : register(u1);" in generated
     assert "uint shuffleWithDelta(uint value, uint fill, uint16_t delta)" in generated
     assert "uint16_t delta = uint16_t(1u);" in generated
     assert (
@@ -17008,9 +17008,9 @@ def test_hlsl_auto_registers_skip_later_explicit_global_bindings():
     )
 
     assert "Texture2D autoTexture : register(t1);" in generated_code
-    assert "RWTexture2D<float4> autoImage : register(u1);" in generated_code
+    assert "RWTexture2D<float4> autoImage : register(u2);" in generated_code
     assert "SamplerState autoSampler : register(s1);" in generated_code
-    assert "cbuffer AutoBlock : register(b1)" in generated_code
+    assert "cbuffer AutoBlock : register(b3)" in generated_code
     assert "Texture2D explicitTexture : register(t0);" in generated_code
     assert "RWStructuredBuffer<int> explicitValues : register(u0);" in generated_code
     assert "SamplerState explicitSampler : register(s0);" in generated_code
@@ -17075,10 +17075,10 @@ def test_hlsl_global_resource_register_spaces_keep_independent_cursors():
         "RWTexture2D<float4> otherSpaceImage : register(u3, space2);" in generated_code
     )
     assert (
-        "RWStructuredBuffer<int> autoSpaceBuffer : register(u4, space2);"
+        "RWStructuredBuffer<int> autoSpaceBuffer : register(u7, space2);"
         in generated_code
     )
-    assert "RWStructuredBuffer<int> defaultBuffer : register(u0);" in generated_code
+    assert "RWStructuredBuffer<int> defaultBuffer : register(u1);" in generated_code
 
 
 def test_hlsl_layout_sets_lower_to_register_spaces():
@@ -32457,7 +32457,7 @@ def test_directx_formatted_image_arrays_preserve_format_metadata():
     assert "RWTexture2D<float2> rgPairs[3] : register(u2);" in generated_code
     assert "RWTexture3D<float4> rgbaVolumes[2] : register(u5);" in generated_code
     assert "RWTexture2D<uint> afterCounters : register(u7);" in generated_code
-    assert "Texture2D sampled : register(t0);" in generated_code
+    assert "Texture2D sampled : register(t8);" in generated_code
     assert "SamplerState sampledSampler" not in generated_code
     assert (
         "uint touchCounters(RWTexture2D<uint> images[2], int2 pixel, uint value)"
@@ -32527,7 +32527,7 @@ def test_directx_resource_arrays_account_register_spaces_independently():
     assert "RWTexture2D<uint> counters[3] : register(u0, space2);" in generated_code
     assert "Texture2D afterSpaceOne : register(t2, space1);" in generated_code
     assert "Texture2D afterSpaceTwo : register(t3, space2);" in generated_code
-    assert "RWTexture2D<uint> afterCounter : register(u3, space2);" in generated_code
+    assert "RWTexture2D<uint> afterCounter : register(u4, space2);" in generated_code
     assert (
         "colorMaps[input.layer].Sample(colorSamplers[input.layer], input.uv)"
         in generated_code
@@ -33612,7 +33612,7 @@ def test_directx_formatted_image_arrays_preserve_expression_sizes():
     assert "RWTexture2D<uint> counters[((1 + 1) * 2)] : register(u0);" in generated_code
     assert "RWTexture2D<float2> rgPairs[+3] : register(u4);" in generated_code
     assert "RWTexture2D<uint> afterCounters : register(u7);" in generated_code
-    assert "Texture2D sampled : register(t0);" in generated_code
+    assert "Texture2D sampled : register(t8);" in generated_code
     assert "SamplerState sampledSampler" not in generated_code
     assert (
         "uint touchCounters(RWTexture2D<uint> images[((1 + 1) * 2)], int2 pixel, uint value)"
@@ -47524,7 +47524,7 @@ def test_directx_component_gathers_and_uav_store_in_one_pass():
 
     assert "Texture2D colorMap : register(t0);" in generated_code
     assert "SamplerState linearSampler : register(s0);" in generated_code
-    assert "RWTexture2D<float4> outImage : register(u0);" in generated_code
+    assert "RWTexture2D<float4> outImage : register(u1);" in generated_code
     assert "colorMap.GatherRed(linearSampler, input.uv)" in generated_code
     assert "colorMap.GatherGreen(linearSampler, input.uv)" in generated_code
     assert "colorMap.GatherBlue(linearSampler, input.uv)" in generated_code

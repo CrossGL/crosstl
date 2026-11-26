@@ -13580,7 +13580,7 @@ def test_codegen_float_image_atomic_exchange_uses_backend_diagnostics():
     glsl = GLSLCodeGen().generate(shader_ast)
 
     assert "RWTexture2D<float> scalarImage : register(u0);" in hlsl
-    assert "Texture2DMS<float> sampleImage : register(t0);" in hlsl
+    assert "Texture2DMS<float> sampleImage : register(t1);" in hlsl
     assert (
         "image atomic resource call: imageAtomicExchange on RWTexture2D<float>"
         in hlsl_refusal

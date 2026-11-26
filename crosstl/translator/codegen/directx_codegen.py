@@ -248,6 +248,7 @@ from .hlsl_narrow_system_values import hlsl_narrow_compute_system_value_bridge
 from .hlsl_precise_functions import HLSLPreciseFunctionMixin
 from .hlsl_program_functions import HlslProgramFunctions
 from .hlsl_ray_queries import hlsl_ray_query_expression, hlsl_ray_query_helpers
+from .hlsl_register_slots import SharedResourceSlots
 from .hlsl_resource_access_variants import HLSLResourceAccessVariantsMixin
 from .hlsl_shader_records import HlslShaderRecords, is_shader_record_buffer
 from .hlsl_tall_matrix_rows import HlslTallMatrixRows
@@ -1830,10 +1831,9 @@ class HLSLCodeGen(
         implicit_member_samplers = self.collect_implicit_member_texture_samplers(ast)
         self.implicit_member_texture_samplers = implicit_member_samplers
 
-        texture_registers = {}
+        # Buffers, textures and constant buffers take their implicit registers from one slot sequence.
+        texture_registers = uav_registers = cbuffer_registers = SharedResourceSlots()
         sampler_registers = {}
-        uav_registers = {}
-        cbuffer_registers = {}
         used_resource_registers = self.new_directx_resource_register_allocator()
         self.reserve_explicit_global_resource_registers(
             global_vars, used_resource_registers, cbuffers

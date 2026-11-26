@@ -489,7 +489,7 @@ def test_directx_bfloat_storage_native_uint16_mode_narrows_buffer_writes():
     )
 
     assert "StructuredBuffer<uint16_t> input : register(t0);" in generated
-    assert "RWStructuredBuffer<uint16_t> output : register(u0);" in generated
+    assert "RWStructuredBuffer<uint16_t> output : register(u1);" in generated
     assert "uint16_t preserve_bits(uint16_t bits)" in generated
     assert "uint16_t copy = bits;" in generated
     assert "output[0] = uint16_t(value);" in generated
@@ -527,7 +527,7 @@ def test_directx_bfloat_storage_preserves_explicit_minimum_precision_types():
     )
 
     assert "StructuredBuffer<uint16_t> input : register(t0);" in generated
-    assert "RWStructuredBuffer<uint16_t> output : register(u0);" in generated
+    assert "RWStructuredBuffer<uint16_t> output : register(u1);" in generated
     assert "min16uint preserve_unsigned(min16uint value)" in generated
     assert "min16uint copy = value;" in generated
     assert "min16int preserve_signed(min16int value)" in generated
