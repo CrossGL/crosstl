@@ -43,6 +43,9 @@ QUEUE_TESTED_WORKFLOWS = {
     "examples-test.yml": "python-versions",
 }
 RUN_GROUP = "${{ github.event.pull_request.number || github.run_id }}"
+# Jobs that a planner-gated workflow also skips for another reason: a dispatch that checks a published release
+# (examples-test.yml's release input) tests the package from PyPI, not the checkout's examples.
+ALSO_SKIPPED = {("examples-test.yml", "test-examples"): " && !inputs.release"}
 MAIN_PUSH_GROUP = (
     "${{ github.event.pull_request.number"
     " || (github.event_name == 'push' && github.ref)"
@@ -312,7 +315,10 @@ def test_pushes_to_main_skip_a_commit_the_merge_queue_already_passed(filename, p
             continue
         needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
         assert plan in needs, (filename, name)
-        assert job["if"] == condition, (filename, name)
+        assert job["if"] == condition + ALSO_SKIPPED.get((filename, name), ""), (
+            filename,
+            name,
+        )
 
 
 @pytest.mark.skipif(
