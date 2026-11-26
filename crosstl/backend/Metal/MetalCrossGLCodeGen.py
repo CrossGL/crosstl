@@ -46,6 +46,7 @@ from .crossgl_codegen.operands import MetalOperandMixin
 from .crossgl_codegen.overload_resolution import MetalOverloadResolutionMixin
 from .crossgl_codegen.precise_math import MetalPreciseMathMixin
 from .crossgl_codegen.program_rendering import MetalProgramRenderingMixin
+from .crossgl_codegen.sincos_calls import MetalSincosMixin
 from .crossgl_codegen.source_overloads import MetalSourceOverloadMixin
 from .crossgl_codegen.statements import MetalStatementMixin
 from .crossgl_codegen.struct_declarations import MetalStructDeclarationMixin
@@ -82,6 +83,7 @@ from .crossgl_codegen.support import (
     MetalRemainderProfileError,
     MetalRoundLoweringError,
     MetalScalarAliasResolutionError,
+    MetalSincosLoweringError,
     MetalSizeofResolutionError,
     MetalSourceOverloadResolutionError,
     MetalStageEntryArrayResourceError,
@@ -146,6 +148,7 @@ __all__ = [
     "MetalRemainderProfileError",
     "MetalRoundLoweringError",
     "MetalScalarAliasResolutionError",
+    "MetalSincosLoweringError",
     "MetalSizeofResolutionError",
     "MetalSourceOverloadResolutionError",
     "MetalStageEntryArrayResourceError",
@@ -185,6 +188,7 @@ class MetalToCrossGLConverter(
     MetalSourceOverloadMixin,
     MetalOverloadResolutionMixin,
     MetalPreciseMathMixin,
+    MetalSincosMixin,
     MetalArithmeticProfileMixin,
     MetalMathBuiltinMixin,
     MetalOperandMixin,

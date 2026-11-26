@@ -12038,7 +12038,10 @@ def test_codegen_prefers_qualified_bfloat_builtin_overload_result():
         custom.count("return consume__metal_overload_2(exp__metal_overload_2(value));")
         == 2
     )
-    assert "return consume__metal_overload_1(sincos(value, cosine));" in reference
+    assert (
+        "return consume__metal_overload_1("
+        "__crossgl_metal_sincos_default_float(float(value), cosine));"
+    ) in reference
     # fast:: selects the float overload (half converts implicitly) and keeps
     # its namespace for the Metal backend.
     assert "return consume__metal_overload_1(fast::exp(value));" in fast
