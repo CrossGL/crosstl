@@ -56366,10 +56366,9 @@ def test_translate_project_mojo_vector_add_host_runtime_leak_fails_targets(
         assert diagnostic["location"]["file"] == "vector_addition.mojo"
 
 
-def test_translate_project_mojo_pointer_parameters_are_refused_by_metal(tmp_path):
-    # The Mojo importer keeps `UnsafePointer[Float32]` as a plain type name, which
-    # the Metal emitter used to copy into the output as
-    # `UnsafePointer lhs_tensor[Float32]`. It is refused with the typed refusal.
+def test_translate_project_mojo_pointer_parameters_become_metal_buffers(tmp_path):
+    # A Mojo kernel's `UnsafePointer[Float32]` parameters import as storage buffers, which Metal writes as device
+    # pointers bound in order (the Metal emitter once copied the Mojo type name into the output).
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "vector_addition.mojo").write_text(
@@ -56393,20 +56392,20 @@ def test_translate_project_mojo_pointer_parameters_are_refused_by_metal(tmp_path
     payload = translate_project(repo, targets=["metal"], output_dir="out").to_json()
 
     (artifact,) = payload["artifacts"]
-    assert artifact["status"] == "failed"
-    assert (
-        "the built-in type 'UnsafePointer' has no Metal spelling" in artifact["error"]
-    )
-    assert payload["summary"]["diagnosticsByCode"] == {
-        "project.translate.metal-lowering-unsupported": 1
-    }
+    assert artifact["status"] == "translated"
+    metal = (repo / "out" / "metal" / "vector_addition.metal").read_text()
+    assert "UnsafePointer" not in metal
+    for index, name in enumerate(("lhs_tensor", "rhs_tensor", "out_tensor")):
+        assert f"{name} [[buffer({index})]]" in metal
+    assert metal.count("device float") == 3
+    assert "out_tensor[tid] = lhs_tensor[tid] + rhs_tensor[tid];" in metal
 
 
-def test_translate_project_mojo_untyped_unresolved_local_is_refused_for_metal(
+def test_translate_project_mojo_untyped_index_local_is_unsigned_for_metal(
     tmp_path,
 ):
-    # `var tid = <unresolved host expression>` has no written type and no inferable one; Metal used to declare it
-    # `float`. It is now refused with a typed lowering diagnostic.
+    # `var tid = block_idx.x * block_dim.x + thread_idx.x` has no written type; std.gpu's index fields are UInt, so
+    # the local is unsigned (Metal once declared it `float`).
     repo = tmp_path / "repo"
     repo.mkdir()
     (repo / "vector_addition.mojo").write_text(
@@ -56425,12 +56424,10 @@ def test_translate_project_mojo_untyped_unresolved_local_is_refused_for_metal(
 
     payload = translate_project(repo, targets=["metal"], output_dir="out").to_json()
 
-    assert [artifact["status"] for artifact in payload["artifacts"]] == ["failed"]
-    assert payload["summary"]["diagnosticsByCode"] == {
-        "project.translate.metal-lowering-unsupported": 1
-    }
-    (diagnostic,) = payload["diagnostics"]
-    assert "the type of 'tid' is not written" in diagnostic["message"]
+    assert [artifact["status"] for artifact in payload["artifacts"]] == ["translated"]
+    metal = (repo / "out" / "metal" / "vector_addition.metal").read_text()
+    assert "uint tid = " in metal
+    assert "float tid" not in metal
 
 
 def test_translate_project_opencl_to_opengl_casts_signed_global_id_local(

@@ -6,9 +6,20 @@ from crosstl.translator.renames import renamed
 
 from ..comma_expressions import crossgl_tuple_literal
 from ..import_refusals import ImportRefusalMixin, MojoImportRefused
+from .mojo_arrays import is_array_type_text, materialized_value, mojo_array_type
+from .mojo_stack_allocations import stack_allocation_declaration
 from .MojoAst import *
 from .MojoLexer import *
 from .MojoParser import *
+from .pointer_kernels import (
+    POINTER_KERNEL_BUILTINS,
+    is_pointer_kernel,
+    is_pointer_kernel_program,
+    pointer_kernel_header,
+    pointer_kernel_method_call,
+    refuse_parametric_call,
+    top_level_program,
+)
 
 
 class MojoToCrossGLConverter(ImportRefusalMixin):
@@ -158,6 +169,7 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         "block_idx": "gl_WorkGroupID",
         "block_dim": "gl_WorkGroupSize",
         "thread_idx": "gl_LocalInvocationID",
+        **POINTER_KERNEL_BUILTINS,
     }
     MOJO_DTYPE_TYPE_MAP = {
         "DType.float16": "half",
@@ -183,6 +195,10 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         self.selected_gpu_kernel_names = set()
         self.reachable_gpu_function_names = set()
         self.current_function_is_mojo_gpu_kernel = False
+        # The function being rendered; a function a kernel calls reads the GPU index values as the kernel does.
+        self.current_function_name = None
+        # Whether every kernel the program launches is a pointer kernel (pointer_kernels.py).
+        self.pointer_kernel_program = False
         self.force_typed_declarations = False
         self.scoped_value_names = []
         self.function_body_depth = 0
@@ -333,6 +349,9 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         self.reachable_gpu_function_names = self.collect_reachable_gpu_function_names(
             ast, self.selected_gpu_kernel_names
         )
+        self.pointer_kernel_program = is_pointer_kernel_program(
+            ast, self.selected_gpu_kernel_names
+        )
         self.scoped_value_names = []
         global_value_names = [
             getattr(variable, "name", None)
@@ -341,9 +360,12 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         ]
         self.push_value_scope(global_value_names)
         try:
-            return self.generate_shader(ast)
+            code = self.generate_shader(ast)
         finally:
             self.pop_value_scope()
+        if self.pointer_kernel_program:
+            return top_level_program(code)
+        return code
 
     def generate_shader(self, ast):
         code = "shader main {\n"
@@ -412,6 +434,10 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
                 for kernel_name in sorted(kernel_names):
                     func = functions_by_name.get(kernel_name)
                     if func is None:
+                        continue
+                    if is_pointer_kernel(func):
+                        # A pointer kernel is a compute entry of its own (pointer_kernels.py).
+                        code += self.generate_function(func, indent=1)
                         continue
                     code += "    // Compute Shader\n"
                     code += "    compute {\n"
@@ -521,7 +547,7 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
             param_type = getattr(parameter, "vtype", None)
             if isinstance(param_type, str) and param_type.startswith("TileTensor["):
                 return True
-        return False
+        return is_pointer_kernel(function)
 
     def collect_reachable_gpu_function_names(self, ast, kernel_names):
         if not kernel_names:
@@ -795,7 +821,10 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
             for variable in global_variables
             if isinstance(variable, VariableDeclarationNode)
             and getattr(variable, "name", None) in used_names
-            and self.infer_variable_declaration_type(variable) is not None
+            and (
+                getattr(variable, "vtype", None)
+                or self.infer_variable_declaration_type(variable) is not None
+            )
         ]
         if not selected_globals:
             return ""
@@ -890,8 +919,10 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         indent_str = "    " * indent
         is_selected_gpu_kernel = func.name in self.selected_gpu_kernel_names
         previous_gpu_kernel = self.current_function_is_mojo_gpu_kernel
+        previous_function_name = self.current_function_name
         previous_force_typed_declarations = self.force_typed_declarations
         self.current_function_is_mojo_gpu_kernel = is_selected_gpu_kernel
+        self.current_function_name = func.name
         if is_selected_gpu_kernel:
             self.force_typed_declarations = True
         named_result = self.get_named_result_parameter(func)
@@ -933,10 +964,13 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
             func_attributes = self.map_function_attributes(func)
             func_name = self.map_identifier_name(func.name)
 
-            code += (
-                f"{indent_str}{return_type} {func_name}({params_str})"
-                f"{func_attributes} {{\n"
-            )
+            if is_selected_gpu_kernel and is_pointer_kernel(func):
+                code += pointer_kernel_header(self, func, indent_str)
+            else:
+                code += (
+                    f"{indent_str}{return_type} {func_name}({params_str})"
+                    f"{func_attributes} {{\n"
+                )
             if named_result:
                 result_type = self.map_type(named_result.vtype)
                 code += f"{indent_str}    {result_type} {named_result_name};\n"
@@ -964,6 +998,7 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
                 self.function_body_depth = saved_body_depth
         finally:
             self.current_function_is_mojo_gpu_kernel = previous_gpu_kernel
+            self.current_function_name = previous_function_name
             self.force_typed_declarations = previous_force_typed_declarations
 
         code += f"{indent_str}}}\n\n"
@@ -1135,11 +1170,16 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         )
 
         name = self.generate_declaration_name(node.name)
+        if has_initial_value:
+            allocation = stack_allocation_declaration(self, name, node.initial_value)
+            if allocation is not None:
+                return allocation
         inferred_type = (
             self.infer_variable_declaration_type(node)
             if self.force_typed_declarations and not node.vtype
             else None
         )
+        declaration_type = None
         if node.vtype or inferred_type:
             declaration_type = (
                 self.map_type(node.vtype) if node.vtype else inferred_type
@@ -1154,9 +1194,17 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
 
         if has_initial_value:
             value = self.generate_expression(node.initial_value)
+            if isinstance(node.initial_value, ListLiteralNode) and is_array_type_text(
+                declaration_type
+            ):
+                # A list literal initializes a Mojo array as a braced list does a CrossGL one.
+                value = "{" + value[1:-1] + "}"
             declaration += f" = {value}"
             if attributes:
                 declaration = f"{attributes} {declaration}"
+        if getattr(node, "is_comptime", False) and (node.vtype or inferred_type):
+            # A comptime value is a constant of the program.
+            declaration = f"const {declaration}"
         return declaration
 
     def infer_variable_declaration_type(self, node):
@@ -1186,8 +1234,27 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
             and isinstance(value, BinaryOpNode)
             and self.expression_uses_mojo_gpu_builtins(value)
         ):
+            # std.gpu's block_idx, thread_idx, block_dim and global_idx fields are UInt, and so is arithmetic on
+            # them and integer literals alone.
+            if self.is_mojo_gpu_index_arithmetic(value):
+                return "uint"
             return "int"
         return None
+
+    def is_mojo_gpu_index_arithmetic(self, node):
+        """Whether ``node`` is ``+``, ``-``, ``*``, ``//`` and ``%`` of std.gpu index fields and integer literals."""
+        if isinstance(node, BinaryOpNode):
+            return node.op in {"+", "-", "*", "//", "%"} and all(
+                self.is_mojo_gpu_index_arithmetic(side)
+                for side in (node.left, node.right)
+            )
+        if isinstance(node, MemberAccessNode):
+            return (
+                isinstance(node.object, VariableNode)
+                and node.object.name in self.MOJO_GPU_BUILTIN_MAP
+                and node.member in {"x", "y", "z"}
+            )
+        return self.is_integer_literal(node)
 
     def is_integer_literal(self, value):
         if isinstance(value, int) and not isinstance(value, bool):
@@ -1613,14 +1680,22 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
             method_name = self.map_member_name(expr.method)
             full_name = f"{obj}.{method_name}"
             if self.is_scoped_value_name(obj):
+                if self.pointer_kernel_program:
+                    # A method of a local value (a structure's own method, SIMD.cast) has no CrossGL form here.
+                    return pointer_kernel_method_call(self, obj, method_name, args)
                 return f"{obj}.{method_name}({args_str})"
             func_name = self.map_function(full_name, len(args))
             if func_name != full_name:
                 return f"{func_name}({args_str})"
+            if self.pointer_kernel_program:
+                return pointer_kernel_method_call(self, obj, method_name, args)
             return f"{obj}.{method_name}({args_str})"
         elif isinstance(expr, CallNode):
             if self.is_mlir_op_specialization_call(expr):
                 return self.generate_mlir_op_specialization_call(expr)
+            materialized = materialized_value(expr)
+            if materialized is not None:
+                return self.generate_expression(materialized)
             callee = self.generate_expression(expr.callee)
             args = []
             if hasattr(expr, "args") and expr.args:
@@ -1629,6 +1704,8 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
                 call_args = [callee] + args
                 return f"__mojo_indirect_call({', '.join(call_args)})"
             args_str = ", ".join(args)
+            if self.pointer_kernel_program and "[" in callee:
+                return refuse_parametric_call(self, callee)
             return f"{callee}({args_str})"
         elif isinstance(expr, MemberAccessNode):
             obj = self.generate_member_receiver_expression(expr.object)
@@ -1644,6 +1721,9 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
                 args = [self.generate_expression(arg) for arg in expr.args]
             args_str = ", ".join(args)
             type_name = self.map_type(expr.type_name)
+            if self.pointer_kernel_program and "[" in str(type_name):
+                # A parameterized Mojo type or function the importer does not map reaches CrossGL as Mojo text.
+                return refuse_parametric_call(self, type_name)
             return f"{type_name}({args_str})"
         elif isinstance(expr, ArrayAccessNode):
             if self.should_elide_empty_postfix_access(expr):
@@ -1662,8 +1742,10 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
             index = self.generate_array_index(expr.index)
             return f"{array}[{index}]"
         else:
-            # For any unhandled expression type
-            return f"/* Unhandled expression: {type(expr).__name__} */"
+            return self.refuse_import(
+                f"the Mojo expression {type(expr).__name__} has no CrossGL form in the importer",
+                placeholder="0",
+            )
 
     def generate_array_index(self, index):
         if isinstance(index, AssignmentNode) and isinstance(index.left, VariableNode):
@@ -1855,6 +1937,9 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         mapped_type = self.type_map.get(mojo_type)
         if mapped_type:
             return mapped_type
+        array_type = mojo_array_type(self, mojo_type)
+        if array_type:
+            return array_type
         mlir_type = self.map_mlir_backtick_type(mojo_type)
         if mlir_type:
             return mlir_type
@@ -1889,7 +1974,10 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         return False
 
     def map_mojo_gpu_builtin_name(self, name):
-        if self.current_function_is_mojo_gpu_kernel:
+        if (
+            self.current_function_is_mojo_gpu_kernel
+            or self.current_function_name in self.reachable_gpu_function_names
+        ):
             return self.MOJO_GPU_BUILTIN_MAP.get(name, self.map_identifier_name(name))
         return self.map_identifier_name(name)
 

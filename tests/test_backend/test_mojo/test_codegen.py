@@ -161,7 +161,7 @@ def test_struct_generic_member_codegen():
 
     assert "mat4 transform @ Position;" in generated_code
     assert "vec4 tint @ Color;" in generated_code
-    assert "InlineArray[SIMD[DType.float32, 4], 2] samples;" in generated_code
+    assert "vec4[2] samples;" in generated_code
     parse_crossgl(generated_code)
 
 
@@ -2000,10 +2000,8 @@ def test_modular_histogram_nested_gpu_kernel_metadata_codegen():
         "@ __llvm_metadata(MAX_THREADS_PER_BLOCK_METADATA = "
         "StaticTuple[Int32, 1](int(block_dim)))"
     ) in generated_code
-    assert (
-        "stack_allocation[bin_width, Int64, "
-        "address_space=AddressSpace.SHARED]()" in generated_code
-    )
+    # The shared stack allocation is the kernel's workgroup array.
+    assert "var<workgroup> shared_mem: array<int64_t, bin_width>;" in generated_code
     assert "shared_mem[thread_idx.x] = 0;" in generated_code
     assert "barrier();" in generated_code
     assert (
@@ -2346,7 +2344,7 @@ def test_brace_struct_codegen_preserves_generic_members_and_attributes():
     assert "struct Resources" in generated_code
     assert "mat4 transform @ Position;" in generated_code
     assert "vec4 tint @ Color;" in generated_code
-    assert "InlineArray[SIMD[DType.float32, 4], 2] samples;" in generated_code
+    assert "vec4[2] samples;" in generated_code
     parse_crossgl(generated_code)
 
 
@@ -3679,7 +3677,7 @@ def test_typed_local_declaration_codegen_preserves_type():
     assert "float x;" in generated_code
     assert "int y = 1;" in generated_code
     assert "mat4 transform;" in generated_code
-    assert "InlineArray[Float32, 4] values;" in generated_code
+    assert "float[4] values;" in generated_code
     assert "let inferred = y;" in generated_code
     assert "var transform;" not in generated_code
 
@@ -3821,7 +3819,7 @@ def test_generic_inline_array_constructor_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "let values = InlineArray[Float32, 4](1.0, 2.0, 3.0, 4.0);" in generated_code
+    assert "let values = float[4](1.0, 2.0, 3.0, 4.0);" in generated_code
 
 
 def test_generic_matrix_constructor_codegen():

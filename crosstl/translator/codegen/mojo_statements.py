@@ -507,6 +507,17 @@ class MojoStatementMixin:
         if lowered_get_dimensions is not None:
             return lowered_get_dimensions
 
+        if isinstance(stmt, (VariableNode, ArrayNode)) and self.is_mojo_shared_variable(
+            stmt
+        ):
+            if self.current_shader_type is None:
+                raise MojoRefusal(
+                    f"Mojo workgroup-shared array '{stmt.name}' is declared in a helper function; a "
+                    "stack_allocation in AddressSpace.SHARED belongs to the kernel that shares it"
+                )
+            # A workgroup array declared in the kernel body is the block's array, as one at stage scope is.
+            return self.generate_mojo_shared_declaration(stmt, indent)
+
         if isinstance(stmt, VariableNode):
             var_type = self.variable_declared_type(stmt)
             if "ArrayAccessNode(" in str(getattr(stmt, "vtype", "")):
