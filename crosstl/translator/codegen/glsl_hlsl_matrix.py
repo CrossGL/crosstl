@@ -25,6 +25,7 @@ from ..ast import (
     VariableNode,
 )
 from ..refusals import TranslationRefusal
+from .glsl_version_floor import require_integer_mix
 
 EMULATED_MATRIX_PATTERN = re.compile(
     r"(?P<scalar>int|uint|bool)(?P<rows>[2-4])x(?P<columns>[2-4])"
@@ -769,6 +770,8 @@ class GLSLEmulatedMatrices:
             (false_value, true_value), "select", comparison=True
         )
         result = (scalar,) + shape[1:]
+        # The columns are selected with a boolean-selector mix (GLSL 4.50 for integer and boolean columns).
+        require_integer_mix(self, scalar)
         rows, columns = shape[1], shape[2]
         column_type = vector_type_name(scalar, rows)
         parts = []

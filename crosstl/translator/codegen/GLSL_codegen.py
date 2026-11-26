@@ -160,6 +160,10 @@ from .glsl_stage_output_values import (
 )
 from .glsl_target_builtins import OPENGL_UNAVAILABLE_BUILTINS
 from .glsl_union_storage import UnionStorage
+from .glsl_version_floor import (
+    glsl_implicit_literal_conversion,
+    glsl_version_reaches,
+)
 from .glsl_vulkan_resources import VulkanResourceForms
 from .image_access_contracts import (
     collect_function_image_access_requirements,
@@ -613,6 +617,7 @@ class GLSLCodeGen(
         self.current_glsl_extensions = set()
         self.glsl_vulkan_memory_model = False
         self.current_glsl_version_line = None
+        self.glsl_version_line_is_default = False
         self.current_glsl_resource_binding_layouts_supported = True
         self.glsl_emission_requirements = []
         self.glsl_raised_version_line = None
@@ -9929,12 +9934,12 @@ class GLSLCodeGen(
             and isinstance(getattr(expr, "value", expr), (int, float))
             and getattr(expr, "value", expr) >= 0
         ):
-            if (
-                self.GLSL_IMPLICIT_LITERAL_CONVERSIONS
-                or expected["family"] == actual["family"]
+            if glsl_implicit_literal_conversion(
+                self, actual["family"], expected["family"]
             ):
                 return generated
-            # GLSL ES has no implicit conversions (ESSL 3.00 section 4.1.10).
+            # GLSL ES has no implicit conversions (ESSL 3.00 section 4.1.10), and desktop GLSL converts an int
+            # to a uint only from GLSL 4.00.
             return self.glsl_explicit_literal_conversion(generated, expected)
         if (
             isinstance(expr, FunctionCallNode)
@@ -10721,9 +10726,8 @@ class GLSLCodeGen(
         infos = [self.glsl_value_type_info(item) for item in types]
         if any(info is None or info["width"] not in {1, 2, 3, 4} for info in infos):
             reject("unsupported-operand-type")
-        version = re.match(r"#version\s+(\d+)\b", self.current_glsl_version_line or "")
-        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL" or (
-            version is not None and int(version.group(1)) < 400
+        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL" or not glsl_version_reaches(
+            self, f"the OpenGL form of '{func_name}'", 400
         ):
             reject("unsupported-profile")
         value = infos[0]

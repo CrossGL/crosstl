@@ -27,6 +27,7 @@ from .glsl_shared_array_values import (
     allow_shared_array_value,
     shared_array_value_root,
 )
+from .glsl_version_floor import glsl_version_reaches
 from .opengl_values import (
     OpenGLCooperativeMatrixError,
     OpenGLTrailingZeroBuiltinError,
@@ -281,7 +282,7 @@ class OpenGLCooperativeMatrixMixin:
             self.GLSL_TARGET_DISPLAY_NAME != "OpenGL"
             or self.glsl_version_is_es(version_line)
             or version_number is None
-            or version_number < 400
+            or not glsl_version_reaches(self, f"the OpenGL form of '{func_name}'", 400)
             or (
                 required_width == 64
                 and self.GLSL_INT64_EXTENSION in getattr(

@@ -1,4 +1,4 @@
-#version 450 core
+#version 430 core
 layout(std430, binding = 0) buffer outputBufferBuffer { int outputBuffer[]; };
 int helper(int val, int a);
 

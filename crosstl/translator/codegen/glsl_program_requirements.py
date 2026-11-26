@@ -28,4 +28,8 @@ def finish_glsl_program_requirements(codegen, code: str) -> str:
     code = require_builtin_extensions(
         code, getattr(codegen, "glsl_stage_builtin_extensions", ())
     )
-    return codegen.ensure_glsl_int64_support(code)
+    code = codegen.ensure_glsl_int64_support(code)
+    # The steps above add extension directives, and glslang declares the built-ins of several extensions only from
+    # a version of its own (:mod:`.glsl_extension_versions`), so the line is resolved again. Resolution only
+    # raises, and a refusal it repeats is recorded once.
+    return codegen.ensure_glsl_version_supports_generated_layouts(code)

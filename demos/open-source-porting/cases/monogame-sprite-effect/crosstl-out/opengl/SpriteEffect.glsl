@@ -1,4 +1,4 @@
-#version 450 core
+#version 420 core
 #ifdef GL_VERTEX_SHADER
 layout(location = 13) out vec4 out_color;
 layout(location = 5) out vec2 out_texCoord;

@@ -1,4 +1,4 @@
-#version 450 core
+#version 420 core
 #ifdef VULKAN
 #define CROSSGL_SAMPLED(vulkan, opengl) vulkan
 #else

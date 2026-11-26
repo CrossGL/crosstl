@@ -1,4 +1,4 @@
-#version 450 core
+#version 430 core
 layout(std430, binding = 0) readonly buffer ABuffer { float A[]; };
 layout(std430, binding = 1) readonly buffer BBuffer { float B[]; };
 layout(std430, binding = 2) buffer XBuffer { float X[]; };

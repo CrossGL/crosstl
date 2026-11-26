@@ -14,6 +14,7 @@ from ..ast import FunctionCallNode
 from .array_utils import split_array_type_suffix
 from .float_remainder_assignment import float_remainder_assignment
 from .glsl_half_conversions import glsl_half_conversion_call
+from .glsl_version_floor import require_integer_mix
 
 
 class GLSLHlslValueMixin:
@@ -434,6 +435,7 @@ class GLSLHlslValueMixin:
         if None in infos or infos[2]["family"] != "bool":
             return None
         width = max(info["width"] for info in infos[:2])
+        require_integer_mix(self, infos[0]["family"])
         x, y, selector = (self.generate_expression(argument) for argument in arguments)
         if infos[2]["width"] == 1 and width > 1:
             selector = f"bvec{width}({selector})"

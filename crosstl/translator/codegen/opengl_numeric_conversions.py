@@ -38,6 +38,7 @@ from .comma_expressions import (
     is_comma_expression,
 )
 from .crossgl_vector_names import crossgl_named_vector_spelling
+from .glsl_version_floor import glsl_version_reaches
 from .opengl_values import (
     OpenGLAggregateInitializerError,
     OpenGLComplexArithmeticError,
@@ -378,9 +379,8 @@ class OpenGLNumericConversionMixin:
     def glsl_apply_bfloat_contract(self, value, expected_type, source_node):
         width = self.glsl_bfloat_width(expected_type)
         source_type = self.glsl_source_expression_type(source_node)
-        version = re.match(r"#version\s+(\d+)\b", self.current_glsl_version_line or "")
-        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL" or (
-            version is not None and int(version.group(1)) < 400
+        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL" or not glsl_version_reaches(
+            self, "a bfloat16 conversion", 400
         ):
             self.glsl_scalar_conversion_error(
                 source_node, source_type, expected_type, "bfloat-unsupported-profile"
@@ -581,9 +581,8 @@ class OpenGLNumericConversionMixin:
             return value
         source_type = self.glsl_source_expression_type(source_node)
         info = self.glsl_value_type_info(source_type)
-        version = re.match(r"#version\s+(\d+)\b", self.current_glsl_version_line or "")
-        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL" or (
-            version is not None and int(version.group(1)) < 400
+        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL" or not glsl_version_reaches(
+            self, "a half conversion", 400
         ):
             self.glsl_scalar_conversion_error(
                 source_node, source_type, expected_type, "half-unsupported-profile"

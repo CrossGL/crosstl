@@ -36,6 +36,7 @@ from .glsl_draw_parameters import (
     draw_parameter_spelling,
     vertex_builtin_spelling,
 )
+from .glsl_version_floor import glsl_version_reaches
 from .opengl_values import (
     GLSL_FLOAT_TO_INTEGER_RULE_HELPERS,
     OpenGLAtomicFenceLoweringError,
@@ -1315,10 +1316,9 @@ class OpenGLMetalBuiltinMixin:
         }:
             reject("operand-shape-mismatch")
         value = max(infos, key=lambda info: info["width"])
-        version = re.match(r"#version\s+(\d+)\b", self.current_glsl_version_line or "")
         minimum = 400 if value["bits"] == 64 else 330
-        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL" or (
-            version and int(version.group(1)) < minimum
+        if self.GLSL_TARGET_DISPLAY_NAME != "OpenGL" or not glsl_version_reaches(
+            self, f"a {value['bits']}-bit floating remainder", minimum
         ):
             reject("unsupported-profile")
         builtins = (

@@ -1,4 +1,4 @@
-#version 450 core
+#version 330 core
 #ifdef GL_VERTEX_SHADER
 layout(location = 0) in vec2 pos;
 #endif

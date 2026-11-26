@@ -31,14 +31,14 @@ def _parse(shader):
     return crosstl.translator.parse(shader)
 
 
-def _validate_compute_if_available(source, tmp_path, name):
+def _validate_compute_if_available(source, tmp_path, name, stage="comp"):
     validator = shutil.which("glslangValidator")
     if validator is None:
         return False
-    path = tmp_path / f"{name}.comp"
+    path = tmp_path / f"{name}.{stage}"
     path.write_text(source, encoding="utf-8")
     result = subprocess.run(
-        [validator, "-S", "comp", str(path)],
+        [validator, "-S", stage, str(path)],
         check=False,
         capture_output=True,
         text=True,
@@ -871,7 +871,10 @@ def test_opengl_normalizes_texture_buffer_and_nested_resource_alias_indices(tmp_
     """
     texture_generated = GLSLCodeGen().generate(_parse(texture_shader))
     assert "texelFetch(values, 2)" in texture_generated
-    _validate_compute_if_available(texture_generated, tmp_path, "texture_buffer_index")
+    # The program has no stage, so its lowest version is GLSL 3.30, which has no compute shaders.
+    _validate_compute_if_available(
+        texture_generated, tmp_path, "texture_buffer_index", stage="frag"
+    )
 
     runtime_texture_shader = """
     shader RuntimeTextureBufferIndex {
@@ -891,6 +894,7 @@ def test_opengl_normalizes_texture_buffer_and_nested_resource_alias_indices(tmp_
         runtime_texture_generated,
         tmp_path,
         "runtime_texture_buffer_index",
+        stage="frag",
     )
 
     alias_shader = """

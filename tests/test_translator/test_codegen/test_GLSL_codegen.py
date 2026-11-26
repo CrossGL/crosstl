@@ -58,7 +58,6 @@ from crosstl.translator.codegen.GLSL_codegen import (
     OpenGLIndexTypeError,
     OpenGLIsFiniteError,
     OpenGLMappedOverloadError,
-    OpenGLPreciseQualifierError,
     OpenGLPrivatePointerParameterError,
     OpenGLRecursiveFunctionError,
     OpenGLReferenceParameterError,
@@ -230,7 +229,7 @@ def test_glsl_clang_trailing_zero_builtins_preserve_width_and_signedness(
     )
 
     assert generated.startswith(
-        "#version 450 core\n#extension GL_ARB_gpu_shader_int64 : require\n"
+        "#version 430 core\n#extension GL_ARB_gpu_shader_int64 : require\n"
     )
     assert "int crossgl_ctz_uint(uint value)" in generated
     assert "return value == 0u ? -1 : findLSB(value);" in generated
@@ -16859,6 +16858,8 @@ shader PreciseProfile {{
         ("330 core", "#version 400 core"),
         ("430 core", "#version 430 core"),
         ("320 es", "#version 320 es"),
+        # GLSL ES has precise from GLSL ES 3.20, so a GLSL ES 3.10 line rises like a desktop one.
+        ("310 es", "#version 320 es"),
     ],
 )
 def test_glsl_precise_output_selects_a_profile_with_the_qualifier(version, expected):
@@ -16879,17 +16880,23 @@ def test_glsl_profile_is_unchanged_without_precise_output():
     assert "precise" not in generated_code.replace("mentions precise", "")
 
 
-def test_glsl_es_profile_without_precise_is_rejected():
-    with pytest.raises(OpenGLPreciseQualifierError) as exc_info:
-        GLSLCodeGen(target_profile="gles").generate(
-            crosstl.translator.parse(PRECISE_PROFILE_SHADER.format(version="310 es"))
-        )
-
-    assert exc_info.value.project_diagnostic_code == (
-        "project.translate.opengl-precise-unsupported"
+def test_glsl_es_precise_output_rises_to_glsl_es_320_and_compiles(tmp_path):
+    # GLSL ES output rises to GLSL ES 3.20 for precise instead of refusing a GLSL ES 3.10 line; WebGL 2, whose
+    # version is fixed at GLSL ES 3.00, still refuses (test_webgl_codegen).
+    generated_code = GLSLCodeGen(target_profile="gles").generate(
+        crosstl.translator.parse(PRECISE_PROFILE_SHADER.format(version="310 es"))
     )
-    assert exc_info.value.version_line == "#version 310 es"
-    assert "GLSL ES 3.20 or desktop GLSL 4.00" in str(exc_info.value)
+
+    assert generated_code.splitlines()[0] == "#version 320 es"
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+    shader_path = tmp_path / "precise.frag"
+    shader_path.write_text(generated_code, encoding="utf-8")
+    result = subprocess.run(
+        [glslang, str(shader_path)], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
 
 
 def test_glsl_global_fragment_integer_input_adds_required_flat_qualifier():
@@ -24923,7 +24930,8 @@ def test_glsl_target_stage_ray_query_extensions_are_scoped_to_emitted_stage():
     compute_code = GLSLCodeGen().generate_stage(ast, "compute")
     combined_code = GLSLCodeGen().generate(ast)
 
-    assert vertex_code.lstrip().startswith("#version 450 core")
+    # The vertex stage needs nothing above GLSL 3.30; only the ray query stage needs GLSL 4.60.
+    assert vertex_code.lstrip().startswith("#version 330 core")
     assert "#extension GL_EXT_ray_query : require" not in vertex_code
     assert "rayQueryEXT" not in vertex_code
     assert "rayQueryProceedEXT" not in vertex_code
@@ -27123,7 +27131,7 @@ def test_codegen_emits_version_when_absent_in_crossgl():
     """
     ast = crosstl.translator.parse(shader)
     glsl_code = GLSLCodeGen().generate(ast)
-    assert glsl_code.lstrip().startswith("#version 450 core")
+    assert glsl_code.lstrip().startswith("#version 330 core")
 
 
 def test_geometry_stage_entrypoint():

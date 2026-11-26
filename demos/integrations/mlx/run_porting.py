@@ -8692,7 +8692,7 @@ def _check_fft_opengl_toolchain(
     )
     generated = generated_path.read_text(encoding="utf-8")
     _require(
-        generated.count("#version 450 core") == 1
+        len(re.findall(r"^#version [1-9][0-9]{2} core$", generated, re.M)) == 1
         and generated.count("void main()") == 1,
         "OpenGL FFT artifact is not one standalone compute shader",
     )

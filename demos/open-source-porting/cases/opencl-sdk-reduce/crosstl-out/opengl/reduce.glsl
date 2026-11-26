@@ -1,4 +1,4 @@
-#version 450 core
+#version 430 core
 #extension GL_ARB_gpu_shader_int64 : require
 layout(std430, binding = 0) buffer frontBuffer { int front[]; };
 layout(std430, binding = 1) buffer backBuffer { int back[]; };

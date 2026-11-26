@@ -228,6 +228,9 @@ def glsl_source_directives(codegen, ast, target_stage):
             version_line = line
         elif line and codegen.should_emit_glsl_preprocessor_line(line):
             lines.append(line)
+    # Without a line of its own, the program starts from the lowest version of the profile and output chooses
+    # every version-dependent form so that the version can rise (:mod:`.glsl_version_floor`).
+    codegen.glsl_version_line_is_default = version_line is None
     if version_line is None:
         version_line = codegen.default_glsl_version_line(ast, target_stage)
     version_line = _profile_version_line(codegen, version_line)
