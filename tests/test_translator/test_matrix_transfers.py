@@ -945,6 +945,18 @@ def test_chunk_loop_needs_a_bound_that_cannot_overflow(tmp_path, target, conditi
         # Negative bounds take zero trips; only the maximum can overflow.
         assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
         return
+    if target == "directx" and conditions:
+        # DirectX tests t <= T - 8 instead, which T >= 0 keeps in range: no
+        # counter it admits overflows t += 8, even for T = INT_MAX.
+        assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
+        (artifact,) = report["artifacts"]
+        text = (tmp_path / artifact["path"]).read_text()
+        assert "for (; (t <= (matrix_transfers_T - 8)); t += 8) {" in text
+        if os.environ.get("CROSTL_SKIP_NATIVE_VALIDATORS") != "1":
+            work = tmp_path / "validation"
+            work.mkdir()
+            _dx_compile(text, work)
+        return
     assert report["summary"]["translatedCount"] == 0, report
     codes = {item["code"] for item in report["diagnostics"]}
     assert ERRORS[target] in codes, codes
@@ -954,32 +966,36 @@ def test_chunk_loop_needs_a_bound_that_cannot_overflow(tmp_path, target, conditi
 def test_chunk_loop_may_start_from_a_constant_local(tmp_path, target):
     """``int t = zero;`` starts every invocation's counter at the same value.
 
-    OpenGL's flow analysis proves the counter uniform where the loop starts,
-    and the bound still has to rule out overflow, exactly as for ``t = 0``.
-    DirectX still proves only literal starts.
+    The flow analysis proves the counter uniform where the loop starts, and
+    the bound still has to rule out overflow. OpenGL keeps the source test,
+    which wraps, so it needs the bound ``t = 0`` needs. DirectX, whose signed
+    addition does not wrap, proves the start unknown and tests ``t <= T -
+    8``, which no start overflows for any ``T >= 0``.
     """
     source = METAL_KERNEL.replace("int t = 0;", "const int zero = 0; int t = zero;")
     report = _translate(tmp_path, target, source=source).to_json()
-    codes = {item["code"] for item in report["diagnostics"]}
-    if target == "directx":
-        assert report["summary"]["translatedCount"] == 0, report
-        assert ERRORS[target] in codes, codes
-        return
     assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
     (artifact,) = report["artifacts"]
     text = (tmp_path / artifact["path"]).read_text()
-    assert "int t = zero;" in text and "for (; ((t + 8) <= T); t += 8)" in text
+    test = {
+        "opengl": "for (; ((t + 8) <= T); t += 8)",
+        "directx": "for (; (t <= (matrix_transfers_T - 8)); t += 8)",
+    }[target]
+    assert "int t = zero;" in text and test in text
     unbounded = _translate(
         tmp_path / "unbounded",
         target,
         source=source,
         conditions=({**CONDITION, "maximum": INT_MAX},),
     ).to_json()
-    assert unbounded["summary"]["translatedCount"] == 0, unbounded
+    assert unbounded["summary"]["translatedCount"] == (target == "directx"), unbounded
     if os.environ.get("CROSTL_SKIP_NATIVE_VALIDATORS") != "1":
         work = tmp_path / "validation"
         work.mkdir()
-        _compile(text, "opengl", work)
+        if target == "opengl":
+            _compile(text, "opengl", work)
+        else:
+            _dx_compile(text, work)
 
 
 @pytest.mark.parametrize("target", TARGETS)

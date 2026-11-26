@@ -109,6 +109,7 @@ from .directx_statements import DirectXStatementMixin
 from .directx_struct_members import DirectXStructMemberMixin
 from .directx_subgroup_control_flow import DirectXSubgroupControlFlowMixin
 from .directx_subgroup_helpers import DirectXSubgroupHelperMixin
+from .directx_subgroup_uniform_locals import DirectXSubgroupUniformLocalMixin
 from .directx_tables import DirectXTableMixin
 from .directx_texture_operations import DirectXTextureOperationMixin
 from .directx_typed_buffer_atomics import DirectXTypedBufferAtomicMixin
@@ -367,6 +368,7 @@ class HLSLCodeGen(
     DirectXTableMixin,
     DirectXProgramOptionMixin,
     DirectXSubgroupControlFlowMixin,
+    DirectXSubgroupUniformLocalMixin,
     DirectXSubgroupHelperMixin,
     DirectXPreciseHelperMixin,
     DirectXStructMemberMixin,
@@ -2814,7 +2816,9 @@ class HLSLCodeGen(
         # Loops entered with an unknown counter need the flow analysis to
         # prove the counter uniform where each loop starts.
         self.hlsl_software_subgroup_counter_loops = (
-            any_start_counter_loops(function, self.walk_ast, counter_writes)
+            any_start_counter_loops(
+                function, self.walk_ast, counter_writes, tracked_writes=True
+            )
             if entry
             else {}
         )
@@ -2988,15 +2992,22 @@ class HLSLCodeGen(
                 return
             if isinstance(node, AssignmentNode):
                 name = self.hlsl_software_subgroup_assignment_target_name(node)
-                if self.map_operator(
+                operator = self.map_operator(
                     getattr(node, "operator", getattr(node, "op", "="))
-                ) == "=" and self.hlsl_software_subgroup_uniform_expression(
+                )
+                value_uniform = self.hlsl_software_subgroup_uniform_expression(
                     getattr(node, "value", getattr(node, "right", None)),
                     names,
                     components,
-                ):
+                )
+                if operator == "=" and value_uniform:
                     names.add(name)
-                else:
+                elif not (
+                    value_uniform
+                    and self.hlsl_software_subgroup_uniform_compound_write(
+                        node, operator, names
+                    )
+                ):
                     names.discard(name)
                 return
             if isinstance(node, (BlockNode, list)):
@@ -3359,6 +3370,7 @@ class HLSLCodeGen(
         self.hlsl_software_subgroup_counter_loops = {}
         self.hlsl_software_subgroup_fresh_counter_loops = set()
         self.hlsl_software_subgroup_proven_counter_loops = set()
+        self.hlsl_software_subgroup_rebased_conditions = {}
         self.hlsl_software_subgroup_modular_stride_loops = set()
         self.hlsl_software_subgroup_symmetry = None
         if self.software_subgroup_width is None:
@@ -3675,11 +3687,16 @@ class HLSLCodeGen(
                 self.hlsl_software_subgroup_uniform_calls.add(id(node))
             elif storage_load_call(name, node.arguments):
                 storage_loads.add(id(node))
+        # Immutable program-scope values read alike by every invocation.
+        self.hlsl_software_subgroup_constant_names = (
+            self.hlsl_software_subgroup_program_constants(ast)
+        )
         self.hlsl_software_subgroup_uniform_returns = UniformReturnAnalysis(
             resolved_calls,
             self.hlsl_software_subgroup_uniform_calls,
             self.structs_by_name,
             storage_loads,
+            constants=self.hlsl_software_subgroup_constant_names,
         )
         call_mutations = {}
         for binding in declarations.values():
@@ -3815,9 +3832,10 @@ class HLSLCodeGen(
                     declaration,
                 )
             }
-            uniform_names = set(self.literal_int_constants) - {
-                parameter.name for parameter in parameters
-            }
+            uniform_names = (
+                set(self.literal_int_constants)
+                | self.hlsl_software_subgroup_constant_names
+            ) - {parameter.name for parameter in parameters}
             uniform_names.update(
                 parameter.name
                 for index, parameter in enumerate(parameters)
@@ -5130,9 +5148,8 @@ class HLSLCodeGen(
                 code += self.generate_statement_body(body, indent + 1)
             declarations = "".join(
                 f"{'    ' * (indent + 1)}{vtype} {name};\n"
-                for vtype, name in self.hlsl_wide_integer_compound_indices + list(
-                    self.hlsl_precise_captures or ()
-                )
+                for vtype, name in self.hlsl_wide_integer_compound_indices
+                + list(self.hlsl_precise_captures or ())
             )
             code = (
                 code[:compound_declaration_offset]
@@ -6249,7 +6266,8 @@ class HLSLCodeGen(
                 if matrix_call_type is not None:
                     return matrix_call_type
             if (
-                func_name in {
+                func_name
+                in {
                     "frac",
                     "fract",
                     "inverseSqrt",
@@ -6274,9 +6292,9 @@ class HLSLCodeGen(
                     "ddy_fine",
                     "ddx_coarse",
                     "ddy_coarse",
-                } and args and func_name not in getattr(
-                    self, "function_return_types", {}
-                )
+                }
+                and args
+                and func_name not in getattr(self, "function_return_types", {})
             ):
                 return self.expression_result_type(args[0])
             if func_name in {
@@ -6286,7 +6304,8 @@ class HLSLCodeGen(
             } and func_name not in getattr(self, "function_return_types", {}):
                 return "float"
             if (
-                func_name in {
+                func_name
+                in {
                     "clamp",
                     "lerp",
                     "max",
