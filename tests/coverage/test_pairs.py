@@ -123,10 +123,21 @@ def test_a_compute_probe_is_outside_webgl():
 
 
 def test_the_partner_prefers_the_usual_compiler_target():
+    source = Feature("hlsl", "function", "WaveActiveSum", ABS)
     usual = Feature("glsl", "function", "subgroupAdd", ABS)
     vulkan = Feature("glsl", "function", "subgroupAdd2", ABS, target="vulkan")
-    assert pairs.choose_partner([vulkan, usual]) is usual
-    assert pairs.choose_partner([vulkan]) is vulkan
+    assert pairs.choose_partner([vulkan, usual], source) is usual
+    assert pairs.choose_partner([vulkan], source) is vulkan
+
+
+def test_the_partner_is_the_target_feature_of_the_same_name_first():
+    # HLSL's atan2 and HIP's atan and atan2 share a semantic key; the cell checks HIP's atan2, even where the
+    # same-named feature is probed for another compiler target.
+    source = Feature("hlsl", "function", "atan2", ABS)
+    atan = Feature("hip", "function", "atan", ABS)
+    atan2 = Feature("hip", "function", "atan2", ABS, target="other")
+    assert pairs.choose_partner([atan, atan2], source) is atan2
+    assert pairs.choose_partner([atan], source) is atan
 
 
 @pytest.fixture
@@ -281,3 +292,47 @@ def test_a_kept_pair_writes_its_probe_and_translation(checked, tmp_path):
         "glsl-to-hlsl/abs/probe.comp",
         "glsl-to-hlsl/abs/translated.hlsl",
     ]
+
+
+FLOAT = Type("float")
+INT = Type("int")
+
+
+def _compare_store(language: str, kind: Type) -> Feature:
+    signature = Signature(
+        Type("", opaque="void"),
+        (Param(kind, direction="inout"), Param(kind), Param(kind)),
+    )
+    return Feature(
+        language, "function", "InterlockedCompareStoreFloatBitwise", signature
+    )
+
+
+@pytest.mark.parametrize("fallback_only", [True, False])
+def test_a_translation_slangc_compiles_only_for_hlsl_is_checked_as_the_slang_row_checks_it(
+    monkeypatch, fallback_only
+):
+    # Slang's InterlockedCompareStoreFloatBitwise is generic, so its own probe stores ints, which slangc writes as
+    # SPIR-V. An HLSL probe stores floats, which slangc compiles only for HLSL: the translation is checked for HLSL
+    # when Slang's own probe of the float program needs HLSL too, and is wrong when that probe compiles for SPIR-V.
+    checked = []
+
+    def validated(language, source, stage, entry="", target=""):
+        checked.append((source == "translated", target))
+        native = source != "translated"
+        floats = "RWStructuredBuffer<float>" in source
+        accepted = target == "hlsl" or (native and not (fallback_only and floats))
+        return validators.Verdict(accepted, "" if accepted else "error: integer only")
+
+    monkeypatch.setattr(validators, "available", lambda language, target="": True)
+    monkeypatch.setattr(runner, "_validated", validated)
+    monkeypatch.setattr(runner, "translate", lambda *args: "translated")
+    result = pairs.run_pair(
+        _compare_store("hlsl", FLOAT), "hlsl", "slang", _compare_store("slang", INT)
+    )
+    if fallback_only:
+        assert result.outcome == "supported", result.detail
+        assert checked[-1] == (True, "hlsl")
+    else:
+        assert (result.outcome, result.detail) == ("wrong", "error: integer only")
+        assert (True, "hlsl") not in checked
