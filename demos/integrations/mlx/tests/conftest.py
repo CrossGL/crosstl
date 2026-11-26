@@ -15,7 +15,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from demos.integrations.mlx.tests import pins
+from demos.integrations.mlx.tests import model_tests, pins
 
 _OWNED_DRIFT_DIR = "_crosstl_mlx_owned_pin_drift_dir"
 
@@ -24,7 +24,13 @@ def _is_worker(config) -> bool:
     return hasattr(config, "workerinput")
 
 
+def pytest_collection_modifyitems(config, items):
+    # Pure-Python model checks get the mlx_model marker; see model_tests.py.
+    model_tests.mark_model_tests(items)
+
+
 def pytest_configure(config):
+    config.addinivalue_line("markers", model_tests.MARKER_DESCRIPTION)
     if _is_worker(config) or pins.pin_mode() != pins.REPORT_PIN_MODE:
         return
     if os.environ.get(pins.PIN_DRIFT_DIR_ENV, "").strip():
