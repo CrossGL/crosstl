@@ -20,7 +20,7 @@ from urllib.parse import quote
 
 from . import chart, ir, trend
 from .causes import cause, diagnostic, grouped, headline
-from .model import OUTCOMES, ROUND_TRIPS
+from .model import MATRIX_AGE_HOURS, OUTCOMES, ROUND_TRIPS
 from .report import site
 
 # One row per language and direction per run; 400 runs is more than a year of nightly runs plus pushes to main.
@@ -372,7 +372,8 @@ def _matrix(report: dict, repository: str) -> list[str]:
         "Rows are source languages and columns are target languages. Each score links to the cell's gaps. A score "
         "in italics is the source's input row, which translates back into the source language (OpenCL C into "
         "HLSL), `none` marks two languages that share no feature, and an empty cell was not measured. The Coverage "
-        "workflow measures the matrix nightly; this one was measured on "
+        "workflow measures the matrix nightly and whenever a push to main finds it more than "
+        f"{MATRIX_AGE_HOURS} hours old; this one was measured on "
         f"{_stamp(stamp.get('commit', ''), stamp.get('date', ''), repository)}.",
         "",
         "| Source \\ Target | " + " | ".join(chart.name(t) for t in targets) + " |",

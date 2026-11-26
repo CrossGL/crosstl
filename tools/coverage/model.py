@@ -52,6 +52,9 @@ LANGUAGES = (
 DIRECTIONS = ("output", "input")
 # The direction of a translation matrix result, which translates a native probe into another language (:mod:`.pairs`).
 PAIR = "pair"
+# How many hours old the published translation matrix may get before a push to main starts a run that measures it
+# again: GitHub starts the nightly run hours late (:func:`.pairs.due`).
+MATRIX_AGE_HOURS = 6
 # The language an imported probe is emitted to and validated in when CrossTL has no generator for its own: HLSL, the
 # target whose output row covers the most of what OpenCL C kernels call.
 ROUND_TRIPS = {"opencl": "hlsl"}

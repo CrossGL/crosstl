@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING
 
 from . import chart, decorations, execution, ir, placeholders, publish
 from .causes import Causes, causes_of, diagnostic, grouped, headline
-from .model import ROUND_TRIPS, kept_folder
+from .model import MATRIX_AGE_HOURS, ROUND_TRIPS, kept_folder
 
 if TYPE_CHECKING:
     from .github import GitHub
@@ -515,7 +515,8 @@ def pair_body(cell: dict, repository: str) -> str:
         f"[The cell's page]({base}/{publish.page(cell)}) lists every gap, and "
         f"[COVERAGE.md]({base}/COVERAGE.md#translation-matrix) has the whole matrix.",
         "",
-        "The coverage workflow measures the matrix nightly, keeps this issue up to date and closes it when every "
+        "The coverage workflow measures the matrix nightly and whenever a push to main finds it more than "
+        f"{MATRIX_AGE_HOURS} hours old, keeps this issue up to date and closes it when every "
         "measured feature is supported, so edits to this description are overwritten. A gap is in the "
         f"{source} frontend or the {target} code generator; the {source} input and {target} output rows show "
         "which.",
