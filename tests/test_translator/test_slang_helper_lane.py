@@ -105,6 +105,25 @@ def test_slang_refuses_gl_helper_invocation_outside_fragment_stages(stage, code)
 def test_slang_refuses_unmapped_builtin_semantic():
     with pytest.raises(
         SlangLoweringRefused,
+        match="Slang has no system value for the built-in @gl_NumSamples",
+    ):
+        generate("""
+            shader Probe {
+                struct FragmentInput {
+                    vec2 uv;
+                    int samples @ gl_NumSamples;
+                }
+                fragment {
+                    void main(FragmentInput input) {}
+                }
+            }
+        """)
+
+
+def test_slang_refuses_helper_invocation_member_of_a_returned_structure():
+    # The structure is also a stage output, so its member cannot become a local read from IsHelperLane().
+    with pytest.raises(
+        SlangLoweringRefused,
         match="Slang has no system value for the built-in @gl_HelperInvocation",
     ):
         generate("""
@@ -114,7 +133,7 @@ def test_slang_refuses_unmapped_builtin_semantic():
                     bool helper @ gl_HelperInvocation;
                 }
                 fragment {
-                    void main(FragmentInput input) {}
+                    FragmentInput main(FragmentInput input) { return input; }
                 }
             }
         """)

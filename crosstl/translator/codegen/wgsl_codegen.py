@@ -59,13 +59,18 @@ from .wgsl_buffer_atomics import ATOMIC_NAMES, WGSLBufferAtomicsMixin
 from .wgsl_buffer_resources import WGSLBufferResourceMixin
 from .wgsl_builtin_options import WGSLBuiltinOptionMixin
 from .wgsl_call_lowering import WGSLCallLoweringMixin
+from .wgsl_clip_distances import (
+    CLIP_DISTANCES_SEMANTICS,
+    is_scalar_clip_distance_access,
+    scalar_clip_distance_value,
+)
 from .wgsl_composite_conditionals import WGSLCompositeConditionalMixin
 from .wgsl_conditional_effects import WGSLConditionalEffectsMixin
 from .wgsl_constructors import WGSLConstructorMixin
 from .wgsl_cube_texture_offsets import (
     OFFSET_TEXTURE_LOOKUPS,
     WGSLCubeTextureOffsetUnsupportedError,
-    is_cube_array_texture_type,
+    is_cube_texture_type,
 )
 from .wgsl_entry_outputs import (
     EntryOutputLoweringError,
@@ -107,7 +112,17 @@ from .wgsl_matrix_inverse import (
     wgsl_matrix_inverse_call,
 )
 from .wgsl_matrix_resize import wgsl_matrix_resize
+from .wgsl_mixed_float_operands import (
+    MIXED_FLOAT_ARITHMETIC_OPERATORS,
+    MIXED_FLOAT_OPERATORS,
+    mixed_float_common_type,
+    wgsl_mixed_float_operands,
+)
 from .wgsl_multisampled_textures import WGSLMultisampledTextureMixin
+from .wgsl_nan_aware_min_max import (
+    is_nan_aware_min_max_call,
+    wgsl_nan_aware_min_max_call,
+)
 from .wgsl_narrow_storage import narrow_storage_word_type
 from .wgsl_parameter_lowering import WGSLParameterLoweringMixin
 from .wgsl_program_collection import WGSLProgramCollectionMixin
@@ -123,6 +138,7 @@ from .wgsl_struct_initializers import (
     wgsl_struct_array_initializer,
     wgsl_struct_initializer,
 )
+from .wgsl_subgroup_directives import add_subgroup_directives
 from .wgsl_subgroup_operations import wgsl_wave_operation, wgsl_wave_result_type
 from .wgsl_texture_calls import WGSLTextureCallMixin
 from .wgsl_texture_gather import GATHER_OPERATIONS, WGSLTextureGatherMixin
@@ -295,6 +311,7 @@ class WGSLCodeGen(
         "gl_numsubgroups": "num_subgroups",
         "subgroup_id": "subgroup_id",
         "gl_subgroupid": "subgroup_id",
+        **CLIP_DISTANCES_SEMANTICS,
     }
     BUILTIN_IDENTIFIER_ALIASES = {
         "gl_Position": "position",
@@ -309,8 +326,8 @@ class WGSLCodeGen(
         "gl_WorkGroupID": "workgroup_id",
         "SV_GroupID": "workgroup_id",
         "gl_NumWorkGroups": "num_workgroups",
-        # The subgroup built-in inputs (WGSL section 13.3.1.1). naga 30 reads them without the
-        # `enable subgroups;` directive and rejects that directive as not yet implemented.
+        # The subgroup built-in inputs (WGSL section 13.3.1.1), which need `enable subgroups;`
+        # (wgsl_subgroup_directives).
         "gl_SubgroupSize": "subgroup_size",
         "gl_SubgroupInvocationID": "subgroup_invocation_id",
         "gl_NumSubgroups": "num_subgroups",
@@ -895,6 +912,7 @@ class WGSLCodeGen(
         self._frexp_modf_helpers = {}
         self._matrix_inverse_helpers = {}
         self._matrix_resize_helpers = {}
+        self._nan_aware_min_max_helpers = {}
         self._uniform_registers = None
         self._half_conversion_helpers = {}
         self._constant_values = {}
@@ -919,6 +937,9 @@ class WGSLCodeGen(
         self._builtin_option_specializations = {}
         self._generic_function_specializer = None
         self._uses_primitive_index = False
+        self._uses_clip_distances = False
+        self._clip_distance_members = set()
+        self._scalar_clip_distance_members = set()
         self._int_builtin_members = {}
         self._enum_type_names = set()
         self._enum_variant_constants = {}
@@ -991,6 +1012,7 @@ class WGSLCodeGen(
             helper_section_index,
             lines,
         )
+        add_subgroup_directives(lines)
         return "\n".join(lines).rstrip() + "\n"
 
     def stage_output_lowerings(self, ast, target_stage, existing_structs):
@@ -1171,6 +1193,9 @@ class WGSLCodeGen(
         try:
             if isinstance(expr, FunctionCallNode):
                 expr = self.specialize_generic_function_call(expr)
+                matrix_conditional = self.matrix_select_as_ternary(expr)
+                if isinstance(matrix_conditional, TernaryOpNode):
+                    self.require_select_operands(matrix_conditional)
                 rendered = self.generate_function_call(expr, expected_type=target_type)
             else:
                 rendered = self.generate_expression(expr)
@@ -1302,6 +1327,12 @@ class WGSLCodeGen(
                 return f"({left} {expr.operator} {right})"
             if expr.operator in MIXED_INTEGER_OPERATORS:
                 left, right = wgsl_mixed_integer_operands(self, expr.left, expr.right)
+                if expr.operator in MIXED_FLOAT_OPERATORS:
+                    # A float operand converts the integer one to f32, as the
+                    # C-style languages do implicitly (see wgsl_mixed_float_operands).
+                    left, right = wgsl_mixed_float_operands(
+                        self, expr.left, expr.right, left, right
+                    )
                 return f"({left} {expr.operator} {right})"
             return (
                 f"({self.generate_expression(expr.left)} {expr.operator} "
@@ -1345,6 +1376,9 @@ class WGSLCodeGen(
             self.require_unconditional_branches(expr)
             return self.generate_ternary_expression(expr)
         if isinstance(expr, FunctionCallNode):
+            matrix_conditional = self.matrix_select_as_ternary(expr)
+            if isinstance(matrix_conditional, TernaryOpNode):
+                self.require_select_operands(matrix_conditional)
             return self.generate_function_call(expr)
         if isinstance(expr, ConstructorNode):
             return self.generate_constructor(expr)
@@ -1363,6 +1397,9 @@ class WGSLCodeGen(
             if is_int_builtin_member(self, expr):
                 access = f"{self.generate_expression(expr.object_expr)}.{member_name}"
                 return f"i32({access})"
+            if is_scalar_clip_distance_access(self, expr):
+                # A float clip distance is the only element of array<f32, 1>.
+                member_name = f"{member_name}[0]"
             if isinstance(
                 expr.object_expr, IdentifierNode
             ) and self.is_pointer_identifier(expr.object_expr.name):
@@ -1579,6 +1616,8 @@ class WGSLCodeGen(
             return wgsl_matrix_inverse_call(self, node)
         if is_float_classification_call(self, node):
             return wgsl_float_classification_call(self, node)
+        if is_nan_aware_min_max_call(self, node):
+            return wgsl_nan_aware_min_max_call(self, node)
 
         if self.is_type_constructor_name(function_name):
             if len(node.arguments) == 1:
@@ -1607,16 +1646,21 @@ class WGSLCodeGen(
             function_name
         ):
             struct = self._structs_by_name[function_name]
-            member_types = [
-                member.member_type
+            members = [
+                member
                 for member in getattr(struct, "members", None) or []
                 if hasattr(member, "member_type")
             ]
             # Only a call with one argument per member: zip would drop any argument past the last member.
-            if member_types and len(node.arguments) == len(member_types):
+            if members and len(node.arguments) == len(members):
                 args = ", ".join(
-                    self.generate_expression_for_target(arg, member_type)
-                    for arg, member_type in zip(node.arguments, member_types)
+                    scalar_clip_distance_value(
+                        self,
+                        struct.name,
+                        member.name,
+                        self.generate_expression_for_target(arg, member.member_type),
+                    )
+                    for arg, member in zip(node.arguments, members)
                 )
                 return f"{self.type_name_string(function_name)}({args})"
         resolved_function = None
@@ -1695,7 +1739,7 @@ class WGSLCodeGen(
         if normalized_name in FILTERED_TEXTURE_LOOKUPS and args:
             self.refuse_integer_texture_sample(args[0], function_name)
         if normalized_name in OFFSET_TEXTURE_LOOKUPS and args:
-            self.refuse_cube_array_texture_offset(args[0], function_name)
+            self.refuse_cube_texture_offset(args[0], function_name)
         if normalized_name == "texture":
             return self.generate_texture_sample_call(function_name, args)
         if normalized_name == "texturelod":
@@ -1737,9 +1781,9 @@ class WGSLCodeGen(
             f"{function_name} yet"
         )
 
-    def refuse_cube_array_texture_offset(self, texture_expr, function_name):
+    def refuse_cube_texture_offset(self, texture_expr, function_name):
         texture_type = self.sampled_texture_type(self.expression_type(texture_expr))
-        if is_cube_array_texture_type(texture_type):
+        if is_cube_texture_type(texture_type):
             raise WGSLCubeTextureOffsetUnsupportedError(
                 function_name, self.generate_expression(texture_expr)
             )
@@ -2046,6 +2090,13 @@ class WGSLCodeGen(
                 return left_type
             if right_matrix is not None and left_scalar is not None:
                 return right_type
+        if expr.operator in MIXED_FLOAT_ARITHMETIC_OPERATORS:
+            # A float operand promotes an integer one to f32, so a nested
+            # expression such as `(x / 4) + u` keeps its float type instead
+            # of losing it to None.
+            common_float = mixed_float_common_type(self, expr.left, expr.right)
+            if common_float is not None:
+                return common_float
         if left_vector is not None and right_vector is not None:
             if left_vector == right_vector:
                 return left_type

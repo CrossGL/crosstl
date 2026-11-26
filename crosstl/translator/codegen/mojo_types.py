@@ -104,6 +104,7 @@ class MojoTypeMixin:
             not size_text
             or re.fullmatch(r"\d+", size_text)
             or re.fullmatch(r"[A-Z_][A-Z0-9_]*", size_text)
+            or size_text in getattr(self, "literal_int_constants", {})
         ):
             return open_bracket, size_text
         return None

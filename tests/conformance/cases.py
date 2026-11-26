@@ -25,8 +25,10 @@ from . import (
     integer_cases,
     libm_cases,
     pack_cases,
+    power_cases,
     rounding_cases,
     warp_cases,
+    workgroup_cases,
 )
 
 CASES_DIR = Path(__file__).resolve().parent / "cases"
@@ -1035,6 +1037,15 @@ def o_buffer_helper_parameters(inp):
     return np.array(out, dtype=np.int32)
 
 
+def o_workgroup_uniform_load(inp):
+    """Per 64-invocation workgroup: ``tile[63]``, the sum of the inputs, ``cells[2].w[1]`` and the rewritten ``tile[0]``."""
+    out = []
+    for group in inp.astype(np.int64).reshape(-1, 64):
+        loads = [group[63], group.sum(), group[2] + 2, group[0] * 2 + 1]
+        out.extend(loads * 64)
+    return np.array(out, dtype=np.int32)
+
+
 def _width_check(inp, out, group=64, divergent=False):
     """Parametric oracle for SIMD/wave reductions: the reported width w must be uniform and every lane's sum must
     equal the sum over its SIMD-group (consecutive chunks of w threads within each threadgroup); with
@@ -1583,6 +1594,16 @@ CASES = [
         np.float32,
         o_pow,
         compare="ulp:16",
+    ),
+    Case(
+        "x_integer_powers",
+        "H8",
+        "powi of binary32 scalars and vectors to int powers in [-9, 9], with zeros, infinities and a NaN",
+        "CrossGL powi: C17 F.10.4.4 for an integral exponent; repeated squaring bounded at 16 ulp, signed zeros",
+        power_cases.power_inputs(),
+        np.float32,
+        power_cases.power_reference,
+        compare="ulp:16+sign",
     ),
     Case(
         "u_sinf",
@@ -2230,6 +2251,30 @@ CASES = [
         threads=128,
     ),
     Case(
+        "x_workgroup_uniform_load",
+        "H13",
+        "workgroupUniformLoad of a shared array element, an atomically built sum and a structure member",
+        "CrossGL workgroupUniformLoad (WGSL workgroupUniformLoad): a workgroup barrier, the read every invocation of "
+        "the workgroup sees, and a barrier before any invocation writes the memory again",
+        SMALL,
+        np.int32,
+        o_workgroup_uniform_load,
+        threads=128,
+    ),
+    Case(
+        "x_workgroup_collectives",
+        "H13",
+        "Workgroup reductions, inclusive and exclusive scans, votes and a broadcast over int, uint, float and ivec2",
+        "CrossGL workgroup<Op>, workgroupInclusive<Op>, workgroupExclusive<Op>, workgroupAll, workgroupAny and "
+        "workgroupBroadcast (OpenCL C 3.0 section 6.15.15 work_group_* functions): every invocation of the "
+        "workgroup receives the combination in local invocation index order",
+        SMALL,
+        np.int32,
+        workgroup_cases.reference,
+        threads=128,
+        out_count=128 * workgroup_cases.RESULTS,
+    ),
+    Case(
         "x_bfloat16_arithmetic",
         "S13",
         "bfloat16 x * y, x + y and x - y, read as float and assigned to a float",
@@ -2422,6 +2467,16 @@ CASES = [
         integer_cases.integer_pair_inputs(),
         np.uint32,
         integer_cases.extended_arithmetic_reference,
+    ),
+    Case(
+        "x_integer_combinatorics",
+        "integer",
+        "gcd, lcm, factorial, comb and perm of 8-, 16-, 32- and 64-bit integers, scalar and vector",
+        "CrossGL integer combinatorics: exact greatest common divisors, least common multiples, factorials, "
+        "binomial coefficients and permutation counts wherever the result fits the type",
+        integer_cases.combinatorics_inputs(),
+        np.uint32,
+        integer_cases.combinatorics_reference,
     ),
     Case(
         "s_extended_arithmetic",

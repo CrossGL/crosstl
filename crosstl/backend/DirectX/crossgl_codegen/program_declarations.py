@@ -19,6 +19,11 @@ from ..shader_record_import import (
     shader_record_layout,
 )
 from ..subpass_inputs import SUBPASS_INPUT_TYPES
+from ..vk_constant_ids import (
+    VK_CONSTANT_ID_ATTRIBUTE,
+    has_vk_constant_id,
+    vk_constant_id_suffix,
+)
 
 
 class ProgramDeclarationMixin:
@@ -309,10 +314,13 @@ class ProgramDeclarationMixin:
                 IMAGE_FORMAT_ATTRIBUTES
                 if self.raw_type_base(getattr(node, "vtype", None))
                 in self.RUNTIME_FORMAT_STORAGE_TEXTURES
-                else None
+                else ()
             )
+            # A specialization id follows the name, as the GLSL importer writes it.
             code = self.format_attributes(
-                getattr(node, "attributes", []), 1, skip_names=format_attributes
+                getattr(node, "attributes", []),
+                1,
+                skip_names=(*format_attributes, VK_CONSTANT_ID_ATTRIBUTE),
             )
         if id(node) in self.hlsl_program_constant_global_ids:
             code += "    @ hlsl_program_constant\n"
@@ -332,12 +340,17 @@ class ProgramDeclarationMixin:
             # DXC reads '[[vk::push_constant]] T name;' as one push-constant buffer holding a T, which CrossGL
             # spells 'ConstantBuffer<T> name @push_constant'.
             variable_type = f"ConstantBuffer<{variable_type}>"
-        variable_name = self.render_identifier(node.name)
+        variable_name = self.render_identifier(node.name) + vk_constant_id_suffix(
+            self, node
+        )
         if storage_prefix == "const " and array_suffix:
             variable_type = f"{variable_type}{array_suffix}"
             array_suffix = ""
         initializer = ""
-        if getattr(node, "value", None) is not None:
+        if (
+            getattr(node, "value", None) is not None
+            and id(node) not in self.hlsl_program_constant_global_ids
+        ):
             # DXC folds global initializers with exact math at compile time.
             self.constant_initializer_depth += 1
             try:
@@ -369,17 +382,15 @@ class ProgramDeclarationMixin:
         )
 
     def is_hlsl_program_constant_global(self, node):
-        if getattr(node, "value", None) is not None:
-            return False
+        # A module variable without ``static`` is a $Globals member, ``const`` or not, even with an initializer, which
+        # DXC ignores ("Initializer of external global will be ignored").
         if self.is_vk_push_constant_global(node):
             return False
+        if has_vk_constant_id(node):
+            # DXC's SPIR-V back end makes it a specialization constant (vk_constant_ids).
+            return False
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
-        if getattr(node, "is_const", False) or qualifiers & {
-            "const",
-            "groupshared",
-            "static",
-            "shared",
-        }:
+        if qualifiers & {"groupshared", "static", "shared"}:
             return False
 
         type_name = getattr(node, "vtype", None)

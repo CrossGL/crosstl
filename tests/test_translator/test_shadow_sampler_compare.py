@@ -204,6 +204,15 @@ def test_metal_keeps_biased_shadow_samples(tmp_path):
     assert "input.uvz.xy, input.uvz.z, bias(0.5))" in metal
 
 
+def test_hlsl_writes_biased_shadow_samples_as_sample_cmp_bias(tmp_path):
+    """Shader Model 6.8's SampleCmpBias is the biased comparison GLSL's texture(sampler2DShadow, P, bias) is."""
+    hlsl = _flat(_edge(tmp_path, "texture(shadowMap, input.uvz, 0.5)", "directx"))
+    assert (
+        "shadowMap.SampleCmpBias(shadowMapSampler, input.uvz.xy, input.uvz.z, 0.5)"
+        in hlsl
+    )
+
+
 @pytest.mark.parametrize(
     "call, backend, reason",
     [
@@ -212,7 +221,6 @@ def test_metal_keeps_biased_shadow_samples(tmp_path):
             "directx",
             "evaluated once for the coordinate",
         ),
-        ("texture(shadowMap, input.uvz, 0.5)", "directx", "level-of-detail bias"),
         ("texture(shadowMap, input.uvz, 0.5)", "vulkan", "level-of-detail bias"),
         (
             "textureProj(shadowArray, input.dirLayer)",

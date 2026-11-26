@@ -112,7 +112,8 @@ def lower(
     ``keep_bindings`` keeps the resources the probe never reads (:data:`KEEP_BINDINGS`), ``auto_locations``
     numbers the stage inputs and outputs that have no location (:data:`AUTO_LOCATIONS`), and ``debug`` adds the
     compiler's debug information (:data:`DEBUG_INFO`). GLSL is lowered with the Vulkan names of its vertex and
-    instance index (:func:`vulkan_glsl`). Call only when :func:`can_lower` is true.
+    instance index (:func:`vulkan_glsl`), and WGSL as naga reads it (:func:`.validators.naga_source`). Call only when
+    :func:`can_lower` is true.
     """
     tool, arguments = SPIRV_COMPILERS[language]
     name = "probe" + (
@@ -128,9 +129,11 @@ def lower(
         ),
     }
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-") as scratch:
-        Path(scratch, name).write_text(
-            vulkan_glsl(source) if language == "glsl" else source
-        )
+        if language == "glsl":
+            source = vulkan_glsl(source)
+        elif language == "wgsl":
+            source = validators.naga_source(source)
+        Path(scratch, name).write_text(source)
         filled = [a.format(**fields) for a in arguments]
         if keep_bindings:
             filled += KEEP_BINDINGS.get(language, ())

@@ -22,8 +22,10 @@ one the compiler wrote: slangc writes SPIR-V 1.5, which Vulkan 1.1 does not acce
 
 Where the selected runtimes include the harness's Direct3D 12 WARP, HLSL probes run there as HLSL instead, with the
 entry point :func:`validators.hlsl_entry` names, compiled by DXC for the harness's shader model
-(``tests.conformance.validators.HLSL_PROFILE``). A probe that needs a later shader model fails to compile there and keeps
-its validation result, and so does one that queries a ray query. The Windows coverage job runs them so, and
+(``tests.conformance.validators.HLSL_PROFILE``). A probe that DXC rejects there only because it calls an operation of
+Shader Model 6.7 or 6.8 is compiled again at that model (``tests.conformance.validators.later_profiles``). A probe that
+needs Shader Model 6.9, which the WARP device cannot create pipelines for, fails to compile and keeps its validation
+result, and so does one that queries a ray query. The Windows coverage job runs them so, and
 ``tools.coverage merge`` adds those verdicts to the rows the Linux job measured (:mod:`.report`).
 
 GLSL runs on llvmpipe's OpenGL, which lacks extensions such as the explicit arithmetic types. When it rejects a native
@@ -64,6 +66,7 @@ its validation result, because the native probe and the translation would run on
 
 from __future__ import annotations
 
+import os
 import re
 import struct
 import tempfile
@@ -71,7 +74,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
 from pathlib import Path
 
-from . import lanes, lowering, validators
+from . import executed, lanes, lowering, validators
 from .model import Feature, Result, Type
 
 # The languages the harness runs, with the suffix it reads each one's sources from (tests/conformance/cases.py).
@@ -111,6 +114,11 @@ _GLSL_460 = re.compile(r"^#version 460\b.*$", re.M)
 # that extension, which names them with an ARB suffix.
 _GROUP_VOTE = re.compile(
     r"\b(anyInvocation|allInvocations|allInvocationsEqual)(?=\s*\()"
+)
+# Its atomic counter operations beyond increment and decrement came from ARB_shader_atomic_counter_ops, which llvmpipe
+# implements and which also names them with an ARB suffix.
+_COUNTER_OPS = re.compile(
+    r"\b(atomicCounter(?:Add|Subtract|Min|Max|And|Or|Xor|Exchange|CompSwap))(?=\s*\()"
 )
 # lavapipe drops a conversion of a 32-bit float to 16 bits that is converted straight back, so a native probe that
 # rounds through a 16-bit float writes its unrounded input there. Probes whose SPIR-V declares a 16-bit float keep
@@ -253,9 +261,13 @@ def runnable(language: str, source: str) -> str:
     if language != "glsl" or not _GLSL_460.search(source):
         return source
     version = "#version 450 core"
-    if _GROUP_VOTE.search(source):
-        version += "\n#extension GL_ARB_shader_group_vote : require"
-        source = _GROUP_VOTE.sub(r"\1ARB", source)
+    for functions, extension in (
+        (_GROUP_VOTE, "GL_ARB_shader_group_vote"),
+        (_COUNTER_OPS, "GL_ARB_shader_atomic_counter_ops"),
+    ):
+        if functions.search(source):
+            version += f"\n#extension {extension} : require"
+            source = functions.sub(r"\1ARB", source)
     return _GLSL_460.sub(version, source, count=1)
 
 
@@ -728,7 +740,9 @@ def run(results: list[Result], runtimes: str = "available", workers: int = 4):
     did not run, or ran without a verdict, says why in ``unrun``.
     """
     results = list(results)
+    kept = _kept(runtimes)
     by_language: dict[tuple[str, str], list[tuple[int, Result]]] = {}
+    used = set()
     for index, result in enumerate(results):
         native, translated = languages(result)
         if native == translated:
@@ -736,9 +750,14 @@ def run(results: list[Result], runtimes: str = "available", workers: int = 4):
                 continue
         elif not runs_pair(native, translated):
             continue
-        if executable(result):
-            by_language.setdefault((native, translated), []).append((index, result))
-    used = set()
+        if not executable(result):
+            continue
+        again = kept.lookup(result, (native, translated)) if kept else None
+        if again:
+            results[index] = again
+            used.add(again.runtime)
+            continue
+        by_language.setdefault((native, translated), []).append((index, result))
     with tempfile.TemporaryDirectory(prefix="crosstl-coverage-execution-") as scratch:
         for (language, into), items in by_language.items():
             found, runtime, skipped = {}, "", {}
@@ -785,8 +804,28 @@ def run(results: list[Result], runtimes: str = "available", workers: int = 4):
                 reason = "" if judged.runtime else skipped.get(index, judged.unrun)
                 if reason:
                     judged = replace(judged, unrun=f"on {where[index]}, {reason}")
+                if kept:
+                    kept.store(results[index], languages(judged), judged)
                 results[index] = judged
+    if kept:
+        kept.forget_unused()
     return results, sorted(used - {""})
+
+
+def _kept(runtimes: str) -> executed.Kept | None:
+    """The verdicts earlier runs kept for this selection of runtimes (:mod:`.executed`), or ``None``."""
+    if not os.environ.get(executed.EXECUTIONS):
+        return None
+    from tests.conformance import runner
+
+    selection = runner.select_runtimes(runtimes, sorted(SUFFIXES))
+    identities = "; ".join(
+        f"{runtime.id}={provision.identity}"
+        for target in sorted(selection)
+        for runtime, provision in selection[target]
+        if provision.available
+    )
+    return executed.open_kept(runtimes, identities)
 
 
 def _label(result: Result) -> str:

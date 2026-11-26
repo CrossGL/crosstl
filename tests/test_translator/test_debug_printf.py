@@ -2,9 +2,9 @@
 
 ``printf(format, values...)`` is CrossGL's debug print with the Vulkan debug printf format. The GLSL and SPIR-V
 importers read GLSL's ``debugPrintfEXT`` and SPIR-V's ``NonSemantic.DebugPrintf`` as it, HLSL and Slang spell it
-``printf`` already. SPIR-V emits ``NonSemantic.DebugPrintf``, GLSL ``debugPrintfEXT`` and Metal
-``os_log_default.log`` with vector conversions written out per component. DXIL, WebGL 2 and WGSL cannot print from
-a shader and refuse it with a typed diagnostic.
+``printf`` already. SPIR-V emits ``NonSemantic.DebugPrintf``, GLSL ``debugPrintfEXT``, HLSL ``printf`` (which DXC
+compiles to SPIR-V) and Metal ``os_log_default.log`` with vector conversions written out per component. WebGL 2 and
+WGSL cannot print from a shader and refuse it with a typed diagnostic.
 """
 
 from __future__ import annotations
@@ -21,7 +21,10 @@ from crosstl.translator.codegen.spirv_debug_printf import (
     spirv_string_operand,
 )
 from crosstl.translator.diagnostics import TranslationDiagnostic
-from crosstl.translator.semantics import DebugPrintfUnsupportedError
+from crosstl.translator.semantics import (
+    DebugPrintfUnsupportedError,
+    DebugPrintfValueUnsupportedError,
+)
 
 GLSL_PRINT = """#version 450
 #extension GL_EXT_debug_printf : require
@@ -193,11 +196,64 @@ def test_metal_refuses_formats_os_log_cannot_print(tmp_path, body, message):
     assert caught.value.code == "project.translate.metal-debug-printf-unsupported"
 
 
-@pytest.mark.parametrize("backend", ["directx", "dx12", "webgl", "wgsl"])
+@pytest.mark.parametrize("backend", ["webgl", "wgsl"])
 def test_targets_without_a_shader_print_refuse_it(tmp_path, backend):
     with pytest.raises(DebugPrintfUnsupportedError) as caught:
         _translate(tmp_path, "print.hlsl", HLSL_PRINT, backend)
     assert caught.value.code.endswith("-debug-printf-unsupported")
+
+
+def _dxc_spirv(tmp_path, code, profile, entry):
+    # DXC compiles HLSL printf only to SPIR-V; DXIL has no print operation.
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not on PATH")
+    (tmp_path / "out.hlsl").write_text(code, encoding="utf-8")
+    _run(
+        [dxc, "-spirv", "-fspv-target-env=vulkan1.3", "-T", profile, "-E", entry]
+        + ["-HV", "2021", "out.hlsl", "-Fo", "out.spv"],
+        tmp_path,
+    )
+
+
+@pytest.mark.parametrize(
+    "name, source, expected, profile, entry",
+    [
+        (
+            "print.cgl",
+            CROSSGL_PRINT,
+            (
+                'printf("plain %d %u 100%% \\"q\\" \\\\ \\n", 3, id);',
+                'printf("v=%v3f id=%u w=%5.2f", (v * 2.0), id, v.x);',
+            ),
+            "cs_6_9",
+            "CSMain",
+        ),
+        (
+            "print.hlsl",
+            HLSL_PRINT,
+            ('printf("Position = %v3f", pos);',),
+            "vs_6_9",
+            "VSMain",
+        ),
+        (
+            "print.frag",
+            GLSL_PRINT,
+            ('printf("v=%v3f i=%d", input.v, 3);',),
+            "ps_6_9",
+            "PSMain",
+        ),
+    ],
+)
+@pytest.mark.parametrize("backend", ["directx", "dx12"])
+def test_hlsl_prints_through_its_printf_intrinsic(
+    tmp_path, backend, name, source, expected, profile, entry
+):
+    code = _translate(tmp_path, name, source, backend)
+    for line in expected:
+        assert line in code
+    assert "debugPrintfEXT" not in code
+    _dxc_spirv(tmp_path, code, profile, entry)
 
 
 def test_a_program_function_named_printf_is_an_ordinary_call(tmp_path):
@@ -208,3 +264,48 @@ def test_a_program_function_named_printf_is_an_ordinary_call(tmp_path):
     hlsl = _translate(tmp_path, "print.cgl", source, "directx")
     # HLSL output renames the helper apart from the printf intrinsic.
     assert "printf_fn(v.x)" in hlsl
+
+
+CUDA_PRINT_VALUE = r"""
+__global__ void k(int* out) {
+    int r = printf("v=%d\n", 1);
+    out[threadIdx.x] = r;
+}
+"""
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        'int r = printf("%d", 1);',
+        'int r = 0; r = printf("%d", 1) + 1;',
+        'if (printf("%d", 1) > 0) { v.x = 0.0; }',
+    ],
+)
+@pytest.mark.parametrize(
+    "backend", ["directx", "opengl", "vulkan", "metal", "slang", "cuda", "hip"]
+)
+def test_a_debug_print_whose_value_is_read_is_refused(tmp_path, body, backend):
+    # Every target's debug print is a statement, and C's printf value is the source language's own.
+    with pytest.raises(DebugPrintfValueUnsupportedError) as caught:
+        _translate(tmp_path, "print.cgl", _compute(body), backend)
+    assert caught.value.code == (
+        f"project.translate.{backend}-debug-printf-value-unsupported"
+    )
+
+
+def test_a_cuda_print_value_is_kept_only_for_cuda(tmp_path):
+    code = _translate(tmp_path, "print.cu", CUDA_PRINT_VALUE, "cuda")
+    assert 'int r = printf("v=%d\\n", 1);' in code
+    for backend in ("hip", "directx", "opengl", "vulkan"):
+        with pytest.raises(DebugPrintfValueUnsupportedError, match="cannot be carried"):
+            _translate(tmp_path, "print.cu", CUDA_PRINT_VALUE, backend)
+
+
+def test_prints_evaluated_for_their_effects_are_statements(tmp_path):
+    body = 'int i = 0; for (; i < 2; printf("i=%d", i), i++) { printf("%d", i); }'
+    assembly = _translate(tmp_path, "print.cgl", _compute(body), "vulkan")
+    assert assembly.count('OpExtInstImport "NonSemantic.DebugPrintf"') == 1
+    _validate_spirv(tmp_path, assembly)
+    hlsl = _translate(tmp_path, "print.cgl", _compute(body), "directx")
+    assert 'printf("%d", i);' in hlsl

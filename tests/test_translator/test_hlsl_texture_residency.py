@@ -1,8 +1,9 @@
 """CrossGL texture residency queries lower to HLSL's ``out uint Status`` overloads and ``CheckAccessFullyMapped``.
 
 Each query gets a ``uint`` Status local declared at the top of its function. The read gains the neutral optional
-operands Status follows (a zero offset, cube textures excepted, and a ``0.0f`` clamp) and the code is
-``CheckAccessFullyMapped(status) ? 0 : 1``, sequenced after the read by the comma operator.
+operands Status follows (a zero offset, cube textures excepted, and a ``0.0f`` clamp) and the code is the Status
+itself, ``int(status)``, sequenced after the read by the comma operator; ``textureResident(code)`` is
+``CheckAccessFullyMapped(uint(code))``.
 """
 
 from __future__ import annotations
@@ -137,8 +138,8 @@ def test_reads_take_their_status_overloads(tmp_path):
     ):
         assert f"({texel} = {read[:-1]}, crosstl_residency_status_" in flat, texel
     assert "int code = ((a = colorMap.Sample(" in flat
-    assert "CheckAccessFullyMapped(crosstl_residency_status_" in flat
-    assert "((code == 0) && helper)" in flat
+    assert "true) ? int(crosstl_residency_status_" in flat
+    assert "(CheckAccessFullyMapped(uint(code)) && helper)" in flat
     assert "textureResidency" not in code and "textureResident" not in code
     _compile(tmp_path, code)
 
@@ -156,7 +157,8 @@ def test_status_locals_are_declared_at_the_top_of_each_function(tmp_path):
     # A query in a loop condition reads the local declared before the loop.
     assert (
         "it < 2" in entry
-        and "crosstl_residency_status_19), CheckAccessFullyMapped(" in entry
+        and "crosstl_residency_status_19), true) ? int(crosstl_residency_status_19)"
+        in entry
     )
 
 
@@ -183,4 +185,5 @@ def test_hlsl_aliases_lower_residency(tmp_path):
     path = tmp_path / "shader.cgl"
     path.write_text(SOURCE, encoding="utf-8")
     code = crosstl.translate(str(path), backend="dx12", format_output=False)
-    assert "CheckAccessFullyMapped(crosstl_residency_status_" in code
+    assert "? int(crosstl_residency_status_" in code
+    assert "CheckAccessFullyMapped(uint(code))" in code

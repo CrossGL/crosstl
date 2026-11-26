@@ -1,7 +1,7 @@
 """Probes for bindings, textures, images, memory qualifiers, specialization constants and subgroups."""
 
 from tests.conformance import metal_textures
-from tools.coverage import constructs, probes
+from tools.coverage import constructs, probes, validators
 from tools.coverage.templates import (
     bindings,
     images,
@@ -254,9 +254,10 @@ def test_subgroup_probes_read_each_languages_built_ins():
         assert line in probe.source, (language, name)
     crossgl = probes.build(construct_feature("glsl", "num-subgroups"), "crossgl").source
     assert "outp[i] = float(gl_NumSubgroups);" in crossgl
-    # naga accepts the subgroup built-ins only without the enable directive it has not implemented.
+    # WGSL's subgroup built-ins need the enable directive, which naga reads blanked out (validators.naga_source).
     wgsl = probes.build(construct_feature("wgsl", "subgroup-size"), "wgsl").source
-    assert "enable subgroups" not in wgsl
+    assert wgsl.startswith("enable subgroups;\n")
+    assert "enable subgroups" not in validators.naga_source(wgsl)
     # HLSL has no built-in for the waves in a group or the group's size, WGSL and Rust none for the group's size, and
     # WebGL 2 no compute stage.
     names = set(subgroups.NAMES)

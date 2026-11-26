@@ -112,6 +112,7 @@ from .generic_struct_utils import (
     collect_generic_struct_specializations,
     infer_struct_constructor_type,
 )
+from .glsl_atomic_counters import counter_placements
 from .glsl_call_helpers import emit_glsl_call_helpers
 from .glsl_compute_derivative_groups import compute_derivative_group_layout
 from .glsl_descriptor_sets import GLSLDescriptorSetBindingsMixin
@@ -215,6 +216,7 @@ from .opengl_fixed_array_parameters import OpenGLFixedArrayParameterMixin
 from .opengl_function_intervals import OpenGLFunctionIntervalMixin
 from .opengl_function_signatures import OpenGLFunctionSignatureMixin
 from .opengl_global_initializers import OpenGLGlobalInitializerMixin
+from .opengl_group_votes import OpenGLGroupVoteMixin
 from .opengl_image_operations import OpenGLImageOperationMixin
 from .opengl_interface_blocks import OpenGLInterfaceBlockMixin
 from .opengl_local_identifiers import OpenGLLocalIdentifierMixin
@@ -353,6 +355,7 @@ class GLSLCodeGen(
     OpenGLMetalBuiltinMixin,
     OpenGLMetalMathMixin,
     OpenGLWaveOperationMixin,
+    OpenGLGroupVoteMixin,
     OpenGLFunctionSignatureMixin,
     OpenGLCallArgumentMixin,
     OpenGLTextureCallMixin,
@@ -459,6 +462,7 @@ class GLSLCodeGen(
         self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
         self.required_glsl_cooperative_matrix_helpers = set()
         self.current_glsl_exact_subgroup_width = None
+        self.current_glsl_group_vote_suffix = None
         self.sampler_variables = set()
         self.current_sampler_parameters = set()
         self.glsl_resource_binding_records = []
@@ -533,6 +537,9 @@ class GLSLCodeGen(
         self.current_glsl_source_function_id = None
         self.current_glsl_source_function_name = None
         self.glsl_function_stage_contexts = {}
+        self.glsl_stage_local_function_owners = {}
+        self.glsl_stage_local_function_names = {}
+        self.glsl_global_function_names = set()
         self.glsl_function_call_graph = {}
         self.glsl_function_call_locations = {}
         self.glsl_function_call_source_edges = {}
@@ -1436,18 +1443,6 @@ class GLSLCodeGen(
                 self.glsl_software_subgroup_uniform_call_ids.add(id(call))
             elif storage_load_call(name, call.arguments):
                 storage_loads.add(id(call))
-        analysis = UniformReturnAnalysis(
-            {
-                call_id: functions_by_id[target_id]
-                for call_id, target_id in (
-                    self.glsl_software_subgroup_resolved_call_targets.items()
-                )
-            },
-            self.glsl_software_subgroup_uniform_call_ids,
-            self.structs_by_name,
-            storage_loads,
-        )
-        self.glsl_software_subgroup_uniform_returns = analysis
         constant_source_types = {
             **self.glsl_constant_types,
             **{
@@ -1458,6 +1453,19 @@ class GLSLCodeGen(
                 and "volatile" not in node.qualifiers
             },
         }
+        analysis = UniformReturnAnalysis(
+            {
+                call_id: functions_by_id[target_id]
+                for call_id, target_id in (
+                    self.glsl_software_subgroup_resolved_call_targets.items()
+                )
+            },
+            self.glsl_software_subgroup_uniform_call_ids,
+            self.structs_by_name,
+            storage_loads,
+            constants=constant_source_types,
+        )
+        self.glsl_software_subgroup_uniform_returns = analysis
         for function in functions:
             lexical = self.glsl_scalar_array_view_lexical_bindings(function)
             declared_names = {
@@ -2744,6 +2752,12 @@ class GLSLCodeGen(
         )
         if self.software_subgroup_width is not None:
             return []
+        group_vote_suffix = getattr(self, "current_glsl_group_vote_suffix", None)
+        if group_vote_suffix is not None:
+            # GLSL 4.60 has the votes without an extension.
+            if not group_vote_suffix:
+                return []
+            return [f"#extension {self.GLSL_GROUP_VOTE_EXTENSION} : require"]
         operations = self.glsl_wave_operations(ast, target_stage)
         lines = []
         if (
@@ -2926,6 +2940,19 @@ class GLSLCodeGen(
         self.current_glsl_source_function_id = None
         self.current_glsl_source_function_name = None
         self.glsl_function_stage_contexts = {}
+        self.glsl_stage_local_function_owners = {}
+        self.glsl_stage_local_function_names = {}
+        self.glsl_global_function_names = {
+            getattr(function, "name", None)
+            for function in getattr(ast, "functions", []) or []
+        }
+        for stage_type, stage in (getattr(ast, "stages", None) or {}).items():
+            for local_function in getattr(stage, "local_functions", []) or []:
+                stage_name = normalize_stage_name(stage_type)
+                self.glsl_stage_local_function_owners[id(local_function)] = stage_name
+                self.glsl_stage_local_function_names.setdefault(stage_name, set()).add(
+                    local_function.name
+                )
         self.glsl_function_call_graph = {}
         self.glsl_function_call_locations = {}
         self.glsl_function_call_source_edges = {}
@@ -3135,6 +3162,7 @@ class GLSLCodeGen(
         self.glsl_cooperative_matrix_fragment_contracts_by_key = {}
         self.required_glsl_cooperative_matrix_helpers = set()
         self.current_glsl_exact_subgroup_width = None
+        self.current_glsl_group_vote_suffix = None
         self.current_structured_buffer_array_parameters = {}
         self.current_structured_buffer_counter_parameters = {}
         self.current_structured_buffer_access_parameters = {}
@@ -3371,6 +3399,7 @@ class GLSLCodeGen(
         self.glsl_vulkan_resources.activate(self, version_line)
         exact_subgroup_width = self.glsl_stage_exact_subgroup_width(ast, target_stage)
         self.current_glsl_exact_subgroup_width = exact_subgroup_width
+        self.set_glsl_stage_group_vote_suffix(ast, target_stage)
         code += f"{version_line}\n"
         code += source_license_comments(ast, "opengl")
         for line in self.glsl_stage_extension_lines(ast, target_stage):
@@ -3780,6 +3809,7 @@ class GLSLCodeGen(
         self.reserve_explicit_global_resource_bindings(
             resource_declaration_nodes, used_resource_bindings
         )
+        atomic_counters = counter_placements(self, resource_declaration_nodes)
         for index, node in enumerate(resource_declaration_nodes):
             vtype, array_size, array_suffix, resource_count = (
                 self.resource_declaration_shape(node)
@@ -4066,7 +4096,23 @@ class GLSLCodeGen(
                     f"{mapped_type}{array_suffix}",
                 )
                 continue
-            if self.is_opaque_resource_type(mapped_type):
+            if id(node) in atomic_counters:
+                binding, offset = atomic_counters[id(node)]
+                layout = self.glsl_resource_layout_prefix(binding=binding, node=node)
+                if offset:
+                    layout = f"{layout[:-1]}, offset = {offset})"
+                code += f"{layout} uniform {declaration};\n"
+                self.record_glsl_resource_binding(
+                    node,
+                    source_var_name,
+                    var_name,
+                    "atomic-counter",
+                    "atomic counter binding",
+                    binding,
+                    resource_count,
+                    offset=offset,
+                )
+            elif self.is_opaque_resource_type(mapped_type):
                 binding_namespace = (
                     "image binding"
                     if self.is_storage_image_type(vtype)
@@ -10644,6 +10690,34 @@ class GLSLCodeGen(
             reject("invalid-arity")
         if any(item is None for item in types):
             reject("unresolved-operand-type")
+        if func_name == "select" and self.is_matrix_value_type(self.map_type(types[0])):
+            if self.map_type(types[0]) != self.map_type(types[1]):
+                reject("matrix-operand-type-mismatch")
+            condition = args[2]
+            condition_is_matrix_comparison = (
+                isinstance(condition, BinaryOpNode)
+                and self.map_operator(condition.op)
+                in self.GLSL_VECTOR_RELATIONAL_FUNCTIONS
+                and any(
+                    self.is_matrix_value_type(
+                        self.map_type(self.glsl_source_expression_type(operand))
+                    )
+                    for operand in (condition.left, condition.right)
+                )
+            )
+            if self.map_type(types[2]) != "bool" or condition_is_matrix_comparison:
+                reject("matrix-condition-not-scalar-bool")
+            false_value, true_value, condition = args
+            if not all(
+                self.glsl_side_effect_free_expression(value)
+                for value in (false_value, true_value)
+            ):
+                reject("matrix-select-evaluates-both-value-arguments")
+            return (
+                f"({self.generate_glsl_boolean_context(condition)} ? "
+                f"{self.generate_expression(true_value)} : "
+                f"{self.generate_expression(false_value)})"
+            )
         infos = [self.glsl_value_type_info(item) for item in types]
         if any(info is None or info["width"] not in {1, 2, 3, 4} for info in infos):
             reject("unsupported-operand-type")
@@ -10790,7 +10864,14 @@ class GLSLCodeGen(
         if quad_lane_read_needs_helper(operation, arguments):
             return glsl_quad_lane_read_call(self, arguments)
 
-        mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
+        group_vote_suffix = getattr(self, "current_glsl_group_vote_suffix", None)
+        if (
+            group_vote_suffix is not None
+            and operation in self.GLSL_GROUP_VOTE_FUNCTIONS
+        ):
+            mapped = self.GLSL_GROUP_VOTE_FUNCTIONS[operation] + group_vote_suffix
+        else:
+            mapped = self.GLSL_WAVE_DIRECT_MAPPINGS.get(operation)
         if mapped is None:
             return self.glsl_wave_diagnostic_expression(
                 diagnostic_operation, "is not recognized by the OpenGL backend"

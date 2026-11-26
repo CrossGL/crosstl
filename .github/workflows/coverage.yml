@@ -2,16 +2,18 @@ name: Coverage
 
 # Measures what CrossTL supports per backend and direction (tools/coverage). Every feature in the pinned upstream
 # feature lists gets a generated probe, which CrossTL translates and the target's reference tool validates. The Linux
-# job measures GLSL, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga and slangc
-# (and nvcc for the Slang functions only CUDA has, and DXC's Shader Model 6.10 preview for the HLSL intrinsics that
-# need shader model 6.10), and OpenCL C input with the runner image's clang-18 and DXC, and
+# job measures GLSL, GLSL ES 3.x, WebGL (GLSL ES 3.00), HLSL, SPIR-V, WGSL and Slang with glslang, DXC, spirv-val, naga,
+# Tint and slangc (and nvcc for the Slang functions only CUDA has, and DXC's Shader Model 6.10 preview for the HLSL
+# intrinsics that need shader model 6.10), and OpenCL C input with the runner image's clang-18 and DXC, and
 # runs the GLSL and SPIR-V compute probes on Mesa's llvmpipe and lavapipe, and the HLSL, Slang and WGSL ones on lavapipe
 # as the SPIR-V DXC, slangc and naga write for them. Three more Linux jobs measure CUDA, HIP and Mojo with nvcc, hipcc
 # and the Mojo compiler, one measures Rust with rust-gpu and runs the Rust compute probes on lavapipe as the SPIR-V
 # rust-gpu writes, and the macOS job measures Metal with xcrun metal and runs the Metal compute probes on the GPU. The
 # Windows job runs the HLSL compute probes as HLSL on Direct3D 12 WARP; its report carries only those execution
 # verdicts, which the merge adds to the HLSL rows the Linux job measures. Every run goes through Core's conformance
-# harness (tools/coverage/execution.py). The report job merges the reports and adds the CrossGL IR row. On pushes to main and nightly, the publish job replaces the orphan `coverage` branch with
+# harness (tools/coverage/execution.py). The report job merges the reports and adds the CrossGL IR row; on pull
+# requests and in the merge queue the result job does, so they wait for one runner less. On pushes to main and
+# nightly, the publish job replaces the orphan `coverage` branch with
 # coverage.json (each row's score, with its features in features/<language>-<direction>.json so that no file reaches
 # 1 MB), coverage.svg (the README chart), COVERAGE.md, a bounded history.csv and trend.svg, the trend chart drawn from
 # it; main itself never receives generated files. The issues job then reconciles the tracking and bug issues
@@ -150,6 +152,35 @@ jobs:
           echo "$RUNNER_TEMP/naga/bin" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/naga/bin/naga" --version
 
+      # Tint, Dawn's WGSL compiler, checks WGSL after naga (tools/coverage/tint.py). It runs through Dawn's Node.js
+      # bindings, npm webgpu, on Dawn's null backend. npm ci installs the versions tools/coverage/webgpu pins and checks
+      # each package against the integrity hash in its lockfile; the package's only install script serves macOS.
+      - name: Restore Tint
+        id: tint
+        uses: actions/cache@v6
+        with:
+          path: ${{ runner.temp }}/webgpu/node_modules
+          key: tint-webgpu-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/coverage/webgpu/package-lock.json') }}
+
+      - name: Install Tint (npm webgpu)
+        if: steps.tint.outputs.cache-hit != 'true'
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/webgpu"
+          cp tools/coverage/webgpu/package.json tools/coverage/webgpu/package-lock.json "$RUNNER_TEMP/webgpu/"
+          npm ci --prefix "$RUNNER_TEMP/webgpu" --ignore-scripts --no-audit --no-fund
+          # The package carries Dawn for every platform; the cache keeps only this runner's.
+          own="$(node -p "process.platform + '-' + process.arch")"
+          find "$RUNNER_TEMP/webgpu/node_modules/webgpu/dist" -mindepth 1 -maxdepth 1 ! -name "$own" -exec rm -rf {} +
+
+      - name: Activate Tint
+        run: |
+          set -euo pipefail
+          echo "CROSSTL_COVERAGE_WEBGPU=$RUNNER_TEMP/webgpu/node_modules/webgpu" >> "$GITHUB_ENV"
+          node --version
+          printf '@compute @workgroup_size(1)\nfn main() {}\n' > "$RUNNER_TEMP/tint-check.wgsl"
+          node tools/coverage/webgpu/tint.mjs "$RUNNER_TEMP/webgpu/node_modules/webgpu" "$RUNNER_TEMP/tint-check.wgsl"
+
       # The release tools/coverage/upstream.py reads Slang's standard library from; the archive digest is pinned.
       - name: Install slangc ${{ env.SLANG_VERSION }}
         run: |
@@ -177,7 +208,8 @@ jobs:
           restore-keys: coverage-upstream-linux-
 
       # The verdicts of the last run on main, so that only sources CrossTL now writes differently are checked again
-      # (tools/coverage/runner.py). The key changes with the pinned tools and the code that runs them.
+      # (tools/coverage/runner.py) and run again (tools/coverage/executed.py). The key changes with the pinned tools and
+      # the code that runs them.
       - name: Restore verdicts
         id: verdicts
         uses: actions/cache/restore@v6
@@ -185,6 +217,8 @@ jobs:
           path: |
             ${{ runner.temp }}/coverage-verdicts
             ${{ runner.temp }}/pairs-verdicts
+            ${{ runner.temp }}/coverage-executions
+            ${{ runner.temp }}/pairs-executions
           key: coverage-verdicts-linux-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-${{ github.sha }}-${{ github.run_id }}
           restore-keys: coverage-verdicts-linux-${{ hashFiles('.github/workflows/coverage.yml', 'tools/coverage/validators.py', 'tools/coverage/rustgpu.py') }}-
 
@@ -193,13 +227,14 @@ jobs:
         env:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
           CROSSTL_COVERAGE_VERDICTS: ${{ runner.temp }}/coverage-verdicts
+          CROSSTL_COVERAGE_EXECUTIONS: ${{ runner.temp }}/coverage-executions
           # The clang whose opencl-c.h tools/coverage/upstream.py pins.
           CROSSTL_COVERAGE_CLANG: clang-18
           CROSSTL_CONFORMANCE_MESA: host
         run: |
           python -m tools.coverage run --strict --execute --jobs 4 \
-            --backend glsl --backend webgl --backend hlsl --backend spirv --backend wgsl --backend slang \
-            --backend opencl --output coverage-linux.json
+            --backend glsl --backend gles --backend webgl --backend hlsl --backend spirv --backend wgsl \
+            --backend slang --backend opencl --output coverage-linux.json
 
       # The nightly run also measures the translation matrix into this leg's languages (tools/coverage/pairs.py). The
       # rows of the published report define its cells, and the report job reconciles them with this run's rows.
@@ -209,6 +244,7 @@ jobs:
           CROSSTL_COVERAGE_CACHE: ${{ runner.temp }}/coverage-cache
           # Apart from the rows' verdicts, which a run keeps only when it used them.
           CROSSTL_COVERAGE_VERDICTS: ${{ runner.temp }}/pairs-verdicts
+          CROSSTL_COVERAGE_EXECUTIONS: ${{ runner.temp }}/pairs-executions
           CROSSTL_COVERAGE_CLANG: clang-18
           CROSSTL_CONFORMANCE_MESA: host
         run: |
@@ -220,8 +256,8 @@ jobs:
             exit 0
           fi
           python -m tools.coverage run --pairs "$published/coverage.json" --strict --execute --jobs 4 \
-            --backend glsl --backend webgl --backend hlsl --backend spirv --backend wgsl --backend slang \
-            --output coverage-pairs-linux.json
+            --backend glsl --backend gles --backend webgl --backend hlsl --backend spirv --backend wgsl \
+            --backend slang --output coverage-pairs-linux.json
 
       - name: Keep verdicts
         if: github.ref == 'refs/heads/main'
@@ -230,6 +266,8 @@ jobs:
           path: |
             ${{ runner.temp }}/coverage-verdicts
             ${{ runner.temp }}/pairs-verdicts
+            ${{ runner.temp }}/coverage-executions
+            ${{ runner.temp }}/pairs-executions
           key: ${{ steps.verdicts.outputs.cache-primary-key }}
 
       - uses: actions/upload-artifact@v7
@@ -610,89 +648,26 @@ jobs:
           path: coverage-d3d12.json
           retention-days: 14
 
+  # On pushes to main, nightly and on dispatch the report feeds the publish job. Pull requests and the merge queue
+  # merge the reports in the result job instead, which saves them a job and the wait for its runner.
   report:
     name: Coverage report
     needs: [plan, linux, compute, rust, metal, d3d12]
-    # Every leg ran or was planned out; a leg is skipped only on pull requests and in the merge queue.
+    # Every leg ran; legs are planned out only on pull requests and in the merge queue.
     if: >-
-      always() && needs.plan.result == 'success' && needs.linux.result == 'success'
+      always() && github.event_name != 'pull_request' && github.event_name != 'merge_group'
+      && needs.plan.result == 'success' && needs.linux.result == 'success'
       && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
       contents: read
-      issues: read
     steps:
       - uses: actions/checkout@v7
         with:
           persist-credentials: false
 
-      - uses: actions/setup-python@v7
-        with:
-          python-version: "3.13"
-          cache: pip
-
-      - name: Install CrossTL
-        run: |
-          python -m pip install --upgrade pip
-          pip install -e .
-
-      - uses: actions/download-artifact@v8
-        with:
-          pattern: coverage-*
-          merge-multiple: true
-
-      - name: Merge the reports
-        run: |
-          set -euo pipefail
-          python -m tools.coverage merge coverage-*.json --output coverage.json | tee summary.txt
-          {
-            echo "### Coverage"
-            echo
-            echo '```'
-            cat summary.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - uses: actions/upload-artifact@v7
-        with:
-          name: coverage
-          path: coverage.json
-          retention-days: 14
-
-      # The coverage branch is public, so reading it needs no token; naming the pull requests in between reads commits.
-      - name: Compare with the published coverage
-        if: github.event_name == 'pull_request'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: |
-          set -euo pipefail
-          published="$RUNNER_TEMP/published"
-          if git fetch --quiet --depth=1 origin coverage && mkdir -p "$published" \
-            && git archive FETCH_HEAD | tar -x -C "$published"; then
-            python -m tools.coverage compare "$published/coverage.json" coverage.json \
-              --repository "$GITHUB_REPOSITORY" --head "$HEAD_SHA" | tee compare.md
-            { echo "### Change against main"; echo; cat compare.md; } >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "No published coverage to compare with yet."
-          fi
-
-      # Pull requests and the merge queue only print what the issues job would change on main.
-      - name: Plan the issue changes
-        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          python -m tools.coverage issues coverage.json --dry-run --repository "$GITHUB_REPOSITORY" | tee plan.txt
-          {
-            echo "### Issue changes on main"
-            echo
-            echo '```'
-            cat plan.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: ./.github/actions/coverage-report
 
   publish:
     name: Publish coverage
@@ -862,6 +837,10 @@ jobs:
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
+    # Reading issues is for the plan of issue changes that pull requests and the merge queue print.
+    permissions:
+      contents: read
+      issues: read
     steps:
       - name: Check coverage jobs
         env:
@@ -873,3 +852,12 @@ jobs:
               *) echo "A coverage job ended with $result."; exit 1 ;;
             esac
           done
+
+      # Pull requests and the merge queue merge the reports here once every leg passed (see the report job).
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/coverage-report
+        if: github.event_name == 'pull_request' || github.event_name == 'merge_group'

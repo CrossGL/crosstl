@@ -1,7 +1,12 @@
 version: 2
 updates:
   - package-ecosystem: github-actions
-    directory: /
+    # "/" covers .github/workflows; composite actions elsewhere are listed by
+    # directory (Dependabot accepts globs here).
+    directories:
+      - /
+      - /.github/actions/*
+      - /demos/integrations/mlx/actions/upload-evidence
     schedule:
       interval: weekly
     labels: [dependencies]
@@ -12,6 +17,14 @@ updates:
   # Python dependencies get security updates only; this entry sets their labels.
   - package-ecosystem: pip
     directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 0
+    labels: [dependencies]
+  # Likewise for the npm package that runs Tint in the coverage workflow; its
+  # version is pinned so a coverage run validates WGSL with a known Tint.
+  - package-ecosystem: npm
+    directory: /tools/coverage/webgpu
     schedule:
       interval: weekly
     open-pull-requests-limit: 0

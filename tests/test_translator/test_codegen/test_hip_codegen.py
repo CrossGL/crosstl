@@ -1497,13 +1497,14 @@ class TestHipCodeGen:
 
         hip_code = HipCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
 
-        assert "__device__ inline uint3 cgl_uint3_bitCount(uint3 value)" in hip_code
+        # bitCount returns int components (GLSL 4.60, 8.8).
+        assert "__device__ inline int3 cgl_uint3_bitCount(uint3 value)" in hip_code
         assert (
-            "return make_uint3(__popc(value.x), __popc(value.y), __popc(value.z));" in (
+            "return make_int3(__popc(value.x), __popc(value.y), __popc(value.z));" in (
                 hip_code
             )
         )
-        assert "__device__ inline uint3 cgl_int3_bitCount(int3 value)" in hip_code
+        assert "__device__ inline int3 cgl_int3_bitCount(int3 value)" in hip_code
         assert "__popc(static_cast<unsigned int>(value.x))" in hip_code
         assert (
             "__device__ inline uint3 cgl_uint3_bitfieldReverse(uint3 value)" in hip_code
@@ -1517,8 +1518,14 @@ class TestHipCodeGen:
         assert "__device__ inline int3 cgl_int3_findMSB(int3 value)" in hip_code
         assert "(31 - __clz(~(value.x)))" in hip_code
 
-        assert "uint3 counts = cgl_uint3_bitCount(mask);" in hip_code
-        assert "uint3 signedCounts = cgl_int3_bitCount(signedMask);" in hip_code
+        # The uvec3 locals take the int3 counts through an implicit conversion.
+        assert (
+            "uint3 counts = cgl_convert_to_uint3(cgl_uint3_bitCount(mask));" in hip_code
+        )
+        assert (
+            "uint3 signedCounts = cgl_convert_to_uint3(cgl_int3_bitCount(signedMask));"
+            in hip_code
+        )
         assert "uint3 reversed = cgl_uint3_bitfieldReverse(mask);" in hip_code
         assert "int3 signedReversed = cgl_int3_bitfieldReverse(signedMask);" in hip_code
         assert "uint3 lowBits = cgl_uint3_findLSB(mask);" in hip_code
@@ -7972,8 +7979,8 @@ class TestHipCodeGen:
         )
         assert "return tex2D<float4>(dynGrid[layer][slot], uv.x, uv.y);" in hip_code
         assert (
-            "float4 color = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "float4 color = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "unsigned int count = cgl_surf2Dread<uint>"
@@ -8104,13 +8111,13 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "float4 dynamicColor = cgl_surf2Dread<float4>"
-            "(dynamicImages[layer][slot], pixel.x * sizeof(float4), pixel.y);"
+            "float4 dynamicColor = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynamicImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
             in hip_code
         )
         assert (
-            "float4 fixedColor = cgl_surf2Dread<float4>"
-            "(fixedImages[slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "float4 fixedColor = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(fixedImages[slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "int2 dynamicSize = cgl_textureSize_sampler2D"
@@ -8303,13 +8310,13 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "float4 dynamicColor = cgl_surf2Dread<float4>"
-            "(dynImageGrid[layer][slot], pixel.x * sizeof(float4), pixel.y);"
+            "float4 dynamicColor = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImageGrid[layer][slot], pixel.x * sizeof(ushort4), pixel.y));"
             in hip_code
         )
         assert (
-            "float4 fixedColor = cgl_surf2Dread<float4>"
-            "(fixedImageRow[slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "float4 fixedColor = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(fixedImageRow[slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "int2 dynSize = cgl_textureSize_sampler2D"
@@ -8621,8 +8628,8 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "float4 loaded = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "float4 loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "int2 texSize = cgl_textureSize_sampler2D"
@@ -8641,8 +8648,9 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "accum = cgl_float4_add(accum, cgl_surf2Dread<float4>"
-            "(fixedImages[fixedSlot], pixel.x * sizeof(float4), pixel.y));" in hip_code
+            "accum = cgl_float4_add(accum, cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(fixedImages[fixedSlot], pixel.x * sizeof(ushort4), pixel.y)));"
+            in hip_code
         )
         assert (
             "int2 fixedTexSize = cgl_textureSize_sampler2D"
@@ -8728,12 +8736,12 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "float4 loaded = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "float4 loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
-            "surf2Dwrite(loaded, dynImages[layer][slot], "
-            "pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "surf2Dwrite(cgl_rgba16f_element(loaded), dynImages[layer][slot], "
+            "pixel.x * sizeof(ushort4), pixel.y);" in hip_code
         )
         assert (
             "int2 texSize = cgl_textureSize_sampler2D"
@@ -8878,14 +8886,14 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "float4 dynamicColor = cgl_surf2Dread<float4>"
+            "float4 dynamicColor = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
             "(dynImages[params.layer][params.slot], "
-            "params.pixel.x * sizeof(float4), params.pixel.y);" in hip_code
+            "params.pixel.x * sizeof(ushort4), params.pixel.y));" in hip_code
         )
         assert (
-            "float4 fixedColor = cgl_surf2Dread<float4>"
-            "(fixedImages[params.slot], params.pixel.x * sizeof(float4), "
-            "params.pixel.y);" in hip_code
+            "float4 fixedColor = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(fixedImages[params.slot], params.pixel.x * sizeof(ushort4), "
+            "params.pixel.y));" in hip_code
         )
         assert (
             "int2 dynSize = cgl_textureSize_sampler2D"
@@ -9027,8 +9035,8 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "result.loaded = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "result.loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "result.texSize = cgl_textureSize_sampler2D"
@@ -9040,8 +9048,8 @@ class TestHipCodeGen:
         )
         assert (
             "return SampleResult{tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
-            "cgl_surf2Dread<float4>(dynImages[layer][slot], "
-            "pixel.x * sizeof(float4), pixel.y), "
+            "cgl_rgba16f_texel(cgl_surf2Dread<ushort4>(dynImages[layer][slot], "
+            "pixel.x * sizeof(ushort4), pixel.y)), "
             "cgl_textureSize_sampler2D(dynTex_metadata[layer][slot], 0), "
             "cgl_imageSize_image2D(dynImages_metadata[layer][slot])};" in hip_code
         )
@@ -9148,8 +9156,8 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "envelope.result.loaded = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "envelope.result.loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "envelope.result.texSize = cgl_textureSize_sampler2D"
@@ -9165,8 +9173,8 @@ class TestHipCodeGen:
         )
         assert (
             "envelope.bias = cgl_float4_add(tex2D<float4>(dynTex[layer][slot], uv.x, uv.y), "
-            "cgl_surf2Dread<float4>(dynImages[layer][slot], "
-            "pixel.x * sizeof(float4), pixel.y));" in hip_code
+            "cgl_rgba16f_texel(cgl_surf2Dread<ushort4>(dynImages[layer][slot], "
+            "pixel.x * sizeof(ushort4), pixel.y)));" in hip_code
         )
         assert (
             "SampleEnvelope envelope = buildNestedAssigned("
@@ -9276,8 +9284,8 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "envelope.results[slot].loaded = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "envelope.results[slot].loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "envelope.results[slot].texSize = cgl_textureSize_sampler2D"
@@ -9422,16 +9430,16 @@ class TestHipCodeGen:
             in hip_code
         )
         assert (
-            "envelope.result.loaded = cgl_surf2Dread<float4>"
-            "(dynImages[layer][slot], pixel.x * sizeof(float4), pixel.y);" in hip_code
+            "envelope.result.loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[layer][slot], pixel.x * sizeof(ushort4), pixel.y));" in hip_code
         )
         assert (
             "envelope.result.sampled = tex2D<float4>(dynTex[fallback][slot], uv.x, uv.y);"
             in hip_code
         )
         assert (
-            "envelope.result.loaded = cgl_surf2Dread<float4>"
-            "(dynImages[fallback][slot], pixel.x * sizeof(float4), pixel.y);"
+            "envelope.result.loaded = cgl_rgba16f_texel(cgl_surf2Dread<ushort4>"
+            "(dynImages[fallback][slot], pixel.x * sizeof(ushort4), pixel.y));"
             in hip_code
         )
         assert (

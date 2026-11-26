@@ -19,8 +19,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-INPUT, OUTPUT = 0, 1
-
 
 class InterfaceChanged(ValueError):
     """The artifact does not expose the storage-buffer compute interface of its source."""
@@ -184,42 +182,47 @@ def _hlsl_constant_buffers(text):
 
 
 def _hlsl(text, group, constants, input_count):
-    if input_count != 1:
-        raise InterfaceChanged("The D3D12 harness supports one input buffer")
     entry = _single(ENTRY_PATTERNS["hlsl"], text)
+    from . import directx_resources
+
     blocks = _hlsl_constant_buffers(text)
-    declared = re.findall(
-        r"\b(RW)?(StructuredBuffer|ByteAddressBuffer)\s*(?:<\s*([\w\s]+?)\s*>)?\s+(\w+)\s*:\s*"
-        r"register\(\s*([a-z])(\d+)\s*(?:,\s*space(\d+)\s*)?\)",
-        text,
-    )
+    declared = directx_resources.declarations(text)
     registers = re.findall(HLSL_REGISTER, text)
     if len(registers) != len(declared) + len(blocks) or any(
-        space not in ("", "0") for *_, space in declared
+        record["space"] for record in declared
     ):
         raise InterfaceChanged(f"Unexpected HLSL registers: {registers}")
+    # The kernel's other resources bind as :mod:`.directx_resources` describes.
+    buffers, extras = directx_resources.split(declared, input_count)
     resources = {}
-    for writable, kind, element, name, register, slot, _ in declared:
-        if (register, bool(writable)) not in {("t", False), ("u", True)}:
+    for slot, record in buffers.items():
+        kind, register, name = record["type"], record["register"], record["name"]
+        writable = kind.startswith("RW")
+        if (register, writable) not in {("t", False), ("u", True)}:
             raise InterfaceChanged(
-                f"Register class {register} does not match {writable}{kind} {name}"
+                f"Register class {register} does not match {kind} {name}"
             )
-        resources[int(slot)] = {
+        element = record["element"]
+        resources[slot] = {
             "register": f"{register}{slot}",
             "name": name,
-            "kind": "structured" if kind == "StructuredBuffer" else "raw",
+            "kind": "structured" if kind.endswith("StructuredBuffer") else "raw",
             "stride": _hlsl_stride(element, text) if element else 0,
         }
     bindings = _slots(list(resources), "HLSL register", input_count)
-    if resources[OUTPUT]["register"] != "u1":
-        raise InterfaceChanged("The output buffer must be the UAV u1")
-    return {
+    # The inputs take slots 0 through n-1 and the output, which the shader writes, the UAV u<n>.
+    if resources[input_count]["register"] != f"u{input_count}":
+        raise InterfaceChanged(f"The output buffer must be the UAV u{input_count}")
+    found = {
         "entry": entry.group(4),
         "group": tuple(int(entry.group(i)) for i in (1, 2, 3)),
         "bindings": bindings,
-        "resources": [resources[INPUT], resources[OUTPUT]],
+        "resources": [resources[slot] for slot in bindings],
         "constants": _constants(blocks, constants, "HLSL constant buffers"),
     }
+    if extras:
+        found["extras"] = directx_resources.records(extras, text)
+    return found
 
 
 def _glsl(text, _group, constants, input_count):
@@ -244,7 +247,11 @@ def _glsl(text, _group, constants, input_count):
             raise InterfaceChanged("A GLSL uniform block has no explicit binding")
         else:
             uniform_blocks.append({"slot": int(binding.group(1)), "kind": "uniform"})
-    if len(re.findall(r"\buniform\b", text)) != len(uniform_blocks):
+    from . import glsl_resources
+
+    # The host creates the samplers, images and atomic counters :mod:`.glsl_resources` describes.
+    opaque = glsl_resources.declarations(text)
+    if len(re.findall(r"\buniform\b", text)) != len(uniform_blocks) + len(opaque):
         raise InterfaceChanged(
             "The GLSL artifact declares uniforms the host does not provide"
         )
@@ -253,6 +260,7 @@ def _glsl(text, _group, constants, input_count):
         "group": (size.get("x", 1), size.get("y", 1), size.get("z", 1)),
         "bindings": _slots(slots, "GLSL storage binding", input_count),
         "constants": _constants(uniform_blocks, constants, "GLSL uniform blocks"),
+        **glsl_resources.resources(opaque, text),
     }
 
 
@@ -318,8 +326,8 @@ DISCOVER = {"metal": _metal, "hlsl": _hlsl, "glsl": _glsl, "spirv": _spirv}
 def interface(path, target, source_group, constants=False, *, input_count=1):
     """Entry point, one-dimensional workgroup size, ordered storage slots and constants block of an artifact.
 
-    ``input_count`` storage inputs occupy slots 0 through n-1, followed by the output at slot n.
-    D3D12 retains its single-input contract.
+    ``input_count`` storage inputs occupy slots 0 through n-1, followed by the output at slot n; HLSL's are the
+    registers of those numbers.
 
     ``constants`` says whether the case gives the host a constants block; the result's ``constants`` is then the
     block's ``slot`` (``None`` for push constants) and ``kind`` (``uniform`` or ``push``), and ``None`` otherwise.

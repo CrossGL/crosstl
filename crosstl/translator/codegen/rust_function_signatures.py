@@ -18,6 +18,7 @@ from ..ast import (
     MatchNode,
     MemberAccessNode,
     PointerAccessNode,
+    RayQueryOpNode,
     ReturnNode,
     SwitchNode,
     TernaryOpNode,
@@ -29,6 +30,9 @@ from ..host_workgroup_size import function_entry_execution_config
 from ..refusals import RustRefusal
 from .host_workgroup_size_ids import is_host_sized_workgroup
 from .rust_exact_lookups import call_names_resolving_to
+from .rust_gpu_images import rust_gpu_image_parameter_type
+from .rust_gpu_math_calls import rust_gpu_math_mutated_roots
+from .rust_gpu_ray_queries import rust_gpu_ray_query_mutated_roots
 from .rust_memory_atomics import rust_memory_atomic_location_roots
 from .specialized_workgroup_size import require_fixed_workgroup_size
 from .stage_utils import compute_local_size
@@ -333,6 +337,12 @@ class RustFunctionSignatureMixin:
                 collect(current.right)
                 return
 
+            if isinstance(current, RayQueryOpNode):
+                names.update(rust_gpu_ray_query_mutated_roots(self, current))
+                collect(current.query_expr)
+                collect(current.arguments)
+                return
+
             if isinstance(current, TernaryOpNode):
                 collect(current.condition)
                 collect(current.true_expr)
@@ -351,6 +361,8 @@ class RustFunctionSignatureMixin:
                     names.update(self.mutable_reference_borrow_root_names(argument))
                 names.update(self.rust_output_argument_roots(func_name, args))
                 names.update(rust_memory_atomic_location_roots(self, func_name, args))
+                names.update(rust_gpu_math_mutated_roots(self, func_name, args))
+                names.update(rust_gpu_ray_query_mutated_roots(self, current))
                 collect(current.function)
                 collect(args)
                 return
@@ -511,6 +523,18 @@ class RustFunctionSignatureMixin:
             self.collect_generic_operator_constraints(
                 node.value, generic_names, constraints
             )
+            operator = self.map_operator(
+                getattr(node, "operator", getattr(node, "op", None))
+            )
+            target_type = self.expression_result_type(node.target)
+            if target_type in generic_names:
+                bound = self.generic_compound_assignment_bound(
+                    operator,
+                    target_type,
+                    self.expression_result_type(node.value),
+                )
+                if bound is not None:
+                    self.add_generic_constraint(constraints, target_type, bound)
             return
 
         if isinstance(node, IfNode):
@@ -621,6 +645,12 @@ class RustFunctionSignatureMixin:
                     operand_type,
                     f"core::ops::Neg<Output = {operand_type}>",
                 )
+            if operator == "~" and operand_type in generic_names:
+                self.add_generic_constraint(
+                    constraints,
+                    operand_type,
+                    f"core::ops::Not<Output = {operand_type}>",
+                )
             return
 
         if isinstance(node, TernaryOpNode):
@@ -645,6 +675,7 @@ class RustFunctionSignatureMixin:
                 )
             self.add_builtin_function_call_constraints(node, generic_names, constraints)
             self.add_user_function_call_constraints(node, generic_names, constraints)
+            self.check_generic_concrete_function_call(node, generic_names)
             return
 
         if isinstance(node, MemberAccessNode):
@@ -716,6 +747,35 @@ class RustFunctionSignatureMixin:
                     caller_type,
                     self.substitute_generic_bound(bound, callee_param, caller_type),
                 )
+
+    def check_generic_concrete_function_call(self, call_node, generic_names):
+        """Refuse a generic function body that calls a concrete function with a generic argument.
+
+        Rust type-checks a generic body once for every type parameter, not once per call site,
+        so a call such as ``combine(x, x)`` where ``combine`` expects ``float`` cannot compile
+        unless the generic function is monomorphized for each concrete caller. Rust output
+        emits native generics, so it refuses the program instead of writing a generic that
+        rustc would reject.
+        """
+        if not generic_names:
+            return
+        func_name = self.function_call_name(getattr(call_node, "function", None))
+        if not isinstance(func_name, str) or not self.is_user_defined_function(
+            func_name
+        ):
+            return
+        callee = self.user_function_nodes.get(func_name)
+        if callee is None or getattr(callee, "generic_params", None):
+            return
+        for argument in getattr(call_node, "arguments", []) or []:
+            arg_type = self.expression_result_type(argument)
+            if arg_type in generic_names:
+                self.refuse_lowering(
+                    f"Rust generic function calls concrete function '{func_name}' "
+                    f"with generic argument of type '{arg_type}'; the body only "
+                    "type-checks for the concrete call sites"
+                )
+                return
 
     def function_call_name(self, function_expr):
         if isinstance(function_expr, IdentifierNode):
@@ -794,11 +854,15 @@ class RustFunctionSignatureMixin:
                 generic_types.append(type_name)
 
         for generic_type in generic_types:
-            bound = self.generic_operator_bound(operator, generic_type)
+            bound = self.generic_operator_bound(
+                operator,
+                generic_type,
+                right_type if generic_type == left_type else None,
+            )
             if bound is not None:
                 self.add_generic_constraint(constraints, generic_type, bound)
 
-    def generic_operator_bound(self, operator, generic_name):
+    def generic_operator_bound(self, operator, generic_name, rhs_type=None):
         if operator in {"==", "!="}:
             return "PartialEq"
         if operator in {"<", ">", "<=", ">="}:
@@ -810,11 +874,48 @@ class RustFunctionSignatureMixin:
             "*": "Mul",
             "/": "Div",
             "%": "Rem",
+            "&": "BitAnd",
+            "|": "BitOr",
+            "^": "BitXor",
+            "<<": "Shl",
+            ">>": "Shr",
         }
         trait = operator_traits.get(operator)
         if trait is None:
             return None
+        if (
+            operator in {"<<", ">>"}
+            and rhs_type is not None
+            and rhs_type != generic_name
+        ):
+            # The shift operand's type is the trait's parameter when it differs
+            # from the shifted value's type, e.g. ``a << 1u`` needs ``Shl<u32>``.
+            return (
+                f"core::ops::{trait}<{self.map_type(rhs_type)}, "
+                f"Output = {generic_name}>"
+            )
         return f"core::ops::{trait}<Output = {generic_name}>"
+
+    def generic_compound_assignment_bound(self, operator, generic_name, rhs_type=None):
+        """The ``*Assign`` bound for a compound assignment on a generic value."""
+        operator_traits = {
+            "+=": "AddAssign",
+            "-=": "SubAssign",
+            "*=": "MulAssign",
+            "/=": "DivAssign",
+            "%=": "RemAssign",
+            "&=": "BitAndAssign",
+            "|=": "BitOrAssign",
+            "^=": "BitXorAssign",
+            "<<=": "ShlAssign",
+            ">>=": "ShrAssign",
+        }
+        trait = operator_traits.get(operator)
+        if trait is None:
+            return None
+        if rhs_type is not None and rhs_type != generic_name:
+            return f"core::ops::{trait}<{self.map_type(rhs_type)}>"
+        return f"core::ops::{trait}"
 
     def add_generic_constraint(self, constraints, generic_name, bound):
         if generic_name not in constraints:
@@ -852,6 +953,9 @@ class RustFunctionSignatureMixin:
         )
 
     def map_function_parameter_type(self, param_type):
+        image_type = rust_gpu_image_parameter_type(self, param_type)
+        if image_type is not None:
+            return image_type
         rust_type = self.map_type(param_type)
         if self.callable_signature_parts(rust_type) is None:
             return rust_type

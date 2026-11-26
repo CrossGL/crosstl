@@ -164,6 +164,7 @@ def _hlsl():
             "RayDesc",
             "RayQuery",
             "BuiltInTriangleIntersectionAttributes",
+            "BuiltInTrianglePositions",
             "InputPatch",
             "OutputPatch",
             "PointStream",

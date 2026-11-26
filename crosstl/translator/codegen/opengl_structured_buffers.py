@@ -996,6 +996,9 @@ class OpenGLStructuredBufferMixin:
                 if not self.should_preserve_sampler_resource(source_var_name):
                     return None
                 namespace = "sampler binding"
+            elif mapped_type == "atomic_uint":
+                # Atomic counters have their own binding table (:mod:`.glsl_atomic_counters`).
+                return None
             elif not self.is_opaque_resource_type(mapped_type):
                 return None
             else:

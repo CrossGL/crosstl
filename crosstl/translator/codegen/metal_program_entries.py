@@ -50,6 +50,11 @@ from .metal_argument_tables import assign_metal_argument_tables
 from .metal_combined_samplers import bind_combined_samplers
 from .metal_double_refusal import refuse_metal_double_values
 from .metal_draw_base_indices import offset_metal_draw_base_indices
+from .metal_fragment_interlock import (
+    canonicalize_rasterizer_ordered_types,
+    lower_metal_fragment_interlocks,
+)
+from .metal_interpolation_qualifiers import metal_interpolation_qualifier
 from .metal_invariant_position import metal_invariant_attribute_suffix
 from .metal_keyword_identifiers import (
     rename_metal_keyword_members,
@@ -72,6 +77,7 @@ from .metal_stage_input_builtins import (
     split_metal_stage_input_builtins,
 )
 from .metal_typed_buffers import lower_metal_typed_buffers
+from .metal_union_abi import NATIVE_UNION_ABIS, verify_foreign_union_layout
 from .metal_vertex_input_builtins import refuse_unbound_metal_vertex_inputs
 from .pointer_reinterpret import (
     crossgl_literal_positive_integer,
@@ -400,6 +406,7 @@ class MetalProgramEntryMixin:
         """The program ``render_program`` renders, with the Metal rewrites applied, and its stage."""
         target_stage = requested_stage_name(target_stage)
         ast = fold_workgroup_size_extents(ast, "Metal", self.refuse_lowering)
+        ast = canonicalize_rasterizer_ordered_types(ast)
         ast = lower_constant_buffer_resources(
             ast,
             lambda name: self.refuse_lowering(
@@ -416,6 +423,7 @@ class MetalProgramEntryMixin:
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
         self.validate_supported_stage_types(ast, target_stage)
+        ast = lower_metal_fragment_interlocks(ast)
         ast = rename_metal_keyword_members(ast)
         ast = self.rename_metal_reserved_program_identifiers(ast)
         ast = rename_msl_library_functions(ast)
@@ -886,11 +894,11 @@ class MetalProgramEntryMixin:
                 "byte-order-unsupported",
                 f"byte order '{byte_order or '<missing>'}' is not a Metal ABI contract",
             )
-        if source_abi not in {"metal", "msl"}:
+        if not source_abi:
             raise self.metal_union_layout_error(
                 node,
                 "source-abi-unsupported",
-                f"source ABI '{source_abi or '<missing>'}' cannot be reconstructed natively",
+                "source ABI '<missing>' cannot be reconstructed natively",
             )
 
         member_layouts = {}
@@ -951,13 +959,17 @@ class MetalProgramEntryMixin:
                 "empty-union-unsupported",
                 "at least one instance member is required",
             )
-        return {
+        contract = {
             "size": size,
             "alignment": alignment,
             "byte_order": byte_order,
             "source_abi": source_abi,
             "members": member_layouts,
         }
+        if source_abi not in NATIVE_UNION_ABIS:
+            # Another language's C++ union is the same union when Metal lays it out the same (metal_union_abi).
+            verify_foreign_union_layout(self, node, contract)
+        return contract
 
     def is_metal_argument_buffer_global(self, node):
         attributes = getattr(node, "attributes", []) or []
@@ -1062,10 +1074,10 @@ class MetalProgramEntryMixin:
         ) + metal_invariant_attribute_suffix(self, node)
 
     def metal_interpolation_only_suffix(self, node):
-        for attr in getattr(node, "attributes", []) or []:
-            interpolation = self.metal_interpolation_attribute_name(attr)
-            if interpolation is not None:
-                return f" [[{interpolation}]]"
+        # The mode and sampling attributes combine into one Metal attribute (metal_interpolation_qualifiers.py).
+        interpolation = metal_interpolation_qualifier(node)
+        if interpolation is not None:
+            return f" [[{interpolation}]]"
         implied = self.metal_semantic_implied_interpolation_attribute(node)
         if implied is not None:
             return f" [[{implied}]]"

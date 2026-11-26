@@ -312,6 +312,32 @@ def test_a_storage_image_translation_keeps_its_texel_format():
     )
 
 
+def test_a_translation_imported_from_a_language_that_names_no_format_keeps_no_format():
+    unorm = Feature(
+        "spirv",
+        "resource",
+        "unorm-storage-image",
+        None,
+        group="OpImageWrite ImageFormat.Rgba8 Dim.2D",
+    )
+    unknown = "%img = OpTypeImage %float 2D 0 0 0 2 Unknown\n"
+    # A Metal texture, a CUDA or HIP surface and an HLSL RWTexture2D take their format from the host.
+    for imported in ("metal", "cuda", "hip", "hlsl", "opencl"):
+        assert decorations.lost(unorm, "spirv", unknown, imported=imported) == ""
+    # slangc gives RWTexture2D<unorm float4> the Rgba8 format, and GLSL names it in the layout.
+    for imported in ("slang", "glsl", ""):
+        assert decorations.lost(unorm, "spirv", unknown, imported=imported) == (
+            "the translation loses ImageFormat.Rgba8"
+        )
+    # The format a hosted language's probe gives in its own spelling still has to survive a round trip.
+    plain = "RWTexture2D<float4> img;\n"
+    hlsl = Feature("hlsl", "resource", "unorm-storage-image", None, group=unorm.group)
+    assert decorations.lost(hlsl, "hlsl", plain, imported="hlsl") == (
+        "the translation loses ImageFormat.Rgba8"
+    )
+    assert decorations.lost(hlsl, "hlsl", plain, imported="metal") == ""
+
+
 def test_a_shared_sampler_translation_declares_the_sampler_apart():
     shared = Feature(
         "spirv",

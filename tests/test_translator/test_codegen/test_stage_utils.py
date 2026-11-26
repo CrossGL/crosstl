@@ -1,8 +1,12 @@
+import re
 from copy import deepcopy
 from enum import Enum
 
+import pytest
+
+import crosstl
 from crosstl.translator import stage_utils as shared_stage_utils
-from crosstl.translator.ast import StageMap
+from crosstl.translator.ast import AttributeNode, LiteralNode, PrimitiveType, StageMap
 from crosstl.translator.codegen.stage_utils import (
     assign_stage_entry_names,
     collect_stage_entry_records,
@@ -11,6 +15,7 @@ from crosstl.translator.codegen.stage_utils import (
     collect_stage_local_structs,
     collect_stage_local_variables,
     compute_local_size,
+    declaration_signature,
     deduplicate_named_declarations,
     normalize_stage_name,
     order_functions_by_dependencies,
@@ -457,6 +462,93 @@ def test_deduplicate_named_declarations_rejects_conflicting_stage_resources():
         assert str(exc) == "Conflicting resource declaration for 'sharedTex'"
     else:
         raise AssertionError("expected conflicting resource declaration")
+
+
+def _binding_attribute(value):
+    return AttributeNode("binding", [LiteralNode(value, PrimitiveType("int"))])
+
+
+def test_deduplicate_named_declarations_reuses_matching_attribute_arguments():
+    first = DummyVariable("out", "float*", [_binding_attribute(1)])
+    second = DummyVariable("out", "float*", [_binding_attribute(1)])
+
+    assert deduplicate_named_declarations([first, second], "resource") == [first]
+
+
+def test_deduplicate_named_declarations_rejects_different_attribute_arguments():
+    # AttributeNode.__repr__ prints only the name, so a repr-based key dropped the binding-0 declaration.
+    first = DummyVariable("out", "float*", [_binding_attribute(1)])
+    second = DummyVariable("out", "float*", [_binding_attribute(0)])
+
+    with pytest.raises(ValueError, match="Conflicting resource declaration for 'out'"):
+        deduplicate_named_declarations([first, second], "resource")
+
+
+def test_declaration_signature_ignores_source_metadata():
+    first = _binding_attribute(2)
+    second = _binding_attribute(2)
+    second.source_location = ("other.cgl", 9, 4)
+    second.annotations["note"] = True
+
+    assert declaration_signature(DummyVariable("t", "float", [first])) == (
+        declaration_signature(DummyVariable("t", "float", [second]))
+    )
+
+
+_MOVED_BINDING_PROGRAM = """
+shader S {
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+        layout(binding = 0) buffer float* a;
+        layout(binding = 1) buffer float* out;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            out[i] = a[i];
+        }
+    }
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+        layout(binding = %d) buffer float* out;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            out[i] = 1.0;
+        }
+    }
+}
+"""
+
+
+def test_same_name_stage_resources_with_different_bindings_are_refused(tmp_path):
+    # HLSL resources live at file scope, so one name cannot take two registers.
+    source = tmp_path / "moved_binding.cgl"
+    source.write_text(_MOVED_BINDING_PROGRAM % 0)
+
+    with pytest.raises(Exception, match="Conflicting .*declaration for 'out_?'"):
+        crosstl.translate(str(source), backend="directx")
+
+
+def test_same_name_stage_resources_keep_their_bindings_in_per_entry_tables(
+    tmp_path,
+):
+    # Each Metal kernel has its own argument table, so both bindings survive.
+    source = tmp_path / "moved_binding.cgl"
+    source.write_text(_MOVED_BINDING_PROGRAM % 0)
+
+    metal = crosstl.translate(str(source), backend="metal", format_output=False)
+
+    # Unformatted output, so the pointer spelling does not depend on clang-format.
+    first, second = metal.split("kernel void ")[1:]
+    assert re.search(r"device float\s*\*\s*out \[\[buffer\(1\)\]\]", first)
+    assert re.search(r"device float\s*\*\s*out\w* \[\[buffer\(0\)\]\]", second)
+
+
+def test_same_name_stage_resources_with_one_binding_share_a_register(tmp_path):
+    source = tmp_path / "shared_binding.cgl"
+    source.write_text(_MOVED_BINDING_PROGRAM % 1)
+
+    hlsl = crosstl.translate(str(source), backend="directx")
+
+    assert hlsl.count("RWStructuredBuffer<float> out_ : register(u1);") == 1
 
 
 def test_order_functions_by_dependencies_places_callees_first():

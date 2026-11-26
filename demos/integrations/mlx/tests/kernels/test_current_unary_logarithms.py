@@ -246,7 +246,7 @@ def test_ci_requires_complex_logarithm_source_comparison():
         .split("      - name: Checkout current MLX kernel tree\n", 1)[1]
         .split("      - name:", 1)[0]
     )
-    assert "sparse-checkout set mlx/backend/metal/kernels python/tests" in checkout
+    assert "--sparse mlx/backend/metal/kernels python/tests" in checkout
     step = (
         workflow_text.workflow_job_text(workflow, "mlx-metal-porting")
         .split("      - name: Validate pinned unary roots and logarithms\n", 1)[1]

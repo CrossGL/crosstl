@@ -51,8 +51,8 @@ Built-in targets
    * - OpenGL / GLSL
      - ``opengl``
      - ``glsl``, ``ogl``
-     - n/a
-     - n/a
+     - ``gles``, ``opengles``
+     - ``opengl-es``
      - ``.glsl``
    * - WebGL / GLSL ES
      - ``webgl``
@@ -132,7 +132,7 @@ so its programs can be translated through CrossGL to the targets above.
      - ``.glsl`` and stage extensions such as ``.vert``, ``.frag``,
        ``.comp``, ``.geom``, ``.tesc``, ``.tese``, ``.mesh``, ``.task`` and
        ``.rgen``
-   * - WebGL 2 / GLSL ES 3.00
+   * - GLSL ES 3.x (WebGL 2, OpenGL ES)
      - ``opengl``, named as ``webgl``, ``webgl2``, ``essl`` or ``glsl-es``
      - the GLSL extensions; ``.webgl.glsl`` when the source backend is named
    * - Metal
@@ -141,6 +141,9 @@ so its programs can be translated through CrossGL to the targets above.
    * - Vulkan SPIR-V
      - ``vulkan``
      - ``.spvasm``
+   * - WebGPU / WGSL
+     - ``wgsl``, also named as ``webgpu``
+     - ``.wgsl``
    * - CUDA
      - ``cuda``
      - ``.cu``, ``.cuh``, ``.cuda``
@@ -160,11 +163,11 @@ so its programs can be translated through CrossGL to the targets above.
      - ``slang``
      - ``.slang``, ``.slangh``
 
-Target-only sources
--------------------
+Output extensions that are not read back
+----------------------------------------
 
-Some targets are intentionally output-only while their native source frontends
-are still under development.
+Every target also has a source frontend, but one output extension is not read
+back as source by its extension alone.
 
 .. list-table::
    :header-rows: 1
@@ -177,9 +180,6 @@ are still under development.
      - Not read as source by its extension, so translated output is not imported
        again; pass ``source_backend="webgl"`` (``--source-backend webgl``) to read
        it, or use a GLSL extension such as ``.frag``.
-   * - WebGPU / WGSL
-     - ``.wgsl``
-     - Rejected until a dedicated WGSL/WESL source frontend lands.
 
 Runtime discovery
 -----------------

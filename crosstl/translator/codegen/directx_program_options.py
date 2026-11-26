@@ -61,6 +61,7 @@ from .generic_pointer_spaces import (
 from .hlsl_builtin_input_members import lower_hlsl_builtin_input_members
 from .hlsl_intrinsic_functions import rename_hlsl_intrinsic_functions
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
+from .hlsl_work_graph_nodes import pin_hlsl_node_names
 from .lane_symmetry import (
     UNIFORM,
     LaneSymmetryAnalysis,
@@ -615,6 +616,7 @@ class DirectXProgramOptionMixin:
 
         Raises :class:`DirectXLoweringRefused` listing every construct that has no faithful HLSL lowering.
         """
+        pin_hlsl_node_names(ast)
         ast = legalize_hlsl_keyword_names(ast)
         ast = rename_hlsl_intrinsic_functions(ast)
         ast = lower_hlsl_builtin_input_members(ast)

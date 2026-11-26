@@ -234,6 +234,20 @@ class SlangControlFlowMixin:
         result += self.indent() + "}"
         return result
 
+    def generate_loop(self, node):
+        """CrossGL's unconditional ``loop`` (also the loop a self tail call becomes) as ``for (;;)``."""
+        if getattr(node, "label", None):
+            return self.refuse_lowering(
+                f"loop label '{node.label}': Slang output writes no loop labels"
+            )
+        result = "for (;;)\n{\n"
+        self.indent_level += 1
+        for stmt in self.get_statements(node.body):
+            result += self.emit_statement(stmt) + "\n"
+        self.indent_level -= 1
+        result += self.indent() + "}"
+        return result
+
     def generate_do_while(self, node):
         condition = self.slang_precise_condition(
             node.condition,

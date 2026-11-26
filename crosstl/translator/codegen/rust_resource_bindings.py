@@ -21,6 +21,7 @@ from .ast_walk import walk_ast_values
 __all__ = [
     "PROMOTABLE_RESOURCE_KINDS",
     "referenced_identifier_names",
+    "refuse_module_stage_interface",
     "refuse_unbound_rust_resource",
     "resource_parameters",
 ]
@@ -163,3 +164,28 @@ def refuse_unbound_rust_resource(generator, node, type_name):
     if name not in generator.rust_referenced_names:
         return ""
     return generator.refuse_lowering(_reason(generator, node, type_name, resource_kind))
+
+
+_STAGE_INTERFACE_ATTRIBUTES = ("input", "output")
+
+
+def refuse_module_stage_interface(generator, node):
+    """Refuse ``node``, a module-scope ``@input`` or ``@output`` variable the program refers to.
+
+    rust-gpu passes a stage's inputs and outputs as entry-point parameters. The shared stage-interface passes
+    (:mod:`..semantics.module_stage_outputs`, :mod:`..semantics.stage_interface_structs`) gather the ones a stage
+    declares into the structures its entry point takes and returns; one they leave at module scope would become a
+    zero-valued ``static``, which reads 0 instead of the input and cannot be written. Returns the empty string.
+    """
+    name = getattr(node, "name", None)
+    attributes = {
+        str(getattr(attribute, "name", attribute)).lower()
+        for attribute in getattr(node, "attributes", None) or []
+    }
+    directions = [d for d in _STAGE_INTERFACE_ATTRIBUTES if d in attributes]
+    if not name or not directions or name not in generator.rust_referenced_names:
+        return ""
+    return generator.refuse_lowering(
+        f"stage interface: module-scope {directions[0]} '{name}' is not passed to an entry point; "
+        "the rust-gpu output takes stage inputs and outputs as entry-point parameters only"
+    )

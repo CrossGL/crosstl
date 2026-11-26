@@ -19,6 +19,7 @@ import pytest
 import yaml
 
 from tests.fake_commands import write_python_command
+from tests.workflow_text import expand_item_aliases
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW_DIR = ROOT / ".github" / "workflows"
@@ -36,8 +37,8 @@ GATING_WORKFLOWS = {
 # The job that decides whether a push to main repeats a commit the merge queue
 # already tested, per workflow.
 QUEUE_TESTED_WORKFLOWS = {
-    "backend-tests.yml": "python-versions",
-    "translator-tests.yml": "python-versions",
+    "backend-tests.yml": "plan",
+    "translator-tests.yml": "plan",
     "full-tests.yml": "plan",
     "examples-test.yml": "python-versions",
 }
@@ -191,6 +192,40 @@ def test_the_coverage_comment_runs_only_main_code_on_the_report():
     ]
 
 
+QUEUED_EVENTS = (
+    "github.event_name == 'pull_request' || github.event_name == 'merge_group'"
+)
+
+
+def test_coverage_merges_its_reports_in_the_result_job_outside_pushes():
+    # Every job after the legs waits for a runner of its own, so pull requests and the merge queue, whose result
+    # check gates a merge, merge the leg reports in the result job instead of a report job before it.
+    jobs = _workflows()["coverage.yml"]["jobs"]
+    report = ["./.github/actions/coverage-report"]
+    assert [s["uses"] for s in jobs["report"]["steps"]][1:] == report
+    assert (
+        "github.event_name != 'pull_request' && github.event_name != 'merge_group'"
+        in jobs["report"]["if"]
+    )
+    check, checkout, merge = jobs["result"]["steps"]
+    assert "exit 1" in check["run"] and "if" not in check
+    assert checkout["uses"] == "actions/checkout@v7"
+    assert merge["uses"] == report[0]
+    assert checkout["if"] == merge["if"] == QUEUED_EVENTS
+    assert jobs["result"]["permissions"] == {"contents": "read", "issues": "read"}
+    # Publishing reads the report job's artifact, and the coverage comment reads the one either job uploads.
+    assert jobs["publish"]["needs"] == "report"
+    action = yaml.safe_load(
+        (ACTIONS_DIR / "coverage-report" / "action.yml").read_text(encoding="utf-8")
+    )
+    steps = action["runs"]["steps"]
+    (upload,) = (s for s in steps if s.get("uses") == "actions/upload-artifact@v7")
+    assert upload["with"]["name"] == "coverage"
+    plans = [s for s in steps if s.get("name") == "Plan the issue changes"]
+    assert [s["if"] for s in plans] == [QUEUED_EVENTS]
+    assert all(s["shell"] == "bash" for s in steps if "run" in s)
+
+
 STATUS_FUNCTION = re.compile(r"\b(?:always|cancelled|failure|success)\(\)")
 
 
@@ -262,14 +297,22 @@ def test_pushes_to_main_skip_a_commit_the_merge_queue_already_passed(filename, p
     assert "head_sha=$GITHUB_SHA&event=merge_group&status=success" in step["run"]
     reference = yaml.safe_load(
         (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
-    )["jobs"]["python-versions"]["steps"][0]
+    )["jobs"]["plan"]["steps"][0]
     assert step == reference
+    # A planner that only looks the commit up runs on pushes alone, so pull requests and merge groups do not wait
+    # for a runner for it; its jobs then run unless the run is cancelled. The examples planner also picks the
+    # legs, so it runs on every event.
+    only_pushes = list(planner["steps"]) == [step]
+    assert planner.get("if") == ("github.event_name == 'push'" if only_pushes else None)
+    condition = f"needs.{plan}.outputs.tested != 'true'"
+    if only_pushes:
+        condition = "${{ !cancelled() && " + condition + " }}"
     for name, job in jobs.items():
         if name in {plan, "result"}:
             continue
         needs = job["needs"] if isinstance(job["needs"], list) else [job["needs"]]
         assert plan in needs, (filename, name)
-        assert job["if"] == f"needs.{plan}.outputs.tested != 'true'", (filename, name)
+        assert job["if"] == condition, (filename, name)
 
 
 @pytest.mark.skipif(
@@ -297,7 +340,7 @@ def test_queue_lookup_skips_a_push_only_when_a_merge_group_run_passed(
     # translator-tests.yml holds the step every other queue-tested workflow copies.
     step = yaml.safe_load(
         (WORKFLOW_DIR / "translator-tests.yml").read_text(encoding="utf-8")
-    )["jobs"]["python-versions"]["steps"][0]
+    )["jobs"]["plan"]["steps"][0]
     output = tmp_path / "output"
     args = tmp_path / "args"
     # Run the actual workflow shell with a local API substitute, without network access.
@@ -639,9 +682,10 @@ def test_apt_installer_saves_only_new_downloads():
 
 
 def _workflow_job_section(workflow, job_id):
+    # A step shared through a YAML anchor is written out in every job that reuses it.
     match = re.search(
         rf"^  {re.escape(job_id)}:\n(?P<body>.*?)(?=^  [a-z0-9-]+:\n|\Z)",
-        workflow,
+        expand_item_aliases(workflow),
         flags=re.MULTILINE | re.DOTALL,
     )
     assert match is not None, f"workflow job {job_id!r} is missing"

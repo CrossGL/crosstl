@@ -16,7 +16,9 @@ from ..DirectxAst import (
     TypeAliasNode,
     VariableNode,
 )
+from ..vk_constant_ids import has_vk_constant_id
 from ..vk_locations import vk_location_suffix
+from ..work_graph_import import crossgl_work_graph_parameter_attributes
 
 
 class IdentifierAttributeMixin:
@@ -320,7 +322,10 @@ class IdentifierAttributeMixin:
         return f"{' '.join(qualifiers)} " if qualifiers else ""
 
     def should_emit_const_qualifier(self, node):
-        return getattr(node, "value", None) is not None
+        # A $Globals member is read-only already and has no initializer for ``const`` to protect.
+        return getattr(node, "value", None) is not None and id(node) not in getattr(
+            self, "hlsl_program_constant_global_ids", ()
+        )
 
     def format_global_storage_qualifier_prefix(self, node):
         qualifiers = {str(q).lower() for q in getattr(node, "qualifiers", []) or []}
@@ -331,7 +336,10 @@ class IdentifierAttributeMixin:
             ordered.append("groupshared")
         if "static" in qualifiers:
             ordered.append("static")
-        if "const" in qualifiers and self.should_emit_const_qualifier(node):
+        # A specialization constant is ``const`` in CrossGL; DXC also accepts one declared without it.
+        if (
+            "const" in qualifiers or has_vk_constant_id(node)
+        ) and self.should_emit_const_qualifier(node):
             ordered.append("const")
         return f"{' '.join(ordered)} " if ordered else ""
 
@@ -451,6 +459,9 @@ class IdentifierAttributeMixin:
         attributes = self.format_inline_parameter_attributes(parameter)
         if attributes:
             prefixes.append(attributes)
+        work_graph_attributes = crossgl_work_graph_parameter_attributes(self, parameter)
+        if work_graph_attributes:
+            prefixes.append(work_graph_attributes)
         resource_attributes = self.format_inline_resource_qualifier_attributes(
             parameter
         )

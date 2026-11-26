@@ -14,6 +14,7 @@ from .array_utils import (
 from .image_access_contracts import (
     record_explicit_image_metadata,
 )
+from .metal_buffer_handle_values import metal_buffer_handle_pointer_type
 from .metal_entry_return import (
     metal_entry_return_semantic_key,
     refuse_unreturnable_metal_entry_semantic,
@@ -23,6 +24,7 @@ from .metal_post_tessellation import (
     post_tessellation_plan,
 )
 from .metal_raster_order_groups import metal_raster_order_group_attribute
+from .metal_restrict import metal_restrict_suffix
 from .metal_stage_input_merge import (
     merge_metal_stage_inputs,
     metal_stage_input_struct_parameter,
@@ -60,6 +62,9 @@ class MetalFunctionPartsMixin:
                 block["memory"] = self.metal_parameter_memory_qualifier_prefix(
                     param, getattr(param, "param_type", None), "device"
                 )
+                block["restrict"] = metal_restrict_suffix(
+                    param, getattr(param, "param_type", None)
+                )
         if shader_type in {"vertex", "fragment", "compute", "ray_generation"}:
             self.validate_stage_parameter_resource_bindings(
                 param_list, self.current_function_name
@@ -95,6 +100,7 @@ class MetalFunctionPartsMixin:
         self.current_metal_value_array_locals = self.metal_value_array_returned_locals(
             func
         )
+        self.current_metal_value_array_names = set()
         self.current_address_space_variables = {}
         self.current_metal_native_width_local_array_declaration_ids = (
             self.metal_native_width_local_array_declaration_ids(func)
@@ -324,7 +330,8 @@ class MetalFunctionPartsMixin:
                 )
                 reserved_parameter_names.add(builtin_lowering["name"])
                 stage_builtin_parameter_alias_declarations.append(
-                    f"{param_type} {p.name} = {param_type}({builtin_lowering['name']});"
+                    builtin_lowering.get("declaration")
+                    or f"{param_type} {p.name} = {param_type}({builtin_lowering['name']});"
                 )
                 continue
 
@@ -344,12 +351,16 @@ class MetalFunctionPartsMixin:
             if self.is_plain_metal_fragment_stage_input_parameter(
                 raw_param_type, param_type, p, shader_type
             ):
+                varying_attribute = metal_varying_attribute(self, p, semantic)
+                if varying_attribute is not None:
+                    # The [[stage_in]] member keeps the parameter's interpolation, as a struct member does.
+                    varying_attribute += self.metal_interpolation_only_suffix(p)
                 fragment_stage_input_parameters.append(
                     {
                         "name": p.name,
                         "raw_type": raw_param_type,
                         "mapped_type": param_type,
-                        "attribute": metal_varying_attribute(self, p, semantic),
+                        "attribute": varying_attribute,
                         "semantic": semantic,
                         "preserve_user_attribute": True,
                     }
@@ -615,7 +626,9 @@ class MetalFunctionPartsMixin:
                     effective_return_type
                 )
             else:
-                return_type = self.map_type(raw_return_type)
+                return_type = metal_buffer_handle_pointer_type(
+                    self, raw_return_type, f"result of '{func.name}'"
+                ) or self.map_type(raw_return_type)
         else:
             effective_return_type = "void"
             raw_return_type = "void"

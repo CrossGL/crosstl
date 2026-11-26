@@ -47,13 +47,18 @@ def test_suite_legs_and_the_complete_suite_test_every_python_version_once(
     assert "--ignore" not in complete_run
 
     workflow = yaml.safe_load((WORKFLOW_DIR / filename).read_text("utf-8"))
-    (select,) = (
-        step
-        for step in workflow["jobs"]["python-versions"]["steps"]
-        if step.get("id") == "select"
+    test = workflow["jobs"]["test"]
+    matrix = test["strategy"]["matrix"]
+    # The matrix picks the versions itself, so no job has to run before the legs to choose them.
+    choice = re.fullmatch(
+        r"\$\{\{ fromJSON\(\(github\.event_name != 'pull_request'"
+        r" \|\| contains\(github\.event\.pull_request\.labels\.\*\.name, 'ci:full'\)\)"
+        r" && '(\[[^']*\])' \|\| '(\[[^']*\])'\) \}\}",
+        matrix["python-version"],
     )
-    queue_versions = json.loads(select["env"]["FULL_PYTHON_VERSIONS"])
-    pull_request_versions = json.loads(select["env"]["PULL_REQUEST_PYTHON_VERSIONS"])
+    assert choice, matrix["python-version"]
+    queue_versions = json.loads(choice[1])
+    pull_request_versions = json.loads(choice[2])
     supported = _supported_python_versions()
     assert complete_version in supported
     assert complete_version not in queue_versions
@@ -61,10 +66,13 @@ def test_suite_legs_and_the_complete_suite_test_every_python_version_once(
     assert set(queue_versions) | {complete_version} == supported
     assert set(pull_request_versions) <= set(queue_versions)
     ordered = sorted(supported, key=lambda version: tuple(map(int, version.split("."))))
-    assert {ordered[0], ordered[-1]} <= set(pull_request_versions)
+    # A pull request tests the oldest and the newest version on Ubuntu, each once.
+    # The Complete Test Suite runs on every event, so it takes one of them and the
+    # suite's own legs add the other: a third version, or a leg that repeated the
+    # complete suite's, would hold more runners on every push.
+    assert complete_version not in pull_request_versions
+    assert set(pull_request_versions) | {complete_version} == {ordered[0], ordered[-1]}
 
-    test = workflow["jobs"]["test"]
-    matrix = test["strategy"]["matrix"]
     assert matrix["OS"] == ["ubuntu-latest"]
     (run,) = (
         step["run"] for step in test["steps"] if step.get("id", "").startswith("run_")

@@ -7,6 +7,7 @@ from ...translator.semantics.warp import ORDERED_WORKGROUP_BARRIER
 from ..CUDA.array_extents import IntegerConstants
 from ..CUDA.block_votes import BlockVoteLibrary, insert_block_vote_functions
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
+from ..CUDA.buffer_memory_qualifiers import buffer_memory_attributes
 from ..CUDA.directed_rounding import (
     DirectedRoundingLibrary,
     insert_directed_rounding_functions,
@@ -20,6 +21,7 @@ from ..CUDA.keyword_renames import source_identifier_names
 from ..CUDA.parameter_defaults import merge_declared_defaults, parameter_default_suffix
 from ..CUDA.pointer_math_import import sine_cosine_statements
 from ..CUDA.reference_parameters import ReferenceParameters
+from ..CUDA.surface_formats import SurfaceElementKey, declared_variable_types
 from ..import_refusals import HipImportRefused, ImportRefusalMixin
 from ..no_contraction import (
     PRECISE_FUNCTION_ATTRIBUTE,
@@ -46,10 +48,17 @@ from .crossgl_codegen.runtime_graph_calls import HipRuntimeGraphCallMixin
 from .crossgl_codegen.runtime_memory_calls import HipRuntimeMemoryCallMixin
 from .crossgl_codegen.runtime_module_calls import HipRuntimeModuleCallMixin
 from .crossgl_codegen.statements import HipStatementMixin
+from .crossgl_codegen.struct_methods import lower_hip_struct_methods
 from .crossgl_codegen.surfaces import HipSurfaceMixin
 from .crossgl_codegen.textures import HipTextureMixin
 from .crossgl_codegen.type_conversion import HipTypeConversionMixin
 from .crossgl_codegen.union_layouts import HipUnionLayoutMixin
+from .crossgl_codegen.wave_shuffles import (
+    ballot_mask,
+    is_repeatable,
+    is_runtime_width,
+    runtime_width_shuffle,
+)
 from .HipAst import (
     ArrayAccessNode,
     EnumNode,
@@ -211,26 +220,6 @@ class HipToCrossGLConverter(
         "float1": "f32",
         "double1": "f64",
     }
-    HIP_SURFACE_VECTOR_COMPONENTS = ("x", "y", "z", "w")
-    HIP_SURFACE_SCALAR_TYPES = frozenset(
-        {
-            "char",
-            "uchar",
-            "short",
-            "ushort",
-            "int",
-            "uint",
-            "long",
-            "ulong",
-            "longlong",
-            "ulonglong",
-            "half",
-            "__half",
-            "float",
-            "double",
-            "bool",
-        }
-    )
     CROSSL_SCALAR_TYPES = {
         "bool",
         "f16",
@@ -619,6 +608,7 @@ class HipToCrossGLConverter(
         self.vector1_name_scopes = [{}]
         self.user_function_names = set()
         self.global_resource_object_type_hints = {}
+        self.global_surface_variable_types = {}
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
         self.variable_type_scopes = [{}]
@@ -664,6 +654,7 @@ class HipToCrossGLConverter(
     def render_program(self, ast_node):
         self.output = []
         self.indent_level = 0
+        lower_hip_struct_methods(ast_node, self.refuse_import)
         self.source_identifier_names = source_identifier_names(ast_node)
         self.identifier_name_scopes = [{}]
         self.packed_argument_scopes = []
@@ -681,6 +672,11 @@ class HipToCrossGLConverter(
             for stmt in getattr(ast_node, "statements", None) or []
             if isinstance(stmt, FunctionNode)
         )
+        self.global_surface_variable_types = {
+            var.name: var.vtype
+            for var in getattr(ast_node, "global_variables", []) or []
+            if isinstance(var, VariableNode) and var.name
+        }
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
         )
@@ -822,6 +818,7 @@ class HipToCrossGLConverter(
 
     def collect_resource_object_type_hints(self, node, declared_names=None):
         hints = {}
+        variable_types = declared_variable_types(node)
 
         def collect(current):
             if current is None:
@@ -851,6 +848,10 @@ class HipToCrossGLConverter(
                             ),
                             resource_type,
                         )
+                # A global surface's element is merged over the whole program instead.
+                self.collect_surface_element_hint(
+                    hints, current, variable_types, declared_names
+                )
 
             for value in vars(current).values():
                 collect(value)
@@ -858,12 +859,19 @@ class HipToCrossGLConverter(
         collect(node)
         for name in declared_names or []:
             hints.setdefault(name, None)
+            # A local name hides the element of a global surface of the same name.
+            hints.setdefault(SurfaceElementKey(name), None)
         return hints
 
     def collect_global_resource_object_type_hints_from_function(
         self, node, global_names, hints
     ):
         local_names = self.collect_declared_variable_names(node)
+        variable_types = {
+            **self.global_surface_variable_types,
+            **declared_variable_types(node),
+        }
+        surface_names = set(global_names) - set(local_names)
 
         def collect(current):
             if current is None:
@@ -893,6 +901,9 @@ class HipToCrossGLConverter(
                             self.add_resource_object_type_hint(
                                 hints, name, resource_type
                             )
+                self.collect_surface_element_hint(
+                    hints, current, variable_types, surface_names
+                )
 
             for value in vars(current).values():
                 collect(value)
@@ -1306,8 +1317,9 @@ class HipToCrossGLConverter(
                         if isinstance(param, dict)
                         else getattr(param, "vtype", "int")
                     )
-                    param_type = self.convert_hip_variable_type_to_crossgl(
-                        raw_type, param_name
+                    param_type = self.surface_declaration_type(
+                        self.convert_hip_variable_type_to_crossgl(raw_type, param_name),
+                        param_name,
                     )
                     parameter_record = self.record_definition_from_type(raw_type)
                     self.validate_record_layout_use(
@@ -1472,13 +1484,17 @@ class HipToCrossGLConverter(
                             element_type,
                         )
                         params.append(
+                            f"{buffer_memory_attributes(raw_type)}"
                             f"@group(0) @binding({self.global_resource_binding_count + len(params)}) "
                             f"var<storage, {access}> "
                             f"{output_name}: array<{element_type}>"
                         )
                     else:
-                        param_type = self.convert_hip_variable_type_to_crossgl(
-                            raw_type, param_name
+                        param_type = self.surface_declaration_type(
+                            self.convert_hip_variable_type_to_crossgl(
+                                raw_type, param_name
+                            ),
+                            param_name,
                         )
                         output_name = self.register_identifier_name(param_name)
                         self.register_vector1_name(param_name, raw_type)
@@ -1564,10 +1580,18 @@ class HipToCrossGLConverter(
         if function_name not in {"clock", "clock64", "wall_clock64"}:
             return None
 
-        return self.refuse_import(
-            f"HIP device timer {function_name}({', '.join(args)}): CrossGL has no clock counter",
-            "0",
-        )
+        if args:
+            return self.refuse_import(
+                f"HIP device timer {function_name}({', '.join(args)}) takes no arguments",
+                "0",
+            )
+        # clock64() and clock() both return __clock64(), the shader cycle counter (s_memtime) as a long long
+        # (hip/amd_detail/amd_device_functions.h); CrossGL's clockARB() is that counter (HIP output writes it as
+        # clock64()). wall_clock64() reads the constant-rate counter, CrossGL's clockRealtimeEXT() (HIP C++ language
+        # extensions, "Timer functions").
+        if function_name == "wall_clock64":
+            return "i64(clockRealtimeEXT())"
+        return "i64(clockARB())"
 
     def format_hip_load_cache_intrinsic_call(
         self, function_name, raw_args, formatted_args
@@ -1607,6 +1631,11 @@ class HipToCrossGLConverter(
 
         if function_name in {"__activemask", "__ballot_sync"}:
             return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+
+        # __lane_id() is the lane's index in its wavefront (hip/amd_detail/amd_device_functions.h), the subgroup
+        # invocation index that warpSize, imported as the subgroup size, counts.
+        if function_name == "__lane_id" and not args:
+            return "WaveGetLaneIndex()"
 
         if function_name in {"__any", "__all"}:
             if len(args) != 1:
@@ -1699,6 +1728,14 @@ class HipToCrossGLConverter(
             # 5.7.1 does not declare the ``_sync`` forms at all, so these are
             # the ones real kernels compile against.
             width_limit = self.hip_warp_shuffle_segment_width(args[2:] or None)
+            if (
+                len(args) == 3
+                and width_limit is None
+                and is_runtime_width(args[2])
+                and is_repeatable(args[1])
+                and is_repeatable(args[2])
+            ):
+                return runtime_width_shuffle(function_name, *args)
             if len(args) not in {2, 3} or width_limit is None:
                 return self.format_unsupported_hip_warp_intrinsic(function_name, args)
             value, lane = args[0], args[1]
@@ -1771,7 +1808,9 @@ class HipToCrossGLConverter(
             )
 
         if function_name == "__ballot":
-            return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+            if len(args) != 1 or not is_repeatable(args[0]):
+                return self.format_unsupported_hip_warp_intrinsic(function_name, args)
+            return ballot_mask(self.format_wave_predicate(args[0]))
 
         return None
 
@@ -1901,40 +1940,23 @@ class HipToCrossGLConverter(
     def format_unsupported_hip_resource_expression(self, kind, member, fallback):
         return self.refuse_import(f"HIP {kind}.{member} has no CrossGL form", fallback)
 
-    def scale_hip_surface_byte_offset(self, raw_offset, value_type, function_name):
+    def scale_hip_surface_byte_offset(self, raw_offset, element_size, function_name):
         """Scale a HIP surface x byte offset down to a texel coordinate.
 
-        HIP surface functions take x as a byte offset while CrossGL
-        ``imageLoad``/``imageStore`` take a texel coordinate, so the offset is divided by
-        the element size. The quotient is folded when the offset is provably a multiple of
-        the element size (``x * 4 + 4`` with a 4-byte element becomes ``x + 1``). Anything
-        else is refused: passing an unscaled byte offset through would silently address
-        the wrong texel.
+        HIP surface functions take x as a byte offset while CrossGL ``imageLoad``/``imageStore`` take a texel
+        coordinate, so the offset is divided by the element size. The quotient is folded when the offset is
+        provably a multiple of the element size (``x * 4 + 4`` with a 4-byte element becomes ``x + 1``). Anything
+        else is refused: passing an unscaled byte offset through would silently address the wrong texel.
         """
+        divided = self.divide_surface_byte_offset(raw_offset, element_size, None)
+        if divided is not None:
+            return divided[0]
         offset_text = self.visit(raw_offset) if raw_offset is not None else "?"
-        if value_type is None:
-            raise HipSurfaceByteOffsetError(
-                f"{function_name} cannot scale its x byte offset {offset_text}: "
-                "the element type is unknown, so the offset cannot be shown to be "
-                "a multiple of the element size"
-            )
-        byte_size = self.hip_surface_value_type_size(value_type)
-        divided = self.divide_hip_surface_byte_offset(raw_offset, byte_size, value_type)
-        if divided is None:
-            if byte_size is None:
-                raise HipSurfaceByteOffsetError(
-                    f"{function_name} cannot scale its x byte offset {offset_text}: "
-                    f"element type {value_type!r} has no known size, so the offset "
-                    "cannot be shown to be a multiple of the element size; write the "
-                    f"offset with sizeof({value_type}), for example "
-                    f"x * sizeof({value_type})"
-                )
-            raise HipSurfaceByteOffsetError(
-                f"{function_name} x byte offset {offset_text} is not provably a multiple "
-                f"of sizeof({value_type}) ({byte_size} bytes); write the offset as a "
-                f"multiple of the element size, for example x * sizeof({value_type})"
-            )
-        return divided[0]
+        raise HipSurfaceByteOffsetError(
+            f"{function_name} x byte offset {offset_text} is not provably a multiple "
+            f"of the {element_size}-byte surface element; write the offset as a "
+            "multiple of the element size, for example x * sizeof(T)"
+        )
 
     def visit_NewNode(self, node):
         placement_args = getattr(node, "placement_args", None)
@@ -2156,6 +2178,8 @@ class HipToCrossGLConverter(
             "double": "f64",
             "size_t": "u64",
             "ptrdiff_t": "i64",
+            # clock_t is long on the LP64 hosts CUDA and ROCm compile device code for (C11 7.27.1).
+            "clock_t": "i64",
             "hipArray": "ptr<void>",
             "hipArray_t": "ptr<void>",
             "hipTextureObject_t": "sampler",

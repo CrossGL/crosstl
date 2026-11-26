@@ -37,6 +37,7 @@ from .hlsl_atomic_conditions import (
     generate_hlsl_atomic_condition_while,
     hlsl_atomic_condition_loop_guard,
 )
+from .hlsl_struct_list_assignment import generate_hlsl_struct_list_assignment
 from .hlsl_word_views import generate_hlsl_word_view_assignment
 from .match_utils import (
     generate_ordered_conditional_match,
@@ -136,6 +137,12 @@ class DirectXStatementMixin:
             byte_update = self.hlsl_byte_update_expression(node, target, op, value)
             if byte_update is not None:
                 return byte_update
+
+        struct_list = generate_hlsl_struct_list_assignment(
+            self, target, value, op, target_type, statement_context
+        )
+        if struct_list is not None:
+            return struct_list
 
         if (
             isinstance(value, ArrayLiteralNode)

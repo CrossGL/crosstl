@@ -4,6 +4,8 @@ from ..ast import FunctionCallNode
 from ..refusals import CudaRefusal
 from .c_pointer_math import generate_pointer_math_call
 from .c_vector_reductions import generate_vector_reduction_call
+from .cuda_componentwise_math import generate_componentwise_math_call
+from .cuda_integer_powers import integer_power_call
 from .cuda_pointer_operands import cuda_pointer_operand_call
 from .cuda_refusals import CudaLoweringRefused
 from .cuda_tables import (
@@ -244,6 +246,12 @@ class CudaFunctionCallMixin:
             if geometric_call is not None:
                 return geometric_call
 
+        componentwise_call = generate_componentwise_math_call(
+            self, func_name, raw_args, args
+        )
+        if componentwise_call is not None:
+            return componentwise_call
+
         math_func_name = self.cuda_math_function_name(func_name)
         vector_math_call = self.generate_vector_scalar_math_call(
             math_func_name,
@@ -284,6 +292,12 @@ class CudaFunctionCallMixin:
             return scalar_math_call
 
         args_str = ", ".join(args)
+
+        integer_power = integer_power_call(
+            self, func_name, raw_args, args, CudaLoweringRefused
+        )
+        if integer_power is not None:
+            return integer_power
 
         euclidean_norm_name = self.cuda_euclidean_norm_function_name(
             func_name, raw_args
@@ -426,8 +440,9 @@ class CudaFunctionCallMixin:
                     len(source_info["components"]),
                 )
             if func_name == "bitCount":
+                # GLSL 4.60, 8.8: bitCount returns genIType, int components for int and uint operands alike.
                 return self.vector_type_for_components(
-                    "uint",
+                    "int",
                     len(source_info["components"]),
                 )
             return source_type

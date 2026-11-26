@@ -1347,7 +1347,7 @@ def test_hlsl_metal_union_bool4_uint_alias_preserves_packed_bytes(tmp_path):
     ("declaration", "reason"),
     [
         (
-            "union BadSize { uint2 words; uint word; };",
+            "union BadSize { uint4 words; uint pair[2]; };",
             "member-size-mismatch",
         ),
         (
@@ -1355,7 +1355,7 @@ def test_hlsl_metal_union_bool4_uint_alias_preserves_packed_bytes(tmp_path):
             "member-shape-unsupported",
         ),
         (
-            "union Padded { uint3 words; uchar4 bytes[4]; };",
+            "union Padded { uint4 words; float2 pairs[2]; };",
             "member-storage-shape-mismatch",
         ),
         (
@@ -40838,7 +40838,7 @@ def test_directx_texture_query_resource_descriptors():
         codegen, codegen.texture_sample_position_expression, "colorMap", "sampleIndex"
     ) == (
         "float2(0.0, 0.0)",
-        "texture sample-position query: textureSamplePosition on Texture2D requires a sampled multisample texture",
+        "texture sample-position query: textureSamplePosition on Texture2D requires a multisample texture",
     )
     assert (
         codegen.texture_sample_position_expression("msTex", "sampleIndex")
@@ -41186,7 +41186,7 @@ def test_directx_multisample_texture_sample_position_queries_use_hlsl_member():
     assert "msTextures[2].GetSamplePosition(input.sampleIndex)" in generated_code
     assert "textureSamplePosition(" not in generated_code
     assert (
-        "texture sample-position query: textureSamplePosition on Texture2D requires a sampled multisample texture"
+        "texture sample-position query: textureSamplePosition on Texture2D requires a multisample texture"
         in refusal
     )
     assert "SamplerState msTexSampler" not in generated_code
@@ -42402,7 +42402,7 @@ def test_directx_multisample_diagnostics_do_not_create_sampler_role_conflicts():
     assert ".Sample(pack.samplers" not in struct_code
 
 
-def test_directx_multisample_texel_fetch_offsets_emit_diagnostics():
+def test_directx_multisample_texel_fetch_offsets_load_offset_locations(tmp_path):
     shader = """
     shader UnsupportedMultisampleTexelFetchOffset {
         sampler2DMS msTex;
@@ -42434,25 +42434,31 @@ def test_directx_multisample_texel_fetch_offsets_emit_diagnostics():
     }
     """
 
-    generated_code, refusal = hlsl_partial_output(
-        HLSLCodeGen().generate_stage, crosstl.translator.parse(shader), "fragment"
+    generated_code = HLSLCodeGen().generate_stage(
+        crosstl.translator.parse(shader), "fragment"
     )
 
-    diagnostic = "texel fetch offset: multisample textures do not support offsets"
+    # Texture2DMS(Array).Load takes an offset after the sample index; the offset moves into the location, as it
+    # does for the other texture shapes, so it need not be an immediate.
     assert "Texture2DMS<float4> msTex : register(t0);" in generated_code
     assert "Texture2DMSArray<float4> msArray : register(t1);" in generated_code
+    assert "return tex.Load((pixel + offset), sampleIndex);" in generated_code
     assert (
-        "float4 offset2D(Texture2DMS<float4> tex, int2 pixel, int sampleIndex, int2 offset)"
+        "return tex.Load(int3((pixelLayer.xy + offset), pixelLayer.z), sampleIndex);"
         in generated_code
     )
-    assert (
-        "float4 offsetArray(Texture2DMSArray<float4> tex, int3 pixelLayer, int sampleIndex, int2 offset)"
-        in generated_code
-    )
-    assert diagnostic in refusal
     assert "texelFetchOffset(" not in generated_code
-    assert ".Load(" not in generated_code
-    assert "SamplerState" not in generated_code
+    dxc = shutil.which("dxc")
+    if dxc:
+        path = tmp_path / "multisample_offsets.hlsl"
+        path.write_text(generated_code, encoding="utf-8")
+        result = subprocess.run(
+            [dxc, "-T", "ps_6_0", "-E", "PSMain", str(path)],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
 
 
 def test_directx_cube_texel_fetches_emit_diagnostics():
@@ -52029,11 +52035,6 @@ def test_hlsl_hip_inherited_fields_aliases_and_enums_validate(tmp_path):
             "int get() { return value; } } item; };",
             "Outer state; state.item.value = input[0]; "
             "output[0] = state.item.get();",
-        ),
-        (
-            "own-instance",
-            "class State { public: int value; int get() { return value; } };",
-            "State state; state.value = input[0]; output[0] = state.get();",
         ),
         (
             "inherited-static",

@@ -147,25 +147,25 @@ COUNTERPARTS = {
     "emit_stream_vertex": "void EmitStreamVertex(const int)",
     "end_stream_primitive": "void EndStreamPrimitive(const int)",
 }
-# rust-gpu takes a clustered reduction's cluster size as a constant generic parameter, where CrossGL takes it as a
-# constant argument.
-COUNTERPARTS.update(
-    {
-        f"subgroup_clustered_{kind}{operator}": (
-            f"{scalar} WaveClustered{wave}({scalar}, const uint)"
-        )
-        for operator, (wave, kinds) in _SUBGROUP_OPERATORS.items()
-        for kind, scalar in kinds.items()
-    }
-)
 
 
 # Built-in functions CrossGL has under a name the GLSL feature list lacks, or writes as an expression.
+# rust-gpu takes a clustered reduction's cluster size as a constant generic parameter, which the native probe sets to
+# 4 (features/rust.py, CLUSTER_SIZE), where CrossGL takes it as a constant argument.
+_CLUSTERED = {
+    f"subgroup_clustered_{kind}{operator}": f"WaveClustered{wave}({{0}}, 4u)"
+    for operator, (wave, kinds) in _SUBGROUP_OPERATORS.items()
+    for kind in kinds
+}
 OTHER_NAMES = {
+    **_CLUSTERED,
     # The C math functions of CUDA's device library and MSL compute what these methods of a scalar do. glam's
     # Vec3::is_finite tests every element at once, and is_finite_mask each one.
     "Float::exp_m1": "expm1",
     "Float::ln_1p": "log1p",
+    # rust-gpu computes cbrt as GLSL.std.450 Pow with the exponent 1/3 (rustc_codegen_spirv's
+    # builder/libm_intrinsics.rs), which is undefined for a negative base, where C's cbrt is negative.
+    "Float::cbrt": "pow({0}, 1.0 / 3.0)",
     "Float::is_finite": "isfinite",
     "Float::is_normal": "isnormal",
     "Float::is_sign_negative": "signbit",

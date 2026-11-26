@@ -486,7 +486,7 @@ def test_generic_typealias_codegen_from_slang_neural_modules():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "typedef Array<uint32_t, Dim> uvec<intDim>;" in generated_code
+    assert "typedef Array<uint32_t, Dim> uvec<int Dim>;" in generated_code
 
 
 def test_typealias_logical_not_generic_argument_codegen_reparse():
@@ -1129,9 +1129,7 @@ def test_fragment_sv_position_parameter_codegen_uses_frag_coord():
     generated_code = generate_code(ast)
 
     assert "vec4 fragmentMain(vec4 pos @ gl_FragCoord) @ gl_FragColor" in generated_code
-    assert (
-        "vec4 vertexMain(vec3 position @ in_Position) @ gl_Position" in generated_code
-    )
+    assert "vec4 vertexMain(vec3 position @ Position) @ gl_Position" in generated_code
     cgl_translator.parse(generated_code)
 
 
@@ -1206,7 +1204,7 @@ def test_precise_output_parameter_modifier_codegen_from_hlsl_variable_syntax():
     output_param = ast.functions[0].params[1]
     assert output_param.qualifiers == ["out", "precise"]
     assert (
-        "void main(in vec3 inPos @ in_Position, out vec4 outPos @ gl_Position)"
+        "void main(in vec3 inPos @ Position, out vec4 outPos @ gl_Position)"
         in generated_code
     )
     assert "precise" not in generated_code
@@ -1596,9 +1594,11 @@ def test_generic_function_declaration_after_name_codegen():
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "float GetRayT(uint rayInlineFlags)" in generated_code
+    # CrossGL declares a generic value parameter by its name, which each specialization substitutes.
+    assert "float GetRayT<RAY_QUERY_FLAGS>(uint rayInlineFlags)" in generated_code
     assert "return 0.0;" in generated_code
     assert "<let" not in generated_code
+    cgl_translator.parse(generated_code)
 
 
 def test_generic_struct_declaration_after_name_codegen():
@@ -1760,7 +1760,8 @@ def test_reverse_codegen_erases_builtin_generic_where_constraints_from_wave_matr
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "void matMad(" in generated_code
+    # ``int R0`` is a value parameter, which CrossGL declares by its name.
+    assert "void matMad<T, R0>(" in generated_code
     assert "where" not in generated_code
     assert "__BuiltinFloatingPointType" not in generated_code
     cgl_translator.parse(generated_code)

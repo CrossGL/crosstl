@@ -11247,20 +11247,24 @@ def test_translate_project_rust_sampled_texture_uses_entry_resource_parameters(
     payload = report.to_json()
     output = repo / "translated" / "rust" / "shaders" / "sampled.rs"
 
-    # rust-gpu output does not bind textures and samplers yet: the file is refused by resource name, with no
-    # output and no placeholder, instead of writing default-valued statics.
-    assert not output.exists()
-    assert payload["summary"]["translatedCount"] == 0
-    messages = [
-        diagnostic["message"]
-        for diagnostic in payload["diagnostics"]
-        if diagnostic.get("target") == "rust"
-    ]
-    assert any(
-        "resource: 'colorMap' (sampler2D) is not lowered to a rust-gpu resource binding"
-        in message
-        for message in messages
-    ), messages
+    # The texture and the sampler are spirv-std entry parameters with their explicit bindings, not
+    # default-valued statics.
+    assert output.exists()
+    assert payload["summary"]["translatedCount"] == 1
+    rust_code = " ".join(output.read_text(encoding="utf-8").split())
+    # rustfmt, when it is on PATH, drops the space before ':' and inside the Image! arguments.
+    assert re.search(
+        r"#\[spirv\(descriptor_set = 1, binding = 2\)\] colorMap ?: "
+        r"&Image ?!\( ?2D, type ?= ?f32, sampled\)",
+        rust_code,
+    )
+    assert re.search(
+        r"#\[spirv\(descriptor_set = 1, binding = 3\)\] linearSampler ?: &Sampler",
+        rust_code,
+    )
+    assert "colorMap.sample(*linearSampler, uv)" in rust_code
+    assert "static COLOR_MAP" not in rust_code
+    assert "Default::default()" not in rust_code
     assert not [
         diagnostic
         for diagnostic in payload["diagnostics"]
@@ -13857,7 +13861,7 @@ def test_metal_union_layout_diagnostic_matches_direct_and_project(tmp_path):
     repo.mkdir()
     source_path = repo / "unsupported-union.metal"
     source_path.write_text(
-        "union Unsupported { uint2 words; uint word; };\n",
+        "union Unsupported { uint4 words; uint pair[2]; };\n",
         encoding="utf-8",
     )
 

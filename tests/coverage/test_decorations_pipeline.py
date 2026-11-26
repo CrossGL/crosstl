@@ -255,6 +255,11 @@ def test_the_metal_compiler_lists_function_constants_in_air():
         ("restrict-buffer", "Decoration.Restrict", "device float* __restrict outp"),
         ("volatile-buffer", "Decoration.Volatile", "volatile device float* outp"),
         (
+            "volatile-buffer",
+            "Decoration.Volatile",
+            "coherent volatile device float* outp",
+        ),
+        (
             "coherent-buffer",
             "Decoration.Coherent",
             "coherent(device) device float* outp",
@@ -265,7 +270,8 @@ def test_the_metal_compiler_keeps_buffer_memory_qualifiers_in_air(
     name, anchor, qualified
 ):
     # AIR has no attribute for these qualifiers: a restrict buffer is a noalias argument, a volatile one is stored to
-    # with volatile stores, and a coherent one through the device_coherent intrinsics.
+    # with volatile stores (through the device_coherent.volatile intrinsics when it is also coherent), and a
+    # coherent one through the device_coherent intrinsics.
     source = (
         "#include <metal_stdlib>\nusing namespace metal;\n"
         f"kernel void probe(device float* fin [[buffer(0)]], {qualified} [[buffer(1)]],\n"

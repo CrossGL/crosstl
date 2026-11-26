@@ -16,6 +16,7 @@ SOURCE = """struct Pair {
     float y;
 };
 __device__ void grow(float& a) { a = a * 2.0f; }
+__device__ void settle(float& a) { __syncthreads(); a = a * 2.0f; }
 __device__ void swap_pair(Pair& q, const float& c) {
     float t = q.x;
     q.x = q.y + c;
@@ -113,13 +114,16 @@ def test_read_references_import_by_value(tmp_path, extension):
     "body, message",
     [
         (
-            "grow(outp[2]);",
-            "argument 1 of 'grow' binds a reference parameter to storage",
+            "settle(outp[2]);",
+            "argument 1 of 'settle' binds a reference parameter to storage",
         ),
-        ("grow(q[1]);", "argument 1 of 'grow' binds a reference parameter to storage"),
         (
-            "float* r = &x; grow(x);",
-            "argument 1 of 'grow' binds a reference parameter to storage",
+            "settle(q[1]);",
+            "argument 1 of 'settle' binds a reference parameter to storage",
+        ),
+        (
+            "float* r = &x; settle(x);",
+            "argument 1 of 'settle' binds a reference parameter to storage",
         ),
         (
             "float& r = x; grow(r);",
@@ -137,6 +141,88 @@ def test_refuses_arguments_copy_in_and_out_cannot_keep(
 ):
     with pytest.raises(ReferenceParameterError, match=re.escape(message)):
         _translate(tmp_path, extension, body)
+
+
+ISOLATED = """__device__ void grow(float& x, int k) { x = x * 2.0f + (float)(k); }
+__device__ void twice(float& x, int k) { grow(x, k); grow(x, k); }
+__device__ void pair(float& a, float& b) { a += b; b += 1.0f; }
+extern "C" __global__ void k(const int* iin, float* outp) {
+    __shared__ float tile[64];
+    unsigned int i = blockIdx.x * blockDim.x + threadIdx.x;
+    float local = 1.0f;
+    outp[i] = (float)(iin[i]) * 0.5f;
+    grow(outp[i], iin[i]);
+    twice(outp[i + 1u], 3);
+    tile[threadIdx.x] = outp[i];
+    grow(tile[threadIdx.x], 2);
+    pair(outp[i], local);
+    outp[i] += tile[threadIdx.x] + local;
+}
+"""
+
+
+@pytest.mark.parametrize("extension", ["cu", "hip"])
+def test_isolated_callees_bind_buffer_and_shared_elements(tmp_path, extension):
+    """A callee that reaches no memory but its references cannot tell a copy in and out from a reference."""
+    path = tmp_path / f"isolated.{extension}"
+    path.write_text(ISOLATED)
+    code = crosstl.translate(str(path), backend="cgl", format_output=False)
+    assert "void grow(inout f32 x, i32 k)" in code
+    assert "grow(outp[i], iin[i]);" in code
+    assert "twice(outp[(i + 1u)], 3);" in code or "twice(outp[i + 1u], 3);" in code
+    assert "pair(outp[i], local);" in code
+    metal = crosstl.translate(str(path), backend="metal")
+    assert "device float &" not in metal, "Metal binds the element through a copy"
+
+
+NOT_ISOLATED_PRELUDE = """struct View { float* p; };
+struct Outer { View view; };
+__device__ int counter;
+__device__ void settle(float& a) { __syncthreads(); a = a * 2.0f; }
+__device__ void outer(float& a) { settle(a); }
+__device__ void global_write(float& a) { counter = 1; a += 1.0f; }
+__device__ void atomic_bump(float& a, int k) { atomicAdd(&counter, k); a += 1.0f; }
+__device__ void scaled(float& a, const float* s) { a *= s[0]; }
+__device__ void viewed(float& a, Outer o) { o.view.p[0] = 0.0f; a += 1.0f; }
+__device__ void cast_store(float& a, unsigned long long at) { *(float*)at = 0.0f; a += 1.0f; }
+__device__ void grow(float& a) { a = a * 2.0f; }
+__device__ void two(float& a, float& b) { a += 1.0f; b += a; }
+"""
+
+
+@pytest.mark.parametrize("extension", ["cu", "hip"])
+@pytest.mark.parametrize(
+    "call, callee",
+    [
+        ("settle(outp[i]);", "settle"),
+        ("outer(outp[i]);", "outer"),
+        ("global_write(outp[i]);", "global_write"),
+        ("atomic_bump(outp[i], 1);", "atomic_bump"),
+        ("scaled(outp[i], outp);", "scaled"),
+        ("Outer o; o.view.p = outp; viewed(outp[i], o);", "viewed"),
+        (
+            "cast_store(outp[i], (unsigned long long)outp);",
+            "cast_store",
+        ),
+        ("unsigned int j = i; grow(outp[j++]);", "grow"),
+        ("two(outp[i], outp[i + 1u]);", "two"),
+    ],
+)
+def test_buffer_elements_bind_only_isolated_callees(tmp_path, extension, call, callee):
+    """Another thread, another argument or the callee itself may reach the element, so a copy would miss writes."""
+    path = tmp_path / f"shared.{extension}"
+    path.write_text(
+        NOT_ISOLATED_PRELUDE
+        + 'extern "C" __global__ void k(float* outp) {\n'
+        + "    unsigned int i = threadIdx.x;\n"
+        + f"    {call}\n"
+        + "}\n"
+    )
+    with pytest.raises(
+        ReferenceParameterError,
+        match=re.escape(f"of '{callee}' binds a reference parameter to storage"),
+    ):
+        crosstl.translate(str(path), backend="cgl", format_output=False)
 
 
 @pytest.mark.parametrize("extension", ["cu", "hip"])

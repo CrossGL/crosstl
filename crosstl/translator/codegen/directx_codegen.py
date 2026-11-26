@@ -236,6 +236,11 @@ from .hlsl_groupshared_word_views import lower_groupshared_word_views
 from .hlsl_half_private_storage import lower_half_private_storage
 from .hlsl_half_storage import HLSLHalfStorage
 from .hlsl_host_workgroup_size import hlsl_entry_local_size
+from .hlsl_initialized_globals import (
+    hlsl_initialized_private_global,
+    hlsl_static_global_initializer,
+)
+from .hlsl_matrix_initializers import hlsl_matrix_aggregate_initializer
 from .hlsl_matrix_orientation import HLSLMatrixOrientation
 from .hlsl_mesh_semantics import collect_hlsl_mesh_output_struct_offsets
 from .hlsl_narrow_integers import HLSLNarrowIntegerMixin
@@ -257,6 +262,7 @@ from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
     hlsl_wave_extension_call,
 )
+from .hlsl_work_graph_nodes import HlslWorkGraphNodeMixin, is_hlsl_work_graph_attribute
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -277,7 +283,6 @@ from .image_access_contracts import (
     is_texture_sample_offset_operation,
     is_texture_sample_operation,
     record_explicit_image_metadata,
-    unsupported_multisample_texel_fetch_offset_expression,
 )
 from .lane_symmetry import SYMMETRIC, UNIFORM
 from .loop_induction import (
@@ -376,6 +381,7 @@ class HLSLCodeGen(
     DirectXCooperativeMatrixMixin,
     DirectXComputeBuiltinMixin,
     DirectXWaveIntrinsicMixin,
+    HlslWorkGraphNodeMixin,
     DirectXResourceGlobalMixin,
     DirectXStageParameterMixin,
     DirectXRayTracingMixin,
@@ -2277,22 +2283,20 @@ class HLSLCodeGen(
                     "static",
                 } & storage_qualifiers and not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
+                elif hlsl_initialized_private_global(node, qualifier):
+                    qualifier = "static " + qualifier
             code += resource_identity_marker(node, var_name)
             if id(node) in self.hlsl_inferred_global_node_ids:
                 if not qualifier.startswith("static"):
                     qualifier = "static " + qualifier
-                initializer = self.generate_expression_with_expected(
-                    node.initial_value, node.var_type
-                )
+                initializer = hlsl_static_global_initializer(self, node)
                 declaration += f" = {initializer}"
             elif (
                 qualifier.startswith("static")
                 and getattr(node, "initial_value", None) is not None
             ):
                 # A static global starts from its initializer, not from zero.
-                initializer = self.generate_expression_with_expected(
-                    node.initial_value, node.var_type
-                )
+                initializer = hlsl_static_global_initializer(self, node)
                 declaration += f" = {initializer}"
             image_format_prefix = self.storage_image_format_prefix(mapped_type, node)
             code += f"{image_format_prefix}{qualifier}{declaration}{register};\n"
@@ -4426,6 +4430,11 @@ class HLSLCodeGen(
                 )
             param_type = self.directx_resource_declaration_type(param_type)
             self.current_hlsl_parameter_resource_types[p.name] = param_type
+            if node_declaration := self.hlsl_work_graph_parameter_declaration(
+                p, param_type, effective_shader_type, param_list
+            ):
+                params.append(node_declaration)
+                continue
             if self.is_texture_type(raw_param_type) or self.is_image_type(
                 raw_param_type
             ):
@@ -4699,6 +4708,10 @@ class HLSLCodeGen(
                     f"uint {subgroup_id_local} = "
                     f"{helper_name}({group_index_name});",
                 )
+        elif effective_shader_type == "node":
+            params_str = self.append_hlsl_node_builtin_parameters(
+                func, params_str, param_names
+            )
         elif effective_shader_type == "vertex":
             explicit_stage_builtins = self.explicit_hlsl_vertex_builtin_parameters(
                 param_list
@@ -4771,6 +4784,7 @@ class HLSLCodeGen(
             "ray_any_hit": "anyhit",
             "ray_miss": "miss",
             "ray_callable": "callable",
+            "node": "node",
         }
 
         if isinstance(getattr(func, "return_type", None), PointerType):
@@ -5007,10 +5021,8 @@ class HLSLCodeGen(
             code += self.generate_stage_numthreads(
                 func, effective_shader_type, execution_config
             )
-            code += self.generate_hlsl_stage_attributes(
-                func,
-                effective_shader_type,
-                stage_node=stage_node,
+            code += self.generate_hlsl_entry_attributes(
+                func, effective_shader_type, stage_node, execution_config, entry_name
             )
             code += wave_size_attribute
             code += waveops_helper_lanes_attribute
@@ -5799,6 +5811,9 @@ class HLSLCodeGen(
         # directx_specialization_constant_attributes. On a resource parameter it makes the binding conditional
         # (MSL specification section 5.8); it never names a semantic.
         if self.directx_is_specialization_constant_attribute(attr):
+            return True
+        # Work-graph node and record attributes are written as HLSL attributes (hlsl_work_graph_nodes).
+        if is_hlsl_work_graph_attribute(attr):
             return True
         return str(getattr(attr, "name", "")).lower() in metadata
 
@@ -8564,80 +8579,8 @@ class HLSLCodeGen(
         self.current_hlsl_private_pointer_condition_interval_names = set()
 
     def hlsl_matrix_aggregate_initializer(self, expr, mapped_type):
-        """Lower ``{...}`` for a CrossGL matrix.
-
-        Nested lists are columns (GLSL 4.60 section 4.1.11) and a flat list fills the columns in
-        order; missing trailing elements are zero. HLSL constructors fill rows, so the columns are
-        built as the transposed matrix, which keeps the elements in evaluation order.
-        """
-        dimensions = self.hlsl_matrix_dimensions(mapped_type)
-        if dimensions is None:
-            return None
-        if self.hlsl_is_zero_aggregate_initializer(expr):
-            return self.hlsl_value_initialized_expression(expr, mapped_type)
-
-        component_type, rows, columns = dimensions
-        elements = list(getattr(expr, "elements", []) or [])
-        nested_count = sum(
-            isinstance(element, ArrayLiteralNode) for element in elements
-        )
-        if nested_count not in {0, len(elements)}:
-            self.hlsl_aggregate_error(
-                expr,
-                expected_type=mapped_type,
-                reason="matrix-shape-mismatch",
-                detail="matrix columns cannot mix nested and flat initializer elements",
-            )
-
-        rendered = []
-        if nested_count or not elements:
-            if len(elements) > columns:
-                self.hlsl_aggregate_error(
-                    expr,
-                    expected_type=mapped_type,
-                    reason="element-count-mismatch",
-                    expected_element_count=columns,
-                )
-            for column in elements:
-                column_elements = list(getattr(column, "elements", []) or [])
-                if len(column_elements) > rows:
-                    self.hlsl_aggregate_error(
-                        column,
-                        expected_type=mapped_type,
-                        reason="element-count-mismatch",
-                        expected_element_count=rows,
-                    )
-                rendered.extend(
-                    self.generate_expression_with_expected(element, component_type)
-                    for element in column_elements
-                )
-                rendered.extend(
-                    self.hlsl_value_initialized_expression(column, component_type)
-                    for _index in range(len(column_elements), rows)
-                )
-            rendered.extend(
-                self.hlsl_value_initialized_expression(expr, component_type)
-                for _index in range(len(elements) * rows, rows * columns)
-            )
-        else:
-            expected_count = rows * columns
-            if len(elements) > expected_count:
-                self.hlsl_aggregate_error(
-                    expr,
-                    expected_type=mapped_type,
-                    reason="element-count-mismatch",
-                    expected_element_count=expected_count,
-                )
-            rendered.extend(
-                self.generate_expression_with_expected(element, component_type)
-                for element in elements
-            )
-            rendered.extend(
-                self.hlsl_value_initialized_expression(expr, component_type)
-                for _index in range(len(elements), expected_count)
-            )
-        transposed_type = f"{component_type}{columns}x{rows}"
-        return f"transpose({transposed_type}({', '.join(rendered)}))"
+        """Lower ``{...}`` for a CrossGL matrix (:mod:`.hlsl_matrix_initializers`)."""
+        return hlsl_matrix_aggregate_initializer(self, expr, mapped_type)
 
     def generate_texture_call(self, func_name, args, *, call_node=None):
         if not func_name:
@@ -8932,7 +8875,12 @@ class HLSLCodeGen(
             if self.is_cube_texture_resource_type(texture_type):
                 return self.unsupported_cube_texel_fetch_call(func_name, texture_type)
             if self.is_multisample_texture_resource_type(texture_type):
-                return unsupported_multisample_texel_fetch_offset_expression("DirectX")
+                # The sample operand stays second; the offset moves into the location, as for the other shapes.
+                if shape_type == "Texture2DMSArray":
+                    coord_xy = self.vector_component(coord, "xy")
+                    layer = self.vector_component(coord, "z")
+                    return f"{texture_name}.Load(int3(({coord_xy} + {offset}), {layer}), {lod})"
+                return f"{texture_name}.Load(({coord} + {offset}), {lod})"
             if shape_type == "Texture2DArray":
                 coord_xy = self.vector_component(coord, "xy")
                 layer = self.vector_component(coord, "z")

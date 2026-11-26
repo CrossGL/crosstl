@@ -683,8 +683,13 @@ class OpenGLCompoundStatementMixin:
         active_name = self.glsl_synthetic_local_identifier(
             "crossglSoftwareSubgroupLoopActive"
         )
+        # The base runs from the start's uniform part, or zero, in steps the
+        # same for every invocation; each adds its subgroup index.
+        start_base, start_index = plan.get("start") or (None, initializer.initial_value)
+        if start_base is None:
+            start_index = initializer.initial_value
         initial_value = self.generate_expression_with_expected(
-            initializer.initial_value,
+            start_index,
             getattr(initializer, "var_type", None),
         )
         bound = self.generate_expression_with_expected(
@@ -692,12 +697,18 @@ class OpenGLCompoundStatementMixin:
             getattr(initializer, "var_type", None),
         )
         step = plan["step"]
-        zero = "0u" if loop_type == "uint" else "0"
+        first = (
+            ("0u" if loop_type == "uint" else "0")
+            if start_base is None
+            else self.generate_expression_with_expected(
+                start_base, getattr(initializer, "var_type", None)
+            )
+        )
         step_literal = f"{step}u" if loop_type == "uint" else str(step)
         indent_str = "    " * indent
         body_indent = "    " * (indent + 1)
         code = (
-            f"{indent_str}for ({loop_type} {base_name} = {zero}; "
+            f"{indent_str}for ({loop_type} {base_name} = {first}; "
             f"({base_name} < {bound}); {base_name} += {step_literal}) {{\n"
             f"{body_indent}{loop_type} {loop_name} = "
             f"({base_name} + {initial_value});\n"

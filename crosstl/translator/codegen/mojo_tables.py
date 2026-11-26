@@ -641,6 +641,8 @@ MOJO_ATOMIC_OP_ALIASES = {
     "InterlockedCompareExchange": "image_atomic_comp_swap",
 }
 MOJO_SCALAR_ATOMIC_OPS = {
+    "atomicLoad": "load",
+    "atomicStore": "store",
     "atomicAdd": "add",
     "atomicMin": "min",
     "atomicMax": "max",
@@ -1080,14 +1082,11 @@ MOJO_VECTOR_ARITHMETIC_OPS = {
     "/": "div",
 }
 MOJO_MATH_HELPERS = {
-    "clamp",
     "cross_product",
     "dot_product",
     "fmod",
     "lerp",
     "magnitude",
-    "max",
-    "min",
     "normalize",
     "power",
     "reflect",

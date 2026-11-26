@@ -638,7 +638,10 @@ def test_workflow_uses_macos_26_arm64_and_uploads_only_report_and_logs():
     assert "runs-on: macos-26-intel" not in text
     assert "macos-latest" not in text.lower()
     assert 'python-version: "3.13"' in text
-    assert "sparse-checkout set /mlx/backend/metal/kernels/" in text
+    assert (
+        'fetch_upstream mlx-metal-source "$MLX_COMMIT" --sparse mlx/backend/metal/kernels\n'
+        in text
+    )
     assert "--mlx-python-root mlx-upstream" in text
     assert "torch" not in text.lower()
     assert "4367c73b60541ddd5a266ce4644fd93d20223b6e" in text

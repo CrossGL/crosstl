@@ -28,6 +28,7 @@ from typing import Any, Iterable
 
 from .refusals import CrossGLRefusal, MetadataContractError
 from .stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
+from .workgroup_operations import WORKGROUP_COLLECTIVES
 
 __all__ = [
     "HOST_WORKGROUP_SIZE_ATTRIBUTE",
@@ -73,7 +74,8 @@ _SIZE_DEPENDENT_BUILTINS = frozenset(
     )
 )
 
-# Execution barriers synchronize the threads of one workgroup or subgroup.
+# Execution barriers synchronize the threads of one workgroup or subgroup, and the workgroup collectives combine the
+# values of every thread of the workgroup.
 _SIZE_DEPENDENT_CALLS = frozenset(
     name.lower()
     for name in (
@@ -90,7 +92,7 @@ _SIZE_DEPENDENT_CALLS = frozenset(
         "threadgroup_barrier",
         "simdgroup_barrier",
     )
-)
+) | frozenset(name.lower() for name in WORKGROUP_COLLECTIVES)
 
 # Subgroup, quad and cooperative-matrix operations act on a partition of the workgroup, and so do the CUDA warp
 # intrinsics that CrossGL keeps as calls (a warp is 32 consecutive invocations of the block).

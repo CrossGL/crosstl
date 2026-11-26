@@ -37,7 +37,14 @@ from ..function_templates import (
     template_type_parameter_names,
 )
 from ..struct_methods import method_local_names
+from ..tiled_status_reads import (
+    begin_status_texel_function,
+    end_status_texel_function,
+    open_status_texel_scope,
+    take_status_texel_declarations,
+)
 from ..vk_locations import VK_LOCATION_ATTRIBUTE, check_function_return_vk_location
+from ..work_graph_import import NODE_STAGE, crossgl_node_entry_attributes
 
 
 class FunctionStatementMixin:
@@ -53,6 +60,8 @@ class FunctionStatementMixin:
     ):
         """Render one HLSL function node as a CrossGL function block."""
         attributes = getattr(func, "attributes", []) or []
+        if getattr(func, "qualifier", None) == NODE_STAGE:
+            attributes = crossgl_node_entry_attributes(attributes)
         early_tests = any(
             str(getattr(attribute, "name", "")).lower() == "earlydepthstencil"
             for attribute in attributes
@@ -139,7 +148,9 @@ class FunctionStatementMixin:
         previous_source_function = getattr(self, "current_source_function", None)
         self.current_function_return_type = func.return_type
         self.current_source_function = func
+        previous_texels = begin_status_texel_function(self)
         code += self.generate_function_body(func.body, indent=indent + 1)
+        end_status_texel_function(self, previous_texels)
         self.current_function_return_type = previous_return_type
         self.current_source_function = previous_source_function
         code += "    " * indent + "}\n\n"
@@ -243,91 +254,101 @@ class FunctionStatementMixin:
             stmt = discarded_cast_operand(stmt)
             if stmt is None or isinstance(stmt, (bool, int, float)):
                 continue  # nothing to evaluate, as in ``(void)x;`` or ``1;``
-            if isinstance(stmt, FunctionCallNode):
-                code += self.generate_function_call_statement(stmt, indent, is_main)
-                continue
-            if isinstance(stmt, VariableNode):
-                code += self.format_matrix_layout_attributes(stmt, indent)
-            code += "    " * indent
-            if isinstance(stmt, VariableNode):
-                array_suffix = self.format_array_suffixes(stmt, is_main)
-                qualifier_prefix = self.format_local_storage_qualifier_prefix(
-                    stmt
-                ) + self.format_precise_qualifier_prefix(stmt)
-                if stmt.value is not None:
-                    value = self.generate_expression(
-                        stmt.value, is_main, expected_type=stmt.vtype
-                    )
-                    value = self.truncated_initializer_value(stmt, value)
-                    self.record_variable_type(stmt)
-                    code += (
-                        f"{qualifier_prefix}{self.map_variable_type(stmt)} "
-                        f"{self.render_identifier(stmt.name)}{array_suffix} = "
-                        f"{value};\n"
-                    )
-                else:
-                    self.record_variable_type(stmt)
-                    code += (
-                        f"{qualifier_prefix}{self.map_variable_type(stmt)} "
-                        f"{self.render_identifier(stmt.name)}{array_suffix};\n"
-                    )
-            elif isinstance(stmt, AssignmentNode):
-                texel_update = self.generate_storage_image_component_update(
-                    stmt, indent, is_main
-                )
-                if texel_update is not None:
-                    code += texel_update
-                else:
-                    code += self.generate_assignment(stmt, is_main) + ";\n"
-
-            elif isinstance(stmt, BinaryOpNode):
-                code += f"{self.generate_expression(stmt, is_main)};\n"
-            elif isinstance(stmt, UnaryOpNode):
-                code += f"{self.generate_expression(stmt, is_main)};\n"
-            elif isinstance(stmt, ReturnNode):
-                if stmt.value is None:
-                    code += "return;\n"
-                elif not is_main:
-                    value = self.generate_expression(
-                        stmt.value,
-                        is_main,
-                        expected_type=self.current_function_return_type,
-                    )
-                    code += f"return {value};\n"
-            elif isinstance(stmt, ForNode):
-                code += self.generate_for_loop(stmt, indent, is_main)
-            elif isinstance(stmt, WhileNode):
-                code += self.generate_while_loop(stmt, indent, is_main)
-            elif isinstance(stmt, DoWhileNode):
-                code += self.generate_do_while_loop(stmt, indent, is_main)
-            elif isinstance(stmt, IfNode):
-                code += self.generate_if_statement(stmt, indent, is_main)
-            elif isinstance(stmt, SwitchNode):
-                code += self.generate_switch_statement(stmt, indent, is_main)
-            elif isinstance(stmt, BreakNode):
-                code += "break;\n"
-            elif isinstance(stmt, ContinueNode):
-                code += "continue;\n"
-            elif isinstance(stmt, ScopedBlockNode):
-                code += "{\n"
-                code += self.generate_function_body(
-                    stmt.statements, indent + 1, is_main
-                )
-                code += "    " * indent + "}\n"
-            elif isinstance(stmt, str):
-                code += f"{stmt};\n"
-            elif isinstance(stmt, TypeAliasNode):
-                code += f"{self.generate_type_alias_declaration(stmt)}\n"
-            elif isinstance(stmt, StructNode):
-                code += self.generate_local_struct(stmt, indent, is_main)
-            elif isinstance(stmt, VALUE_STATEMENT_TYPES):
-                code += f"{self.generate_expression(stmt, is_main)};\n"
-            else:
-                code += self.refuse_import(
-                    f"statement {type(stmt).__name__} has no CrossGL form"
-                )
+            open_status_texel_scope(self)
+            try:
+                statement = self.generate_body_statement(stmt, indent, is_main)
+            finally:
+                declarations = take_status_texel_declarations(self)
+            for declaration in declarations:
+                code += "    " * indent + declaration + "\n"
+            code += statement
         self.current_variable_types = previous_types
         self.current_resource_array_dims = previous_dims
+        return code
+
+    def generate_body_statement(self, stmt, indent=0, is_main=False):
+        """Render one statement of a function body, indented by ``indent`` levels."""
+        code = ""
+        if isinstance(stmt, FunctionCallNode):
+            return self.generate_function_call_statement(stmt, indent, is_main)
+        if isinstance(stmt, VariableNode):
+            code += self.format_matrix_layout_attributes(stmt, indent)
+        code += "    " * indent
+        if isinstance(stmt, VariableNode):
+            array_suffix = self.format_array_suffixes(stmt, is_main)
+            qualifier_prefix = self.format_local_storage_qualifier_prefix(
+                stmt
+            ) + self.format_precise_qualifier_prefix(stmt)
+            if stmt.value is not None:
+                value = self.generate_expression(
+                    stmt.value, is_main, expected_type=stmt.vtype
+                )
+                value = self.truncated_initializer_value(stmt, value)
+                self.record_variable_type(stmt)
+                code += (
+                    f"{qualifier_prefix}{self.map_variable_type(stmt)} "
+                    f"{self.render_identifier(stmt.name)}{array_suffix} = "
+                    f"{value};\n"
+                )
+            else:
+                self.record_variable_type(stmt)
+                code += (
+                    f"{qualifier_prefix}{self.map_variable_type(stmt)} "
+                    f"{self.render_identifier(stmt.name)}{array_suffix};\n"
+                )
+        elif isinstance(stmt, AssignmentNode):
+            texel_update = self.generate_storage_image_component_update(
+                stmt, indent, is_main
+            )
+            if texel_update is not None:
+                code += texel_update
+            else:
+                code += self.generate_assignment(stmt, is_main) + ";\n"
+
+        elif isinstance(stmt, BinaryOpNode):
+            code += f"{self.generate_expression(stmt, is_main)};\n"
+        elif isinstance(stmt, UnaryOpNode):
+            code += f"{self.generate_expression(stmt, is_main)};\n"
+        elif isinstance(stmt, ReturnNode):
+            if stmt.value is None:
+                code += "return;\n"
+            elif not is_main:
+                value = self.generate_expression(
+                    stmt.value,
+                    is_main,
+                    expected_type=self.current_function_return_type,
+                )
+                code += f"return {value};\n"
+        elif isinstance(stmt, ForNode):
+            code += self.generate_for_loop(stmt, indent, is_main)
+        elif isinstance(stmt, WhileNode):
+            code += self.generate_while_loop(stmt, indent, is_main)
+        elif isinstance(stmt, DoWhileNode):
+            code += self.generate_do_while_loop(stmt, indent, is_main)
+        elif isinstance(stmt, IfNode):
+            code += self.generate_if_statement(stmt, indent, is_main)
+        elif isinstance(stmt, SwitchNode):
+            code += self.generate_switch_statement(stmt, indent, is_main)
+        elif isinstance(stmt, BreakNode):
+            code += "break;\n"
+        elif isinstance(stmt, ContinueNode):
+            code += "continue;\n"
+        elif isinstance(stmt, ScopedBlockNode):
+            code += "{\n"
+            code += self.generate_function_body(stmt.statements, indent + 1, is_main)
+            code += "    " * indent + "}\n"
+        elif isinstance(stmt, str):
+            code += f"{stmt};\n"
+        elif isinstance(stmt, TypeAliasNode):
+            code += f"{self.generate_type_alias_declaration(stmt)}\n"
+        elif isinstance(stmt, StructNode):
+            code += self.generate_local_struct(stmt, indent, is_main)
+        elif isinstance(stmt, VALUE_STATEMENT_TYPES):
+            code += f"{self.generate_expression(stmt, is_main)};\n"
+        else:
+            code += self.refuse_import(
+                f"statement {type(stmt).__name__} has no CrossGL form"
+            )
         return code
 
     def generate_local_struct(self, stmt, indent, is_main=False):

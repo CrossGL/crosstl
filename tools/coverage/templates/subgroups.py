@@ -16,8 +16,8 @@ both compute the number of warps, from the flattened thread index the way GLSL d
 HLSL has no built-in for the number or index of waves in a group or for the group's size, WGSL and Rust none for the
 workgroup's size (rust-gpu leaves out the ``WorkgroupSize`` constant), and WebGL 2 has no compute stage.
 
-naga rejects ``enable subgroups;`` ("not yet implemented in Naga") and accepts the built-ins without it, so the WGSL
-probes have no ``enable`` directive.
+WGSL's built-ins need ``enable subgroups;``. naga, which refuses that directive as not yet implemented, checks the
+probes without it (:func:`..validators.naga_source`), and Tint as written.
 """
 
 from __future__ import annotations
@@ -78,7 +78,9 @@ METAL = {
 WGSL = {
     **{
         name: Template(
-            f"outp[i] = f32({spelling});", params=f"@builtin({builtin}) {spelling}: u32"
+            f"outp[i] = f32({spelling});",
+            params=f"@builtin({builtin}) {spelling}: u32",
+            prelude="enable subgroups;",
         )
         for name, builtin, spelling in (
             ("subgroup-size", "subgroup_size", "width"),

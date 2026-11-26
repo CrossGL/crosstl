@@ -23,6 +23,11 @@ from .comma_expressions import (
 )
 from .rust_exact_lookups import rust_foreign_call_reason
 from .rust_gpu_builtins import generate_rust_gpu_builtin_call
+from .rust_gpu_images import generate_rust_gpu_image_call
+from .rust_gpu_ray_queries import (
+    generate_rust_gpu_ray_query_member_call,
+    rust_gpu_ray_query_constant,
+)
 from .rust_memory_atomics import generate_rust_memory_atomic_call
 from .shader_clock_refusals import (
     SHADER_CLOCK_BUILTINS,
@@ -54,6 +59,9 @@ class RustExpressionMixin:
             return str(expr)
         elif hasattr(expr, "__class__") and "Identifier" in str(expr.__class__):
             name = getattr(expr, "name", str(expr))
+            ray_query_constant = rust_gpu_ray_query_constant(self, name)
+            if ray_query_constant is not None:
+                return ray_query_constant
             return self.generate_identifier_value_expression(name)
         elif isinstance(expr, VariableNode):
             if hasattr(expr, "name"):
@@ -95,23 +103,10 @@ class RustExpressionMixin:
             finally:
                 self.array_object_depth -= 1
             array = self.lazy_static_object_expression(array_expr, array)
+            component = self.generate_component_access(expr, array_expr, array)
+            if component is not None:
+                return component
             index = self.generate_array_index_expression(index_expr)
-            if self.matrix_type_info(self.expression_result_type(array_expr)):
-                # glam matrices index their columns through col and col_mut.
-                if self.assignment_lhs_depth > 0:
-                    return f"(*{array}.col_mut({index}))"
-                return f"{array}.col({index})"
-            array_vector = self.vector_type_info(
-                self.expression_result_type(array_expr)
-            )
-            if array_vector is not None and array_vector["component_type"] == "bool":
-                # glam's BVecN has no Index impl; test(i) reads one lane, and no place expression names one.
-                if self.assignment_lhs_depth > 0:
-                    return self.refuse_lowering(
-                        "bool vector element assignment: glam BVecN has no indexable element place in rust-gpu",
-                        f"{array}.test({index})",
-                    )
-                return f"{array}.test({index})"
             padded = self.rust_gpu_padded_slice_read(array_expr, array, index)
             if padded is not None:
                 return padded
@@ -154,6 +149,11 @@ class RustExpressionMixin:
                 slice_length = self.generate_rust_gpu_slice_length(func_expr, args)
                 if slice_length is not None:
                     return slice_length
+                ray_query_call = generate_rust_gpu_ray_query_member_call(
+                    self, func_expr, args
+                )
+                if ray_query_call is not None:
+                    return ray_query_call
 
             qualified_method_call = self.generate_qualified_generic_trait_method_call(
                 func_expr,
@@ -172,6 +172,12 @@ class RustExpressionMixin:
                 )
                 return f"{self.rust_callable_name(callee)}({args_str})"
 
+            memory_atomic = generate_rust_memory_atomic_call(self, func_name, args)
+            if memory_atomic is not None:
+                return memory_atomic
+            image_call = generate_rust_gpu_image_call(self, func_name, args)
+            if image_call is not None:
+                return image_call
             rust_gpu_call = generate_rust_gpu_builtin_call(self, func_name, args)
             if rust_gpu_call is not None:
                 return rust_gpu_call
@@ -216,10 +222,6 @@ class RustExpressionMixin:
             bitcast_intrinsic = self.generate_bitcast_intrinsic_call(func_name, args)
             if bitcast_intrinsic is not None:
                 return bitcast_intrinsic
-
-            memory_atomic = generate_rust_memory_atomic_call(self, func_name, args)
-            if memory_atomic is not None:
-                return memory_atomic
 
             original_func_name = func_name
             func_name = self.mapped_function_name(func_name, len(args), args)
@@ -396,6 +398,11 @@ class RustExpressionMixin:
 
     def generate_increment_update(self, operand_expr, op):
         """``x += 1`` or ``x -= 1``: a ``++``/``--`` whose value is not used."""
+        component_store = self.expand_dynamic_component_write(
+            operand_expr, lambda: self.generate_increment_update(operand_expr, op)
+        )
+        if component_store is not None:
+            return component_store
         operand = self.generate_expression(operand_expr)
         assignment_op = "+=" if op == "++" else "-="
         increment = self.rust_increment_literal(

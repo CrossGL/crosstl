@@ -6,6 +6,7 @@ from ...thread_hierarchy import global_invocation_axis
 from ..bit_intrinsics import format_bit_intrinsic
 from ..CudaAst import UnaryOpNode
 from ..directed_rounding import directed_rounding_call, refuse_directed_rounding
+from ..float_classification import format_float_classification_intrinsic
 from ..function_templates import generic_call_name
 from ..pointer_math_import import format_pointer_output_call
 from ..sizeof_operands import sizeof_type_operand
@@ -92,6 +93,9 @@ class CudaImportIntrinsicMixin:
         bit_intrinsic = format_bit_intrinsic(self, raw_name, node.args, args, "CUDA")
         if bit_intrinsic is not None:
             return bit_intrinsic
+        classification = format_float_classification_intrinsic(raw_name, args)
+        if classification is not None:
+            return classification
         if raw_name == "sizeof" and len(args) == 1 and isinstance(node.args[0], str):
             # The type operand of ``sizeof(let)`` names the struct as its declaration does.
             args = [
@@ -236,11 +240,19 @@ class CudaImportIntrinsicMixin:
             return None
 
         display_name = normalized_name.rsplit("::", 1)[-1]
-        return self.format_cuda_time_function_diagnostic(display_name, args)
+        if args:
+            return self.format_cuda_time_function_diagnostic(display_name, args)
+        # clock64() reads the multiprocessor's 64-bit cycle counter, PTX %clock64, as a long long; CrossGL's
+        # clockARB() is that counter (CUDA output writes it as clock64()). clock() reads %clock, the low 32 bits of
+        # %clock64, as an int and returns it widened to clock_t, a long (CUDA C++ Programming Guide, "Time
+        # Function"; PTX ISA, "Special Registers: %clock, %clock_hi, %clock64").
+        if display_name == "clock64":
+            return "i64(clockARB())"
+        return "i64(i32(clock2x32ARB().x))"
 
     def format_cuda_time_function_diagnostic(self, function_name, args):
         return self.refuse_import(
-            f"CUDA time function {function_name}({', '.join(args)}): CrossGL has no clock counter",
+            f"CUDA time function {function_name}({', '.join(args)}) takes no arguments",
             "0",
         )
 

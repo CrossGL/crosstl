@@ -157,12 +157,16 @@ class CudaImportDeclarationMixin:
                 member_name = getattr(member, "name", str(member))
                 member_value = getattr(member, "value", None)
 
+            output_member = self.sanitize_enum_member_name(member_name)
             if member_value is not None:
                 value = self.visit(member_value)
-                member_name = self.sanitize_enum_member_name(member_name)
-                self.emit(f"{member_name} = {value},")
+                self.emit(f"{output_member} = {value},")
             else:
-                self.emit(f"{self.sanitize_enum_member_name(member_name)},")
+                self.emit(f"{output_member},")
+            if not getattr(node, "is_scoped", False):
+                # An unscoped enumerator is in scope where its enum is ([dcl.enum]/11), and CrossGL names every
+                # enumerator through its enum: ``Low`` reads ``Mode::Low``. A later declaration of ``Low`` hides it.
+                self.register_enumerator_name(member_name, f"{name}::{output_member}")
 
         self.indent_level -= 1
         self.emit("};")
@@ -236,6 +240,14 @@ class CudaImportDeclarationMixin:
 
         self.register_packed_argument_list(node)
         self.register_unique_ptr_name(node.name, node.vtype)
+        surface = (
+            self.surface_global_declaration(var_type, node.name, output_name)
+            if self.namespace_scope_variable and not node.value
+            else None
+        )
+        if surface is not None:
+            self.emit(surface)
+            return
         if (
             self.namespace_scope_variable
             and is_device_memory(node)
@@ -246,8 +258,7 @@ class CudaImportDeclarationMixin:
                 node,
                 output_name,
                 var_type,
-                self.allocate_global_resource_binding(),
-                "CUDA",
+                self.allocate_global_resource_binding,
             )
             if declaration is not None:
                 self.emit(declaration)

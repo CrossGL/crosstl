@@ -3,6 +3,7 @@
 import re
 
 from ...CUDA.array_extents import declare_enumerators
+from ...CUDA.libm_names import LIBM_BINARY32_FUNCTIONS
 
 
 class HipTypeConversionMixin:
@@ -340,6 +341,8 @@ class HipTypeConversionMixin:
             # Math functions
             "sqrtf": "sqrt",
             "powf": "pow",
+            # HIP's single-precision integer power; CrossGL spells both precisions powi.
+            "powif": "powi",
             # The accurate sinf and cosf are bounded over the whole binary32 range, which the libm rule
             # carries; CrossGL's sin and cos have the precision of the target.
             "sinf": "__cgl_libm_sin",
@@ -348,9 +351,7 @@ class HipTypeConversionMixin:
             "sinhf": "sinh",
             "coshf": "cosh",
             "tanhf": "tanh",
-            "asinhf": "asinh",
-            "acoshf": "acosh",
-            "atanhf": "atanh",
+            **LIBM_BINARY32_FUNCTIONS,
             "asinf": "asin",
             "acosf": "acos",
             "atanf": "atan",
@@ -417,6 +418,8 @@ class HipTypeConversionMixin:
             "double": "f64",
             "size_t": "u64",
             "ptrdiff_t": "i64",
+            # clock_t is long on the LP64 hosts CUDA and ROCm compile device code for (C11 7.27.1).
+            "clock_t": "i64",
             # Vector functions
             **self.VECTOR_CONSTRUCTOR_MAPPING,
             "dim3": "vec3<u32>",
@@ -503,12 +506,16 @@ class HipTypeConversionMixin:
                 member_name = getattr(member, "name", str(member))
                 member_value = getattr(member, "value", None)
 
+            output_member = self.sanitize_enum_member_name(member_name)
             if member_value is not None:
                 value = self.visit(member_value)
-                member_name = self.sanitize_enum_member_name(member_name)
-                self.emit(f"{member_name} = {value},")
+                self.emit(f"{output_member} = {value},")
             else:
-                self.emit(f"{self.sanitize_enum_member_name(member_name)},")
+                self.emit(f"{output_member},")
+            if not getattr(node, "is_scoped", False):
+                # An unscoped enumerator is in scope where its enum is ([dcl.enum]/11), and CrossGL names every
+                # enumerator through its enum: ``Low`` reads ``Mode::Low``. A later declaration of ``Low`` hides it.
+                self.register_enumerator_name(member_name, f"{name}::{output_member}")
 
         self.indent_level -= 1
         self.emit("};")

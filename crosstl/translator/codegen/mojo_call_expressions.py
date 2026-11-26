@@ -18,6 +18,10 @@ from .lowering_refusals import (
 from .mojo_bit_functions import (
     generate_mojo_bit_function_call,
 )
+from .mojo_min_max import generate_mojo_min_max
+from .mojo_numeric_functions import (
+    generate_mojo_numeric_function_call,
+)
 from .mojo_tables import (
     MOJO_GENERIC_TEXTURE_BUILTINS,
     MOJO_IMAGE_ATOMIC_BUILTINS,
@@ -119,6 +123,10 @@ class MojoCallExpressionMixin:
         if reduction is not None:
             return reduction
 
+        buffer_object_call = self.generate_mojo_buffer_object_call(func_name, expr.args)
+        if buffer_object_call is not None:
+            return buffer_object_call
+
         ray_tracing_call = self.generate_ray_tracing_call_expression(
             func_name, expr.args
         )
@@ -145,12 +153,8 @@ class MojoCallExpressionMixin:
             bool_mix_call = self.generate_bool_mix_call(expr.args)
             if bool_mix_call is not None:
                 return bool_mix_call
-        if func_name == "clamp":
-            clamp_call = self.generate_clamp_call(expr.args)
-            if clamp_call is not None:
-                return clamp_call
-        if func_name in {"min", "max"}:
-            min_max_call = self.generate_min_max_call(func_name, expr.args, target_type)
+        if func_name in {"min", "max", "clamp"}:
+            min_max_call = generate_mojo_min_max(self, func_name, expr.args)
             if min_max_call is not None:
                 return min_max_call
         if func_name == "smoothstep":
@@ -234,6 +238,11 @@ class MojoCallExpressionMixin:
         bit_function = generate_mojo_bit_function_call(self, func_name, expr.args)
         if bit_function is not None:
             return bit_function
+        numeric_function = generate_mojo_numeric_function_call(
+            self, func_name, expr.args, target_type
+        )
+        if numeric_function is not None:
+            return numeric_function
         split_builtin = self.generate_mojo_split_builtin_call(func_name, expr.args)
         if split_builtin is not None:
             return split_builtin

@@ -13,7 +13,6 @@ import subprocess
 import pytest
 
 import crosstl
-from crosstl.translator.codegen.lowering_refusals import LoweringRefused
 from crosstl.translator.lexer import Lexer
 from crosstl.translator.parser import Parser
 from crosstl.translator.semantics import (
@@ -99,17 +98,6 @@ def _graphics(stage_scope):
 
 @pytest.mark.parametrize("backend", COMPUTE_TARGETS)
 def test_compute_stage_block_matches_module_scope_block(backend, tmp_path):
-    if backend == "rust":
-        # The rust-gpu output does not lower constant blocks to uniform blocks yet; both scopes are refused alike.
-        messages = []
-        for stage_scope, name in ((True, "stage.cgl"), (False, "module.cgl")):
-            with pytest.raises(
-                LoweringRefused, match="constant buffers are not lowered"
-            ) as info:
-                _translate(_compute(stage_scope), backend, tmp_path, name)
-            messages.append(str(info.value))
-        assert messages[0] == messages[1]
-        return
     stage = _translate(_compute(True), backend, tmp_path, "stage.cgl")
     module = _translate(_compute(False), backend, tmp_path, "module.cgl")
     assert stage == module

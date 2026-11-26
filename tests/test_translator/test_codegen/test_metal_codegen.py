@@ -1241,15 +1241,15 @@ def test_metal_reconstructs_retained_source_union_layout_and_compiles():
         ),
         (
             """
-            @union_layout(4, 4, little_endian, directx)
-            struct ForeignAbi {
-                @union_member_layout(0, 4, 4) uint word;
+            @union_layout(12, 4, little_endian, directx)
+            struct ForeignLayout {
+                @union_member_layout(0, 12, 4) vec3 value;
             }
             """,
-            "source-abi-unsupported",
+            "member-layout-mismatch",
         ),
     ],
-    ids=["missing-member", "nonzero-offset", "foreign-abi"],
+    ids=["missing-member", "nonzero-offset", "foreign-layout"],
 )
 def test_metal_retained_union_layout_rejects_ambiguous_contracts(declaration, reason):
     shader = f"shader InvalidMetalUnion {{ {declaration} }}"
@@ -16820,7 +16820,8 @@ def test_metal_hlsl_system_value_outputs_lower_to_msl_attributes():
         ("fragment", "vec3", "gl_FragCoord", "position", "float4"),
         ("fragment", "vec3", "gl_PointCoord", "point_coord", "float2"),
         ("fragment", "float", "gl_SampleID", "sample_id", "uint"),
-        ("fragment", "int", "gl_SampleMaskIn", "sample_mask", "uint"),
+        # GLSL's int mask is accepted (test_metal_sample_mask_input.py); a float is not.
+        ("fragment", "float", "gl_SampleMaskIn", "sample_mask", "uint"),
     ],
 )
 def test_graphics_builtin_parameter_types_are_validated(

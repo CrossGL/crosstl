@@ -4,6 +4,7 @@ from ..unhandled import UNHANDLED
 from .generic_function_utils import (
     generate_numeric_trait_method_call,
     generic_function_call_name,
+    generic_function_value_arguments,
     reject_unresolved_generic_function_call,
 )
 from .metal_builtin_call_forms import MetalBuiltinCallFormMixin
@@ -42,6 +43,37 @@ class MetalCallExpressionMixin(MetalBuiltinCallFormMixin):
         else:
             callee = self.generate_expression(func_expr)
 
+        if (
+            func_name == "select"
+            and func_name not in self.user_function_names
+            and len(expr.args) == 3
+            and all(
+                self.is_matrix_value_type(self.expression_result_type(argument))
+                for argument in expr.args[:2]
+            )
+        ):
+            false_value, true_value, condition = expr.args
+            condition_type = self.map_type(self.expression_result_type(condition))
+            if condition_type != "bool":
+                return self.refuse_lowering(
+                    "matrix select condition must be a scalar bool",
+                    self.generate_expression(false_value),
+                )
+            if not all(
+                self.metal_expression_is_side_effect_free(value)
+                for value in (false_value, true_value)
+            ):
+                return self.refuse_lowering(
+                    "matrix select evaluates both value arguments, but a "
+                    "conditional expression would skip one side-effecting argument",
+                    self.generate_expression(false_value),
+                )
+            return (
+                f"({self.generate_expression(condition)} ? "
+                f"{self.generate_expression(true_value)} : "
+                f"{self.generate_expression(false_value)})"
+            )
+
         handled = self.generate_metal_numeric_builtin_call(expr, func_expr, func_name)
         if handled is not UNHANDLED:
             return handled
@@ -55,7 +87,10 @@ class MetalCallExpressionMixin(MetalBuiltinCallFormMixin):
             expr.args,
         )
         argument_func_name = func_name
+        call_args = expr.args
         if specialized_func_name is not None:
+            # Leading type arguments, as in bump(vec2, w, w), select the specialization; they are not passed.
+            call_args = generic_function_value_arguments(self, func_name, expr.args)
             callee = specialized_func_name
             func_name = specialized_func_name
         else:
@@ -67,31 +102,31 @@ class MetalCallExpressionMixin(MetalBuiltinCallFormMixin):
         if handled is not UNHANDLED:
             return handled
         readonly_raw_buffer_call = self.readonly_raw_buffer_call_diagnostic(
-            argument_func_name, expr.args
+            argument_func_name, call_args
         )
         if readonly_raw_buffer_call is not None:
             return readonly_raw_buffer_call
         readonly_parameter_call = self.readonly_metal_parameter_call_diagnostic(
-            argument_func_name, expr.args
+            argument_func_name, call_args
         )
         if readonly_parameter_call is not None:
             return readonly_parameter_call
         mesh_context_call = self.metal_mesh_dispatch_context_call_diagnostic(func_name)
         if mesh_context_call is not None:
             return mesh_context_call
-        self.validate_address_space_call(argument_func_name, expr.args)
+        self.validate_address_space_call(argument_func_name, call_args)
         wave_lane_call = self.metal_wave_lane_helper_call_diagnostic(func_name)
         if wave_lane_call is not None:
             return wave_lane_call
         readonly_mesh_payload_call = self.readonly_metal_mesh_payload_call_diagnostic(
-            argument_func_name, expr.args
+            argument_func_name, call_args
         )
         if readonly_mesh_payload_call is not None:
             return readonly_mesh_payload_call
-        self.validate_function_resource_argument_types(func_name, expr.args)
-        self.validate_function_image_access_arguments(func_name, expr.args)
-        args = self.generate_function_call_arguments(argument_func_name, expr.args)
-        if self.function_call_matches_known_signature(func_name, expr.args):
+        self.validate_function_resource_argument_types(func_name, call_args)
+        self.validate_function_image_access_arguments(func_name, call_args)
+        args = self.generate_function_call_arguments(argument_func_name, call_args)
+        if self.function_call_matches_known_signature(func_name, call_args):
             args.extend(self.required_function_stage_output_argument_names(func_name))
             args.extend(
                 self.required_function_stage_parameter_argument_names(func_name)

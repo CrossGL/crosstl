@@ -283,11 +283,13 @@ class TestCudaCodeGen:
         ast = parser.parse()
 
         # An initialized __device__ variable is device memory the module load fills, which no buffer the host
-        # binds carries; it used to import as a per-invocation private variable.
-        with pytest.raises(CudaImportRefused) as raised:
-            CudaToCrossGLConverter().generate(ast)
-        assert "'g_uids' has an initializer" in str(raised.value)
-        assert "'grid_dot_result' has an initializer" in str(raised.value)
+        # binds carries: it imports as one initialized object in the CrossGL device address space, not as a
+        # storage buffer or a per-invocation private variable.
+        result = CudaToCrossGLConverter().generate(ast)
+        assert "var<device> g_uids: i32 = 0;" in result
+        assert "var<device> grid_dot_result: f64 = 0.0;" in result
+        assert "@binding" not in result
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
 
     def test_cuda_constant_memory_globals_use_distinct_crossgl_bindings(self):
         code = """
@@ -1134,7 +1136,7 @@ class TestCudaCodeGen:
         assert "cuda::thread_scope" not in result
         CrossGLParser(CrossGLLexer(result).tokens).parse()
 
-    def test_syncwarp_mask_emits_explicit_diagnostic(self):
+    def test_syncwarp_mask_stays_a_cuda_call(self):
         code = """
         __global__ void sync(unsigned int mask) {
             __syncwarp(mask);
@@ -1146,19 +1148,30 @@ class TestCudaCodeGen:
         parser = CudaParser(tokens)
         ast = parser.parse()
 
-        codegen = CudaToCrossGLConverter()
-        result, message = cuda_import_partial_output(codegen.generate, ast)
+        result = CudaToCrossGLConverter().generate(ast)
 
-        # A full-warp __syncwarp stays a CUDA call: a subgroup barrier waits for a subgroup of another size on most
-        # targets. A mask that may name fewer lanes has no CrossGL barrier.
+        # Both forms stay CUDA calls: a subgroup barrier waits for a subgroup of another size on most targets, and
+        # a mask may name only some lanes. CUDA and HIP output write them back; crosstl.translator.semantics.warp
+        # emulates the full-warp form and refuses a mask it cannot show to name the whole warp.
+        assert "__syncwarp(mask);" in result
         assert "__syncwarp();" in result
         assert "subgroupBarrier" not in result
-        assert (
-            "CUDA __syncwarp(mask): CrossGL has no barrier over a subset of the subgroup"
-            in message
+        CrossGLParser(CrossGLLexer(result).tokens).parse()
+
+    def test_syncwarp_mask_with_too_many_arguments_is_refused(self):
+        code = """
+        __global__ void sync(unsigned int mask) {
+            __syncwarp(mask, 1);
+        }
+        """
+        ast = CudaParser(CudaLexer(code).tokenize()).parse()
+
+        result, message = cuda_import_partial_output(
+            CudaToCrossGLConverter().generate, ast
         )
-        assert "__syncwarp(mask)" not in result
-        assert "None" not in result
+
+        assert "CUDA __syncwarp(mask, 1) takes one mask" in message
+        assert "__syncwarp(mask" not in result
 
     def test_nvidia_cuda_shfl_sync_full_width_argument_converts(self):
         code = """
@@ -8930,11 +8943,12 @@ class TestCudaCodeGen:
         result = CudaToCrossGLConverter().generate(ast)
 
         assert "var texRef: sampler2D;" in result
-        assert "var surfaceRef: image2D;" in result
+        # Each surface takes the format of the float4 texels it reads and writes.
+        assert "@format(rgba32f) var surfaceRef: image2D;" in result
         assert (
             "void resourcePointerOps("
             "ptr<sampler2D> textureObjects, ptr<image2D> surfaceObjects, "
-            "sampler2D legacyTex, image2D legacySurface, i32 index"
+            "sampler2D legacyTex, @format(rgba32f) image2D legacySurface, i32 index"
         ) in result
         assert (
             "var fromPointer: vec4<f32> = texture("
@@ -9013,9 +9027,17 @@ class TestCudaCodeGen:
         codegen = CudaToCrossGLConverter()
         result = codegen.generate(ast)
 
+        # Every surface is read as float: one r32f channel, the .x of the texel imageLoad returns.
+        for declaration in (
+            "@format(r32f) image2D img,",
+            "@format(r32f) image1D line,",
+            "@format(r32f) image3D vol,",
+            "@format(r32f) imageCube cube,",
+        ):
+            assert declaration in result
         assert (
             "var clamped: f32 = imageLoad(img, clamp(vec2<i32>(x, y), "
-            "vec2<i32>(0, 0), imageSize(img) - vec2<i32>(1, 1)));" in result
+            "vec2<i32>(0, 0), imageSize(img) - vec2<i32>(1, 1))).x;" in result
         )
         # cudaBoundaryModeZero and a mode that is not a constant keep the CUDA call, which every target refuses.
         assert (
@@ -9023,20 +9045,20 @@ class TestCudaCodeGen:
             in result
         )
         assert "imageStore(img" not in result
-        assert "var trapped: f32 = imageLoad(img, vec2<i32>(x, y));" in result
-        assert "var plain: f32 = imageLoad(img, vec2<i32>(x, y));" in result
+        assert "var trapped: f32 = imageLoad(img, vec2<i32>(x, y)).x;" in result
+        assert "var plain: f32 = imageLoad(img, vec2<i32>(x, y)).x;" in result
         assert (
             "var lineClamped: f32 = imageLoad(line, "
-            "clamp(x, 0, imageSize(line) - 1));" in result
+            "clamp(x, 0, imageSize(line) - 1)).x;" in result
         )
         assert (
             "var voxelClamped: f32 = imageLoad(vol, clamp(vec3<i32>(x, y, z), "
-            "vec3<i32>(0, 0, 0), imageSize(vol) - vec3<i32>(1, 1, 1)));" in result
+            "vec3<i32>(0, 0, 0), imageSize(vol) - vec3<i32>(1, 1, 1))).x;" in result
         )
         assert (
             "var faceClamped: f32 = imageLoad(cube, vec3<i32>("
             "clamp(x, 0, imageSize(cube).x - 1), "
-            "clamp(y, 0, imageSize(cube).y - 1), z));" in result
+            "clamp(y, 0, imageSize(cube).y - 1), z)).x;" in result
         )
         assert (
             "var unknown: f32 = surf2Dread<float>(img, (x * sizeof(float)), y, "
@@ -9075,11 +9097,11 @@ class TestCudaCodeGen:
         assert (
             "var a: f32 = imageLoad(layers, vec3<i32>("
             "clamp(x, 0, imageSize(layers).x - 1), "
-            "clamp(y, 0, imageSize(layers).y - 1), layer));" in result
+            "clamp(y, 0, imageSize(layers).y - 1), layer)).x;" in result
         )
         assert (
             "var b: f32 = imageLoad(lines, vec2<i32>("
-            "clamp(x, 0, imageSize(lines).x - 1), layer));" in result
+            "clamp(x, 0, imageSize(lines).x - 1), layer)).x;" in result
         )
         assert (
             "imageStore(cubes, vec3<i32>(clamp(x, 0, imageSize(cubes).x - 1), "

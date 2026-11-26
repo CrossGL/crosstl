@@ -1,5 +1,6 @@
 """Steps of ``GLSLToCrossGLConverter.generate_shader``: resetting the per-shader state, recording the built-in stage outputs the entry writes, rendering the structs, stage interfaces, uniforms, constants and globals, and rendering the stage block with its functions."""
 
+from .atomic_counter_offsets import is_applied_default
 from .block_member_names import (
     instance_block_member_names,
     rename_shadowing_locals,
@@ -8,6 +9,16 @@ from .OpenglAst import (
     LayoutNode,
     ReturnNode,
     VariableNode,
+)
+
+# The fragment built-ins a shader writes besides its colour outputs: depth, the sample mask and the stencil
+# reference value of GL_ARB_shader_stencil_export (GL_EXT spelling included). A fragment entry that writes one of
+# them keeps its colour outputs as declarations, so that every output stays a stage-level variable.
+FRAGMENT_BUILTIN_OUTPUTS = (
+    "gl_FragDepth",
+    "gl_SampleMask",
+    "gl_FragStencilRefARB",
+    "gl_FragStencilRefEXT",
 )
 
 
@@ -27,9 +38,7 @@ class GLSLShaderSectionMixin:
         self.flattened_uniform_block_member_renames = {}
         rename_shadowing_locals(node, instance_block_member_names(node))
         self.emitted_cbuffer_member_names = set()
-        self.function_name_renames = self.collect_function_name_renames(
-            getattr(node, "functions", []) or []
-        )
+        self.function_name_renames = self.collect_function_name_renames(node)
         self.user_function_arities = {
             (
                 getattr(function, "name", None),
@@ -66,9 +75,9 @@ class GLSLShaderSectionMixin:
             [*self.inputs, *self.outputs], builtin_redeclaration_qualifiers
         )
 
-        fragment_writes_depth = self.fragment_main_writes_name(node, "gl_FragDepth")
-        fragment_writes_sample_mask = self.fragment_main_writes_name(
-            node, "gl_SampleMask"
+        fragment_writes_builtin_output = any(
+            self.fragment_main_writes_name(node, name)
+            for name in FRAGMENT_BUILTIN_OUTPUTS
         )
         vertex_writes_point_size = self.main_writes_name(
             node, "gl_PointSize", shader_type="vertex"
@@ -142,8 +151,7 @@ class GLSLShaderSectionMixin:
         if (
             self.shader_type == "fragment"
             and not self.outputs
-            and not fragment_writes_depth
-            and not fragment_writes_sample_mask
+            and not fragment_writes_builtin_output
             and fragment_entry_return is None
         ):
             builtin = VariableNode(
@@ -151,7 +159,7 @@ class GLSLShaderSectionMixin:
             )
             self.outputs.append(builtin)
         fragment_uses_direct_outputs = self.fragment_uses_direct_output_declarations(
-            fragment_writes_depth, fragment_writes_sample_mask
+            fragment_writes_builtin_output
         )
 
         for uniform in node.uniforms:
@@ -399,7 +407,12 @@ class GLSLShaderSectionMixin:
         """Render the stage block: layouts, helper functions and the entry point."""
         result += self.indent_str + f"{self.shader_type} {{\n"
 
-        layouts = getattr(node, "layouts", []) or []
+        # The counters carry the offsets of the atomic counter defaults (:mod:`.atomic_counter_offsets`).
+        layouts = [
+            layout
+            for layout in getattr(node, "layouts", []) or []
+            if not is_applied_default(layout)
+        ]
         if layouts:
             self.increase_indent()
             for layout in layouts:

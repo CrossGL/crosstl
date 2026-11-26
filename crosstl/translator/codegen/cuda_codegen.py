@@ -29,6 +29,7 @@ from .comma_expressions import (
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
 from .cuda_bindings import CudaBindingMixin
 from .cuda_buffer_calls import CudaBufferCallMixin
+from .cuda_componentwise_math import componentwise_math_result_type
 from .cuda_expression_types import CudaExpressionTypeMixin
 from .cuda_expressions import CudaExpressionMixin
 from .cuda_function_calls import CudaFunctionCallMixin
@@ -45,6 +46,7 @@ from .cuda_math_calls import CudaMathCallMixin
 from .cuda_query_metadata import CudaQueryMetadataMixin
 from .cuda_query_returns import CudaQueryReturnMixin
 from .cuda_refusals import CudaLoweringRefused
+from .cuda_reserved_names import rename_reserved_program_names
 from .cuda_resource_access import CudaResourceAccessMixin
 from .cuda_resource_calls import CudaResourceCallMixin
 from .cuda_semantics import CudaSemanticMixin
@@ -52,6 +54,8 @@ from .cuda_shared_memory import helper_shared_variables
 from .cuda_stage_attributes import CudaStageAttributeMixin
 from .cuda_stage_checks import CudaStageCheckMixin
 from .cuda_statements import CudaStatementMixin
+from .cuda_subgroup_inputs import is_subgroup_builtin_input
+from .cuda_surface_texels import CudaSurfaceTexelMixin
 from .cuda_tables import (
     CUDA_64BIT_BITCAST_FUNCTIONS,
     CUDA_BITCAST_FUNCTION_TARGETS,
@@ -147,6 +151,7 @@ class CudaCodeGen(
     CudaVectorTypeMixin,
     CudaTextureMixin,
     CudaTexelBufferMixin,
+    CudaSurfaceTexelMixin,
     CudaGatherMixin,
     LoweringRefusalMixin,
     PreciseEvaluationMixin,
@@ -217,6 +222,7 @@ class CudaCodeGen(
         self.match_temp_variable_index = 0
         self.variable_types = {}
         self.image_resource_accesses = {}
+        self.surface_texels = {}
         self.buffer_resource_accesses = {}
         self.glsl_buffer_block_accesses = {}
         self.glsl_buffer_block_layouts = {}
@@ -355,6 +361,8 @@ class CudaCodeGen(
         ast_node = canonicalize_separate_textures(ast_node)
         # A user function named like a device library function would redefine it or make its calls ambiguous.
         ast_node = rename_cuda_library_functions(ast_node)
+        # A program-scope value is declared in the global namespace, where C++ reserves names that start with ``_``.
+        ast_node = rename_reserved_program_names(ast_node)
         # GLSL's lessThan, equal, not and the other relational built-ins are the componentwise operators.
         lower_relational_builtins(ast_node)
         # CUDA has no hidden buffer counter, so a counted RWStructuredBuffer gets an explicit one.
@@ -368,6 +376,7 @@ class CudaCodeGen(
         self.current_function_return_type = None
         self.match_temp_variable_index = 0
         self.image_resource_accesses = {}
+        self.surface_texels = {}
         self.buffer_resource_accesses = {}
         self.glsl_buffer_block_accesses = {}
         self.glsl_buffer_block_layouts = {}
@@ -558,9 +567,11 @@ class CudaCodeGen(
                     and id(var) not in self.file_scope_shared_variable_ids
                 ):
                     continue
-                if self.cuda_stage_local_builtin_role(stage_name, var) is not None:
-                    # A stage-local input that names a compute built-in is the
-                    # built-in itself, not a variable to declare.
+                if self.cuda_stage_local_builtin_role(
+                    stage_name, var
+                ) is not None or is_subgroup_builtin_input(var):
+                    # A stage-local input that names a compute or subgroup
+                    # built-in is the built-in itself, not a variable to declare.
                     continue
                 var_name = getattr(var, "name", None)
                 var_type = self.type_name_string(self.get_variable_node_type(var))
@@ -893,10 +904,10 @@ class CudaCodeGen(
                 qualifier_str += " "
 
             declaration_type = self.glsl_buffer_block_declaration_type(var_type, node)
-            declaration = (
-                f"{qualifier_str}"
-                f"{self.format_typed_declarator(declaration_type, node.name)}"
+            declarator = self.apply_volatile_qualifier_to_declarator(
+                self.format_typed_declarator(declaration_type, node.name), node
             )
+            declaration = f"{qualifier_str}{declarator}"
             declaration = self.apply_restrict_qualifier_to_declaration(
                 declaration, node.name, node
             )
@@ -908,7 +919,10 @@ class CudaCodeGen(
                     if array_initializer.strip():
                         declaration += f" = {array_initializer}"
                     return declaration
-                declaration += f" = {self.visit(initial_value)}"
+                value = self.visit_in_texel_context(
+                    initial_value, self.map_type(var_type)
+                )
+                declaration += f" = {value}"
             return declaration
 
         return node.name
@@ -951,7 +965,13 @@ class CudaCodeGen(
             target = self.visit(node.target)
         finally:
             self.assignment_lhs_depth -= 1
-        value = self.visit(node.value)
+        value = (
+            self.visit_in_texel_context(
+                node.value, self.expression_result_type(node.target)
+            )
+            if operator == "="
+            else self.visit(node.value)
+        )
         compound_binary_ops = {
             "+=": "+",
             "-=": "-",
@@ -1055,7 +1075,7 @@ class CudaCodeGen(
 
     def cuda_half_constructor_expression(self, constructor_type, raw_args, args):
         """Lower CrossGL FP16 constructors to CUDA's documented half intrinsics."""
-        if constructor_type in {"f16", "half", "float16"}:
+        if constructor_type in {"f16", "half", "float16", "float16_t"}:
             if not args:
                 return "half{}"
             return f"__float2half({args[0]})"
@@ -1437,6 +1457,11 @@ class CudaCodeGen(
                 return self.function_return_types[specialized_func_name]
             if self.is_user_defined_function(func_name):
                 return self.function_return_types.get(func_name)
+            componentwise_type = componentwise_math_result_type(
+                self, func_name, raw_args
+            )
+            if componentwise_type is not None:
+                return componentwise_type
             if func_name in CUDA_WAVE_OP_ARITIES:
                 return self.wave_result_type(
                     func_name,

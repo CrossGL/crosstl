@@ -748,8 +748,14 @@ class OpenGLWaveOperationMixin:
                     )
                 )
 
-        generated_args = ", ".join(self.generate_expression(arg) for arg in args)
-        return f"{func_name}({generated_args})"
+        generated = [self.generate_expression(arg) for arg in args]
+        if func_name == "interpolateAtSample":
+            # GLSL declares the sample number ``int`` and converts no other integer type to it (GLSL 4.60 sections
+            # 8.13.2 and 4.1.10); HLSL's EvaluateAttributeAtSample and MSL's interpolate_at_sample take a uint.
+            sample_type = self.expression_result_type(args[1])
+            if sample_type is not None and self.map_type(sample_type) != "int":
+                generated[1] = f"int({generated[1]})"
+        return f"{func_name}({', '.join(generated)})"
 
     def generate_derivative_call(self, func_name, args):
         expected_args = self.GLSL_DERIVATIVE_FUNCTIONS.get(func_name)
@@ -953,7 +959,11 @@ class OpenGLWaveOperationMixin:
         ):
             return None
         buffer_expr = func_expr.object
-        if not isinstance(buffer_expr, (IdentifierNode, VariableNode)):
+        # One buffer of a declared buffer array keeps its elements in a block member.
+        array_member = self.glsl_structured_buffer_array_element_member(buffer_expr)
+        if array_member is None and not isinstance(
+            buffer_expr, (IdentifierNode, VariableNode)
+        ):
             return None
         structured = {"StructuredBuffer", "RWStructuredBuffer"}
         buffer_type = self.expression_result_type(buffer_expr)

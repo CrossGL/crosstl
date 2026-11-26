@@ -8,7 +8,8 @@ argument that its callers pass on.
 The GPU index built-ins need no argument: every device function can read Mojo's ``global_idx``, ``thread_idx``,
 ``block_idx``, ``block_dim`` and ``grid_dim``, so a function that reads one declares it as a local.
 
-A private variable of each invocation becomes a local of the kernel (``mojo_private_globals``). A storage block or
+A private variable of each invocation becomes a local of the kernel (``mojo_private_globals``), and an HLSL
+structured or byte-address buffer object becomes a pointer argument (``mojo_buffer_objects``). A storage block or
 any other host-visible variable declared outside a function has no Mojo spelling yet, and the generator refuses the
 program instead of declaring it.
 """
@@ -123,9 +124,10 @@ def mojo_declared_names(node, names=None, visited=None):
 class MojoKernelArgumentMixin:
     """Kernel-argument members of ``MojoCodeGen``."""
 
-    def reset_mojo_kernel_arguments(self):
+    def reset_mojo_kernel_arguments(self, ast=None):
         self.mojo_module_kernel_arguments = {}
         self.mojo_stage_kernel_arguments = {}
+        self.reset_mojo_buffer_objects(ast)
 
     def mojo_kernel_argument_type(self, node, variable_type):
         """The CrossGL type a module-scope declaration is passed to the kernel as, or None."""
@@ -135,6 +137,9 @@ class MojoKernelArgumentMixin:
             return None
         if self.parse_pointer_type_name(str(variable_type)) is not None:
             return variable_type
+        buffer_object_type = self.mojo_buffer_object_argument_type(node, variable_type)
+        if buffer_object_type is not None:
+            return buffer_object_type
         qualifiers = {
             str(qualifier).lower()
             for qualifier in getattr(node, "qualifiers", []) or []
@@ -159,15 +164,17 @@ class MojoKernelArgumentMixin:
         )
         arguments.setdefault(name, variable_type)
         self.register_variable_type(name, variable_type)
-        return ""
+        # A buffer object whose size the program queries also passes that size.
+        return self.declare_mojo_buffer_length_argument(name, arguments)
 
     def refuse_mojo_module_variable(self, name, what="a variable", type_name=None):
         """Refuse a module-scope declaration Mojo cannot hold."""
         described = f"{name}: {self.type_name(type_name)}" if type_name else name
         raise MojoRefusal(
             f"Mojo has no global variables, so {what} declared outside a function ({described}) has no Mojo "
-            "spelling; only uniform values and storage buffers of a runtime-sized array, which become kernel "
-            "arguments, private variables, which become kernel locals, and constants can be declared there"
+            "spelling; only uniform values, storage buffers of a runtime-sized array and HLSL structured and "
+            "byte-address buffers, which become kernel arguments, private variables, which become kernel locals, "
+            "and constants can be declared there"
         )
 
     def is_mojo_constant_declaration(self, node):
@@ -183,9 +190,9 @@ class MojoKernelArgumentMixin:
         Buffers and uniform values become kernel arguments and constants become ``comptime`` values. Mojo has no
         global variables: a private variable of each invocation becomes a local of the kernel (mojo_private_globals),
         a GPU index input variable becomes a local of each function that reads it, and a storage block or any
-        other host-visible variable raises a typed refusal. Textures, images, samplers, HLSL buffer objects and
-        structures holding them still keep the module-scope ``var`` the generator wrote before Mojo dropped global
-        variables (#2338).
+        other host-visible variable raises a typed refusal. An HLSL structured or byte-address buffer becomes a
+        pointer argument (mojo_buffer_objects). Textures, images, samplers and structures holding them still keep
+        the module-scope ``var`` the generator wrote before Mojo dropped global variables (#2338).
         """
         name = getattr(node, "name", None)
         if isinstance(node, ArrayNode):
@@ -384,6 +391,7 @@ class MojoKernelArgumentMixin:
         """The kernel arguments each function needs, directly or through its calls, keyed by function name."""
         if not arguments:
             return {}
+        companions = getattr(self, "mojo_kernel_argument_companions", {})
         direct = {}
         calls = {}
         for func in functions:
@@ -398,6 +406,10 @@ class MojoKernelArgumentMixin:
             }
             body = getattr(func, "body", None)
             mentioned = mojo_referenced_names(body)
+            # A function that reads a buffer also receives the size argument passed beside it.
+            for argument, extras in companions.items():
+                if argument in mentioned:
+                    mentioned.update(extras)
             local_names = parameters | mojo_declared_names(body)
             direct.setdefault(name, set()).update(
                 argument

@@ -14,6 +14,7 @@ from ..ast import (
     PointerType,
     ReferenceType,
     ReturnNode,
+    TernaryOpNode,
     UnaryOpNode,
     VariableNode,
     VectorType,
@@ -51,6 +52,13 @@ def checked_induction_value(expression, constants):
             return None
         if expression.operator in {"/", "%"} and left == -(1 << 31) and right == -1:
             return None
+    elif isinstance(expression, TernaryOpNode):
+        # Only the selected operand is evaluated, so only it needs a checked value.
+        condition = _checked_condition(expression.condition, constants)
+        if condition is None:
+            return None
+        selected = expression.true_expr if condition else expression.false_expr
+        return checked_induction_value(selected, constants)
     else:
         return None
     value = evaluate_literal_int_expression(expression, constants)
@@ -62,6 +70,34 @@ def checked_induction_value(expression, constants):
         else (-(1 << 31), (1 << 31) - 1)
     )
     return value if low <= value <= high else None
+
+
+_CHECKED_COMPARISONS = frozenset({"==", "!=", "<", "<=", ">", ">="})
+
+
+def _checked_condition(expression, constants):
+    """Evaluate a selection condition over checked integer operands, or ``None``."""
+    if isinstance(expression, UnaryOpNode) and expression.operator == "!":
+        operand = _checked_condition(expression.operand, constants)
+        return None if operand is None else not operand
+    if isinstance(expression, BinaryOpNode) and expression.operator in {"&&", "||"}:
+        left = _checked_condition(expression.left, constants)
+        right = _checked_condition(expression.right, constants)
+        if left is None or right is None:
+            return None
+        return (left and right) if expression.operator == "&&" else (left or right)
+    if isinstance(expression, BinaryOpNode):
+        if expression.operator not in _CHECKED_COMPARISONS:
+            return None
+        if any(
+            checked_induction_value(side, constants) is None
+            for side in (expression.left, expression.right)
+        ):
+            return None
+    elif not isinstance(expression, (LiteralNode, IdentifierNode)):
+        return None
+    value = evaluate_literal_int_expression(expression, constants)
+    return None if value is None else bool(value)
 
 
 def loop_constant_bindings(function, constants, mutable_names, type_name):

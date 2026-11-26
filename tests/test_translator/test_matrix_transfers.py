@@ -951,11 +951,42 @@ def test_chunk_loop_needs_a_bound_that_cannot_overflow(tmp_path, target, conditi
 
 
 @pytest.mark.parametrize("target", TARGETS)
+def test_chunk_loop_may_start_from_a_constant_local(tmp_path, target):
+    """``int t = zero;`` starts every invocation's counter at the same value.
+
+    OpenGL's flow analysis proves the counter uniform where the loop starts,
+    and the bound still has to rule out overflow, exactly as for ``t = 0``.
+    DirectX still proves only literal starts.
+    """
+    source = METAL_KERNEL.replace("int t = 0;", "const int zero = 0; int t = zero;")
+    report = _translate(tmp_path, target, source=source).to_json()
+    codes = {item["code"] for item in report["diagnostics"]}
+    if target == "directx":
+        assert report["summary"]["translatedCount"] == 0, report
+        assert ERRORS[target] in codes, codes
+        return
+    assert report["summary"]["translatedCount"] == 1, report["diagnostics"]
+    (artifact,) = report["artifacts"]
+    text = (tmp_path / artifact["path"]).read_text()
+    assert "int t = zero;" in text and "for (; ((t + 8) <= T); t += 8)" in text
+    unbounded = _translate(
+        tmp_path / "unbounded",
+        target,
+        source=source,
+        conditions=({**CONDITION, "maximum": INT_MAX},),
+    ).to_json()
+    assert unbounded["summary"]["translatedCount"] == 0, unbounded
+    if os.environ.get("CROSTL_SKIP_NATIVE_VALIDATORS") != "1":
+        work = tmp_path / "validation"
+        work.mkdir()
+        _compile(text, "opengl", work)
+
+
+@pytest.mark.parametrize("target", TARGETS)
 @pytest.mark.parametrize(
     "variant",
     [
         "lane-start",
-        "constant-start",
         "lane-bound",
         "lane-stride",
         "written-in-body",
@@ -972,7 +1003,6 @@ def test_chunk_loop_needs_a_bound_that_cannot_overflow(tmp_path, target, conditi
 def test_divergent_or_unproven_loops_are_rejected(tmp_path, target, variant):
     rewrites = {
         "lane-start": [("int t = 0;", "int t = int(lane % 2);")],
-        "constant-start": [("int t = 0;", "const int zero = 0; int t = zero;")],
         "lane-bound": [("t + 8 <= T;", "t + 8 <= T - int(lane % 2);")],
         "lane-stride": [("t += 8)", "t += 8 + int(lane % 2))")],
         "written-in-body": [("C = tiles[1];", "C = tiles[1]; t += int(lane % 2);")],

@@ -129,6 +129,15 @@ class HipDeclarationMixin:
                 )
             return
 
+        surface = (
+            self.surface_global_declaration(var_type, raw_name, output_name)
+            if self.namespace_scope_variable and not getattr(node, "value", None)
+            else None
+        )
+        if surface is not None:
+            self.emit(surface)
+            return
+
         if (
             self.namespace_scope_variable
             and is_device_memory(node)
@@ -139,8 +148,7 @@ class HipDeclarationMixin:
                 node,
                 output_name,
                 var_type,
-                self.global_resource_binding_for(node),
-                "HIP",
+                lambda: self.global_resource_binding_for(node),
             )
             if declaration is not None:
                 if "__managed__" in qualifiers:

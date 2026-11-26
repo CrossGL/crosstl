@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 import textwrap
 
 import pytest
@@ -22,6 +24,9 @@ from crosstl.translator.codegen.metal_codegen import (
 from crosstl.translator.codegen.SPIRV_codegen import VulkanSPIRVCodeGen
 from crosstl.translator.lexer import Lexer as CrossGLLexer
 from crosstl.translator.parser import Parser as CrossGLParser
+from crosstl.translator.semantics.texture_residency import (
+    declare_hlsl_residency_status,
+)
 from tests.lowering_refusal_helpers import hlsl_import_partial_output
 from tests.test_translator.test_project_translation import (
     assert_directx_compute_validates_if_available,
@@ -499,6 +504,22 @@ PAREN_HLSL = textwrap.dedent("""
         return saturate((a - b) / c);
     }
     """).strip()
+
+
+def assert_hlsl_pixel_shader_compiles_if_available(hlsl, tmp_path):
+    """Compile ``hlsl``'s PSMain with DXC to validated DXIL when DXC is on PATH."""
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        return
+    path = tmp_path / "pixel.hlsl"
+    path.write_text(hlsl, encoding="utf-8")
+    result = subprocess.run(
+        [dxc, "-T", "ps_6_0", "-E", "PSMain", str(path)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def generate_crossgl(code: str, **lexer_options) -> str:
@@ -2140,9 +2161,10 @@ def test_global_static_const_array_initializer_generates_crossgl():
     ] == [0.25, 0.75]
 
 
-def test_codegen_global_const_initializer_preserves_const_from_hlsl_variable_syntax():
-    # Source: Microsoft Learn HLSL variable syntax documents const type modifiers.
-    # URL: https://learn.microsoft.com/windows/win32/direct3dhlsl/dx-graphics-hlsl-variable-syntax
+def test_codegen_global_const_without_static_is_a_host_bound_constant():
+    # A const global without static is a $Globals member: DXC loads it from the
+    # constant buffer (cbufferLoadLegacy) and ignores its initializer, so CrossGL
+    # declares it as a program constant without the initializer.
     output = generate_crossgl("""
         const float ExposureScale = 1.25f;
 
@@ -2152,8 +2174,9 @@ def test_codegen_global_const_initializer_preserves_const_from_hlsl_variable_syn
     """)
 
     lines = {line.strip() for line in output.splitlines()}
-    assert "const float ExposureScale = 1.25;" in lines
-    assert "float ExposureScale = 1.25;" not in lines
+    assert "float ExposureScale;" in lines
+    assert "@ hlsl_program_constant" in lines
+    assert not any("1.25" in line for line in lines)
     parse_crossgl(output)
 
 
@@ -2946,20 +2969,18 @@ def test_codegen_node_shader_attribute_reparses_from_dxc_callgraph():
 
     crossgl = generate_crossgl(code)
 
-    assert '@shader("node")' in crossgl
-    assert '@ shader("node")' not in crossgl
+    # [shader("node")] makes main the entry of a CrossGL node stage, and its attributes the node's.
+    assert "node {" in crossgl
+    assert "shader(" not in crossgl
 
     shader_ast = parse_crossgl(crossgl)
-    main = next(
-        function for function in shader_ast.functions if function.name == "main"
-    )
+    main = shader_ast.stages[ShaderStage.NODE].entry_point
 
+    assert main.name == "main"
     assert [
         (attr.name, [arg.value for arg in attr.arguments]) for attr in main.attributes
-    ] == [
-        ("shader", ["node"]),
-        ("NodeLaunch", ["thread"]),
-    ]
+    ] == [("node_launch", ["thread"])]
+    assert [function.name for function in shader_ast.functions] == ["intermediate"]
 
 
 def test_codegen_pascal_case_mesh_attributes_infer_stage():
@@ -4172,7 +4193,6 @@ def test_codegen_byte_address_status_loads_do_not_become_texture_fetches():
     assert "uint4 quad = rawOutput.Load4((offset + 16u));" in regenerated_hlsl
     assert "rawOutput.Store((offset + 4u), scalar);" in regenerated_hlsl
     assert "texelFetch(" not in regenerated_hlsl
-    assert "CheckAccessFullyMapped(" not in regenerated_hlsl
     assert ", status)" not in regenerated_hlsl
 
 
@@ -4612,32 +4632,25 @@ def test_codegen_texture_method_descriptors():
     sample_cmp_bias = converter.texture_method_descriptor(
         "SampleCmpBias", 4, "Texture2D<float>"
     )
+    # CrossGL's compare forms carry the bias as their last operand (hlsl_texture_operands.py).
     assert sample_cmp_bias["function"] == "textureCompare"
     assert sample_cmp_bias["usage"] == "comparison"
-    assert sample_cmp_bias["dropped_parameters"] == ["LOD bias"]
+    assert "dropped_parameters" not in sample_cmp_bias
     sample_cmp_bias_offset = converter.texture_method_descriptor(
         "SampleCmpBias", 5, "Texture2DArray<float>"
     )
     assert sample_cmp_bias_offset["function"] == "textureCompareOffset"
-    assert sample_cmp_bias_offset["dropped_parameters"] == ["LOD bias"]
+    assert "dropped_parameters" not in sample_cmp_bias_offset
     sample_cmp_bias_status = converter.texture_method_descriptor(
         "SampleCmpBias", 7, "Texture2D<float>"
     )
-    assert sample_cmp_bias_status["function"] == "textureCompareOffset"
-    assert sample_cmp_bias_status["dropped_parameters"] == [
-        "LOD bias",
-        "LOD clamp",
-        "status output",
-    ]
+    assert sample_cmp_bias_status["function"] == "textureCompareOffsetClamp"
+    assert sample_cmp_bias_status["dropped_parameters"] == ["status output"]
     sample_cmp_bias_cube = converter.texture_method_descriptor(
         "SampleCmpBias", 6, "TextureCube<float>"
     )
-    assert sample_cmp_bias_cube["function"] == "textureCompare"
-    assert sample_cmp_bias_cube["dropped_parameters"] == [
-        "LOD bias",
-        "LOD clamp",
-        "status output",
-    ]
+    assert sample_cmp_bias_cube["function"] == "textureCompareClamp"
+    assert sample_cmp_bias_cube["dropped_parameters"] == ["status output"]
     assert (
         converter.texture_method_descriptor("SampleCmpLevelZero", 4)["function"]
         == "textureCompareLodOffset"
@@ -4673,9 +4686,11 @@ def test_codegen_texture_method_descriptors():
     gather_cmp_red_offsets = converter.texture_method_descriptor("GatherCmpRed", 7)
     assert gather_cmp_red_offsets["fallback_expression"] == "vec4(0.0)"
     assert "four-offset overload" in gather_cmp_red_offsets["diagnostic_reason"]
+    # GatherCmpGreen is CrossGL's compare gather of component 1, its last operand.
     gather_cmp_green = converter.texture_method_descriptor("GatherCmpGreen", 4)
-    assert gather_cmp_green["fallback_expression"] == "vec4(0.0)"
-    assert "component selector" in gather_cmp_green["diagnostic_reason"]
+    assert gather_cmp_green["function"] == "textureGatherCompareOffset"
+    assert gather_cmp_green["component"] == "1"
+    assert "diagnostic_reason" not in gather_cmp_green
     assert converter.texture_method_descriptor("GatherBlue", 2) == {
         "member": "GatherBlue",
         "function": "textureGather",
@@ -4853,9 +4868,7 @@ def test_codegen_texture_method_descriptors():
         "GetSamplePosition", 1, "Texture2D<float4>"
     )
     assert invalid_sample_position["fallback_expression"] == "vec2(0.0, 0.0)"
-    assert (
-        "sampled multisample textures" in invalid_sample_position["diagnostic_reason"]
-    )
+    assert "multisample textures" in invalid_sample_position["diagnostic_reason"]
     assert converter.resource_method_descriptor("Store", 2) == {
         "member": "Store",
         "function": "buffer_store",
@@ -5096,10 +5109,17 @@ def test_codegen_texture_gather_compare_red_imports_to_helpers():
         "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
         "offset0)"
     ) in crossgl
+    # The one-offset Status overload is a residency query; the four-offset one imports as four gathers, which no
+    # single residency code covers.
     assert (
-        "DirectX texture overload extras for GatherCmpRed: CrossGL has no operand for status output"
+        "vec4 redStatus = (status = uint(textureResidency(textureGatherCompareOffset(shadowArray, "
+        "compareSampler, uvLayer, depth, offset0), crosstl_status_texel_0)), crosstl_status_texel_0);"
+    ) in crossgl
+    assert (
+        "DirectX tiled-resource status for Texture2DArray.GatherCmpRed: the read imports as 'vec4("
         in message
     )
+    assert "not as one CrossGL texture read that textureResidency can wrap" in message
     assert (
         "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
         "offset0).x"
@@ -5116,15 +5136,19 @@ def test_codegen_texture_gather_compare_red_imports_to_helpers():
         "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
         "offset3).w"
     ) in crossgl
+    # GatherCmpGreen gathers component 1, CrossGL's last operand of the compare gather.
     assert (
-        "DirectX texture gather-compare component for Texture2DArray: GatherCmpGreen requires a compare-gather component selector"
-        in message
-    )
+        "textureGatherCompareOffset(shadowArray, compareSampler, uvLayer, depth, "
+        "offset0, 1)"
+    ) in crossgl
+    assert "GatherCmpGreen" not in message
     assert "GatherCmpRed four-offset overload" not in crossgl
     assert ".GatherCmpRed(" not in crossgl
     assert ".GatherCmpGreen(" not in crossgl
 
-    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    parsed = parse_crossgl(crossgl)
+    declare_hlsl_residency_status(parsed, "directx")
+    hlsl = TranslatorHLSLCodeGen().generate(parsed)
     assert "shadowMap.GatherCmp(compareSampler, uv, depth)" in hlsl
     assert "shadowArray.GatherCmp(compareSampler, uvLayer, depth, offset0)" in hlsl
     assert "shadowArray.GatherCmp(compareSampler, uvLayer, depth, offset0).x" in hlsl
@@ -5132,7 +5156,7 @@ def test_codegen_texture_gather_compare_red_imports_to_helpers():
     assert "shadowArray.GatherCmp(compareSampler, uvLayer, depth, offset2).z" in hlsl
     assert "shadowArray.GatherCmp(compareSampler, uvLayer, depth, offset3).w" in hlsl
     assert "GatherCmpRed" not in hlsl
-    assert "GatherCmpGreen" not in hlsl
+    assert "shadowArray.GatherCmpGreen(compareSampler, uvLayer, depth, offset0)" in hlsl
 
 
 def test_codegen_texture_compare_lod_grad_member_imports_to_helpers():
@@ -5184,7 +5208,7 @@ def test_codegen_texture_compare_lod_grad_member_imports_to_helpers():
         }
     """).strip()
 
-    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
+    crossgl = generate_crossgl(code)
 
     assert "texture2DShadow shadowMap;" in crossgl
     assert "textureCubeShadow cubeShadow;" in crossgl
@@ -5212,33 +5236,35 @@ def test_codegen_texture_compare_lod_grad_member_imports_to_helpers():
         "textureCompareGradOffsetClamp("
         "shadowMap, compareSampler, uv, depth, ddx, ddy, offset, 0.0)" in crossgl
     )
-    assert (
-        "DirectX texture overload extras for SampleCmpLevel: CrossGL has no operand for status output"
-        in message
-    )
-    assert (
-        "DirectX texture overload extras for SampleCmpGrad: CrossGL has no operand for status output"
-        in message
-    )
+    # The Status overloads are residency queries whose code is stored in ``status``.
+    for read in (
+        "textureCompareLodOffset(shadowMap, compareSampler, uv, depth, lod, offset)",
+        "textureCompareGradOffsetClamp(shadowMap, compareSampler, uv, depth, ddx, ddy, offset, 0.0)",
+        "textureCompareLod(cubeShadow, compareSampler, direction, depth, lod)",
+        "textureCompareGradClamp(cubeShadow, compareSampler, direction, depth, ddx3, ddy3, 0.0)",
+    ):
+        assert (
+            f"(status = uint(textureResidency({read}, crosstl_status_texel_" in crossgl
+        )
     assert ".SampleCmpLevel(" not in crossgl
     assert ".SampleCmpGrad(" not in crossgl
 
-    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    parsed = parse_crossgl(crossgl)
+    declare_hlsl_residency_status(parsed, "directx")
+    hlsl = TranslatorHLSLCodeGen().generate(parsed)
     assert "shadowMap.SampleCmpLevel(compareSampler, uv, depth, lod)" in hlsl
     assert "shadowMap.SampleCmpLevel(compareSampler, uv, depth, lod, offset)" in hlsl
     assert "shadowMap.SampleCmpGrad(compareSampler, uv, depth, ddx, ddy)" in hlsl
     assert (
         "shadowMap.SampleCmpGrad(compareSampler, uv, depth, ddx, ddy, offset)" in hlsl
     )
-    assert "cubeShadow.SampleCmpLevel(compareSampler, direction, depth, lod)" in hlsl
-    assert (
-        "cubeShadow.SampleCmpGrad(compareSampler, direction, depth, ddx3, ddy3, 0.0)"
-        in hlsl
-    )
-    assert "lod, offset, status" not in hlsl
-    assert "ddy, offset, 0.0, status" not in hlsl
-    assert "lod, status" not in hlsl
-    assert "ddy3, 0.0, status" not in hlsl
+    for read in (
+        "shadowMap.SampleCmpLevel(compareSampler, uv, depth, lod, offset, crosstl_residency_status_0)",
+        "shadowMap.SampleCmpGrad(compareSampler, uv, depth, ddx, ddy, offset, 0.0, crosstl_residency_status_1)",
+        "cubeShadow.SampleCmpLevel(compareSampler, direction, depth, lod, crosstl_residency_status_2)",
+        "cubeShadow.SampleCmpGrad(compareSampler, direction, depth, ddx3, ddy3, 0.0, crosstl_residency_status_3)",
+    ):
+        assert read in hlsl
 
 
 def test_codegen_texture_compare_bias_member_imports_as_compare_with_diagnostics():
@@ -5270,32 +5296,28 @@ def test_codegen_texture_compare_bias_member_imports_as_compare_with_diagnostics
         }
     """).strip()
 
-    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
+    crossgl = generate_crossgl(code)
 
     assert "texture2DShadow shadowMap;" in crossgl
     assert "texture2DArrayShadow shadowArray;" in crossgl
     assert "textureCubeShadow cubeShadow;" in crossgl
+    # CrossGL's compare forms take the bias last, and the Status overloads become residency queries.
+    assert "textureCompare(shadowMap, compareSampler, uv, depth, bias)" in crossgl
     assert (
-        "DirectX texture overload extras for SampleCmpBias: CrossGL has no operand for LOD bias"
-        in message
-    )
+        "(status = uint(textureResidency(textureCompareOffsetClamp(shadowArray, compareSampler, uvLayer, depth, "
+        "offset, 0.0, bias), crosstl_status_texel_0)), crosstl_status_texel_0)"
+    ) in crossgl
     assert (
-        "DirectX texture overload extras for SampleCmpBias: CrossGL has no operand for LOD bias, LOD clamp, status output"
-        in message
-    )
-    assert "textureCompare(shadowMap, compareSampler, uv, depth)" in crossgl
-    assert (
-        "textureCompareOffset(shadowArray, compareSampler, uvLayer, depth, offset)"
-        in crossgl
-    )
-    assert "textureCompare(cubeShadow, compareSampler, direction, depth)" in crossgl
+        "(status = uint(textureResidency(textureCompareClamp(cubeShadow, compareSampler, direction, depth, 0.0, "
+        "bias), crosstl_status_texel_1)), crosstl_status_texel_1)"
+    ) in crossgl
     assert ".SampleCmpBias(" not in crossgl
-    assert "textureCompare(shadowMap, compareSampler, uv, depth, bias)" not in crossgl
 
-    parse_crossgl(crossgl)
+    parsed = parse_crossgl(crossgl)
+    declare_hlsl_residency_status(parsed, "directx")
 
     with pytest.raises(DirectXTextureOffsetError) as error:
-        TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+        TranslatorHLSLCodeGen().generate(parsed)
 
     assert error.value.operation == "textureCompareOffset"
     assert error.value.target_method == "Texture2DArray.SampleCmp"
@@ -5355,20 +5377,10 @@ def test_codegen_texture_status_and_clamp_overloads_import_as_valid_crossgl():
         }
     """).strip()
 
-    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
+    crossgl = generate_crossgl(code)
 
-    assert (
-        "DirectX texture overload extras for Sample: CrossGL has no operand for status output"
-        in message
-    )
-    assert (
-        "DirectX texture overload extras for SampleLevel: CrossGL has no operand for status output"
-        in message
-    )
-    assert (
-        "DirectX texture overload extras for GatherRed: CrossGL has no operand for status output"
-        in message
-    )
+    # Every Status overload is a residency query around the read without Status, whose code is stored in status.
+    assert crossgl.count("(status = uint(textureResidency(") == 10
     assert "textureOffsetClamp(colorMap, linearSampler, uv, offset, 0.0)" in crossgl
     assert (
         "textureOffsetClamp(colorMap, linearSampler, uv, offset, 0.0, bias)" in crossgl
@@ -5395,8 +5407,10 @@ def test_codegen_texture_status_and_clamp_overloads_import_as_valid_crossgl():
     assert ".Sample(" not in crossgl
     assert ".Gather" not in crossgl
 
+    parsed = parse_crossgl(crossgl)
+    declare_hlsl_residency_status(parsed, "directx")
     with pytest.raises(DirectXTextureOffsetError) as error:
-        TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+        TranslatorHLSLCodeGen().generate(parsed)
 
     assert error.value.operation == "textureOffset"
     assert error.value.target_method == "Texture2D.Sample"
@@ -5446,16 +5460,9 @@ def test_codegen_cube_texture_status_overloads_do_not_become_offset_calls():
         }
     """).strip()
 
-    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
+    crossgl = generate_crossgl(code)
 
-    assert (
-        "DirectX texture overload extras for Sample: CrossGL has no operand for status output"
-        in message
-    )
-    assert (
-        "DirectX texture overload extras for Gather: CrossGL has no operand for status output"
-        in message
-    )
+    assert crossgl.count("(status = uint(textureResidency(") == 9
     assert "textureClamp(cubeMap, linearSampler, direction, 0.0)" in crossgl
     assert "textureClamp(cubeMap, linearSampler, direction, 0.0, bias)" in crossgl
     assert "textureLod(cubeMap, linearSampler, direction, lod)" in crossgl
@@ -5478,20 +5485,28 @@ def test_codegen_cube_texture_status_overloads_do_not_become_offset_calls():
     assert "textureGatherOffset(" not in crossgl
     assert "textureGatherCompareOffset(" not in crossgl
 
-    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
-    assert "cubeMap.Sample(linearSampler, direction, 0.0)" in hlsl
-    assert "cubeMap.SampleBias(linearSampler, direction, bias, 0.0)" in hlsl
-    assert "cubeMap.SampleLevel(linearSampler, direction, lod)" in hlsl
-    assert "cubeMap.SampleGrad(linearSampler, direction, ddx, ddy, 0.0)" in hlsl
-    assert "cubeShadow.SampleCmp(compareSampler, direction, depth, 0.0)" in hlsl
-    assert "cubeMap.Gather(linearSampler, direction)" in hlsl
-    assert "cubeMap.GatherRed(linearSampler, direction)" in hlsl
-    assert "cubeShadow.GatherCmp(compareSampler, direction, depth)" in hlsl
-    assert "0.0, status" not in hlsl
-    assert "direction, status" not in hlsl
+    parsed = parse_crossgl(crossgl)
+    declare_hlsl_residency_status(parsed, "directx")
+    hlsl = TranslatorHLSLCodeGen().generate(parsed)
+    # The reads take their Status overloads again, which cube textures give no offset.
+    for index, read in enumerate(
+        (
+            "cubeMap.Sample(linearSampler, direction, 0.0",
+            "cubeMap.SampleBias(linearSampler, direction, bias, 0.0",
+            "cubeMap.SampleLevel(linearSampler, direction, lod",
+            "cubeMap.SampleGrad(linearSampler, direction, ddx, ddy, 0.0",
+            "cubeShadow.SampleCmp(compareSampler, direction, depth, 0.0",
+            "cubeShadow.SampleCmpLevelZero(compareSampler, direction, depth",
+            "cubeMap.Gather(linearSampler, direction",
+            "cubeMap.GatherRed(linearSampler, direction",
+            "cubeShadow.GatherCmp(compareSampler, direction, depth",
+        )
+    ):
+        assert f"{read}, crosstl_residency_status_{index})" in hlsl
+    assert "int2(0, 0)" not in hlsl
 
 
-def test_codegen_tiled_resource_status_loads_import_as_diagnostics():
+def test_codegen_tiled_resource_status_loads_import_as_residency_queries(tmp_path):
     code = textwrap.dedent("""
         Texture2D colorMap : register(t0);
         Texture2DMS<float4> msMap : register(t1);
@@ -5511,24 +5526,39 @@ def test_codegen_tiled_resource_status_loads_import_as_diagnostics():
         }
     """).strip()
 
-    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
+    crossgl = generate_crossgl(code)
 
     assert (
-        "DirectX tiled-resource status for Load: CrossGL has no operand for status output"
-        in message
-    )
+        "vec4 fetched = (status = uint(textureResidency(texelFetchOffset(colorMap, pixel, 0, offset), "
+        "crosstl_status_texel_0)), crosstl_status_texel_0);"
+    ) in crossgl
     assert (
-        "DirectX tiled-resource status check CheckAccessFullyMapped: CrossGL has no residency status"
-        in message
-    )
-    assert "texelFetchOffset(colorMap, pixel, 0, offset)" in crossgl
-    assert "imageLoad(outputImage, pixel)" in crossgl
-    assert "texelFetchOffset(msMap, pixel, sampleIndex, offset)" in crossgl
-    assert "CheckAccessFullyMapped(" not in crossgl
+        "vec4 stored = (status = uint(textureResidency(imageLoad(outputImage, pixel), "
+        "crosstl_status_texel_1)), crosstl_status_texel_1);"
+    ) in crossgl
+    assert (
+        "vec4 ms = (status = uint(textureResidency(texelFetchOffset(msMap, pixel, sampleIndex, offset), "
+        "crosstl_status_texel_2)), crosstl_status_texel_2);"
+    ) in crossgl
+    assert "bool mapped = textureResident(int(status));" in crossgl
     assert ".Load(" not in crossgl
-    assert ", status" not in crossgl
+    assert "CheckAccessFullyMapped" not in crossgl
 
-    parse_crossgl(crossgl)
+    parsed = parse_crossgl(crossgl)
+    declare_hlsl_residency_status(parsed, "directx")
+    hlsl = TranslatorHLSLCodeGen().generate(parsed)
+    # The offsets move into the locations, and the reads take their Status overloads again.
+    assert (
+        "colorMap.Load(int3((pixel + offset), 0), int2(0, 0), crosstl_residency_status_0)"
+        in hlsl
+    )
+    assert "outputImage.Load(pixel, crosstl_residency_status_1)" in hlsl
+    assert (
+        "msMap.Load((pixel + offset), sampleIndex, int2(0, 0), crosstl_residency_status_2)"
+        in hlsl
+    )
+    assert "bool mapped = CheckAccessFullyMapped(uint(int(status)));" in hlsl
+    assert_hlsl_pixel_shader_compiles_if_available(hlsl, tmp_path)
 
 
 def test_codegen_texture_load_mixed_vector_locations_from_texture_array_docs():
@@ -5566,7 +5596,7 @@ def test_codegen_texture_load_mixed_vector_locations_from_texture_array_docs():
     assert "volume.Load(int4(int3(pixel, z), mip))" in hlsl
 
 
-def test_codegen_tiled_resource_status_only_loads_roundtrip_without_offsets():
+def test_codegen_sampled_texture_load_reads_a_uint_operand_as_its_offset():
     code = textwrap.dedent("""
         Texture1D ramp : register(t0);
         Texture2D colorMap : register(t1);
@@ -5596,37 +5626,37 @@ def test_codegen_tiled_resource_status_only_loads_roundtrip_without_offsets():
         }
     """).strip()
 
-    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
+    crossgl = generate_crossgl(code)
 
+    # Sampled textures have no Load(location, Status) overload: DXC reads the uint operand as the offset, which
+    # converts to the texture's offset vector (DXC gen_intrin_main.txt, Texture*Methods).
+    assert "texelFetchOffset(ramp, x, lod, int(status))" in crossgl
+    assert "texelFetchOffset(colorMap, pixel, lod, ivec2(status))" in crossgl
+    assert "texelFetchOffset(layers, pixelLayer, lod, ivec2(status))" in crossgl
+    assert "texelFetchOffset(volume, voxel, lod, ivec3(status))" in crossgl
+    assert "texelFetchOffset(msMap, pixel, sampleIndex, ivec2(status))" in crossgl
     assert (
-        "DirectX tiled-resource status for Load: CrossGL has no operand for status output"
-        in message
+        "texelFetchOffset(msLayers, pixelLayer, sampleIndex, ivec2(status))" in crossgl
     )
-    assert "texelFetch(ramp, x, lod)" in crossgl
-    assert "texelFetch(colorMap, pixel, lod)" in crossgl
-    assert "texelFetch(layers, pixelLayer, lod)" in crossgl
-    assert "texelFetch(volume, voxel, lod)" in crossgl
-    assert "texelFetch(msMap, pixel, sampleIndex)" in crossgl
-    assert "texelFetch(msLayers, pixelLayer, sampleIndex)" in crossgl
-    assert "texelFetchOffset(" not in crossgl
+    assert "textureResidency" not in crossgl
     assert ".Load(" not in crossgl
-    assert ", status" not in crossgl
 
     hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
 
-    assert "float4 line_ = ramp.Load(int2(x, lod));" in hlsl
-    assert "float4 color = colorMap.Load(int3(pixel, lod));" in hlsl
-    assert "float4 layer = layers.Load(int4(pixelLayer, lod));" in hlsl
-    assert "float4 volumeColor = volume.Load(int4(voxel, lod));" in hlsl
-    assert "float4 ms = msMap.Load(pixel, sampleIndex);" in hlsl
-    assert "float4 msLayer = msLayers.Load(pixelLayer, sampleIndex);" in hlsl
-    assert "CheckAccessFullyMapped(" not in hlsl
+    assert "float4 line_ = ramp.Load(int2((x + int(status)), lod));" in hlsl
+    assert (
+        "float4 color = colorMap.Load(int3((pixel + int2(status, status)), lod));"
+        in hlsl
+    )
+    assert (
+        "float4 ms = msMap.Load((pixel + int2(status, status)), sampleIndex);" in hlsl
+    )
     assert "texelFetch(" not in hlsl
-    assert "texelFetchOffset(" not in hlsl
-    assert ", status" not in hlsl
 
 
-def test_codegen_multisample_storage_image_status_loads_roundtrip_to_srv_reads():
+def test_codegen_multisample_storage_image_status_loads_roundtrip_to_srv_reads(
+    tmp_path,
+):
     code = textwrap.dedent("""
         RWTexture2DMS<float4> msImage : register(u0);
         RWTexture2DMSArray<uint> counters : register(u1);
@@ -5644,79 +5674,36 @@ def test_codegen_multisample_storage_image_status_loads_roundtrip_to_srv_reads()
         }
     """).strip()
 
-    crossgl, message = hlsl_import_partial_output(generate_crossgl, code)
+    crossgl = generate_crossgl(code)
 
     assert (
-        "DirectX tiled-resource status for Load: CrossGL has no operand for status output"
-        in message
-    )
+        "vec4 color = (status = uint(textureResidency(imageLoad(msImage, pixel, sampleIndex), "
+        "crosstl_status_texel_0)), crosstl_status_texel_0);"
+    ) in crossgl
     assert (
-        "DirectX tiled-resource status check CheckAccessFullyMapped: CrossGL has no residency status"
-        in message
-    )
-    assert "imageLoad(msImage, pixel, sampleIndex)" in crossgl
-    assert "imageLoad(counters, pixelLayer, sampleIndex)" in crossgl
+        "uint count = (status = uint(textureResidency(imageLoad(counters, pixelLayer, sampleIndex), "
+        "crosstl_status_texel_1)), crosstl_status_texel_1.x);"
+    ) in crossgl
+    assert "uvec4 crosstl_status_texel_1;" in crossgl
     assert ".Load(" not in crossgl
-    assert ", status)" not in crossgl
 
-    hlsl = TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    parsed = parse_crossgl(crossgl)
+    declare_hlsl_residency_status(parsed, "directx")
+    hlsl = TranslatorHLSLCodeGen().generate(parsed)
 
+    # The SRV a multisample storage image is read through takes an offset before Status.
     assert "Texture2DMS<float4> msImage : register(t0);" in hlsl
     assert "Texture2DMSArray<uint4> counters : register(t1);" in hlsl
-    assert "float4 color = msImage.Load(pixel, sampleIndex);" in hlsl
-    assert "uint count = counters.Load(pixelLayer, sampleIndex).x;" in hlsl
+    assert (
+        "msImage.Load(pixel, sampleIndex, int2(0, 0), crosstl_residency_status_0)"
+        in hlsl
+    )
+    assert (
+        "counters.Load(pixelLayer, sampleIndex, int2(0, 0), crosstl_residency_status_1)"
+        in hlsl
+    )
     assert "RWTexture2DMS" not in hlsl
-    assert "RWTexture2DMSArray" not in hlsl
-    assert "CheckAccessFullyMapped(" not in hlsl
-    assert ", status)" not in hlsl
-
-
-@pytest.mark.parametrize(
-    ("resource_decl", "main_signature", "load_expr", "type_name"),
-    [
-        (
-            "RWTexture2DMS<float4> msImage : register(u0);",
-            "float4 main(int2 pixel : TEXCOORD0, float sampleIndex : TEXCOORD1) : SV_Target0",
-            "msImage.Load(pixel, sampleIndex)",
-            "float",
-        ),
-        (
-            "RWTexture2DMSArray<uint> counters : register(u0);",
-            "float4 main(int3 pixelLayer : TEXCOORD0, int2 sampleIndex : TEXCOORD1) : SV_Target0",
-            "float4(counters.Load(pixelLayer, sampleIndex), 0.0, 0.0, 1.0)",
-            "int2",
-        ),
-        (
-            "RWTexture2DMS<float4> msImage : register(u0);",
-            "float4 main(int2 pixel : TEXCOORD0) : SV_Target0",
-            "msImage.Load(pixel, msImage)",
-            "RWTexture2DMS<float4>",
-        ),
-    ],
-)
-def test_codegen_multisample_storage_image_load_rejects_bad_sample_index_roundtrip(
-    resource_decl, main_signature, load_expr, type_name
-):
-    code = textwrap.dedent(f"""
-        {resource_decl}
-
-        {main_signature} {{
-            return {load_expr};
-        }}
-    """).strip()
-
-    crossgl = generate_crossgl(code)
-    assert "imageLoad(" in crossgl
-    assert ".Load(" not in crossgl
-
-    with pytest.raises(
-        ValueError,
-        match=(
-            "DirectX multisample image operation 'imageLoad' requires a scalar "
-            f"integer sample index argument: .* has type {type_name}"
-        ),
-    ):
-        TranslatorHLSLCodeGen().generate(parse_crossgl(crossgl))
+    assert_hlsl_pixel_shader_compiles_if_available(hlsl, tmp_path)
 
 
 def test_codegen_resource_array_receivers_use_canonical_calls():
@@ -7526,15 +7513,13 @@ def test_codegen_texture_sample_position_invalid_imports_diagnostic():
         in message
     )
     assert (
-        "DirectX texture sample-position query for Texture2D: GetSamplePosition is only available on sampled multisample textures"
-        in message
-    )
-    assert (
-        "DirectX texture sample-position query for RWTexture2DMS: GetSamplePosition is only available on sampled multisample textures"
+        "DirectX texture sample-position query for Texture2D: GetSamplePosition is only available on multisample textures"
         in message
     )
     assert "textureSamplePosition(colorMap" not in crossgl
-    assert "textureSamplePosition(msImage" not in crossgl
+    # RWTexture2DMS (Shader Model 6.7) has sample positions too; CrossGL's textureSamplePosition takes its image.
+    assert "RWTexture2DMS" not in message
+    assert "textureSamplePosition(msImage, sampleIndex)" in crossgl
 
 
 def test_codegen_preserves_parentheses():

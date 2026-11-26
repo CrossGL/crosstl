@@ -95,3 +95,47 @@ def test_pruning_follows_calls_between_members():
     assert not {"Ops_float__once", "Ops_float__twice"} & definitions
     # Members of a concrete struct are ordinary definitions, not instantiations.
     assert "Plain__unused" in definitions
+
+
+# `Rot<float>::rotate` calls `twiddle<T>`; nothing calls `rotate`, so its call is never materialized, while `table`
+# materializes `twiddle<float>` on its own. Translating for a non-Metal target goes through the project template
+# materializer, whose late member lowering wrote `rotate` with an unmaterialized `twiddle<float>` call.
+LATE_MEMBER_SOURCE = """#include <metal_stdlib>
+using namespace metal;
+
+template <typename T>
+METAL_FUNC vec<T, 2> twiddle(int k, int p) {
+  T theta = T(k) / T(p);
+  return {T(cos(theta)), T(sin(theta))};
+}
+
+template <typename T>
+struct Rot {
+  vec<T, 2> v;
+  METAL_FUNC vec<T, 2> get() const {
+    return v;
+  }
+  METAL_FUNC vec<T, 2> rotate(int i, int n) const {
+    return v * twiddle<T>(i, n);
+  }
+};
+
+kernel void table(device float2* t [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+  t[i] = twiddle<float>(int(i), 8);
+}
+
+kernel void copy(device float2* b [[buffer(0)]], uint i [[thread_position_in_grid]]) {
+  Rot<float> r{b[i]};
+  b[i] = r.get();
+}
+"""
+
+
+def test_late_lowered_unused_member_is_pruned_for_targets(tmp_path):
+    path = tmp_path / "unit.metal"
+    path.write_text(LATE_MEMBER_SOURCE)
+    for backend in ("directx", "vulkan", "cuda"):
+        code = crosstl.translate(str(path), backend=backend, format_output=False)
+        assert "rotate" not in code and "u3c" not in code, backend
+    hlsl = crosstl.translate(str(path), backend="directx", format_output=False)
+    assert "twiddle_float(" in hlsl

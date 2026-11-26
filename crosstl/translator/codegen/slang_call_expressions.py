@@ -1,7 +1,11 @@
 """Slang rendering of CrossGL function-call expressions."""
 
 from ..ast import (
+    AssignmentNode,
+    BinaryOpNode,
+    FunctionCallNode,
     MemberAccessNode,
+    UnaryOpNode,
 )
 from .enum_utils import (
     generate_enum_constructor_call,
@@ -12,14 +16,12 @@ from .generic_function_utils import (
     generic_function_call_name,
     reject_unresolved_generic_function_call,
 )
-from .shader_clock_refusals import (
-    SHADER_CLOCK_BUILTINS,
-    refuse_shader_clock_call,
-)
 from .slang_buffer_lengths import (
     slang_glsl_buffer_block_length,
     slang_structured_buffer_length,
 )
+from .slang_core_functions import generate_slang_core_function_call
+from .slang_shader_clocks import generate_slang_shader_clock_call
 from .slang_value_resizes import slang_resize_constructor
 from .slang_wave_shuffles import (
     as_type_target,
@@ -38,11 +40,12 @@ class SlangCallExpressionMixin:
         if func_expr is None:
             func_expr = node.name
         clock_name = getattr(func_expr, "name", func_expr)
-        if (
-            clock_name in SHADER_CLOCK_BUILTINS
-            and clock_name not in self.user_function_names
-        ):
-            return refuse_shader_clock_call("Slang", clock_name)
+        if isinstance(clock_name, str) and clock_name not in self.user_function_names:
+            clock_call = generate_slang_shader_clock_call(
+                self, clock_name, getattr(node, "args", None)
+            )
+            if clock_call is not None:
+                return clock_call
         ray_query_call = self.slang_ray_query_call_parts(node)
         if ray_query_call is not None:
             operation, query_expr, args = ray_query_call
@@ -64,6 +67,54 @@ class SlangCallExpressionMixin:
             callee = func_expr
         else:
             callee = self.generate_expression(func_expr)
+        if (
+            callee == "select"
+            and callee not in self.user_function_names
+            and len(node.args) == 3
+            and all(
+                self.is_matrix_value_type(self.expression_result_type(argument))
+                for argument in node.args[:2]
+            )
+        ):
+            false_value, true_value, condition = node.args
+            condition_is_matrix_comparison = (
+                isinstance(condition, BinaryOpNode)
+                and str(getattr(condition, "op", getattr(condition, "operator", "")))
+                in {"<", ">", "<=", ">=", "==", "!="}
+                and any(
+                    self.is_matrix_value_type(self.expression_result_type(operand))
+                    for operand in (condition.left, condition.right)
+                )
+            )
+            if (
+                self.convert_type(self.expression_result_type(condition)) != "bool"
+                or condition_is_matrix_comparison
+            ):
+                return self.refuse_lowering(
+                    "matrix select condition must be a scalar bool",
+                    self.generate_expression(false_value),
+                )
+            if any(
+                any(
+                    isinstance(item, (FunctionCallNode, AssignmentNode))
+                    or (
+                        isinstance(item, UnaryOpNode)
+                        and str(getattr(item, "op", "")) in {"++", "--"}
+                    )
+                    for item in self.walk_ast(value)
+                )
+                for value in (false_value, true_value)
+            ):
+                return self.refuse_lowering(
+                    "matrix select evaluates both value arguments, but a "
+                    "conditional expression would skip one side-effecting argument",
+                    self.generate_expression(false_value),
+                )
+            return (
+                f"({self.generate_expression(condition)} ? "
+                f"{self.generate_expression(true_value)} : "
+                f"{self.generate_expression(false_value)})"
+            )
         numeric_trait_call = generate_numeric_trait_method_call(
             self,
             func_expr,
@@ -217,5 +268,8 @@ class SlangCallExpressionMixin:
             bit_query = self.generate_slang_bit_query_call(callee, node.args, args)
             if bit_query is not None:
                 return bit_query
+            core_call = generate_slang_core_function_call(self, callee, node.args)
+            if core_call is not None:
+                return core_call
             callee = self.slang_callee_name(callee)
         return f"{callee}({args})"
