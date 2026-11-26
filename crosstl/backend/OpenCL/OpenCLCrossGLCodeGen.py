@@ -36,6 +36,10 @@ from .conversions import format_conversion, is_conversion_name
 from .enumerations import OpenCLEnumerationMixin
 from .global_variables import refuse_writable_global_variable
 from .OpenCLAst import OpenCLBlockLiteralNode, OpenCLMacroBlockNode, OpenCLProgramNode
+from .pointer_qualifiers import (
+    opencl_pointee_qualifiers,
+    opencl_pointer_memory_attributes,
+)
 from .pointer_results import OpenCLPointerResultMixin
 from .sizeof_scopes import OpenCLSizeofScopeMixin
 from .vector_components import (  # noqa: F401 - re-exported diagnostic
@@ -170,6 +174,16 @@ class OpenCLImageReadUnsupportedError(TranslationDiagnostic):
     """An OpenCL C ``read_imagef`` call or ``sampler_t`` value that CrossGL cannot carry exactly."""
 
     code = CODE_PREFIX + "opencl-image-read-unsupported"
+
+
+class OpenCLPrintfValueUnsupportedError(TranslationDiagnostic):
+    """An OpenCL C ``printf`` whose result is read.
+
+    OpenCL C ``printf`` returns an ``int``, 0 when it ran and -1 otherwise (OpenCL C 3.0 section 6.15.14). CrossGL
+    ``printf`` is the Vulkan debug print, which returns nothing, so only a ``printf`` statement is imported.
+    """
+
+    code = CODE_PREFIX + "opencl-printf-value-unsupported"
 
 
 class OpenCLToCrossGLConverter(
@@ -446,8 +460,10 @@ class OpenCLToCrossGLConverter(
         self.normalize_target_safe_cgl = normalize_target_safe_cgl
         self.opencl_image_access = {}
         self.opencl_sampler_states = {}
+        self.opencl_printf_statements = set()
 
     def generate(self, ast_node):
+        self.opencl_printf_statements = set()
         self.opencl_sizeof_symbols = {}
         self.opencl_current_function_name = None
         self.opencl_event_tokens = set()
@@ -831,6 +847,7 @@ class OpenCLToCrossGLConverter(
 
         access = self.opencl_kernel_pointer_access(raw_type)
         return (
+            f"{opencl_pointer_memory_attributes(raw_type)}"
             "@group(0) "
             f"@binding({binding}) "
             f"var<storage, {access}> "
@@ -842,7 +859,8 @@ class OpenCLToCrossGLConverter(
         return bool(qualifiers & self.OPENCL_LOCAL_QUALIFIERS)
 
     def opencl_kernel_pointer_access(self, raw_type):
-        qualifiers = set(str(raw_type).split())
+        # A ``const`` after the ``*`` makes the address constant, not the memory (``float* const p``).
+        qualifiers = opencl_pointee_qualifiers(raw_type)
         if qualifiers & {"read_write"}:
             return "read_write"
         if qualifiers & {"write_only"}:
@@ -1043,6 +1061,15 @@ class OpenCLToCrossGLConverter(
         func_name = getattr(node, "name", None)
         if isinstance(func_name, str):
             raw_args = getattr(node, "args", []) or []
+            if (
+                func_name == "printf"
+                and id(node) not in self.opencl_printf_statements
+                and not self.is_user_defined_function(func_name)
+            ):
+                raise OpenCLPrintfValueUnsupportedError(
+                    "OpenCL C printf returns an int (0, or -1 on failure), and CrossGL printf, the Vulkan "
+                    "debug print, returns nothing, so its result cannot be read"
+                )
             image_write = self.format_opencl_image_write(func_name, raw_args)
             if image_write is not None:
                 return image_write
@@ -1545,6 +1572,9 @@ class OpenCLToCrossGLConverter(
         return int(match.group(1) or match.group(2))
 
     def emit_statement(self, stmt):
+        if isinstance(stmt, FunctionCallNode) and stmt.name == "printf":
+            # A printf statement discards the result CrossGL's printf does not have.
+            self.opencl_printf_statements.add(id(stmt))
         if self.emit_opencl_compare_exchanges(stmt):
             return
         if self.is_opencl_prefetch_call(stmt):
@@ -2014,14 +2044,99 @@ class OpenCLToCrossGLConverter(
                 return f"{base}.{component}"
         return format_work_item_query(self, func_name, args)
 
+    # The OpenCL C integer scalar types a dimension cast may name. A cast
+    # to any other type keeps the current behaviour.
+    OPENCL_INTEGER_CAST_TYPES = frozenset(
+        {
+            "char",
+            "uchar",
+            "short",
+            "ushort",
+            "int",
+            "uint",
+            "long",
+            "ulong",
+            "size_t",
+            "signed char",
+            "unsigned char",
+            "signed short",
+            "unsigned short",
+            "signed int",
+            "unsigned int",
+            "signed long",
+            "unsigned long",
+            "signed long long",
+            "unsigned long long",
+        }
+    )
+
     def opencl_dimension_component(self, arg):
-        if isinstance(arg, int):
-            value = arg
-        elif isinstance(arg, str) and arg.isdigit():
-            value = int(arg)
-        else:
+        value = self.opencl_constant_dimension(arg)
+        if value is None:
             return None
         return ("x", "y", "z")[value] if value in {0, 1, 2} else None
+
+    def opencl_constant_dimension(self, arg):
+        """The constant dimension an argument spells, or ``None``.
+
+        A plain ``0``, ``1`` or ``2`` maps to ``.x``, ``.y`` or ``.z``; so
+        does the same value with an integer suffix (``1u``, ``2U``, ``1ul``),
+        as a hex literal (``0x1``) or behind an integer cast
+        (``(uint)1``, ``(unsigned int)2``). A cast to a narrow integer type
+        applies that type's width first, so ``(uchar)256`` is 0 and
+        ``(ushort)65537`` is 1; a signed narrow type whose value does not
+        fit returns ``None``. Anything else -- a runtime value, a float
+        cast, a dimension of 3 or more -- returns ``None`` so the caller
+        keeps its current behaviour.
+        """
+        if isinstance(arg, bool):
+            return None
+        if isinstance(arg, int):
+            return arg
+        if isinstance(arg, str):
+            digits = arg.rstrip("uUlL")
+            if digits.isdigit():
+                return int(digits)
+            if digits[:2].lower() == "0x" and digits[2:]:
+                try:
+                    return int(digits, 16)
+                except ValueError:
+                    return None
+            return None
+        if isinstance(arg, CastNode):
+            target = " ".join(str(arg.target_type).split())
+            if target not in self.OPENCL_INTEGER_CAST_TYPES:
+                return None
+            value = self.opencl_constant_dimension(arg.expression)
+            if value is None:
+                return None
+            # Bit widths of the narrow integer types a dimension cast may
+            # name, as (bits, signed). A cast applies its type's width
+            # first: in C, (uchar)256 is 0 and (ushort)65537 is 1.
+            widths = {
+                "char": (8, True),
+                "signed char": (8, True),
+                "uchar": (8, False),
+                "unsigned char": (8, False),
+                "short": (16, True),
+                "signed short": (16, True),
+                "ushort": (16, False),
+                "unsigned short": (16, False),
+                "int": (32, True),
+                "signed int": (32, True),
+                "uint": (32, False),
+                "unsigned int": (32, False),
+            }
+            width = widths.get(target)
+            if width is None:
+                return value
+            bits, signed = width
+            if signed:
+                if value < -(1 << (bits - 1)) or value > (1 << (bits - 1)) - 1:
+                    return None
+                return value
+            return value % (1 << bits)
+        return None
 
     def format_crossgl_array_extent(self, size):
         return format_opencl_array_extent(size, super().format_crossgl_array_extent)

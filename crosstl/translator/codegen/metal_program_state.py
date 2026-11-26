@@ -45,10 +45,12 @@ from .metal_array_arguments import (
 from .metal_buffer_component_stores import (
     metal_glsl_buffer_component_refusal,
 )
+from .metal_buffer_resource_types import metal_generic_buffer_resource_types
 from .metal_grid_quads import collect_metal_grid_quad_widths
 from .metal_matrix_builtins import (
     MetalMatrixBuiltins,
 )
+from .metal_restrict import metal_restrict_suffix
 from .metal_signed_builtins import (
     collect_metal_signed_builtin_members,
 )
@@ -569,6 +571,9 @@ class MetalProgramStateMixin:
                 block["memory"] = self.resource_memory_qualifier_prefix(
                     node, getattr(node, "var_type", None)
                 )
+                block["restrict"] = metal_restrict_suffix(
+                    node, getattr(node, "var_type", None)
+                )
         self.metal_specialization_macro_constants = (
             specialization_constants_sizing_arrays(
                 ast,
@@ -636,6 +641,7 @@ class MetalProgramStateMixin:
                 **getattr(self, "metal_program_scope_constant_types", {}),
                 **getattr(self, "metal_cbuffer_member_types", {}),
                 **metal_generic_global_types(self, global_vars),
+                **metal_generic_buffer_resource_types(self, global_vars),
             },
             ast=ast,
         )

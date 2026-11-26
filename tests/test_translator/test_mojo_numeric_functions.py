@@ -65,6 +65,11 @@ CASES = {
         " int t = 20; while ((t -= 3) > 0) { n += 64; } int m = 3; do { m += 1; } while (m-- > 5);"
         " int vals[3]; int x = 0; vals[x++] = 1; vals[x++] = 2; vals[x] = x; outp[i] = n + j + vals[1] + m;"
     ),
+    "per_lane_operands": (
+        "float up = nextafter(abs(a), INFINITY); bool big = isinf(abs(a)) || isnan(sqrt(a));"
+        " vec2 v = vec2(a, 2.0); vec2 w = nextafter(floor(v), vec2(sin(a))); bvec2 f = isfinite(abs(v));"
+        " outp[i] = (big || f.y) ? int(up) : int(w.x);"
+    ),
 }
 
 
@@ -121,6 +126,28 @@ def test_float_functions_use_mojo_names_and_nan_takes_the_context_type(tmp_path)
     assert "nan[DType.float32]()" in code
     assert "var dn: Float64 = Float64(nan[DType.float64]())" in code
     assert "rcp(" not in code and "tgamma(" not in code
+
+
+def test_per_lane_built_in_results_are_operands_of_the_operand_type(tmp_path):
+    code = translate(tmp_path, CASES["per_lane_operands"])
+
+    assert "var up: Float32 = nextafter(abs(a), " in code
+    assert "isinf(abs(a))" in code and "isnan(sqrt(a))" in code
+    assert "nextafter(floor(v), " in code
+    assert "var f: SIMD[DType.bool, 2] = isfinite(abs(v))" in code
+
+
+def test_a_lone_underscore_name_is_renamed_because_mojo_discards_it(tmp_path):
+    source = tmp_path / "underscore.cgl"
+    source.write_text(
+        KERNEL.replace("buffer float* fin;", "buffer float* _;")
+        .replace("fin[i]", "_[i]")
+        .format(body="outp[i] = int(a) + k + int(u);")
+    )
+    code = crosstl.translate(str(source), backend="mojo")
+
+    assert "__: UnsafePointer[Float32" in code and "__[Int(i)]" in code
+    assert "_:" not in code.replace("__:", "")
 
 
 def test_bit_counts_are_std_bit_counts_of_the_operand_type(tmp_path):

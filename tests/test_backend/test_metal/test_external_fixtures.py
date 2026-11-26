@@ -2475,7 +2475,8 @@ EXTERNAL_FIXTURES = [
         "contains": [
             "@metal_alignas(16)\n    generic<_T, _length> struct sv",
             "@metal_alignas(16)\n    struct alignment_dummy",
-            "dtype[_length] data;",
+            # `using dtype = _T;` is a member alias, which CrossGL does not have: the member names its target.
+            "_T[_length] data;",
         ],
         "preprocess": True,
         "source": (

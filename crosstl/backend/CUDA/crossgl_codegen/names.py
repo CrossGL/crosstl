@@ -91,6 +91,13 @@ class CudaImportNameMixin:
         if len(self.identifier_name_scopes) > 1:
             self.identifier_name_scopes.pop()
 
+    def register_enumerator_name(self, name, output_name):
+        if not self.is_simple_identifier(name):
+            return
+        if not self.identifier_name_scopes:
+            self.identifier_name_scopes.append({})
+        self.identifier_name_scopes[-1][name] = output_name
+
     def register_identifier_name(self, name):
         if not self.is_simple_identifier(name):
             return name

@@ -177,6 +177,10 @@ def _copy_back(codegen, call, argument, source, name):
         target, write_conversion = layout_store
         if write_conversion:
             value = f"{write_conversion}({name})"
+    narrow_storage = codegen.metal_narrow_member_vector_storage_type(argument)
+    if value == name and narrow_storage is not None:
+        # The widened temporary converts back to the field's declared width explicitly.
+        value = f"{narrow_storage}({name})"
     return f"{target} = {value}"
 
 
@@ -210,12 +214,15 @@ def _sequence_call(codegen, sequence, stmt, call, copied, discarded=False):
                     "__crossgl_index", _index_type(codegen, index_expr), index_expr
                 )
         raw_type = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
-        name = sequence.temporary(
-            "__crossgl_ref", codegen.map_type(codegen.type_name_string(raw_type))
-        )
+        mapped = codegen.map_type(codegen.type_name_string(raw_type))
+        name = sequence.temporary("__crossgl_ref", mapped)
         source = codegen.generate_expression(argument)
         if qualifier == "inout":
-            sequence.steps.append(f"{name} = {source}")
+            if codegen.metal_narrow_member_vector_storage_type(argument) is not None:
+                source_value = f"{mapped}({source})"
+            else:
+                source_value = source
+            sequence.steps.append(f"{name} = {source_value}")
         copy_backs.append(_copy_back(codegen, call, argument, source, name))
         sequence.substitute(argument, name)
     call_code = codegen.generate_expression(call)

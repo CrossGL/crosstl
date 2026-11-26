@@ -23,10 +23,9 @@ The others are written with those: ``WaveActiveCountBits(b)`` counts the bits of
 
 WGSL's lane reads and quad operations take numbers only, and ``subgroup{And,Or,Xor}`` integers only, so a ``bool``
 operand travels as the ``u32`` 0 or 1 and comes back as ``!= 0u``, which is exact for every one of them. The built-in
-inputs reach entry points only (:mod:`.wgsl_functions` refuses them in helpers). Like the subgroup built-in inputs,
-the functions need no ``enable subgroups;`` directive in naga 30, which rejects it as not yet implemented. Every other
-wave operation (the min, max and bitwise scans, clustered reductions, ballot arithmetic, partitions and rotations)
-has no WGSL built-in and is refused.
+inputs reach entry points only (:mod:`.wgsl_functions` refuses them in helpers). A module that uses any of them
+enables ``subgroups`` (:mod:`.wgsl_subgroup_directives`). Every other wave operation (the min, max and bitwise scans,
+clustered reductions, ballot arithmetic, partitions and rotations) has no WGSL built-in and is refused.
 """
 
 from __future__ import annotations

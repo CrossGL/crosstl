@@ -162,6 +162,35 @@ def builtin_input_infos(ast):
     return infos
 
 
+def declared_builtin_input_info(node):
+    """The built-in record of a declared compute built-in input, else ``None``.
+
+    The SPIR-V importer declares each built-in input a compute stage reads as a variable of the stage
+    (``uint3 gl_GlobalInvocationID @input @gl_GlobalInvocationID;``). rust-gpu reads it as an entry-point parameter
+    with the built-in's attribute, like a built-in a program reads by name (:func:`builtin_input_infos`); the record
+    keeps the declaration itself, so the generator does not also write it as a static.
+    """
+    if not isinstance(node, VariableNode):
+        return None
+    names = [
+        str(getattr(attribute, "name", attribute))
+        for attribute in getattr(node, "attributes", None) or []
+    ]
+    if "input" not in {name.lower() for name in names}:
+        return None
+    for name in [*names, getattr(node, "name", "")]:
+        entry = COMPUTE_BUILTIN_INPUTS.get(name)
+        if entry:
+            builtin, type_name = entry
+            return {
+                "node": node,
+                "type_name": type_name,
+                "kind": BUILTIN_INPUT_KIND,
+                "builtin": builtin,
+            }
+    return None
+
+
 def _crossgl_type(type_name):
     if type_name == "uvec3":
         return VectorType(PrimitiveType("uint"), 3)

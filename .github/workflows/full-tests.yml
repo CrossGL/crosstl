@@ -14,6 +14,10 @@ on:
       - main
   workflow_dispatch:
   merge_group:
+  schedule:
+    # Every test, including the ones pull requests and merge groups deselect as unaffected
+    # (tools/pytest_scope.py), so dependency updates reach them within a day.
+    - cron: "37 0 * * *"
 
 permissions:
   contents: read
@@ -25,6 +29,9 @@ concurrency:
 jobs:
   plan:
     name: Plan
+    # Only a push to main can repeat a commit the merge queue tested. Pull requests and merge groups skip this
+    # job, so their tests start without first waiting for a runner for it.
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
@@ -48,21 +55,37 @@ jobs:
   pytest:
     name: pytest (shard ${{ matrix.shard }} of ${{ strategy.job-total }})
     needs: plan
-    if: needs.plan.outputs.tested != 'true'
+    if: ${{ !cancelled() && needs.plan.outputs.tested != 'true' }}
     runs-on: ubuntu-latest
-    # tools/pytest_shard.py splits the suite by test id. Six shards ran their tests
-    # for about 10 minutes each, the longest job of a merge-queue run once macOS
-    # translator tests were split; eight bring a shard under the translator legs.
-    # Each shard still collects the whole suite.
+    # tools/pytest_shard.py splits the suite by test id. Eight shards ran their tests
+    # for 9 to 13 minutes each (up to 16), the longest job of a merge-queue run, so a
+    # group waited about 23 minutes for this workflow. Twelve bring a shard under the
+    # macOS translator legs for about 1.7 minutes of setup each. Each shard still
+    # collects the whole suite.
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
+        with:
+          # The parent commit lists the files a pull request or merge group changes.
+          fetch-depth: 2
+
+      - name: List the files the change touches
+        # A pull request checks out its merge commit and a merge group its queued commit, so the first parent is
+        # the base. tools/pytest_scope.py deselects the scoped tests no listed path can affect; pushes, the
+        # nightly run, dispatches and pull requests labelled ci:full run every test.
+        if: >-
+          github.event_name == 'merge_group' ||
+          (github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full'))
+        run: |
+          mkdir -p build
+          git diff --name-only HEAD^1 HEAD > build/changed-files.txt
+          echo "$(wc -l < build/changed-files.txt) changed files"
 
       - name: Set up Python
         uses: actions/setup-python@v7
@@ -91,8 +114,12 @@ jobs:
         # rest. Work stealing moves queued tests to whichever worker runs dry.
         run: |
           mkdir -p build/reports
+          scope=()
+          if [ -f build/changed-files.txt ]; then
+            scope=(-p tools.pytest_scope --changed-files build/changed-files.txt)
+          fi
           python -m pytest tests demos/integrations \
-            -p tools.pytest_shard --shard "${{ matrix.shard }}/${{ strategy.job-total }}" \
+            -p tools.pytest_shard --shard "${{ matrix.shard }}/${{ strategy.job-total }}" "${scope[@]}" \
             --durations=25 -n auto --dist worksteal --junitxml build/reports/full-tests-pytest.xml
 
       - name: Write complete test failure summary
@@ -120,7 +147,7 @@ jobs:
   shader-validators:
     name: Shader Validators (${{ matrix.os }})
     needs: plan
-    if: needs.plan.outputs.tested != 'true'
+    if: ${{ !cancelled() && needs.plan.outputs.tested != 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 90
     strategy:
@@ -272,7 +299,7 @@ jobs:
   runtime-parity:
     name: Runtime Parity (${{ matrix.adapter }} on ${{ matrix.os }})
     needs: plan
-    if: needs.plan.outputs.tested != 'true'
+    if: ${{ !cancelled() && needs.plan.outputs.tested != 'true' }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
@@ -467,7 +494,7 @@ jobs:
   directx-native-runtime-smoke:
     name: Direct3D 12 Native Runtime Smoke (Windows)
     needs: plan
-    if: needs.plan.outputs.tested != 'true'
+    if: ${{ !cancelled() && needs.plan.outputs.tested != 'true' }}
     runs-on: windows-latest
     timeout-minutes: 30
 
@@ -526,7 +553,7 @@ jobs:
   compiler-smoke-linux:
     name: Compiler Smoke (Linux CUDA/DXC/SPIR-V/Slang)
     needs: plan
-    if: needs.plan.outputs.tested != 'true'
+    if: ${{ !cancelled() && needs.plan.outputs.tested != 'true' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 90
     env:
@@ -709,7 +736,7 @@ jobs:
   compiler-smoke-macos:
     name: Compiler Smoke (macOS Metal)
     needs: plan
-    if: needs.plan.outputs.tested != 'true'
+    if: ${{ !cancelled() && needs.plan.outputs.tested != 'true' }}
     runs-on: macOS-latest
     timeout-minutes: 60
 

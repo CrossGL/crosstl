@@ -47,6 +47,13 @@ def discarded_wide_atomic_call(codegen: Any, expr: Any) -> str | None:
     mapped_type = codegen.map_type(codegen.expression_result_type(expr.args[0]))
     if mapped_type not in METAL_WIDE_ATOMIC_TYPES:
         return None
+    # A GLSL buffer-block member lowers by byte offset, not by reinterpret
+    # cast, so try that path before the buffer-resource path.
+    block_call = codegen.generate_glsl_buffer_block_atomic_call(
+        name, expr.args, discarded=True
+    )
+    if block_call is not None:
+        return block_call
     return codegen.generate_metal_buffer_resource_atomic_call(
         name, expr.args, wide_result_discarded=True
     )
@@ -68,8 +75,8 @@ def metal_wide_atomic_call(
         return codegen.unsupported_metal_buffer_resource_atomic_call(
             func_name,
             target,
-            "on a 64-bit target uses its result, but Metal's 64-bit atomic_max_explicit and "
-            "atomic_min_explicit return nothing",
+            "Metal's 64-bit atomic min/max return no value, "
+            "so the result cannot be used",
         )
     if address_space != "device":
         return codegen.unsupported_metal_buffer_resource_atomic_call(

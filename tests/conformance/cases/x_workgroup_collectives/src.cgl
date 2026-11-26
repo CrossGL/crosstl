@@ -1,0 +1,34 @@
+// Workgroup collectives combine the values of every invocation of a 64-invocation workgroup, in local invocation
+// index order: reductions, inclusive and exclusive scans, votes and a broadcast from invocation 5, over int, uint,
+// float and ivec2 operands. Every invocation writes the 12 results.
+shader WorkgroupCollectives {
+    compute {
+        layout(local_size_x = 64, local_size_y = 1, local_size_z = 1) in;
+
+        readonly buffer int inp[] @binding(0);
+        buffer int outp[] @binding(1);
+
+        int pair(ivec2 v) {
+            return v.x * 3 + v.y;
+        }
+
+        void main() {
+            uint g = gl_GlobalInvocationID.x;
+            int x = inp[g];
+            uint bits = uint(x) & 255u;
+            uint base = g * 12u;
+            outp[base] = workgroupAdd(x);
+            outp[base + 1u] = workgroupInclusiveAdd(x);
+            outp[base + 2u] = workgroupExclusiveAdd(x);
+            outp[base + 3u] = workgroupMin(x) * 7 + workgroupMax(x);
+            outp[base + 4u] = workgroupInclusiveMin(x);
+            outp[base + 5u] = workgroupExclusiveMax(x);
+            outp[base + 6u] = workgroupBroadcast(x, 5u);
+            outp[base + 7u] = (workgroupAll(x > -990) ? 1 : 0) + (workgroupAny(x > 990) ? 2 : 0);
+            outp[base + 8u] = int(workgroupXor(bits) ^ (workgroupInclusiveOr(bits) << 8u));
+            outp[base + 9u] = int(workgroupExclusiveMul((bits & 1u) + 1u));
+            outp[base + 10u] = int(workgroupAdd(float(x) * 0.5) * 2.0);
+            outp[base + 11u] = pair(workgroupInclusiveMax(ivec2(x, -x)));
+        }
+    }
+}

@@ -31,6 +31,7 @@ from .builtin_output_writes import (
     convert_signed_builtin_outputs,
     declare_builtin_outputs,
 )
+from .builtin_stage_functions import refuse_misplaced_builtin_functions
 from .builtin_stage_identifiers import refuse_misplaced_builtin_identifiers
 from .builtin_stages import refuse_misplaced_builtins
 from .builtin_values import BuiltinValueUnsupportedError, canonicalize_builtin_values
@@ -51,7 +52,12 @@ from .constant_reference_layouts import (
     ConstantReferenceLayoutError,
     hoist_constant_reference_layouts,
 )
-from .debug_printf import DebugPrintfUnsupportedError, refuse_debug_printf
+from .debug_printf import (
+    DebugPrintfUnsupportedError,
+    DebugPrintfValueUnsupportedError,
+    refuse_debug_printf,
+    refuse_debug_printf_values,
+)
 from .declaration_scopes import separate_initializer_scopes
 from .declared_functions import UndeclaredFunctionError, refuse_undeclared_functions
 from .declared_identifiers import (
@@ -164,6 +170,7 @@ from .partitioned_waves import (
     PartitionedWaveUnsupportedError,
     lower_partitioned_wave_operations,
 )
+from .powi_helpers import PowiUnsupportedError, lower_powi_calls
 from .program_families import discharge_program_families
 from .push_constant_layouts import mark_push_constant_layouts
 from .relative_vertex_ids import (
@@ -276,6 +283,10 @@ from .work_graph_nodes import (
     check_work_graph_nodes,
     refuse_work_graph_nodes,
 )
+from .workgroup_collectives import (
+    WorkgroupCollectiveError,
+    lower_workgroup_collectives,
+)
 from .workgroup_uniform_load import (
     WorkgroupUniformLoadError,
     lower_workgroup_uniform_loads,
@@ -303,8 +314,10 @@ __all__ = [
     "ConstantBufferTooLargeError",
     "CudaWarpIntrinsicUnsupportedError",
     "PartitionedWaveUnsupportedError",
+    "PowiUnsupportedError",
     "WaveRotationUnsupportedError",
     "DebugPrintfUnsupportedError",
+    "DebugPrintfValueUnsupportedError",
     "DescriptorArrayUnsupportedError",
     "DeviceReferenceUnsupportedError",
     "DeviceVariableUnsupportedError",
@@ -319,6 +332,7 @@ __all__ = [
     "HitObjectUnsupportedError",
     "WorkGraphNodeError",
     "WorkGraphUnsupportedError",
+    "WorkgroupCollectiveError",
     "WorkgroupUniformLoadError",
     "HlslGeometryStreamUnsupportedError",
     "RowMajorStructMemberUnsupportedError",
@@ -411,6 +425,9 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     Two different structures of one name in a scope are then refused with :class:`ConflictingStructError`, two
     different program constants of one name with :class:`ConflictingConstantError`, and a repeated identical one
     is kept once (:mod:`.struct_declarations`).
+    Workgroup reductions, scans, votes and broadcasts become calls of CrossGL helpers that combine the
+    invocations' values through a ``shared`` array, on every target that does not write them itself, or are refused
+    with :class:`WorkgroupCollectiveError` (:mod:`.workgroup_collectives`).
     Shader-scope functions that name a stage's declarations become functions of the stages that call them
     (:mod:`.stage_bound_functions`).
     Structure member functions then become free functions taking the receiver first (:mod:`.struct_methods`).
@@ -488,7 +505,8 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     (:mod:`.fixed_samplers`), and is validated and refused for targets that cannot declare it (:mod:`.sampler_states`).
     Shader Model 6.9 hit objects (``dx::HitObject``) are refused for every target but Direct3D (:mod:`.hit_objects`).
     Shader record buffers are refused for targets without a shader binding table (:mod:`.shader_records`), debug
-    prints for targets that cannot print from a shader (:mod:`.debug_printf`), and
+    prints for targets that cannot print from a shader and debug prints whose value is read for targets whose print
+    has no such value (:mod:`.debug_printf`), and
     minimum-LOD clamped samples for targets that cannot attach the clamp to a sample (:mod:`.texture_lod_clamp`),
     and texture residency queries for targets that do not lower them (:mod:`.texture_residency`).
     Sampler feedback textures are refused for every target but Direct3D (:mod:`.feedback_textures`).
@@ -532,7 +550,8 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     ``countbits``, ``reversebits``, ``firstbithigh`` and ``firstbitlow`` become the GLSL functions with HLSL's
     ``uint`` results on targets without them, and bit counts, bit reversals and signed ``abs`` of 8- and 16-bit
     integers are spelled on 32-bit operands, so 32-bit carriers compute them at the value's width
-    (:mod:`.bit_functions`). Binary16 values
+    (:mod:`.bit_functions`). Calls of CrossGL's ``powi`` and ``powif`` become calls of CrossGL helpers on targets
+    other than CUDA and HIP, or are refused with :class:`PowiUnsupportedError` (:mod:`.powi_helpers`). Binary16 values
     (:mod:`.half`) and narrow integers (:mod:`.narrow`) are then legalized for targets that compute them in 32-bit
     registers; on Metal, DirectX, CUDA and HIP, which compute them with integer promotion, the narrow results of a
     non-promoting source's arithmetic are converted back to their types (:mod:`.narrow_arithmetic`). A SPIR-V
@@ -554,6 +573,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     hoist_local_structs(program, report.target)
     refuse_conflicting_structs(program, report.target)
     fill_generic_struct_defaults(program, report.target)
+    lower_workgroup_collectives(program, report.target)
     bind_stage_functions(program)
     lower_struct_methods(program, report.target)
     hoist_stage_constant_blocks(program, report.target)
@@ -572,6 +592,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     resolve_builtin_names(program, report.target)
     refuse_misplaced_builtins(program, report.target)
     refuse_misplaced_builtin_identifiers(program, report.target)
+    refuse_misplaced_builtin_functions(program, report.target)
     lower_relative_vertex_ids(program, report.target)
     lower_spirv_instance_ids(program, report.target)
     refuse_ambiguous_matrix_spellings(program, report.target)
@@ -604,6 +625,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     zero_empty_scalar_initializers(program, report.target)
     refuse_initializer_shape_mismatches(program, report.source, report.target)
     lower_metal_math_spellings(program, report.target)
+    lower_powi_calls(program, report.target)
     lower_float_relations(program, report.target)
     lower_enum_values(program, report.target)
     split_union_word_views(program, report.target)
@@ -663,6 +685,7 @@ def apply_rule_carrying(program, source, target, entry_point=None) -> RuleReport
     legalize_sampler_states(program, report.target)
     refuse_shader_record_buffers(program, report.target)
     refuse_debug_printf(program, report.target)
+    refuse_debug_printf_values(program, report.source, report.target)
     check_texture_operands(program, report.target)
     refuse_texture_lod_clamp(program, report.target)
     refuse_texture_residency(program, report.target)

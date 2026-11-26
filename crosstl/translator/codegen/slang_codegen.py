@@ -45,6 +45,7 @@ from .builtin_result_types import (
     builtin_call_result_type,
 )
 from .c_family_operands import postfix_operand
+from .call_graph import validate_recursion_free
 from .comma_expressions import (
     c_family_comma_expression,
     comma_result_operand,
@@ -76,7 +77,10 @@ from .generic_function_utils import (
     numeric_trait_method_result_type,
     prepare_generic_function_specializations,
 )
-from .generic_global_types import collect_constant_and_cbuffer_member_types
+from .generic_global_types import (
+    collect_constant_and_cbuffer_member_types,
+    metal_generic_global_types,
+)
 from .generic_pointer_spaces import (
     assign_generic_pointer_spaces,
     refuse_written_generic_pointers,
@@ -94,6 +98,7 @@ from .slang_buffer_block_types import SlangBufferBlockTypesMixin
 from .slang_builtin_input_members import lower_slang_builtin_input_members
 from .slang_byte_address_words import SlangThreeComponentAccess
 from .slang_call_expressions import SlangCallExpressionMixin
+from .slang_compute_derivative_groups import validate_slang_compute_derivative_group
 from .slang_conservative_depth import slang_conservative_depth_semantic
 from .slang_control_flow import SlangControlFlowMixin
 from .slang_cull_distance import slang_cull_distance_member_type
@@ -121,7 +126,14 @@ from .slang_numeric_types import slang_unrepresentable_type_reason
 from .slang_pointer_declarations import refuse_slang_pointer_declarations
 from .slang_precise_functions import SlangPreciseFunctionMixin
 from .slang_program_symbols import SlangProgramSymbolsMixin
-from .slang_rasterizer_order import slang_rasterizer_ordered_type
+from .slang_push_constant_structs import (
+    slang_member_offset_prefix,
+    slang_push_constant_struct_names,
+)
+from .slang_rasterizer_order import (
+    rasterizer_ordered_parameters,
+    slang_rasterizer_ordered_type,
+)
 from .slang_ray_tracing import SlangRayTracingMixin
 from .slang_refusals import SlangLoweringRefused
 from .slang_resource_bindings import SlangResourceBindingsMixin
@@ -130,6 +142,7 @@ from .slang_resource_memory import (
     helper_resource_argument_names,
 )
 from .slang_semantics import SlangSemanticsMixin
+from .slang_shader_records import slang_shader_record_declaration
 from .slang_stage_attributes import SlangStageAttributesMixin
 from .slang_stage_interface import SlangStageInterfaceMixin
 from .slang_stage_parameters import SlangStageParametersMixin
@@ -329,6 +342,7 @@ class SlangCodeGen(
         self.slang_fragment_output_location_ids = set()
         self.literal_int_constants = {}
         self.glsl_buffer_block_struct_names = set()
+        self.slang_push_constant_struct_names = frozenset()
         self.lowered_glsl_buffer_blocks = {}
         self.glsl_buffer_block_lowering_failures = {}
         self.glsl_buffer_block_struct_lowering_failures = {}
@@ -456,6 +470,7 @@ class SlangCodeGen(
         refuse_cooperative_matrices(ast, label="Slang", target="slang")
         self.slang_narrow_scalars_promote = source_promotes_narrow_scalars(ast)
         ast = lower_union_storage(ast, "slang")
+        validate_recursion_free(ast, "slang")
         ast = lower_slang_builtin_input_members(ast)
         # Slang textures are separate objects, as in HLSL: a separate CrossGL texture declares the same Texture2D.
         ast = canonicalize_separate_textures(ast)
@@ -511,6 +526,9 @@ class SlangCodeGen(
             self.slang_helper_resource_arguments = helper_resource_argument_names(
                 ast, self.user_function_names
             )
+            self.slang_rasterizer_ordered_parameters = rasterizer_ordered_parameters(
+                ast
+            )
             self.generic_function_definitions = {}
             self.generic_function_definition_ordinals = {}
             self.generic_function_specializations = {}
@@ -526,6 +544,9 @@ class SlangCodeGen(
                 if getattr(struct, "name", None)
             }
             self.structs_by_name = dict(self.user_structs_by_name)
+            self.slang_push_constant_struct_names = slang_push_constant_struct_names(
+                ast
+            )
             self.vertex_entry_input_struct_names = (
                 self.collect_slang_vertex_entry_input_struct_names(ast)
             )
@@ -594,12 +615,20 @@ class SlangCodeGen(
                     self, self.generic_enum_specializations
                 )
             )
+            # A generic call deduces its arguments' types before the globals are declared, so it reads the
+            # written types of the value, texture and buffer globals (``outp[i]`` of a structured buffer).
+            generic_global_types = metal_generic_global_types(
+                self, getattr(ast, "global_variables", None)
+            )
+            generic_global_types.update(
+                collect_constant_and_cbuffer_member_types(
+                    self, ast, type_renderer=self.convert_type_node_to_string
+                )
+            )
             generic_function_specializations = prepare_generic_function_specializations(
                 self,
                 list(iter_function_nodes(ast)),
-                collect_constant_and_cbuffer_member_types(
-                    self, ast, type_renderer=self.convert_type_node_to_string
-                ),
+                generic_global_types,
                 ast=ast,
             )
             if generic_function_specializations:
@@ -966,6 +995,9 @@ class SlangCodeGen(
         return "static const " if constant else "static "
 
     def generate_global_variable(self, node):
+        shader_record = slang_shader_record_declaration(self, node)
+        if shader_record is not None:
+            return shader_record
         direct_buffer_type = self.slang_glsl_buffer_array_resource_type(node)
         if direct_buffer_type is not None:
             self.register_variable_type(node.name, direct_buffer_type, node)
@@ -1109,7 +1141,8 @@ class SlangCodeGen(
             semantic_str = self.semantic_suffix(semantic)
             member_type = slang_cull_distance_member_type(self, member, member_type)
             declaration = (
-                struct_member_location_prefix(
+                slang_member_offset_prefix(self, node.name, member)
+                + struct_member_location_prefix(
                     self, node, member, default_member_semantics
                 )
                 + self.slang_interpolation_attribute_prefix(member)
@@ -1213,6 +1246,9 @@ class SlangCodeGen(
                 shader_type,
                 effective_param_list,
                 stage_role=stage_role,
+            )
+            validate_slang_compute_derivative_group(
+                self, node, shader_type, execution_config
             )
         else:
             self.validate_slang_ray_query_calls(node, "function", effective_param_list)
@@ -1435,6 +1471,15 @@ class SlangCodeGen(
             )
             if specialized_func_name in self.user_function_return_types:
                 return self.user_function_return_types[specialized_func_name]
+            if func_name == "select" and len(raw_args) == 3:
+                false_type = self.expression_result_type(raw_args[1])
+                true_type = self.expression_result_type(raw_args[2])
+                if (
+                    false_type is not None
+                    and self.convert_type(false_type) == self.convert_type(true_type)
+                    and self.is_matrix_type(false_type)
+                ):
+                    return false_type
             ray_transform_type = self.slang_ray_transform_call_type(func_name, raw_args)
             if ray_transform_type is not None:
                 return ray_transform_type

@@ -44,10 +44,19 @@ from .integral_constant_tags import (
 )
 from .member_address_types import addressed_member_pointer_type
 from .member_lowering_layers import lower_members_with_late_specializations
+from .method_struct_carriers import (
+    lower_late_member_functions,
+    method_struct_template_names,
+)
 from .namespaced_specializations import place_in_namespace, specialization_reference
 from .narrow_float_constants import metal_predefined_constant_type
 from .operator_argument_types import infer_conditional_type, infer_unary_sign_type
 from .overload_precedence import exact_template_outranks
+from .pending_receiver_structs import (
+    deferred_receiver_structs,
+    final_member_lowering,
+    reset_deferred_receiver_structs,
+)
 from .pointer_conversions import pointer_conversion_type
 from .preprocessing.access_type_inference import MetalAccessTypeInferenceMixin
 from .preprocessing.call_rewriting import MetalCallRewriteMixin
@@ -134,6 +143,7 @@ from .static_member_constants import (
     materialized_struct_for_template_id,
     static_member_constant_substituter,
 )
+from .struct_homonyms import distinct_struct_homonyms
 from .swizzle_types import infer_swizzle_type
 from .template_carried_reachability import template_carried_reachable_spans
 from .template_constants import unresolved_constant_references
@@ -301,6 +311,7 @@ class MetalPreprocessor(
         self._const_for_loop_contract_verified = False
         self._const_for_loop_expansion_work = 0
         self._fail_closed_static_assertions = False
+        reset_deferred_receiver_structs(self)
         self._static_constexpr_helper_values = {}
         self._static_constexpr_helper_resolution_stack = []
         self._source_analysis_cache: SourceAnalysisCache[_MetalSourceAnalysis] = (
@@ -355,11 +366,13 @@ class MetalPreprocessor(
         self._const_for_loop_contract_verified = False
         self._const_for_loop_expansion_work = 0
         self._fail_closed_static_assertions = False
+        reset_deferred_receiver_structs(self)
         self._static_constexpr_helper_values = {}
         self._static_constexpr_helper_resolution_stack = []
         code = self._strip_leading_compiler_diagnostics(code)
         processed = super().preprocess(code, file_path=file_path)
         processed = self._canonicalize_metal_library_matrix_typedefs(processed)
+        processed = distinct_struct_homonyms(processed)
         if re.search(r"\b(?:fp|FP_CONTRACT)\b", processed):
             # Inspect active expanded tokens before materialization changes the
             # lexical scope of a directive or prunes its containing template.
@@ -408,7 +421,15 @@ class MetalPreprocessor(
             self._materialize_explicit_template_struct_instantiations,
             MetalStructMethodError,
         )
+        lowered_source = processed
         processed = self._materialize_explicit_template_function_calls(processed)
+        if processed != lowered_source:
+            # A function template first called from a lowered member function (`combine<T, Op<T>>` in a member
+            # template) is instantiated only now; its body spells struct templates with the bound arguments
+            # (`apply_helper<uint, Add_uint> helper;`), which the late member lowering below needs as structs.
+            processed = self._materialize_explicit_template_struct_instantiations(
+                processed
+            )
         # This source reaches the CrossGL generic path, which cannot defer a SIMD-group
         # overload to each instantiation; the project materializer binds its own.
         constrained_source = processed
@@ -421,6 +442,12 @@ class MetalPreprocessor(
             processed = self._materialize_explicit_template_struct_instantiations(
                 processed
             )
+        if processed != constrained_source or deferred_receiver_structs(self):
+            # A carrier body that names a functor struct template (`Less<T> op; op(a, b)`) spells it concretely
+            # only now, and a struct a pending template call needed has kept its members until now
+            # (pending_receiver_structs.py); member lowering lowers both.
+            with final_member_lowering(self):
+                processed = lower_late_member_functions(self, processed)
         processed = self._prune_unreferenced_materialized_function_templates(processed)
         # A constrained overload nothing calls would reach CrossGL without its constraint.
         processed = prune_unreferenced_constrained_templates(self, processed)
@@ -495,10 +522,13 @@ class MetalPreprocessor(
             or (simd_group_overloads and overloads_simd_group_function(template))
         ]
         # Templates whose result is a decltype of their parameters are carriers (dependent_result_templates.py),
-        # and so are templates that name a member type a specialization may redefine (specialized_member_types.py).
-        dependent_results = dependent_result_template_names(
-            self, code, templates
-        ) | specialized_member_type_template_names(self, code, templates)
+        # and so are templates that name a member type a specialization may redefine (specialized_member_types.py)
+        # or a struct template with member functions at their own arguments (method_struct_carriers.py).
+        dependent_results = (
+            dependent_result_template_names(self, code, templates)
+            | specialized_member_type_template_names(self, code, templates)
+            | method_struct_template_names(self, code, templates)
+        )
         if not constrained and not dependent_results:
             return code
 
@@ -1912,6 +1942,8 @@ class MetalPreprocessor(
             if struct_type is None:
                 if self._receiver_has_builtin_member_type_at(
                     code, ident, ident_start, receiver_declaration
+                ) or self._receiver_member_typedef_names_library_type(
+                    receiver_declaration, field_structs_by_name
                 ):
                     return None
                 arg_close = self._find_matching_delimiter(code, arg_open, "(", ")")
@@ -3448,6 +3480,7 @@ class MetalPreprocessor(
                 matching_partials: List[Tuple[_MetalTemplateStruct, Dict[str, str]]] = (
                     []
                 )
+                matching_patterns: List[List[str]] = []
                 has_unmaterializable_partial = False
                 for (
                     partial_template,
@@ -3483,8 +3516,14 @@ class MetalPreprocessor(
                         has_unmaterializable_partial = True
                     else:
                         matching_partials.append((partial_template, bindings))
-                self._require_unique_constrained_struct_partial(
-                    ident, resolved_arguments, matching_partials
+                        matching_patterns.append(canonical_specialization_arguments)
+                matching_partials = self._most_specialized_struct_partials(
+                    ident,
+                    resolved_arguments,
+                    matching_partials,
+                    matching_patterns,
+                    code=code,
+                    position=i,
                 )
                 if matching_partials or has_unmaterializable_partial:
                     resolved_constraint = len(matching_partials) == 1 and any(

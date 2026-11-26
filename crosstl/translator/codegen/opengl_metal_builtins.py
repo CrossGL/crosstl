@@ -31,6 +31,7 @@ from .enum_utils import (
     generate_enum_constructor_expression,
 )
 from .for_initializers import join_for_initializer
+from .glsl_atomic_fences import GLSLAtomicFenceRefusal, glsl_atomic_fence_barrier
 from .glsl_draw_parameters import (
     draw_parameter_spelling,
     vertex_builtin_spelling,
@@ -657,40 +658,35 @@ class OpenGLMetalBuiltinMixin:
                 source_location=source_location,
             )
 
-        if scope != "thread_scope_threadgroup":
-            reason = (
-                "unsupported-system-thread-scope"
-                if scope == "thread_scope_system"
-                else "unsupported-thread-scope"
-            )
+        if scope == "thread_scope_system":
             raise self.opengl_atomic_fence_contract_error(
-                reason,
+                "unsupported-system-thread-scope",
                 args,
                 source_location=source_location,
             )
-        if order != "memory_order_acq_rel":
+        if not validate_stage:
+            return None
+        stage = normalize_stage_name(
+            self.current_stage_entry_type or self.glsl_atomic_fence_stage
+        )
+        has_atomic_counters = any(
+            re.match(r"atomic_uint\b", str(vtype))
+            for vtype in (getattr(self, "global_variable_types", None) or {}).values()
+        )
+        try:
+            return glsl_atomic_fence_barrier(
+                flags,
+                order,
+                scope,
+                stage,
+                has_atomic_counters=has_atomic_counters,
+            )
+        except GLSLAtomicFenceRefusal as refusal:
             raise self.opengl_atomic_fence_contract_error(
-                "unsupported-memory-order",
+                refusal.reason,
                 args,
                 source_location=source_location,
-            )
-        if flags != frozenset({"mem_threadgroup"}):
-            raise self.opengl_atomic_fence_contract_error(
-                "unsupported-memory-flags",
-                args,
-                source_location=source_location,
-            )
-        if validate_stage and (
-            normalize_stage_name(
-                self.current_stage_entry_type or self.glsl_atomic_fence_stage
-            )
-            != "compute"
-        ):
-            raise self.opengl_atomic_fence_contract_error(
-                "unsupported-shader-stage",
-                args,
-                source_location=source_location,
-            )
+            ) from None
 
     def validate_glsl_atomic_fences_before_resource_qualifiers(
         self, ast, target_stage=None
@@ -710,11 +706,10 @@ class OpenGLMetalBuiltinMixin:
                 )
 
     def generate_glsl_atomic_thread_fence(self, args, *, source_location=None):
-        self.validate_glsl_atomic_thread_fence_contract(
+        return self.validate_glsl_atomic_thread_fence_contract(
             args,
             source_location=source_location,
         )
-        return "memoryBarrierShared()"
 
     def synchronization_function_call(self, func_name, args, *, source_location=None):
         if not func_name or func_name in self.function_return_types:

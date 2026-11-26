@@ -15,6 +15,7 @@ import re
 from dataclasses import dataclass
 
 from .. import ast as A
+from ..workgroup_operations import WORKGROUP_COLLECTIVES, WORKGROUP_VOTES
 from .rule_table import CONVERSION_SIGNATURES, CONVERT_SAT_GENERIC
 
 
@@ -456,6 +457,11 @@ class TypeScope:
         direct = type_from_name(name)
         if direct is not None:
             return direct
+        if name in WORKGROUP_COLLECTIVES and name not in self.functions:
+            # A workgroup vote is a bool; every other collective has its first operand's type.
+            if name in WORKGROUP_VOTES:
+                return BOOL
+            return self.infer(arguments[0]) if arguments else None
         if name in ("and", "or") and name not in self.functions:
             lanes = [value.lanes for value in map(self.infer, arguments) if value]
             return BOOL.with_lanes(max(lanes, default=1))

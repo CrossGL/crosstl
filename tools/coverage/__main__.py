@@ -33,6 +33,7 @@ from . import (
     report,
     runner,
     spirv_input,
+    tint,
     validators,
 )
 from .model import DIRECTIONS
@@ -387,6 +388,8 @@ def _how_to_install(tool: str) -> str:
     variable = "CROSSTL_COVERAGE_" + re.sub(r"\W", "_", tool).upper()
     if tool == "rust-gpu":
         return f"set {variable} to a built rust-gpu checkout, see tools/coverage/rustgpu.py"
+    if tool == "tint":
+        return f"put node on PATH and set {tint.VARIABLE} to the webgpu package, see tools/coverage/tint.py"
     return f"put {tool} on PATH or set {variable}"
 
 
@@ -405,7 +408,7 @@ def _tools() -> int:
         if validators.available(language):
             found = validators.version(tool) or "yes, no version reported"
         else:
-            found = "no: " + _how_to_install(tool)
+            found = "no: " + _how_to_install(validators.missing(language) or tool)
         rows.append((language, directions, tool, found))
     widths = [max(len(row[column]) for row in rows) for column in range(3)]
     for row in rows:

@@ -3,12 +3,14 @@
 import re
 
 from ..ast import (
+    ArrayAccessNode,
     BlockNode,
     IdentifierNode,
     LambdaNode,
     LiteralNode,
 )
 from .rust_exact_lookups import RUST_PRIMITIVE_SOURCE_TYPES
+from .rust_gpu_images import rust_gpu_image_parameter_type
 from .rust_gpu_spelling import GLAM_AXES
 from .rust_refusals import RustEnumEmptyBraceError
 
@@ -659,6 +661,13 @@ class RustCallableMixin:
         generated_args = []
         for index, arg in enumerate(args):
             param_type = self.user_function_param_type(func_name, index)
+            if isinstance(arg, ArrayAccessNode) and (
+                param_type is not None
+                and rust_gpu_image_parameter_type(self, param_type) is not None
+            ):
+                # An element of an image or sampler array is a value; the helper's parameter borrows it.
+                generated_args.append(f"&{self.generate_expression(arg)}")
+                continue
             target_type = self.user_function_argument_target_type(
                 func_name,
                 arg,
@@ -694,10 +703,14 @@ class RustCallableMixin:
     def generate_captured_function_call_args(self, func_name):
         captured_params = self.rust_function_capture_params.get(func_name, [])
         return [
-            self.generate_expression_with_type(
-                IdentifierNode(param.name), param.param_type
-            )
-            for param in captured_params
+            (
+                # The helper takes the workgroup reference itself (rust_workgroup_references).
+                self.rust_identifier(param.name)
+                if self.is_rust_workgroup_reference(param.name)
+                else self.generate_expression_with_type(
+                    IdentifierNode(param.name), param.param_type
+                )
+            ) for param in captured_params
         ]
 
     def user_function_argument_target_type(self, func_name, arg, param_type):

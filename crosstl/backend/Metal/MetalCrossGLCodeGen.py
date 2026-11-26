@@ -29,6 +29,7 @@ from .crossgl_codegen.import_tables import (
     FRAGMENT_EXECUTION_ATTRIBUTE_NAMES,
     FUNCTION_METADATA_ATTRIBUTE_NAMES,
     METAL_ATTRIBUTE_SEMANTICS,
+    METAL_INTERPOLATION_SEMANTICS,
     METAL_RAY_TRACING_STAGE_QUALIFIERS,
     METAL_TO_CROSSGL_TYPES,
     PARAMETER_DIRECTION_QUALIFIERS,
@@ -585,6 +586,7 @@ class MetalToCrossGLConverter(
         if stage_entry:
             code += "    " * indent
             code += "@ stage_entry\n"
+        code += self.metal_post_tessellation_function_annotation(func, indent)
         linkage_annotations = []
         if not getattr(func, "qualifier", None):
             qualifiers = set(getattr(func, "declaration_qualifiers", ()) or ())
@@ -1165,6 +1167,8 @@ float {scalar}(float base, float exponent) {{
                 )
             elif has_barycentric_coord and "no_perspective" in str(name).lower():
                 continue
+            elif not has_barycentric_coord and name in METAL_INTERPOLATION_SEMANTICS:
+                out = METAL_INTERPOLATION_SEMANTICS[name]
             elif context_kind == "parameter" and name == "sample_mask":
                 out = "gl_SampleMaskIn"
             elif name == "attribute" and len(args) == 1:

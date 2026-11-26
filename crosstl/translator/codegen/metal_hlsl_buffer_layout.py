@@ -199,6 +199,37 @@ class MetalHlslBufferLayouts:
         # Definitions of the register-word storage structs of matrices and
         # trimmed arrays, with their helpers, by struct name.
         self.matrix_storages: Dict[str, str] = {}
+        # ``(vector_words, row_major, scalar)`` of each matrix those structs hold, by struct name.
+        self.matrix_word_layouts: Dict[str, Tuple[int, bool, str]] = {}
+
+    def add_matrix_storage(
+        self, name, scalar, columns, rows, words, row_major, vector_words=4
+    ):
+        """Define the register-word struct ``name`` of one matrix shape once."""
+        if name not in self.matrix_storages:
+            self.matrix_storages[name] = metal_matrix_storage_definition(
+                name, scalar, columns, rows, words, row_major, vector_words
+            )
+            self.matrix_word_layouts[name] = (vector_words, row_major, scalar)
+
+    def matrix_element_word(self, name, column, row):
+        """``(index, write_conversion)`` of the word holding element ``[column][row]`` of matrix storage ``name``.
+
+        ``column`` and ``row`` are Metal expressions. The word is the element itself, so a store or an update
+        of one element writes it in place, as the storage's ``_store`` helper would place it.
+        """
+        layout = self.matrix_word_layouts.get(name)
+        if layout is None:
+            return None
+        vector_words, row_major, scalar = layout
+        major, minor = (row, column) if row_major else (column, row)
+        if re.fullmatch(r"\d+[uU]?", major) and re.fullmatch(r"\d+[uU]?", minor):
+            index = str(
+                vector_words * int(major.rstrip("uU")) + int(minor.rstrip("uU"))
+            )
+        else:
+            index = f"{vector_words} * ({major}) + ({minor})"
+        return index, "uint" if scalar == "bool" else None
 
     def storage_definitions(self, plan):
         """Definitions of the matrix storage that the members of ``plan`` use.
@@ -626,10 +657,7 @@ class MetalHlslBufferLayouts:
         if padded:
             name += "_padded"
         words = 4 * registers if padded else 4 * (registers - 1) + components
-        if name not in self.matrix_storages:
-            self.matrix_storages[name] = metal_matrix_storage_definition(
-                name, scalar, columns, rows, words, row_major
-            )
+        self.add_matrix_storage(name, scalar, columns, rows, words, row_major)
         return name, 4 * words, 4, f"{name}_load", f"{name}_store", None
 
     def block_array_element_storage(self, layout_type, layout):
@@ -684,10 +712,9 @@ class MetalHlslBufferLayouts:
         if row_major:
             name += "_row_major"
         words = components * registers
-        if name not in self.matrix_storages:
-            self.matrix_storages[name] = metal_matrix_storage_definition(
-                name, scalar, columns, rows, words, row_major, vector_words=components
-            )
+        self.add_matrix_storage(
+            name, scalar, columns, rows, words, row_major, vector_words=components
+        )
         return name, 4 * words, 4, f"{name}_load", f"{name}_store", None
 
     def structured_matrix_storage(self, layout_type):
@@ -710,10 +737,9 @@ class MetalHlslBufferLayouts:
         if row_major:
             name += "_row_major"
         words = components * registers
-        if name not in self.matrix_storages:
-            self.matrix_storages[name] = metal_matrix_storage_definition(
-                name, scalar, columns, rows, words, row_major, vector_words=components
-            )
+        self.add_matrix_storage(
+            name, scalar, columns, rows, words, row_major, vector_words=components
+        )
         return name, 4 * words, 4, f"{name}_load", f"{name}_store", None
 
     def plan_cbuffer(self, name, members, layout=HLSL_CBUFFER_LAYOUT):

@@ -366,10 +366,14 @@ def test_clang_formatter_disables_include_sorting(
     style = json.loads(
         next(arg[len("-style=") :] for arg in commands[0] if arg.startswith("-style="))
     )
-    assert style == {
+    expected_style = {
         "BasedOnStyle": expected_base_style,
         "SortIncludes": False,
     }
+    if language == ShaderLanguage.RUST:
+        # Rust cannot concatenate adjacent string literals, so a split asm! line would not compile.
+        expected_style["BreakStringLiterals"] = False
+    assert style == expected_style
 
 
 @pytest.mark.parametrize("backend", ["hip", "cuda"])
