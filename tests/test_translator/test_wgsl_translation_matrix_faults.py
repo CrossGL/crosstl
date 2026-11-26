@@ -360,17 +360,24 @@ void main() {{
         assert "enable primitive_index;" in output
 
 
-CUDA_TEXTURE_OBJECT = """__device__ float4 fetch(cudaTextureObject_t t, float u, float v) {
-    return tex2D<float4>(t, u, v);
+FOREIGN_TYPE_PARAMETER = """shader S {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer float* o;
+        float pick(cudaTextureObject_t t, float x) { return x; }
+        void main() {
+            cudaTextureObject_t t;
+            o[0] = pick(t, 1.0);
+        }
+    }
 }
-__global__ void k(float4* o, cudaTextureObject_t tex) { o[threadIdx.x] = fetch(tex, 0.5f, 0.5f); }
 """
 
 
 def test_foreign_builtin_type_left_in_the_output_is_refused(tmp_path):
-    # The kernel's cudaTextureObject_t parameter reaches WGSL output as a type of that name, which WGSL lacks.
+    # A CUDA built-in type name carried through the IR reaches WGSL output as a type of that name, which WGSL lacks.
     with pytest.raises(
         WGSLLoweringRefused,
         match="the built-in type 'cudaTextureObject_t' has no WGSL spelling",
     ):
-        translate(tmp_path, CUDA_TEXTURE_OBJECT, ".cu")
+        translate(tmp_path, FOREIGN_TYPE_PARAMETER, ".cgl")
