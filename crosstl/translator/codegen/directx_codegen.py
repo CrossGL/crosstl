@@ -260,6 +260,8 @@ from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
 from .hlsl_vk_locations import hlsl_vk_location_prefix
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
+    hlsl_wave_all_equal_scalar_call,
+    hlsl_wave_bitwise_transport_call,
     hlsl_wave_extension_call,
 )
 from .hlsl_work_graph_nodes import HlslWorkGraphNodeMixin, is_hlsl_work_graph_attribute
@@ -7004,7 +7006,13 @@ class HLSLCodeGen(
                 return f"asfloat({operation}(asuint({value})))"
 
         self.validate_hlsl_wave_intrinsic_arguments(operation, args)
+        whole_value_vote = hlsl_wave_all_equal_scalar_call(self, operation, args)
+        if whole_value_vote is not None:
+            return whole_value_vote
         self.validate_hlsl_wave_intrinsic_result_context(operation, args)
+        transported = hlsl_wave_bitwise_transport_call(self, operation, args)
+        if transported is not None:
+            return transported
         if self.software_subgroup_width is not None and operation == "WaveReadLaneAt":
             value_type = self.expression_result_type(args[0])
             value = self.generate_expression_with_expected(args[0], value_type)

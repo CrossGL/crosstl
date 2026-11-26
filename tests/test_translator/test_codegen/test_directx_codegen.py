@@ -28272,11 +28272,6 @@ def test_directx_wave_active_all_equal_preserves_input_shape():
     ("body", "match"),
     [
         (
-            "bool wrong = WaveActiveAllEqual(pair);",
-            "DirectX wave intrinsic 'WaveActiveAllEqual' requires "
-            "bool2 result context, got bool",
-        ),
-        (
             "bvec2 wrong = WaveActiveAllEqual(value);",
             "DirectX wave intrinsic 'WaveActiveAllEqual' requires "
             "bool result context, got bool2",
@@ -28744,7 +28739,7 @@ def test_directx_wave_intrinsics_infer_let_result_types():
         "uint4 ballot = WaveActiveBallot(predicate);",
         "uint4 matchMask = WaveMatch(value);",
         "uint reduced = WaveActiveSum(value);",
-        "int bitAnd = WaveActiveBitAnd(bits);",
+        "int bitAnd = ((int)(WaveActiveBitAnd((uint)(bits))));",
         "uint laneValue = WaveReadLaneAt(value, lane);",
         "uint firstValue = WaveReadLaneFirst(value);",
         "uint prefixValue = WavePrefixSum(value);",

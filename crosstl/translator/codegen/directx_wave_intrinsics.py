@@ -1224,13 +1224,20 @@ class DirectXWaveIntrinsicMixin:
                 rendered_resource=buffer,
                 resource_type=resource_type,
             )
-            resource_name = self.hlsl_resource_type_name(resource_type)
-            if resource_name in {
+            typed_buffers = {
                 "RWBuffer",
                 "RWStructuredBuffer",
                 "RasterizerOrderedBuffer",
                 "RasterizerOrderedStructuredBuffer",
-            }:
+            }
+            resource_name = self.hlsl_resource_type_name(resource_type)
+            if resource_type is None and binding is not None:
+                # A helper's ``device T*`` parameter is the buffer its binding
+                # declares; a typed or structured buffer has no Store method.
+                resource_name = self.hlsl_resource_type_name(
+                    binding.get("resource_type")
+                )
+            if resource_name in typed_buffers:
                 return f"{buffer}[{index}] = {value}"
             return f"{buffer}.Store({index}, {value})"
         if func_name == "buffer_append" and len(args) >= 2:
