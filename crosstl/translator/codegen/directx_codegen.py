@@ -248,6 +248,7 @@ from .hlsl_narrow_system_values import hlsl_narrow_compute_system_value_bridge
 from .hlsl_precise_functions import HLSLPreciseFunctionMixin
 from .hlsl_program_functions import HlslProgramFunctions
 from .hlsl_ray_queries import hlsl_ray_query_expression, hlsl_ray_query_helpers
+from .hlsl_register_slots import SharedResourceSlots
 from .hlsl_resource_access_variants import HLSLResourceAccessVariantsMixin
 from .hlsl_shader_records import HlslShaderRecords, is_shader_record_buffer
 from .hlsl_tall_matrix_rows import HlslTallMatrixRows
@@ -257,7 +258,6 @@ from .hlsl_texture_residency import (
     hlsl_texture_resident_call,
 )
 from .hlsl_unavailable_builtins import hlsl_unavailable_builtin
-from .hlsl_register_slots import SharedResourceSlots
 from .hlsl_vk_locations import hlsl_vk_location_prefix
 from .hlsl_wave_extended import (
     emit_hlsl_wave_extension_helpers,
