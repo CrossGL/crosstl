@@ -1,0 +1,1 @@
+GLSL ES output that carries an artifact contract record, such as the `crosstl-fixed-samplers` record of an OpenCL `sampler_t` or Metal `constexpr sampler`, keeps `#version NNN es` on the first line and writes the records after it. GLSL ES admits nothing before `#version`, so glslang rejected those shaders. Desktop GLSL, HLSL and Metal output keep their records on the first line.

@@ -10,9 +10,14 @@ import subprocess
 import pytest
 
 import crosstl
+from crosstl.translator import parse
+from crosstl.translator.ast import FunctionCallNode
+from crosstl.translator.semantics.hub_types import call_name
 from crosstl.translator.semantics.metal_math_spellings import (
     MetalMathFunctionUnsupportedError,
+    lower_metal_math_spellings,
 )
+from crosstl.translator.semantics.rewrite import child_slots, get_child
 
 POWERS = """
 #include <metal_stdlib>
@@ -169,3 +174,43 @@ def test_cuda_and_hip_still_refuse_the_pi_functions_they_lack(
         crosstl.translate(str(path), backend=backend)
     assert function in str(raised.value)
     assert not str(raised.value).startswith("MSL ")
+
+
+OPENCL_MATH = """
+shader Probe {
+    compute {
+        buffer float* fin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float x = fin[i];
+            outp[i] = sinpi(x) + cospi(x) + tanpi(x) + asinpi(x) + acospi(x) + atanpi(x)
+                + atan2pi(x, 2.0) + exp10(x) + powr(x, 2.0);
+        }
+    }
+}
+"""
+
+
+def _calls(program):
+    names = []
+
+    def walk(node):
+        if isinstance(node, FunctionCallNode):
+            names.append(call_name(node))
+        for field, key in child_slots(node):
+            walk(get_child(node, field, key))
+
+    walk(program)
+    return sorted(name for name in names if name)
+
+
+def test_opencl_keeps_every_msl_math_function():
+    # OpenCL C 3.0 section 6.15.2 declares powr, exp10 and the seven pi functions with MSL's meaning.
+    program = parse(OPENCL_MATH)
+    before = _calls(program)
+    assert lower_metal_math_spellings(program, "opencl") == 0
+    assert _calls(program) == before
+    assert {"sinpi", "tanpi", "atan2pi", "exp10", "powr"} <= set(before)
+    with pytest.raises(MetalMathFunctionUnsupportedError):
+        lower_metal_math_spellings(parse(OPENCL_MATH), "cuda")

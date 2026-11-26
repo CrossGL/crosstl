@@ -17,6 +17,9 @@ SPIR-V generator refused them. :func:`lower_metal_math_spellings` handles them f
   ``float``, exact at integers and half-integers, and their generators pick the spelling for the operand's precision
   and apply it per component to vectors. Neither declares the other five, so those stay refused there too.
 
+OpenCL C keeps every call: it declares ``powr``, ``exp10`` and the seven ``pi`` functions with MSL's meaning
+(OpenCL C 3.0 section 6.15.2), so its generator spells them itself.
+
 A program that defines a function with one of these names keeps its calls.
 """
 
@@ -44,6 +47,7 @@ _CARRYING = frozenset({"metal", "cgl", "crossgl", ""})
 _NATIVE_FUNCTIONS = {
     "cuda": frozenset({"sinpi", "cospi", "exp10"}),
     "hip": frozenset({"sinpi", "cospi", "exp10"}),
+    "opencl": frozenset(_ARITY),
 }
 
 

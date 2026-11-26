@@ -87,6 +87,37 @@ def test_no_contract_can_be_moved_past_source(index, prefix):
             parser(source)
 
 
+@pytest.mark.parametrize("version", ["#version 310 es\n", "#version 300 es\n"])
+@pytest.mark.parametrize("order", list(itertools.permutations(range(3))))
+def test_records_follow_a_leading_glsl_es_version(version, order):
+    # GLSL ES admits nothing before #version, not even a comment (GLSL ES 3.10, 3.4).
+    source = version + BODY
+    for index in order:
+        source = with_artifact_contract_header(source, HEADERS[index])
+    assert source == version + "".join(HEADERS) + BODY
+    for index, parser in enumerate(PARSERS):
+        assert parser(source) == RECORDS[index]
+    crlf = source.replace("\n", "\r\n")
+    assert len(artifact_contract_headers(crlf)) == len(HEADERS)
+
+
+def test_records_lead_a_desktop_glsl_version():
+    # Desktop GLSL allows comments before #version (GLSL 4.60, 3.3).
+    source = with_artifact_contract_header("#version 450 core\n" + BODY, HEADERS[0])
+    assert source == HEADERS[0] + "#version 450 core\n" + BODY
+
+
+@pytest.mark.parametrize("index", range(1, 3))
+def test_a_version_directive_inside_the_block_ends_it(index):
+    version = "#version 310 es\n"
+    source = "".join(HEADERS[:index]) + version + "".join(HEADERS[index:]) + BODY
+    for parser in PARSERS:
+        with pytest.raises(ValueError, match="first line"):
+            parser(source)
+    with pytest.raises(ValueError, match="one artifact contract header"):
+        with_artifact_contract_header(BODY, version + HEADERS[0])
+
+
 @pytest.mark.parametrize("index", range(3))
 @pytest.mark.parametrize("location", ["block", "body", "comment"])
 def test_duplicates_rejected_even_outside_the_leading_block(index, location):

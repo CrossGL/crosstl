@@ -302,6 +302,21 @@ def test_opengl_fixed_sampler_in_a_helper_reaches_the_callers_uniform(tmp_path):
     _validate_glsl(tmp_path, glsl)
 
 
+def test_gles_keeps_version_first_above_the_fixed_sampler_record(tmp_path):
+    # GLSL ES admits nothing before #version, not even a comment (GLSL ES 3.00/3.10, 3.4).
+    glsl = _translate(tmp_path, SHADOWED, "gles")
+    first, second = glsl.splitlines()[:2]
+    assert re.fullmatch(r"#version \d+ es", first)
+    assert second.startswith("// crosstl-fixed-samplers: ")
+    assert sorted(
+        r["state"]["mag_filter"] for r in parse_fixed_sampler_contract(glsl)
+    ) == [
+        "linear",
+        "nearest",
+    ]
+    _validate_glsl(tmp_path, glsl)
+
+
 def test_webgl_still_refuses_fixed_sampler_state(tmp_path):
     with pytest.raises(FixedSamplerStateUnsupportedError):
         _translate(tmp_path, SAMPLERS, "webgl")
