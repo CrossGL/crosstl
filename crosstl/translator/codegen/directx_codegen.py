@@ -2722,6 +2722,10 @@ class HLSLCodeGen(
                     operation = self.HLSL_METAL_SIMD_SHUFFLE_OPERATIONS[metal_name]
                 elif function_name in self.HLSL_WAVE_INTRINSIC_ARITIES:
                     operation = function_name
+            if operation == "WaveGetLaneIndex":
+                # A lane query exchanges nothing; see
+                # hlsl_software_subgroup_lane_query_nodes.
+                continue
             if operation in self.HLSL_WAVE_INTRINSIC_ARITIES:
                 records.append((operation, node))
         return records
@@ -2729,11 +2733,29 @@ class HLSLCodeGen(
     def hlsl_software_subgroup_uses_system_inputs(self, root):
         """Whether ``root`` reads a subgroup lane, ID, size or count input."""
         inputs = self.SOFTWARE_SUBGROUP_SYSTEM_INPUTS
-        return any(
+        return bool(self.hlsl_software_subgroup_lane_query_nodes(root)) or any(
             self.semantic_from_node(node) in inputs
             or (isinstance(node, IdentifierNode) and node.name in inputs)
             for node in self.walk_ast(root)
         )
+
+    def hlsl_software_subgroup_lane_query_nodes(self, root):
+        """``WaveGetLaneIndex()`` calls, which any function may make.
+
+        Under software lowering a lane is ``SV_GroupIndex`` modulo the subgroup
+        width under any control flow, so a query exchanges nothing and its
+        function reads the index from the entry's static global.
+        """
+        return [
+            node
+            for node in self.walk_ast(root)
+            if (isinstance(node, WaveOpNode) and node.operation == "WaveGetLaneIndex")
+            or (
+                isinstance(node, FunctionCallNode)
+                and self.function_call_name(node) == "WaveGetLaneIndex"
+                and "WaveGetLaneIndex" not in self.function_return_types
+            )
+        ]
 
     def hlsl_software_subgroup_lane_local_matrix_nodes(self, root):
         """Matrix fills and transfers, which software lowering keeps per lane."""
@@ -3456,9 +3478,10 @@ class HLSLCodeGen(
                     source_location=getattr(attribute, "source_location", None),
                 )
 
+        lane_query_nodes = self.hlsl_software_subgroup_lane_query_nodes(ast)
         if system_inputs_only:
             self.hlsl_software_subgroup_bind_lane_local_matrix_functions(
-                ast, lane_local_matrix_nodes
+                ast, lane_local_matrix_nodes + lane_query_nodes
             )
             return
         if not all_records:
@@ -3647,7 +3670,7 @@ class HLSLCodeGen(
                 functions_by_id[function_id].name
             ] = variable
         self.hlsl_software_subgroup_bind_lane_local_matrix_functions(
-            ast, lane_local_matrix_nodes
+            ast, lane_local_matrix_nodes + lane_query_nodes
         )
 
         calls = [
@@ -7005,6 +7028,19 @@ class HLSLCodeGen(
 
         self.validate_hlsl_wave_intrinsic_arguments(operation, args)
         self.validate_hlsl_wave_intrinsic_result_context(operation, args)
+        if self.software_subgroup_width is not None and operation == "WaveGetLaneIndex":
+            invocation = self.hlsl_software_subgroup_invocation_expressions.get(
+                self.current_function_name
+            )
+            if invocation is None:
+                raise self.hlsl_software_subgroup_error(
+                    "DirectX software subgroup lane query has no proven logical "
+                    "invocation index in the current function",
+                    workgroup_size=self.hlsl_software_subgroup_workgroup_size,
+                    operation=operation,
+                    reason="invocation-index-unavailable",
+                )
+            return f"(uint({invocation}) % {self.software_subgroup_width}u)"
         if self.software_subgroup_width is not None and operation == "WaveReadLaneAt":
             value_type = self.expression_result_type(args[0])
             value = self.generate_expression_with_expected(args[0], value_type)
