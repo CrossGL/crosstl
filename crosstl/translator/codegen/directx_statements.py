@@ -323,6 +323,14 @@ class DirectXStatementMixin:
         if compound_assignment is not None:
             return compound_assignment
         lhs = self.generate_expression(target)
+        # A T[N] value held as its lowered vector or struct converts to the array element by element.
+        array_value = (
+            self.hlsl_array_value_arguments.argument(value, target_type)
+            if op == "=" and target_type is not None
+            else None
+        )
+        if array_value is not None:
+            return f"{lhs} = {array_value}"
         rhs = self.generate_expression_with_expected(
             value,
             target_type,
