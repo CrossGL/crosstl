@@ -161,6 +161,7 @@ from .glsl_stage_output_values import (
 from .glsl_target_builtins import OPENGL_UNAVAILABLE_BUILTINS
 from .glsl_union_storage import UnionStorage
 from .glsl_vulkan_resources import VulkanResourceForms
+from .glsl_written_globals import written_unqualified_global_ids
 from .image_access_contracts import (
     collect_function_image_access_requirements,
     collect_function_parameter_names,
@@ -520,6 +521,7 @@ class GLSLCodeGen(
         self.glsl_compile_time_bitcast_substitutions = {}
         self.glsl_active_compile_time_bitcast_substitutions = set()
         self.glsl_runtime_global_initializer_node_ids = set()
+        self.glsl_written_global_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
         self.global_type_aliases = {}
         self.current_type_aliases = {}
@@ -2912,6 +2914,7 @@ class GLSLCodeGen(
         self.glsl_runtime_global_initializer_node_ids = set()
         self.glsl_stage_runtime_global_initializers = {}
         self.glsl_unresolved_call_targets = {}
+        self.glsl_written_global_node_ids = written_unqualified_global_ids(ast)
         self.function_sampler_parameter_indices = (
             self.collect_function_sampler_parameter_indices(ast)
         )
@@ -9803,6 +9806,10 @@ class GLSLCodeGen(
             # invocation, which is what a GLSL global without a storage
             # qualifier is.
             return ""
+        if id(node) in self.glsl_written_global_node_ids and not (
+            self.type_contains_opaque_resource(getattr(node, "var_type", None))
+        ):
+            return ""  # a uniform is read-only (glsl_written_globals)
         return "uniform "
 
     def generate_glsl_cooperative_matrix_rounding_support(self):

@@ -55,6 +55,17 @@ from .stage_utils import (
     normalize_stage_name,
 )
 
+# The HLSL and Slang interpolation spellings CrossGL accepts beside GLSL's own
+# (validation.INTERPOLATION_MODE_METADATA_NAMES), as GLSL qualifiers. ``linear``
+# is GLSL's default perspective-correct interpolation and needs none.
+_INTERPOLATION_SPELLINGS = {
+    "nointerpolation": ("flat",),
+    "linear_centroid": ("centroid",),
+    "linear_sample": ("sample",),
+    "linear_noperspective": ("noperspective",),
+    "linear_noperspective_centroid": ("noperspective", "centroid"),
+}
+
 
 class OpenGLGlobalInitializerMixin:
     """Global initializer members of ``GLSLCodeGen``."""
@@ -1120,6 +1131,9 @@ class OpenGLGlobalInitializerMixin:
                 add("tileImageEXT")
             elif normalized in {"shared", "groupshared", "workgroup", "threadgroup"}:
                 add("shared")
+            elif normalized in _INTERPOLATION_SPELLINGS:
+                for interpolation in _INTERPOLATION_SPELLINGS[normalized]:
+                    add(interpolation)
             elif normalized in {
                 "invariant",
                 "precise",
