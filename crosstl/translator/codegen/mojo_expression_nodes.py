@@ -2,6 +2,7 @@
 
 from ..ast import LiteralNode, UnaryOpNode
 from ..float_limit_constants import float_limit_constant
+from ..refusals import MojoRefusal
 from .mojo_integer_promotion import (
     C_PROMOTING_BINARY_OPERATORS,
     promoted_operand,
@@ -115,6 +116,15 @@ class MojoExpressionNodeMixin:
             return f"{obj}.{self.mojo_identifier(expr.member)}"
         swizzle_indices = self.get_swizzle_indices(expr.member)
         if swizzle_indices is not None:
+            if obj_type is None and any(
+                expr.member in fields for fields in self.struct_types.values()
+            ):
+                # A value of unknown type whose member is both a swizzle and a structure field: reading it as a
+                # swizzle would read a vector lane of what may be a structure.
+                raise MojoRefusal(
+                    f"Mojo member access '{obj}.{expr.member}': the type of '{obj}' is unknown, so "
+                    f"'{expr.member}' could be a structure field or a vector swizzle"
+                )
             return self.generate_swizzle(
                 expr.object, obj, obj_type, expr.member, swizzle_indices
             )

@@ -30,7 +30,10 @@ from __future__ import annotations
 __all__ = [
     "POINTER_KERNEL_BUILTINS",
     "is_pointer_kernel",
+    "is_pointer_kernel_program",
     "pointer_kernel_header",
+    "pointer_kernel_method_call",
+    "refuse_parametric_call",
     "top_level_program",
     "unsafe_pointer_arguments",
 ]
@@ -99,6 +102,41 @@ def is_pointer_kernel(function) -> bool:
     return any(
         unsafe_pointer_arguments(getattr(parameter, "vtype", None)) is not None
         for parameter in getattr(function, "params", None) or []
+    )
+
+
+def is_pointer_kernel_program(ast, kernel_names) -> bool:
+    """Whether ``ast`` launches kernels and every one of ``kernel_names`` is a pointer kernel."""
+    functions = {
+        getattr(node, "name", None): node
+        for node in getattr(ast, "functions", None) or []
+    }
+    kernels = [functions.get(name) for name in sorted(kernel_names or ())]
+    return bool(kernels) and all(
+        kernel is not None and is_pointer_kernel(kernel) for kernel in kernels
+    )
+
+
+def pointer_kernel_method_call(generator, receiver, method, arguments):
+    """The CrossGL form of a method call the importer maps to no CrossGL function, or a refusal.
+
+    ``copy()`` copies a value, which every CrossGL assignment does. Any other method (``SIMD.cast[...]``, ``eq``,
+    ``reduce_and``, ``Atomic.max``, a ``warp`` function the importer does not map, a structure's own method) would
+    reach CrossGL as Mojo text, which no generator reads as Mojo does, so it is refused by name.
+    """
+    if method == "copy" and not arguments:
+        return receiver
+    return generator.refuse_import(
+        f"the Mojo method call '{receiver}.{method}(...)' has no CrossGL form in the importer",
+        placeholder="0",
+    )
+
+
+def refuse_parametric_call(generator, callee):
+    """Refuse a call of a parameterized Mojo function or method (``stack_allocation[...]()``, ``x.cast[T]()``)."""
+    return generator.refuse_import(
+        f"the parameterized Mojo call '{callee}(...)' has no CrossGL form in the importer",
+        placeholder="0",
     )
 
 

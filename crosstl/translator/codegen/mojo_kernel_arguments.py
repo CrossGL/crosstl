@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from ..ast import (
     ArrayNode,
+    AssignmentNode,
+    ForNode,
     FunctionCallNode,
     IdentifierNode,
     VariableNode,
@@ -119,6 +121,87 @@ def mojo_declared_names(node, names=None, visited=None):
         if attribute not in _SKIPPED_ATTRIBUTES:
             mojo_declared_names(value, names, visited)
     return names
+
+
+def _statement_declarations(node):
+    """The names a statement declares in its own block: its variables, not those of the blocks it holds."""
+    if isinstance(node, VariableNode) and isinstance(getattr(node, "name", None), str):
+        return {node.name}
+    if isinstance(node, AssignmentNode):
+        return _statement_declarations(node.target)
+    return set()
+
+
+def _call_target(node):
+    function = getattr(node, "function", None)
+    if isinstance(function, str):
+        return function
+    if isinstance(function, IdentifierNode):
+        return function.name
+    return None
+
+
+def mojo_scoped_references(body, parameters):
+    """``(free, calls)`` of a function body whose parameters are ``parameters``.
+
+    ``free`` holds the names the body mentions (as :func:`mojo_referenced_names` collects them) where no parameter
+    or local of that name is in scope, so they name module-scope values or functions. ``calls`` holds a
+    ``(callee, visible)`` pair per call, where ``visible`` is the set of parameter and local names in scope at it.
+    """
+    free = set()
+    calls = []
+    visited = set()
+
+    def mention(name, visible):
+        if name not in visible:
+            free.add(name)
+
+    def visit(node, visible):
+        if node is None or isinstance(node, (int, float, bool)):
+            return
+        if isinstance(node, str):
+            mention(node, visible)
+            return
+        if isinstance(node, (list, tuple)):
+            scope = set(visible)
+            for item in node:
+                visit(item, scope)
+                scope |= _statement_declarations(item)
+            return
+        if isinstance(node, set):
+            for item in sorted(node, key=repr):
+                visit(item, visible)
+            return
+        if isinstance(node, dict):
+            for item in node.values():
+                visit(item, visible)
+            return
+        if id(node) in visited or not hasattr(node, "__dict__"):
+            return
+        visited.add(id(node))
+        if isinstance(node, IdentifierNode):
+            mention(node.name, visible)
+        if isinstance(node, FunctionCallNode):
+            callee = _call_target(node)
+            if callee is not None:
+                mention(callee, visible)
+                calls.append((callee, frozenset(visible)))
+        builtin_name = getattr(node, "builtin_name", None)
+        if isinstance(builtin_name, str):
+            mention(builtin_name, visible)
+        if isinstance(node, ForNode):
+            # The loop variable is in scope in the condition, the update and the body.
+            visit(node.init, visible)
+            visible = set(visible) | _statement_declarations(node.init)
+        for attribute, value in vars(node).items():
+            if attribute in _SKIPPED_ATTRIBUTES or isinstance(value, str):
+                continue
+            if isinstance(node, ForNode) and attribute == "init":
+                continue
+            visit(value, visible)
+
+    visit(body, set(parameters))
+    return free, calls
 
 
 class MojoKernelArgumentMixin:
@@ -394,6 +477,7 @@ class MojoKernelArgumentMixin:
         companions = getattr(self, "mojo_kernel_argument_companions", {})
         direct = {}
         calls = {}
+        call_sites = {}
         for func in functions:
             name = getattr(func, "name", None)
             if not isinstance(name, str):
@@ -405,18 +489,17 @@ class MojoKernelArgumentMixin:
                 )
             }
             body = getattr(func, "body", None)
-            mentioned = mojo_referenced_names(body)
+            # A name read where a parameter or local of that name is in scope reads that variable.
+            mentioned, sites = mojo_scoped_references(body, parameters)
             # A function that reads a buffer also receives the size argument passed beside it.
             for argument, extras in companions.items():
                 if argument in mentioned:
                     mentioned.update(extras)
-            local_names = parameters | mojo_declared_names(body)
             direct.setdefault(name, set()).update(
-                argument
-                for argument in arguments
-                if argument in mentioned and argument not in local_names
+                argument for argument in arguments if argument in mentioned
             )
             calls.setdefault(name, set()).update(mentioned)
+            call_sites.setdefault(name, []).extend(sites)
         captured = {name: set(found) for name, found in direct.items()}
         changed = True
         while changed:
@@ -429,6 +512,16 @@ class MojoKernelArgumentMixin:
                     if missing:
                         captured[name].update(missing)
                         changed = True
+        for name in sorted(call_sites):
+            for callee, visible in call_sites[name]:
+                hidden = sorted(captured.get(callee, set()) & visible)
+                if callee != name and hidden:
+                    # The call would pass the caller's own variable where the callee reads the module value.
+                    raise MojoRefusal(
+                        f"Mojo function '{name}' calls '{callee}' where its own '{hidden[0]}' hides the "
+                        f"module-scope value '{callee}' reads; Mojo has no global variables, so that value "
+                        "reaches the callee as an argument, which the caller cannot name there"
+                    )
         return {
             name: [
                 (argument, arguments[argument])
