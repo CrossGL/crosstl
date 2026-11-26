@@ -9,6 +9,7 @@ from .c_narrow_integer_vectors import generic_narrow_vector_spelling
 from .c_pointer_math import generate_pointer_math_call
 from .c_vector_reductions import generate_vector_reduction_call
 from .c_wide_integer_vectors import wide_integer_vector_constructor
+from .cuda_componentwise_math import generate_componentwise_math_call
 from .cuda_pointer_operands import hip_pointer_operand_call
 from .cuda_type_reinterpretation import (
     as_type_result_type,
@@ -291,6 +292,12 @@ class HipFunctionCallMixin:
                     f"{self.coord_component(args[1], 'y')})"
                 )
 
+        componentwise_call = generate_componentwise_math_call(
+            self, func_name, raw_args, args
+        )
+        if componentwise_call is not None:
+            return componentwise_call
+
         math_func_name = self.hip_math_function_name(func_name)
         vector_math_call = self.generate_vector_scalar_math_call(
             math_func_name,
@@ -457,8 +464,9 @@ class HipFunctionCallMixin:
                     len(source_info["components"]),
                 )
             if func_name == "bitCount":
+                # GLSL 4.60, 8.8: bitCount returns genIType, int components for int and uint operands alike.
                 return self.vector_type_for_components(
-                    "uint",
+                    "int",
                     len(source_info["components"]),
                 )
             return source_type

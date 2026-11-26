@@ -6,6 +6,9 @@ from .array_utils import (
 from .slang_constant_references import (
     slang_constant_reference_parameter,
 )
+from .slang_rasterizer_order import (
+    slang_rasterizer_ordered_parameter_type,
+)
 from .slang_resource_memory import (
     slang_resource_parameter_memory_prefix,
 )
@@ -178,7 +181,10 @@ class SlangFunctionPartsMixin:
                         continue
 
                     declaration = format_c_style_array_declaration(
-                        param_type, param.name
+                        slang_rasterizer_ordered_parameter_type(
+                            self, getattr(node, "name", None), param_type, param
+                        ),
+                        param.name,
                     )
                     declaration = (
                         slang_resource_parameter_memory_prefix(self, param_type, param)

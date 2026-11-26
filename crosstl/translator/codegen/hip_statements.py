@@ -260,15 +260,22 @@ class HipStatementMixin:
             self.current_expression_expected_type = saved_expected_type
 
     def visit_CaseNode(self, node) -> str:
+        statements = getattr(node, "statements", []) or []
+        # C++ does not let a jump to a later label cross a declaration ([stmt.dcl]), and two cases may declare
+        # one name, so a case that declares a variable gets a block of its own.
+        scoped = any(isinstance(stmt, VariableNode) for stmt in statements)
+        opening = " {" if scoped else ""
         if getattr(node, "value", None) is None:
-            self.add_line("default:")
+            self.add_line(f"default:{opening}")
         else:
             value = self.visit(node.value)
-            self.add_line(f"case {value}:")
+            self.add_line(f"case {value}:{opening}")
 
         self.indent_level += 1
-        self.emit_body(getattr(node, "statements", []))
+        self.emit_body(statements)
         self.indent_level -= 1
+        if scoped:
+            self.add_line("}")
 
         return ""
 

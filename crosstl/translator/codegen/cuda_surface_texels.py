@@ -24,6 +24,7 @@ from dataclasses import dataclass
 
 from ..ast import ArrayAccessNode, FunctionCallNode, IdentifierNode, VariableNode
 from ..validation import IMAGE_FORMAT_METADATA_NAMES
+from .cuda_vector_conversions import convert_vector_value
 from .hlsl_image_formats import CROSSGL_TEXEL_TYPES, crossgl_image_component_kind
 
 COMPONENTS = "xyzw"
@@ -335,7 +336,10 @@ class CudaSurfaceTexelMixin:
         )
 
     def visit_in_texel_context(self, node, target_type):
-        """Render ``node`` for a value of ``target_type``; an ``imageLoad`` there loads that many components."""
+        """Render ``node`` for a value of ``target_type``; an ``imageLoad`` there loads that many components.
+
+        A vector of another component type is converted to ``target_type`` (:mod:`.cuda_vector_conversions`).
+        """
         width = cuda_value_width(target_type)
         arguments = (
             _call_arguments(node) if isinstance(node, FunctionCallNode) else None
@@ -347,7 +351,7 @@ class CudaSurfaceTexelMixin:
             or self.raw_function_call_name(node) != "imageLoad"
             or not isinstance(self.storage_image_texel(arguments[0]), SurfaceTexel)
         ):
-            return self.visit(node)
+            return convert_vector_value(self, node, target_type, self.visit(node))
         previous = self.surface_texel_context
         self.surface_texel_context = (arguments, width)
         try:

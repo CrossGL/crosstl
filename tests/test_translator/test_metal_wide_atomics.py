@@ -68,8 +68,8 @@ def test_discarded_wide_atomic_min_and_max_use_metal_64_bit_atomics(tmp_path):
 @pytest.mark.parametrize(
     ("replacement", "reason"),
     [
-        ("uint64_t old = atomicMax(outp[i], a1);", "return nothing"),
-        ("outp[i] = atomicMin(outp[i], a1);", "return nothing"),
+        ("uint64_t old = atomicMax(outp[i], a1);", "return no value"),
+        ("outp[i] = atomicMin(outp[i], a1);", "return no value"),
     ],
 )
 def test_used_wide_atomic_result_is_refused(tmp_path, replacement, reason):
