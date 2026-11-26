@@ -184,9 +184,7 @@ CUDA = {
     "uniform-buffer": Template(
         "outp[i] = fin[i] * scale;", "__constant__ float scale;"
     ),
-    "read-only-buffer": Template(
-        "outp[i] = rin[i];", params="const float* __restrict__ rin"
-    ),
+    "read-only-buffer": Template("outp[i] = fin[i];", read_only=True),
     "sampled-texture": Template(
         "outp[i] = tex2DLod<float4>(tex, fin[i], 0.5f, 0.0f).x;",
         params="cudaTextureObject_t tex",

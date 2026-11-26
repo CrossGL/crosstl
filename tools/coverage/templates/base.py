@@ -16,6 +16,9 @@ class Template:
     output: str = ""
     # The compiler target the probe is checked for when it is not the language's usual one (Feature.target).
     target: str = ""
+    # The kernel declares its input buffers read-only, as the probe of a read-only storage buffer does. They keep
+    # their slots, so the probe binds the buffers the conformance harness binds.
+    read_only: bool = False
 
 
 ABSENT = Template(entry="<absent>")

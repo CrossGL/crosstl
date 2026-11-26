@@ -232,5 +232,6 @@ def build(feature: Feature, dialect):
         prelude=_lines(template.prelude, spelled),
         declarations=_lines(template.declarations, spelled),
         params=_lines(template.params, spelled),
+        read_only=frozenset(read) if template.read_only else frozenset(),
     )
     return source, dialect.entry, dialect.suffix
