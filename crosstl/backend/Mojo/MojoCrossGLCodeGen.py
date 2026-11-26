@@ -183,6 +183,7 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
         self.selected_gpu_kernel_names = set()
         self.reachable_gpu_function_names = set()
         self.current_function_is_mojo_gpu_kernel = False
+        self.current_function_is_stage_entry = False
         self.force_typed_declarations = False
         self.scoped_value_names = []
         self.function_body_depth = 0
@@ -415,7 +416,7 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
                         continue
                     code += "    // Compute Shader\n"
                     code += "    compute {\n"
-                    code += self.generate_function(func, indent=2)
+                    code += self.generate_function(func, indent=2, stage_entry=True)
                     code += "    }\n\n"
                 code += "}\n"
                 return code
@@ -427,7 +428,7 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
                 ):
                     code += "    // Vertex Shader\n"
                     code += "    vertex {\n"
-                    code += self.generate_function(func, indent=2)
+                    code += self.generate_function(func, indent=2, stage_entry=True)
                     code += "    }\n\n"
                 elif (
                     func.qualifier == "fragment"
@@ -436,7 +437,7 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
                 ):
                     code += "    // Fragment Shader\n"
                     code += "    fragment {\n"
-                    code += self.generate_function(func, indent=2)
+                    code += self.generate_function(func, indent=2, stage_entry=True)
                     code += "    }\n\n"
                 elif (
                     func.qualifier == "compute"
@@ -445,7 +446,7 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
                 ):
                     code += "    // Compute Shader\n"
                     code += "    compute {\n"
-                    code += self.generate_function(func, indent=2)
+                    code += self.generate_function(func, indent=2, stage_entry=True)
                     code += "    }\n\n"
                 else:
                     code += self.generate_function(func, indent=1)
@@ -884,14 +885,20 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
                 return True
         return False
 
-    def generate_function(self, func, indent=1):
-        """Render one Mojo function node as a CrossGL function."""
+    def generate_function(self, func, indent=1, stage_entry=False):
+        """Render one Mojo function node as a CrossGL function.
+
+        ``stage_entry`` marks the function a stage block holds as that stage's entry. CrossGL takes a stage's
+        ``main`` as its entry, so an entry with any other name carries ``@ stage_entry``.
+        """
         code = ""
         indent_str = "    " * indent
         is_selected_gpu_kernel = func.name in self.selected_gpu_kernel_names
         previous_gpu_kernel = self.current_function_is_mojo_gpu_kernel
+        previous_stage_entry = self.current_function_is_stage_entry
         previous_force_typed_declarations = self.force_typed_declarations
         self.current_function_is_mojo_gpu_kernel = is_selected_gpu_kernel
+        self.current_function_is_stage_entry = stage_entry and func.name != "main"
         if is_selected_gpu_kernel:
             self.force_typed_declarations = True
         named_result = self.get_named_result_parameter(func)
@@ -964,6 +971,7 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
                 self.function_body_depth = saved_body_depth
         finally:
             self.current_function_is_mojo_gpu_kernel = previous_gpu_kernel
+            self.current_function_is_stage_entry = previous_stage_entry
             self.force_typed_declarations = previous_force_typed_declarations
 
         code += f"{indent_str}}}\n\n"
@@ -2441,7 +2449,11 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
 
     def map_function_attributes(self, func):
         attributes = list(getattr(func, "attributes", []) or [])
-        if self.current_function_is_mojo_gpu_kernel and not any(
+        is_entry = (
+            self.current_function_is_mojo_gpu_kernel
+            or self.current_function_is_stage_entry
+        )
+        if is_entry and not any(
             getattr(attr, "name", None) == "stage_entry" for attr in attributes
         ):
             attributes.append(AttributeNode("stage_entry", []))

@@ -1,0 +1,1 @@
+Mojo input marks a stage entry that is not named `main` (`fn fragment_main`, `@fragment fn shade`) with `@ stage_entry`, so CrossGL takes that function as the stage entry instead of looking for a `main`.

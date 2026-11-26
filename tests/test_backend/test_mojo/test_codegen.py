@@ -3804,12 +3804,51 @@ def test_numeric_alias_constructor_codegen_from_modular_numeric_docs_reparses_cr
     ast = parse_code(tokens)
     generated_code = generate_code(ast)
 
-    assert "float fragment_main(uint raw, double alpha)" in generated_code
+    assert (
+        "float fragment_main(uint raw, double alpha) @ stage_entry {" in generated_code
+    )
     assert "let normalized = (float(raw) / float(uint(255)));" in generated_code
     assert "return float((normalized + float(alpha)));" in generated_code
     assert "Float32(" not in generated_code
     assert "UInt32(" not in generated_code
     parse_crossgl(generated_code)
+
+
+@pytest.mark.parametrize(
+    ("source", "stage", "entry"),
+    [
+        (
+            "fn vertex_shader(x: Float32) -> Float32:",
+            "vertex",
+            "float vertex_shader(float x)",
+        ),
+        (
+            "@fragment\nfn shade(x: Float32) -> Float32:",
+            "fragment",
+            "float shade(float x)",
+        ),
+        (
+            "fn compute_main(x: Float32) -> Float32:",
+            "compute",
+            "float compute_main(float x)",
+        ),
+    ],
+)
+def test_stage_entry_not_named_main_is_marked_stage_entry(source, stage, entry):
+    # CrossGL takes a stage's main as its entry; any other entry name needs @ stage_entry.
+    code = f"{source}\n    return x\n"
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert f"    {stage} {{\n        {entry} @ stage_entry {{" in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_stage_entry_named_main_needs_no_stage_entry_attribute():
+    code = "@fragment\nfn main(x: Float32) -> Float32:\n    return x\n"
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+
+    assert "float main(float x) {" in generated_code
+    assert "stage_entry" not in generated_code
 
 
 def test_generic_inline_array_constructor_codegen():
@@ -4163,7 +4202,7 @@ def test_at_attribute_codegen():
         assert "int data @ Position;" in generated_code
         assert "// Compute Shader" in generated_code
         assert "compute {" in generated_code
-        assert "void kernel_() {" in generated_code
+        assert "void kernel_() @ stage_entry {" in generated_code
         assert "kernel()@ compute_shader" not in generated_code
     except SyntaxError:
         pytest.fail("Attribute parsing or code generation not implemented.")
@@ -4196,7 +4235,7 @@ def test_bracket_attribute_codegen_uses_shader_stage():
 
     assert "// Compute Shader" in generated_code
     assert "compute {" in generated_code
-    assert "void run() {" in generated_code
+    assert "void run() @ stage_entry {" in generated_code
     assert "run()@ compute_shader" not in generated_code
 
 
