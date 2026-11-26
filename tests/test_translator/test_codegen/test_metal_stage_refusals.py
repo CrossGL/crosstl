@@ -1,9 +1,10 @@
 """Metal refuses the stages it cannot write as entry points, with a typed diagnostic.
 
 Metal has no geometry stage, and the compute kernel that writes Metal's tessellation factors is not lowered from a
-hull stage yet, so these stages must not come out as plain functions that no Metal pipeline can call. A domain stage
-becomes a ``[[patch]]`` post-tessellation vertex function (``test_metal_post_tessellation.py`` and
-``test_metal_glsl_tessellation.py``).
+GLSL-form tessellation control stage yet, so these stages must not come out as plain functions that no Metal pipeline
+can call. A domain stage becomes a ``[[patch]]`` post-tessellation vertex function (``test_metal_post_tessellation.py``
+and ``test_metal_glsl_tessellation.py``) and an HLSL-form hull stage a compute kernel
+(``test_metal_tessellation_control.py``).
 """
 
 import pytest
@@ -51,27 +52,17 @@ shader GeometryExpansion {
 
 TESSELLATION_CONTROL = """
 shader TessControl {
-    struct PatchInput { vec3 position @ POSITION; };
-    struct PatchOutput { vec3 position @ POSITION; };
-    struct PatchConstants {
-        vec3 edgeFactors @ SV_TessFactor;
-        float insideFactor @ SV_InsideTessFactor;
-    };
+    in vec4 inPosition @location(0)[];
+    out vec4 outPosition @location(0)[];
 
     tessellation_control {
-        PatchConstants patchConstants(InputPatch<PatchInput, 3> patch) {
-            PatchConstants constants;
-            constants.edgeFactors = vec3(1.0);
-            constants.insideFactor = 1.0;
-            return constants;
-        }
+        layout(vertices = 3) out;
 
-        PatchOutput main(InputPatch<PatchInput, 3> patch, uint pointID @ SV_OutputControlPointID)
-            @domain(tri) @partitioning(integer) @outputtopology(triangle_cw)
-            @outputcontrolpoints(3) @patchconstantfunc(patchConstants) {
-            PatchOutput output;
-            output.position = patch[pointID].position;
-            return output;
+        void main() {
+            outPosition[gl_InvocationID] = inPosition[gl_InvocationID] * 2.0;
+            barrier();
+            gl_TessLevelOuter[0] = 1.0;
+            gl_TessLevelInner[0] = 1.0;
         }
     }
 }

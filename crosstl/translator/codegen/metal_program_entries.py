@@ -76,6 +76,7 @@ from .metal_stage_input_builtins import (
     lower_metal_helper_invocation_reads,
     split_metal_stage_input_builtins,
 )
+from .metal_tessellation_control import lower_metal_tessellation_control
 from .metal_typed_buffers import lower_metal_typed_buffers
 from .metal_union_abi import NATIVE_UNION_ABIS, verify_foreign_union_layout
 from .metal_vertex_input_builtins import refuse_unbound_metal_vertex_inputs
@@ -422,6 +423,7 @@ class MetalProgramEntryMixin:
         ast = bind_combined_samplers(ast)
         validate_pointer_reinterpretation_target(ast, "metal")
         validate_recursion_free(ast, "metal")
+        ast, target_stage = lower_metal_tessellation_control(ast, self, target_stage)
         self.validate_supported_stage_types(ast, target_stage)
         ast = lower_metal_fragment_interlocks(ast)
         ast = rename_metal_keyword_members(ast)
