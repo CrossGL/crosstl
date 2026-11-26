@@ -3,9 +3,9 @@
 The manifest lists, per project, the repository, the pinned commit and the licence; per slice, the source
 language and every translation unit with its SHA-256, stages, entry point, include directories and defines, plus
 the support files its include closure reaches. Units are kept only when the project's own toolchain accepts them
-in this layout. A project is fetched as a shallow, blob-filtered, sparse checkout of exactly the listed files, so
-the include closure is the recorded one and nothing else. The SPIR-V slice is derived from the GLSL slice with
-glslang and spirv-dis and checked against its recorded hashes as well.
+in this layout (for CUDA, nvcc compiling the unit for the device). A project is fetched as a shallow, blob-filtered,
+sparse checkout of exactly the listed files, so the include closure is the recorded one and nothing else. The SPIR-V
+slice is derived from the GLSL slice with glslang and spirv-dis and checked against its recorded hashes as well.
 
 Rebuilding fails closed: a missing file, a changed hash or a failed derivation is a problem, and the runner does
 not measure a corpus with problems.
@@ -25,7 +25,7 @@ from ..toolchains import tool
 HERE = Path(__file__).resolve().parent
 MANIFEST = HERE / "manifest.json"
 SCHEMA = 1
-LANGUAGES = ("glsl", "hlsl", "metal", "spirv")
+LANGUAGES = ("cuda", "glsl", "hlsl", "metal", "spirv")
 STAGES = (
     "compute",
     "vertex",

@@ -3,6 +3,9 @@
   "apple-metal": {
    "metal": "UUUUUUURUURUUUURUUUUUUUUUUUUUUUUUUUURUUUUIIRRURRRRRRRUURRRRRUUUUUUUURRURRUURUURUUUUUUUUUU"
   },
+  "candle-cuda": {
+   "metal": "RRRRRRRRRRRRRRRRRRRRRRRRRRR"
+  },
   "candle-metal": {
    "metal": "RRRUIRURURURRURR"
   },
@@ -43,8 +46,15 @@
   "U": "usable",
   "V": "validator-timeout"
  },
- "manifestSHA256": "e845c17d13d9e42abcf5cf5d33030db704c375e5cf7acd9109ca3af727c6424d",
+ "manifestSHA256": "73cc94fa2b68cc0c74f61258a9cfea0f499d995a1c421b070461e4dc3b893db8",
  "pairs": {
+  "cuda->metal": {
+   "feasible": 27,
+   "outcomes": {
+    "refused": 27
+   },
+   "usableShare": 0.0
+  },
   "glsl->metal": {
    "feasible": 578,
    "outcomes": {

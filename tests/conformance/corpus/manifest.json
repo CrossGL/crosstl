@@ -1561,6 +1561,52 @@
     {"includeDirs": ["candle-metal-kernels/src/metal_src", "candle-metal-kernels/src"], "path": "candle-metal-kernels/src/metal_src/unary.metal", "sha256": "b602228cb8b13d2eae9a10468a8870094aab9654a35756330f33e3dc362cced5", "stages": ["compute"]}
    ]
   },
+  "candle-cuda": {
+   "project": "candle",
+   "language": "cuda",
+   "tag": "held-out",
+   "excludedNativeRejects": 0,
+   "support": {
+    "candle-kernels/src/binary_op_macros.cuh": "a7cf2273a7ee158fc2632235e582f76c3ed5ffa817b216836ee31a4b852d61d8",
+    "candle-kernels/src/compatibility.cuh": "fee2834ac1c6b98460fd642e587cf70189e8acc740cd1ab0debcce9703f4a2a8",
+    "candle-kernels/src/cuda_utils.cuh": "bcc37d44f33524980b6e72c09d4db7ee4d73adf0afbbb636406aeeceef528097",
+    "candle-kernels/src/mmq_gguf/mmq_common.cuh": "ddaa7fb06478584bb8fc4677b26f242721a0ef1e9c27fd0293d16ff2b5b4631e",
+    "candle-kernels/src/mmq_gguf/mmq_gguf.cuh": "44d5d71bcf4a1352307779127ce865e0550f87c250348ea92110d402b8cf8c83",
+    "candle-kernels/src/mmq_gguf/mmq_mma.cuh": "2f06ea7e408af20eeddcc9131b192e1dc928c66cb9793239be0ec045ae64691f",
+    "candle-kernels/src/mmq_gguf/mmq_vecdotq.cuh": "076bbb5270d328f2fed42acb7b464982bbba1f78c72a5dde3e6b95dbe0d68f5d",
+    "candle-kernels/src/moe/gguf.cuh": "cc80a31e79d17169e9a604907979885ebd8b857be3737dd97d2f1e7953d4771b",
+    "candle-kernels/src/moe/moe_utils.cuh": "0ba0412b593f1db391d6c332d37b9dde1d896726d12cb6f0d0cfc7ecaf36bb22"
+   },
+   "units": [
+    {"includeDirs": ["candle-kernels/src"], "path": "candle-kernels/src/affine.cu", "sha256": "8b7865c585e2b870d42f815cb0a73c0738c8de98bc18b4901bf32c1248d1592d", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src"], "path": "candle-kernels/src/binary.cu", "sha256": "777d3bd6ab983c178d9cb9a63466b1bd28e88e20e4e585e1a81f42c8844eb0d6", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src"], "path": "candle-kernels/src/cast.cu", "sha256": "5ea3c394c72eb5c8f011e040caee65d0024425bff4c28d8a561279436d0041d6", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src"], "path": "candle-kernels/src/conv.cu", "sha256": "6d9187017ba53c9511f28962f836c409b326073aab1ecfa036758e0499f9ad4c", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src"], "path": "candle-kernels/src/fill.cu", "sha256": "4fa211565dd589c2a69c881ee65b4e4e87c5f69ecede4071b2276368f21ea8fe", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src"], "path": "candle-kernels/src/indexing.cu", "sha256": "8604566870e58418693517974f6ffe2ebc306dff641ec2de5e5d901646939fe7", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/mmq_gguf", "candle-kernels/src"], "path": "candle-kernels/src/mmq_gguf/mmq_instance_q2_k.cu", "sha256": "073207b8a519bc27f76f0d5dda2ae46d12453f23b6aced6942a6db2a8d45e8ca", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/mmq_gguf", "candle-kernels/src"], "path": "candle-kernels/src/mmq_gguf/mmq_instance_q3_k.cu", "sha256": "418910a1b88239ba29fc07961cda20883c873741f8500b48ea15871a5e677566", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/mmq_gguf", "candle-kernels/src"], "path": "candle-kernels/src/mmq_gguf/mmq_instance_q4_0.cu", "sha256": "ac36d69591e5802368ec8f3f8355311281b526d91b5680571bc1220fffd6257a", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/mmq_gguf", "candle-kernels/src"], "path": "candle-kernels/src/mmq_gguf/mmq_instance_q4_1.cu", "sha256": "0b006812bb17855fe2d1dd00ecc8e384596fbd493189a14232851275fd8d6b6c", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/mmq_gguf", "candle-kernels/src"], "path": "candle-kernels/src/mmq_gguf/mmq_instance_q4_k.cu", "sha256": "a52d459a7777211d5b4805cd6f48c00c035fd139b8968483fc70b50fe9a2c614", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/mmq_gguf", "candle-kernels/src"], "path": "candle-kernels/src/mmq_gguf/mmq_instance_q5_0.cu", "sha256": "e10260ebd90216bbb68630decaf88cfa30859983d0c96e4f28ab7a66185eb26d", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/mmq_gguf", "candle-kernels/src"], "path": "candle-kernels/src/mmq_gguf/mmq_instance_q5_1.cu", "sha256": "dcdae321703495e16656f62faf1e3069b65a608ff1242096f65041770c23f342", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/mmq_gguf", "candle-kernels/src"], "path": "candle-kernels/src/mmq_gguf/mmq_instance_q5_k.cu", "sha256": "149da0fd48e48af80f54853ae5abf4ab5e9aa560721049fc173b15d1c228d133", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/mmq_gguf", "candle-kernels/src"], "path": "candle-kernels/src/mmq_gguf/mmq_instance_q6_k.cu", "sha256": "e8fa64dab5ffd653b26d881742f3f4361b8e8db1ca6c02d10903f5a63410f340", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/mmq_gguf", "candle-kernels/src"], "path": "candle-kernels/src/mmq_gguf/mmq_instance_q8_0.cu", "sha256": "216a9e3e1858ae9a57d3bb6b3cfcfd53a17c4216fb86720b1885e03a51088b03", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/mmq_gguf", "candle-kernels/src"], "path": "candle-kernels/src/mmq_gguf/mmq_quantize.cu", "sha256": "0c8c555ea1822cc24db5001a78491d531c20dbf8efe0bef1dce1d911c967ce13", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src"], "path": "candle-kernels/src/mmvq_gguf.cu", "sha256": "8fe80aa314ea78319749aa7290fd46134a3b8110a3f39d46157b13562ad96717", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/moe", "candle-kernels/src"], "path": "candle-kernels/src/moe/moe_align.cu", "sha256": "d6a7158da0d5f6b10fe37d9f5d6ef70a856022e360462e0be6b709451ca012a9", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/moe", "candle-kernels/src"], "path": "candle-kernels/src/moe/moe_gguf.cu", "sha256": "71aa0a76621d222737d069d62c437f70061f2a5bab31a5c1b1dca218d13de06f", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/moe", "candle-kernels/src"], "path": "candle-kernels/src/moe/moe_wmma.cu", "sha256": "708d9bb8a945fcb195fb69cc8a85d8935a0ef23b925234ea96b7410fdd70c687", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src/moe", "candle-kernels/src"], "path": "candle-kernels/src/moe/moe_wmma_gguf.cu", "sha256": "536205c9d568b5c67b5e5889d88ace36dadcc8517242fd569f43ba11ca236735", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src"], "path": "candle-kernels/src/quantized.cu", "sha256": "44e523f8c705d076ce0c24a01ac81762a8e54f75dea6c683714905de71df59e4", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src"], "path": "candle-kernels/src/reduce.cu", "sha256": "335f6d41ab02bac3d253cca06a7aa63e98ea89a812430ba44b298b7d37683128", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src"], "path": "candle-kernels/src/sort.cu", "sha256": "de957d82ecd715b4f43cafe64464e3f82a00ae98724093739b09bda7d7c10129", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src"], "path": "candle-kernels/src/ternary.cu", "sha256": "4e31593afde2f6acd3971c81ed94f6b34140de4681966183db221ee26cd965c9", "stages": ["compute"]},
+    {"includeDirs": ["candle-kernels/src"], "path": "candle-kernels/src/unary.cu", "sha256": "13c2662cfbf74196bf481ea70b134f315d77c0f5f9b812da81dabe7c44fec0ee", "stages": ["compute"]}
+   ]
+  },
   "apple-metal": {
    "project": "apple-metal-samples",
    "language": "metal",
