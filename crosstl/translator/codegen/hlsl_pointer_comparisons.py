@@ -42,9 +42,48 @@ def _operator(node):
     return str(getattr(node, "operator", getattr(node, "op", "")))
 
 
+_RESOURCE_TYPE_PREFIXES = (
+    "Buffer",
+    "StructuredBuffer",
+    "RWBuffer",
+    "RWStructuredBuffer",
+    "RasterizerOrderedBuffer",
+    "RasterizerOrderedStructuredBuffer",
+)
+
+
+def _local_type(codegen, name):
+    local_types = getattr(codegen, "local_variable_types", None) or {}
+    declared = local_types.get(name)
+    return None if declared is None else str(declared).strip()
+
+
+def _declared_as_value(codegen, name) -> bool:
+    """Whether the innermost declaration of ``name`` is a plain value, such as a local that shadows a buffer.
+
+    A pointer local, a pointer parameter and a resource parameter record a ``*`` or resource type in
+    ``local_variable_types``; a value local declared in an inner block replaces it there, while the outer pointer's
+    alias stays registered for the code after the block.
+    """
+    declared = _local_type(codegen, name)
+    if not declared or declared in {"auto", "auto&", "const auto"}:
+        return False
+    return "*" not in declared and not declared.startswith(_RESOURCE_TYPE_PREFIXES)
+
+
+def _declared_as_pointer(codegen, expression) -> bool:
+    """Whether ``expression`` names a pointer local the generator did not keep as a buffer and an offset."""
+    if not isinstance(expression, (IdentifierNode, VariableNode)):
+        return False
+    declared = _local_type(codegen, getattr(expression, "name", None))
+    return bool(declared) and "*" in declared
+
+
 def is_hlsl_pointer_value(codegen, expression) -> bool:
     """Whether ``expression`` is a pointer into a buffer, rather than a value read through one."""
     if isinstance(expression, (IdentifierNode, VariableNode)):
+        if _declared_as_value(codegen, getattr(expression, "name", None)):
+            return False
         return codegen.hlsl_resource_pointer_binding(expression) is not None
     if isinstance(expression, BinaryOpNode):
         operator = _operator(expression)
@@ -124,7 +163,15 @@ def hlsl_pointer_comparison(codegen, expression, mapped_op):
     if mapped_op in _LOGICAL:
         return _truth_value_refusal(codegen, left if left_pointer else right)
     if not (left_pointer and right_pointer):
-        pointer = left if left_pointer else right
+        pointer, other = (left, right) if left_pointer else (right, left)
+        if _declared_as_pointer(codegen, other):
+            return codegen.refuse_lowering(
+                f"comparison of buffer pointer {_describe(codegen, pointer)} with pointer "
+                f"local {_describe(codegen, other)} in function "
+                f"'{codegen.current_function_name}': HLSL output does not keep that local "
+                "as an element offset into the buffer",
+                "false",
+            )
         return codegen.refuse_lowering(
             f"buffer pointer {_describe(codegen, pointer)} compared with a non-pointer "
             f"value in function '{codegen.current_function_name}': an HLSL resource is "

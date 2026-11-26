@@ -109,3 +109,42 @@ def test_pointers_into_one_buffer_compare_their_offsets(tmp_path, body, expected
     # No pointer local the generator replaced by an offset is left in the output.
     assert not re.search(r"\b[pqe]\b(?!_offset)", code[code.find("CSMain") :])
     _dxc(tmp_path, code)
+
+
+def test_value_local_that_shadows_a_buffer_compares_as_a_value(tmp_path):
+    # The inner ``values`` is a uint; only the outer one is the buffer.
+    path = tmp_path / "shadow.metal"
+    path.write_text(
+        "#include <metal_stdlib>\nusing namespace metal;\n"
+        "uint read_value(const device uint* values) "
+        "{ { uint values = 9; if (values != 9) return 0; } return values[0]; }\n"
+        "kernel void k(const device uint* values [[buffer(0)]], "
+        "device uint* results [[buffer(1)]]) "
+        "{ results[1] = read_value(values); results[0] = values[0]; }\n",
+        encoding="utf-8",
+    )
+    code = crosstl.translate(str(path), backend="directx", format_output=False)
+    assert re.search(r"if \(+values != 9\)*", code), code
+    dxc = shutil.which("dxc")
+    if dxc is None:
+        pytest.skip("dxc is not on PATH")
+    out = tmp_path / "shadow.hlsl"
+    out.write_text(code, encoding="utf-8")
+    sizes = [f"-DCROSSGL_WORKGROUP_SIZE_{axis}=1" for axis in "XYZ"]
+    result = subprocess.run(
+        [dxc, "-T", "cs_6_0", "-E", "CSMain", "-WX", *sizes, str(out)],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr[-2000:]
+
+
+def test_comparison_with_a_pointer_local_kept_as_a_pointer_is_refused(tmp_path):
+    # A for-loop pointer induction variable is not kept as an offset; the diagnostic names it.
+    with pytest.raises(DirectXLoweringRefused, match="with pointer local 'r'"):
+        _translate(
+            tmp_path,
+            "const float *e = inp + n; "
+            "for (const float *r = inp; r != e; ++r) { out[i] += *r; }",
+        )
