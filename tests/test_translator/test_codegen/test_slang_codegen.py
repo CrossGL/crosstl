@@ -22274,7 +22274,8 @@ def test_bool_string_and_char_literals_emit_slang_syntax():
     assert "bool enabled = true;" in generated_code
     assert "bool disabled = false;" in generated_code
     assert 'string label = "debug";' in generated_code
-    assert "char marker = 'x';" in generated_code
+    # Slang has no char; an 8-bit integer holds the character literal's value.
+    assert "int8_t marker = 'x';" in generated_code
     assert 'label = "active";' in generated_code
     assert "marker = 'y';" in generated_code
     assert "True" not in generated_code
@@ -22301,7 +22302,8 @@ def test_inferred_let_declarations_emit_inferred_slang_types():
     assert "float scalar = 1.0;" in generated_code
     assert "bool flag = true;" in generated_code
     assert 'string label = "debug";' in generated_code
-    assert "char marker = 'x';" in generated_code
+    # Slang has no char; an 8-bit integer holds the character literal's value.
+    assert "int8_t marker = 'x';" in generated_code
     assert "None scalar" not in generated_code
     assert "None flag" not in generated_code
 

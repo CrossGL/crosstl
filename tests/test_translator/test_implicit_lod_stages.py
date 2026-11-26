@@ -315,7 +315,7 @@ def test_separate_sampler_hlsl_validates(tmp_path):
     _validate_hlsl(tmp_path, hlsl, "vs_6_0", "VSMain")
 
 
-@pytest.mark.parametrize("target", ["vulkan", "wgsl", "slang"])
+@pytest.mark.parametrize("target", ["vulkan", "wgsl"])
 def test_compute_stages_are_left_to_the_emitters(target):
     program = _parse(COMPUTE_SAMPLING)
     legalize_implicit_lod(program, target)
@@ -328,12 +328,14 @@ def test_compute_stages_are_left_to_the_emitters(target):
     assert "texture" in names and "textureLod" not in names
 
 
-def test_directx_compute_samples_take_level_zero():
+@pytest.mark.parametrize("target", ["directx", "slang"])
+def test_directx_compute_samples_take_level_zero(target):
     # DXC accepts an implicit-LOD Sample in a compute shader only under Shader
     # Model 6.6 with a quad-shaped thread group, and then takes quad derivatives;
-    # CrossGL samples the base level outside fragment shaders.
+    # slangc does the same for every target. CrossGL samples the base level
+    # outside fragment shaders.
     program = _parse(COMPUTE_SAMPLING)
-    legalize_implicit_lod(program, "directx")
+    legalize_implicit_lod(program, target)
 
     calls = [
         node

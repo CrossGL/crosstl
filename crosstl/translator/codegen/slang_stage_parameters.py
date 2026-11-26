@@ -756,6 +756,12 @@ class SlangStageParametersMixin:
                 "gl_SampleMaskIn": ("uint", "SV_Coverage"),
                 "gl_Layer": ("uint", "SV_RenderTargetArrayIndex"),
                 "gl_ViewportIndex": ("uint", "SV_ViewportArrayIndex"),
+                # GL_EXT_fragment_shader_barycentric; the no-perspective one is written noperspective
+                # (SLANG_IMPLICIT_PARAMETER_MODIFIERS), which slangc writes as BaryCoordNoPerspKHR.
+                "gl_BaryCoordEXT": ("vec3", "SV_Barycentrics"),
+                "gl_BaryCoordNoPerspEXT": ("vec3", "SV_Barycentrics"),
+                # GL_EXT_fragment_shading_rate (slang_view_shading_rate.py).
+                "gl_ShadingRateEXT": ("int", "SV_ShadingRate"),
             }
         if shader_stage == "geometry":
             return {

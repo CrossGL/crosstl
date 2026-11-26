@@ -21,6 +21,7 @@ from ..ast import (
 )
 from .for_initializers import join_for_initializer
 from .matrix_compound_assignment import matrix_product_assignment
+from .slang_buffer_out_arguments import slang_buffer_out_argument_statement
 from .slang_workgroup_locals import slang_workgroup_local_prefix
 
 
@@ -143,6 +144,9 @@ class SlangStatementsMixin:
 
     def generate_statement(self, node):
         """Render a single CrossGL statement as Slang code."""
+        buffer_argument_call = slang_buffer_out_argument_statement(self, node)
+        if buffer_argument_call is not None:
+            return buffer_argument_call
         if isinstance(node, ReturnNode):
             if node.value is None:
                 return "return;"
