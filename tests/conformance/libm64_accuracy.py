@@ -431,7 +431,152 @@ def reference(function, *operands):
             if int(y) % 2:
                 return magnitude.copy_negate()
         return magnitude
+    if function in _REFERENCES:
+        return _REFERENCES[function](*values).normalize(context)
     raise KeyError(function)
+
+
+# Inverse trigonometric and hyperbolic references, computed at 80 digits from series and from ``exp``, ``ln`` and
+# ``sqrt``, which ``decimal`` rounds correctly; each form below avoids cancellation over the sampled operands.
+_WIDE = decimal.Context(
+    prec=80,
+    Emax=decimal.MAX_EMAX,
+    Emin=decimal.MIN_EMIN,
+    traps=[decimal.InvalidOperation, decimal.DivisionByZero],
+)
+_ONE = decimal.Decimal(1)
+_TENTH = decimal.Decimal("0.1")
+
+
+def _odd_series(x, step):
+    """``x + step(x^3)/3 + ...``: ``sum (+-1)^n x^(2n+1) / (2n+1)`` (atan, ``step = -1``) or atanh (``step = 1``)."""
+    c = _WIDE
+    square = c.multiply(x, x)
+    total, power, n = x, x, 1
+    limit = c.multiply(x.copy_abs(), decimal.Decimal(10) ** -(c.prec + 5))
+    while True:
+        power = c.multiply(power, square)
+        n += 2
+        piece = c.divide(power if step > 0 else power * (-1) ** (n // 2), n)
+        if piece.copy_abs() < limit:
+            return total
+        total = c.add(total, piece)
+
+
+@functools.lru_cache(maxsize=None)
+def _pi():
+    c = _WIDE
+    # Machin's formula: pi = 16 atan(1/5) - 4 atan(1/239).
+    fifth = _odd_series(c.divide(_ONE, 5), -1)
+    other = _odd_series(c.divide(_ONE, 239), -1)
+    return c.subtract(c.multiply(16, fifth), c.multiply(4, other))
+
+
+def _atan(x):
+    c = _WIDE
+    if x < 0:
+        return _atan(x.copy_negate()).copy_negate()
+    if x > 1:
+        return c.subtract(c.divide(_pi(), 2), _atan(c.divide(_ONE, x)))
+    doublings = 0
+    while x > _TENTH:
+        # atan(x) = 2 atan(x / (1 + sqrt(1 + x^2)))
+        x = c.divide(x, c.add(_ONE, c.add(_ONE, c.multiply(x, x)).sqrt(c)))
+        doublings += 1
+    return c.multiply(_odd_series(x, -1), 2**doublings)
+
+
+def _asin(x):
+    c = _WIDE
+    return _atan(c.divide(x, c.multiply(c.subtract(1, x), c.add(1, x)).sqrt(c)))
+
+
+def _acos(x):
+    c = _WIDE
+    return c.multiply(2, _atan(c.divide(c.subtract(1, x), c.add(1, x)).sqrt(c)))
+
+
+def _atan2(y, x):
+    c = _WIDE
+    angle = _atan(c.divide(y, x))
+    if x > 0:
+        return angle
+    return c.add(angle, _pi()) if y > 0 else c.subtract(angle, _pi())
+
+
+def _log1p(u):
+    c = _WIDE
+    if u.copy_abs() < decimal.Decimal("0.5"):
+        # log(1 + u) = 2 atanh(u / (2 + u))
+        return c.multiply(2, _odd_series(c.divide(u, c.add(2, u)), 1))
+    return c.add(1, u).ln(c)
+
+
+def _sinh(x):
+    c = _WIDE
+    if x.copy_abs() < 1:
+        square = c.multiply(x, x)
+        total, term, n = x, x, 1
+        while True:
+            term = c.divide(c.multiply(term, square), (n + 1) * (n + 2))
+            n += 2
+            if term.copy_abs() < c.multiply(x.copy_abs(), decimal.Decimal(10) ** -85):
+                return total
+            total = c.add(total, term)
+    return c.divide(c.subtract(x.exp(c), x.copy_negate().exp(c)), 2)
+
+
+def _cosh(x):
+    c = _WIDE
+    return c.divide(c.add(x.exp(c), x.copy_negate().exp(c)), 2)
+
+
+def _tanh(x):
+    c = _WIDE
+    if x.copy_abs() < 1:
+        return c.divide(_sinh(x), _cosh(x))
+    decay = c.multiply(-2, x.copy_abs()).exp(c)
+    magnitude = c.divide(c.subtract(1, decay), c.add(1, decay))
+    return magnitude if x > 0 else magnitude.copy_negate()
+
+
+def _asinh(x):
+    c = _WIDE
+    square = c.multiply(x, x)
+    root = c.add(1, square).sqrt(c)
+    magnitude = _log1p(c.add(x.copy_abs(), c.divide(square, c.add(1, root))))
+    return magnitude if x > 0 else magnitude.copy_negate()
+
+
+def _acosh(x):
+    c = _WIDE
+    t = c.subtract(x, 1)
+    return _log1p(c.add(t, c.multiply(t, c.add(2, t)).sqrt(c)))
+
+
+def _atanh(x):
+    c = _WIDE
+    return c.divide(_log1p(c.divide(c.multiply(2, x), c.subtract(1, x))), 2)
+
+
+def _round_away(x):
+    # C11 7.12.9.6: halfway cases away from zero, which is decimal's ROUND_HALF_UP.
+    return x.to_integral_value(rounding=decimal.ROUND_HALF_UP)
+
+
+_REFERENCES = {
+    "__cgl_round_away": _round_away,
+    "asin": _asin,
+    "acos": _acos,
+    "atan": _atan,
+    "atan2": _atan2,
+    "sinh": _sinh,
+    "cosh": _cosh,
+    "tanh": _tanh,
+    "asinh": _asinh,
+    "acosh": _acosh,
+    "atanh": _atanh,
+}
 
 
 _MAX = decimal.Decimal(np.finfo(F64).max.item())
@@ -603,7 +748,175 @@ def samples(function, count=1500, seed=0):
             & (magnitude > 0)
         )
         return (x[keep], y[keep])
+    if function in _SAMPLES:
+        return _SAMPLES[function](rng, count)
     raise KeyError(function)
+
+
+def _signed(rng, values):
+    values = np.asarray(values, F64)
+    return np.where(rng.integers(0, 2, values.size) == 1, -values, values)
+
+
+def _magnitudes(rng, count, low_exponent, high_exponent):
+    """Positive values with uniformly random binary exponents in ``[low_exponent, high_exponent)``."""
+    return np.ldexp(
+        rng.uniform(1.0, 2.0, count), rng.integers(low_exponent, high_exponent, count)
+    )
+
+
+def _unit_interval(rng, count, boundaries):
+    """Operands of asin, acos and atanh: inside (-1, 1), dense near 0 and near +-1, and around ``boundaries``."""
+    below_one = 1.0 - np.ldexp(
+        rng.uniform(0.5, 1.0, count // 3), -rng.integers(1, 54, count // 3)
+    )
+    values = np.concatenate(
+        [
+            rng.uniform(-1.0, 1.0, count),
+            _signed(rng, below_one),
+            _signed(rng, _magnitudes(rng, count // 3, -1074, -1)),
+            _signed(rng, _neighbours(boundaries)),
+            _neighbours([1.0 - 2.0**-53, -1.0 + 2.0**-53], 0),
+        ]
+    )
+    return values[(np.abs(values) < 1.0) & (values != 0.0)]
+
+
+def _inverse_sine_samples(rng, count):
+    # 0.5 and the high word 0x3FEF3333 (0.975) switch formulas; asin returns x below 2^-27, acos pi/2 below 2^-57.
+    switch = _from_words([0x3FEF3333], [0])[0]
+    return (_unit_interval(rng, count, [0.5, switch, 2.0**-27, 2.0**-57]),)
+
+
+def _atan_samples(rng, count):
+    boundaries = [7 / 16, 11 / 16, 19 / 16, 39 / 16, 0.5, 1.0, 1.5, 2.0**66, 2.0**-27]
+    values = np.concatenate(
+        [
+            _signed(rng, _magnitudes(rng, count, -1074, 1024)),
+            rng.uniform(-3.0, 3.0, count // 2),
+            _signed(rng, _neighbours(boundaries)),
+        ]
+    )
+    return (values[np.isfinite(values) & (values != 0.0)],)
+
+
+def _atan2_samples(rng, count):
+    x = _signed(rng, _magnitudes(rng, count, -1000, 1000))
+    with np.errstate(over="ignore"):
+        y = _signed(
+            rng,
+            x * np.ldexp(rng.uniform(0.5, 2.0, count), rng.integers(-70, 70, count)),
+        )
+    edges = np.ldexp(1.0, np.array([60, 61, 62, -60, -61, -62]))
+    x2 = _signed(rng, np.repeat(_magnitudes(rng, 50, -100, 100), edges.size))
+    y2 = _signed(rng, x2 * np.tile(edges, 50))
+    near_one = np.ones(40)
+    y3 = _signed(rng, _magnitudes(rng, 40, -60, 60))
+    xs = np.concatenate([x, x2, near_one, rng.uniform(-4, 4, count // 2)])
+    ys = np.concatenate([y, y2, y3, rng.uniform(-4, 4, count // 2)])
+    keep = np.isfinite(xs) & np.isfinite(ys) & (xs != 0.0) & (ys != 0.0)
+    with np.errstate(all="ignore"):
+        keep &= np.isfinite(ys / xs) & (np.abs(ys / xs) > 2.0**-1000)
+    # atan2(y, x): the first operand is y.
+    return (ys[keep], xs[keep])
+
+
+def _sinh_samples(rng, count):
+    boundaries = [
+        22.0,
+        1.0,
+        2.0**-28,
+        709.782712893384,
+        710.4758600739439,
+        0.5 * math.log(2),
+    ]
+    values = np.concatenate(
+        [
+            rng.uniform(-710.47, 710.47, count),
+            rng.uniform(-23.0, 23.0, count // 2),
+            _signed(rng, _magnitudes(rng, count // 3, -1074, 9)),
+            _signed(rng, _neighbours(boundaries)),
+        ]
+    )
+    return (values[(np.abs(values) < 710.4758600739439) & (values != 0.0)],)
+
+
+def _tanh_samples(rng, count):
+    values = np.concatenate(
+        [
+            rng.uniform(-23.0, 23.0, count),
+            rng.uniform(-1.5, 1.5, count // 2),
+            _signed(rng, _magnitudes(rng, count // 3, -1074, 5)),
+            _signed(rng, _neighbours([1.0, 22.0, 2.0**-55, 0.5])),
+        ]
+    )
+    return (values[values != 0.0],)
+
+
+def _asinh_samples(rng, count):
+    boundaries = [2.0, 2.0**28, 2.0**-28, 1.0, 0.5]
+    values = np.concatenate(
+        [
+            _signed(rng, _magnitudes(rng, count, -1074, 1024)),
+            rng.uniform(-4.0, 4.0, count // 2),
+            _signed(rng, _neighbours(boundaries)),
+        ]
+    )
+    return (values[np.isfinite(values) & (values != 0.0)],)
+
+
+def _acosh_samples(rng, count):
+    above_one = 1.0 + np.ldexp(
+        rng.uniform(1.0, 2.0, count // 2), -rng.integers(1, 53, count // 2)
+    )
+    values = np.concatenate(
+        [
+            1.0 + _magnitudes(rng, count, -52, 1024),
+            above_one,
+            rng.uniform(1.0, 4.0, count // 2),
+            _neighbours([2.0, 2.0**28, 1.0 + 2.0**-52, 1.5]),
+        ]
+    )
+    return (values[np.isfinite(values) & (values > 1.0)],)
+
+
+def _atanh_samples(rng, count):
+    return (_unit_interval(rng, count, [0.5, 2.0**-28, 0.25]),)
+
+
+def _round_away_samples(rng, count):
+    # Every binade from the subnormals to 2^60, the halfway points of each integer magnitude below 2^53 that the
+    # word arithmetic treats differently (the high and the low word, the carry into the exponent) and their
+    # neighbours.
+    exponents = rng.integers(-1074, 61, count)
+    values = np.ldexp(rng.uniform(1.0, 2.0, count), exponents)
+    integers = np.concatenate(
+        [
+            np.arange(0, 64, dtype=F64),
+            np.ldexp(1.0, np.arange(0, 54)),
+            np.ldexp(1.0, np.arange(1, 54)) - 1.0,
+        ]
+    )
+    halves = np.concatenate(
+        [integers + 0.5, rng.integers(0, 2**52, count // 2).astype(F64) + 0.5]
+    )
+    halves = halves[halves < 2.0**52]
+    return (_signed(rng, np.concatenate([values, integers, _neighbours(halves, 1)])),)
+
+
+_SAMPLES = {
+    "__cgl_round_away": _round_away_samples,
+    "asin": _inverse_sine_samples,
+    "acos": _inverse_sine_samples,
+    "atan": _atan_samples,
+    "atan2": _atan2_samples,
+    "sinh": _sinh_samples,
+    "cosh": _sinh_samples,
+    "tanh": _tanh_samples,
+    "asinh": _asinh_samples,
+    "acosh": _acosh_samples,
+    "atanh": _atanh_samples,
+}
 
 
 def main(argv=None):

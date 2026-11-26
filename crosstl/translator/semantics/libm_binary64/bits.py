@@ -13,6 +13,7 @@ import re
 import struct
 
 __all__ = [
+    "ABS",
     "BITS",
     "HIGH",
     "LOW",
@@ -33,6 +34,7 @@ HIGH = PREFIX + "high"
 LOW = PREFIX + "low"
 WITH_HIGH = PREFIX + "with_high"
 WITH_LOW = PREFIX + "with_low"
+ABS = PREFIX + "abs"
 SCALE = PREFIX + "scale"
 
 
@@ -86,6 +88,14 @@ _SUPPORT = (
         WITH_LOW,
         f"""double {WITH_LOW}(double x, uint low) {{
     return packDouble2x32(uvec2(low, unpackDouble2x32(x).y));
+}}""",
+    ),
+    # |x| with the sign bit cleared, exact for every value (fdlibm's fabs).
+    (
+        ABS,
+        f"""double {ABS}(double x) {{
+    uvec2 words = unpackDouble2x32(x);
+    return packDouble2x32(uvec2(words.x, words.y & 0x7FFFFFFFu));
 }}""",
     ),
     # y * 2^k with one rounding, for k <= 1024 and a y * 2^k at least 2^-1075: the scalbn that exp and pow end

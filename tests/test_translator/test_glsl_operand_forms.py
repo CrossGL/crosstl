@@ -7,6 +7,7 @@ not 3-vectors and the float-only functions of GLSL 4.60 sections 8.1 and 8.2 wit
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
 
@@ -178,7 +179,7 @@ def test_cross_of_four_component_vectors_is_refused(tmp_path):
 
 
 @pytest.mark.parametrize(
-    "call", ["acos(x)", "sinh(x)", "asin(x)", "atan2(y, x)", "log10(x)", "tanh(x)"]
+    "call", ["log10(x)", "sin(x)", "cos(x)", "tan(x)", "radians(x)", "degrees(x)"]
 )
 def test_double_operands_of_float_only_functions_are_refused(tmp_path, call):
     with pytest.raises(OpenGLBuiltinOperandError) as caught:
@@ -187,6 +188,19 @@ def test_double_operands_of_float_only_functions_are_refused(tmp_path, call):
     assert error.operation == call.split("(")[0]
     assert "double" in error.operand_types
     assert error.diagnostic_reason == "double-precision-operand"
+
+
+@pytest.mark.parametrize(
+    "call", ["acos(x)", "sinh(x)", "asin(x)", "atan2(y, x)", "atan(y, x)", "tanh(x)"]
+)
+def test_double_operands_of_binary64_helpers_call_the_helpers(tmp_path, call):
+    # crosstl/translator/semantics/libm_binary64 computes these in binary64 arithmetic.
+    name = call.split("(")[0]
+    helper = "atan2" if call == "atan(y, x)" else name
+    code = translate(tmp_path, DOUBLE_CALL.replace("CALL", call))
+    assert f"cgl_rule_libm64_{helper}(" in code
+    assert not re.search(rf"(?<![\w.]){name}\s*\(", code)
+    assert_glslang_accepts(tmp_path, code)
 
 
 @pytest.mark.parametrize(

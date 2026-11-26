@@ -16,6 +16,8 @@ from .compound_values import CompoundValueHoister
 from .conversions import UNRESOLVED, native_conversion
 from .helpers import HelperSet
 from .hub_types import call_name
+from .libm_binary64 import BINARY64_TARGETS
+from .libm_binary64 import FUNCTIONS as BINARY64_FUNCTIONS
 from .nan_conversions import ORIGIN, lower_conversion
 from .rewrite import call, child_slots, clone, get_child, is_pure, set_child
 from .rule_table import (
@@ -162,6 +164,13 @@ class Lowerer:
             "f",
             32,
         ):
+            if (
+                (result_type.kind, result_type.bits) == ("f", 64)
+                and intrinsic in BINARY64_FUNCTIONS
+                and self.target in BINARY64_TARGETS
+            ):
+                # The binary64 helper of libm_binary64, which lower_binary64_math substitutes after this pass.
+                return call(intrinsic, operands)
             raise RuleInexpressibleError(
                 f"{intrinsic} on a {result_type.bits}-bit {_KIND_NAMES.get(result_type.kind, 'value')} operand has "
                 f"no helper for {self.target}: the helper takes binary32 values only",

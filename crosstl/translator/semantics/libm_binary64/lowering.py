@@ -1,13 +1,16 @@
-"""Calls of ``exp``, ``exp2``, ``log``, ``log2`` and ``pow`` on binary64 values become calls of the helpers.
+"""Calls of the exponential, logarithmic, inverse trigonometric and hyperbolic functions on binary64 values become
+calls of the helpers.
 
-GLSL declares these functions for ``genFType`` only (GLSL 4.60 sections 8.1 and 8.2), GLSL.std.450 ``Exp``, ``Exp2``,
-``Log``, ``Log2`` and ``Pow`` take 16- and 32-bit floating-point operands only, and HLSL's ``exp``, ``log`` and
-``pow`` take ``float`` (DXC converts a ``double`` operand to ``float``). A CrossGL program that calls them on
-``double`` values, as CUDA, HIP and OpenCL C programs do, therefore had no correct form on the OpenGL, Vulkan and
-DirectX targets: GLSL and HLSL output computed in binary32 or failed to compile, and SPIR-V output was refused.
-:func:`lower_binary64_math` rewrites each such call on those targets into a call of the binary64 helper
-(:mod:`.exp_log`, :mod:`.power`), which it adds to the program once, ahead of the program's functions, with the
-support functions it calls (:mod:`.bits`). A vector operand calls a per-component lift of the helper.
+GLSL declares ``exp``, ``exp2``, ``log``, ``log2``, ``pow``, ``asin``, ``acos``, ``atan``, ``sinh``, ``cosh``,
+``tanh``, ``asinh``, ``acosh`` and ``atanh`` for ``genFType`` only (GLSL 4.60 sections 8.1 and 8.2), the matching
+GLSL.std.450 instructions take 16- and 32-bit floating-point operands only, and HLSL's take ``float`` (DXC converts
+a ``double`` operand to ``float``). A CrossGL program that calls them on ``double`` values, as CUDA, HIP and OpenCL C
+programs do, therefore had no correct form on the OpenGL, Vulkan and DirectX targets: GLSL and HLSL output computed
+in binary32 or failed to compile, and SPIR-V output was refused. :func:`lower_binary64_math` rewrites each such call
+on those targets into a call of the binary64 helper (:mod:`.exp_log`, :mod:`.power`, :mod:`.inverse_trig`,
+:mod:`.hyperbolic`), which it adds to the program once, ahead of the program's functions, with the support functions
+it calls (:mod:`.bits`, :mod:`.roots`). A vector operand calls a per-component lift of the helper, and GLSL's
+two-operand ``atan(y, x)`` is ``atan2(y, x)``.
 
 The helpers are ``precise`` (no contraction or reassociation: GLSL ``precise``, HLSL ``precise``, SPIR-V
 ``NoContraction``) and use only binary64 addition, subtraction, multiplication, division, comparison and
@@ -31,7 +34,16 @@ from ..helpers import HELPER_MARK, is_helper
 from ..hub_types import HubType, call_name, iter_functions
 from ..rewrite import call, clone
 from ..scoped_walk import ScopedWalker
-from . import bits, exp_log, power
+from . import (
+    bits,
+    exp_log,
+    extended,
+    hyperbolic,
+    inverse_trig,
+    power,
+    roots,
+    rounding,
+)
 
 __all__ = [
     "BINARY64_TARGETS",
@@ -41,7 +53,8 @@ __all__ = [
     "lower_binary64_math",
 ]
 
-# Targets whose built-in exp, exp2, log, log2 and pow take binary32 operands at most.
+# Targets whose built-in exponential, logarithmic, inverse trigonometric and hyperbolic functions take binary32
+# operands at most.
 BINARY64_TARGETS = frozenset({"opengl", "vulkan", "directx"})
 
 # CrossGL built-in -> (helper, arity).
@@ -51,7 +64,21 @@ FUNCTIONS = {
     "pow": (power.POW, 2),
     "exp2": (power.EXP2, 1),
     "log2": (power.LOG2, 1),
+    "asin": (inverse_trig.ASIN, 1),
+    "acos": (inverse_trig.ACOS, 1),
+    "atan": (inverse_trig.ATAN, 1),
+    "atan2": (inverse_trig.ATAN2, 2),
+    "sinh": (hyperbolic.SINH, 1),
+    "cosh": (hyperbolic.COSH, 1),
+    "tanh": (hyperbolic.TANH, 1),
+    "asinh": (hyperbolic.ASINH, 1),
+    "acosh": (hyperbolic.ACOSH, 1),
+    "atanh": (hyperbolic.ATANH, 1),
+    # The round_away rule family's hub intrinsic (rule_table.py), which lower.py keeps for binary64 operands.
+    "__cgl_round_away": (rounding.ROUND_AWAY, 1),
 }
+# Built-ins with a second form of another arity: (name, arity) -> the FUNCTIONS entry it computes.
+_ALTERNATE_FORMS = {("atan", 2): "atan2"}
 _LANE_NAMES = "xyzw"
 _MARK = "libm_binary64"
 
@@ -65,7 +92,16 @@ class Binary64MathError(TranslationDiagnostic):
 @functools.lru_cache(maxsize=None)
 def _definitions():
     """Every helper and support function, in dependency order: name -> CrossGL definition."""
-    return dict(bits.support_sources() + exp_log.sources() + power.sources())
+    return dict(
+        bits.support_sources()
+        + exp_log.sources()
+        + power.sources()
+        + roots.sources()
+        + extended.sources()
+        + inverse_trig.sources()
+        + hyperbolic.sources()
+        + rounding.sources()
+    )
 
 
 def _dependencies(name):
@@ -153,8 +189,8 @@ class _Calls(ScopedWalker):
         name = call_name(node)
         if name not in FUNCTIONS or name in self.user_names:
             return
-        helper, arity = FUNCTIONS[name]
         arguments = list(node.arguments or [])
+        helper, arity = FUNCTIONS[_ALTERNATE_FORMS.get((name, len(arguments)), name)]
         if len(arguments) != arity:
             return
         types = [self.scope.infer(argument) for argument in arguments]
@@ -210,7 +246,7 @@ def _order_key(key, order):
 
 
 def lower_binary64_math(program, target) -> int:
-    """Rewrite binary64 ``exp``, ``exp2``, ``log``, ``log2`` and ``pow`` calls for ``target``; returns their count."""
+    """Rewrite the binary64 calls of the FUNCTIONS built-ins for ``target``; returns their count."""
     target = str(target or "").lower()
     if target not in BINARY64_TARGETS:
         return 0
