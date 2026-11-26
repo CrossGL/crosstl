@@ -10,13 +10,16 @@ you can tell before a local run which rows it will report as untested.
 ``REPORT``, a merged report, define, for each ``--backend`` as the target. ``merge`` adds such reports' cells to the
 rows. ``publish --previous`` keeps the previously published matrix when the report has none, and ``publish --matrix``
 puts a report's matrix in place of the one another report holds, so that a nightly run that finishes after a push
-published newer rows still publishes the matrix it measured.
+published newer rows still publishes the matrix it measured. ``matrix-due REPORT`` prints ``due=true`` when the
+matrix the published ``REPORT`` carries is old enough that a run should measure it again (:func:`.pairs.due`).
 """
 
 from __future__ import annotations
 
 import argparse
+import datetime
 import functools
+import json
 import re
 import sys
 from pathlib import Path
@@ -161,6 +164,19 @@ def _parser() -> argparse.ArgumentParser:
     )
     comparing.add_argument(
         "--head", help="the head commit of the pull request the report measured"
+    )
+    dueing = commands.add_parser(
+        "matrix-due",
+        help="print due=true when the published translation matrix is old enough to measure again, else due=false",
+    )
+    dueing.add_argument(
+        "published", type=Path, help="the coverage branch's coverage.json"
+    )
+    dueing.add_argument(
+        "--max-age-hours",
+        type=float,
+        default=pairs.MAX_AGE.total_seconds() / 3600,
+        help="default: %(default)g",
     )
     commands.add_parser(
         "tools", help="list each language's reference tool and the version found"
@@ -428,6 +444,21 @@ def _tools() -> int:
     return 0
 
 
+def _matrix_due(args: argparse.Namespace) -> int:
+    # Only the stamp and whether there are cells matter, so the feature files the report names are not read.
+    published = json.loads(args.published.read_text(encoding="utf-8"))
+    stamp = published.get("matrix") or {}
+    now = datetime.datetime.now(datetime.UTC)
+    due = pairs.due(published, now, datetime.timedelta(hours=args.max_age_hours))
+    measured = stamp.get("date") or "never"
+    print(
+        f"The published translation matrix was measured {measured}; the limit is {args.max_age_hours:g} hours.",
+        file=sys.stderr,
+    )
+    print(f"due={'true' if due else 'false'}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
@@ -441,6 +472,8 @@ def main(argv: list[str] | None = None) -> int:
             return _issues(args)
         if args.command == "tools":
             return _tools()
+        if args.command == "matrix-due":
+            return _matrix_due(args)
         if args.command == "compare":
             published, current = (
                 report.load(path) for path in (args.published, args.report)

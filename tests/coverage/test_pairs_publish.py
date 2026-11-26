@@ -1,5 +1,6 @@
 """Publishing the translation matrix: reconciling cells with the rows, the coverage branch files and the workflow."""
 
+import datetime
 import json
 from pathlib import Path
 
@@ -393,3 +394,75 @@ def test_a_late_nightly_run_publishes_its_matrix_with_the_newer_rows():
         "tools.coverage issues published/coverage.json" in str(s.get("run", ""))
         for s in issues
     )
+
+
+NOW = datetime.datetime(2026, 11, 26, 12, 0, tzinfo=datetime.UTC)
+
+
+@pytest.mark.parametrize(
+    ("published", "expected"),
+    [
+        # No coverage branch yet, or a report that carries no cells: nothing to keep.
+        (None, True),
+        ({"commit": "e" * 40, "date": "2026-11-26T11:00:00Z", "backends": []}, True),
+        # The stamp reconcile writes, measured five or seven hours before NOW.
+        ({"pairs": [{}], "matrix": {"date": "2026-11-26T07:00:00Z"}}, False),
+        ({"pairs": [{}], "matrix": {"date": "2026-11-26T05:00:00Z"}}, True),
+        # Without a stamp the report's own date is when its cells were measured.
+        ({"pairs": [{}], "date": "2026-11-26T09:30:00Z"}, False),
+        # A stamp whose date cannot be read never keeps a matrix.
+        ({"pairs": [{}], "matrix": {"commit": "a" * 40, "date": ""}}, True),
+    ],
+)
+def test_a_matrix_is_due_again_once_it_is_older_than_the_limit(published, expected):
+    assert pairs.MAX_AGE == datetime.timedelta(hours=6)
+    assert pairs.due(published, NOW) is expected
+
+
+def test_matrix_due_reads_only_the_published_report(tmp_path, capsys):
+    # The coverage branch's coverage.json alone: the feature files it names are not beside it.
+    published = pairs.reconcile(_measured())
+    path = tmp_path / "published.json"
+    path.write_text(json.dumps({**published, "pairs": [{"file": "missing.json"}]}))
+    assert cli.main(["matrix-due", str(path)]) == 0
+    # _measured's cells date from 2026-11-21, more than six hours ago.
+    assert capsys.readouterr().out == "due=true\n"
+    assert cli.main(["matrix-due", str(path), "--max-age-hours", "1e6"]) == 0
+    assert capsys.readouterr().out == "due=false\n"
+
+
+def test_a_push_starts_a_manual_run_when_the_published_matrix_is_old():
+    jobs = _workflow()["jobs"]
+    refresh = jobs["refresh"]
+    assert refresh["needs"] == "publish"
+    # Only after a push published, so a pull request or the merge queue never starts a run.
+    assert "github.event_name == 'push'" in refresh["if"]
+    assert "needs.publish.outputs.published != 'false'" in refresh["if"]
+    assert refresh["permissions"] == {"actions": "write", "contents": "read"}
+    assert refresh["concurrency"]["cancel-in-progress"] is False
+    (start,) = (s for s in refresh["steps"] if "run" in s)
+    run = start["run"]
+    assert "git show FETCH_HEAD:coverage.json" in run
+    assert 'python -m tools.coverage matrix-due "$RUNNER_TEMP/published.json"' in run
+    # A nightly or manual run that is still going measures the matrix already.
+    assert "for event in schedule workflow_dispatch" in run
+    assert 'select(.status != "completed")' in run
+    assert run.rstrip().splitlines()[-2].strip() == (
+        'gh workflow run coverage.yml --repo "$GITHUB_REPOSITORY" --ref main'
+    )
+    # The manual run is one whose legs all measure the matrix.
+    for leg in LEGS:
+        (measure,) = (
+            s
+            for s in jobs[leg]["steps"]
+            if s.get("name") == "Measure the translation matrix"
+        )
+        assert "workflow_dispatch" in measure["if"]
+    assert "workflow_dispatch" in _workflow()[True]
+
+
+@pytest.mark.parametrize("text", ["publish", "issues"])
+def test_the_published_wording_names_the_matrix_age_limit(text):
+    source = (REPO / f"tools/coverage/{text}.py").read_text(encoding="utf-8")
+    assert "whenever a push to main finds it more than" in source
+    assert "{MATRIX_AGE_HOURS} hours old" in source

@@ -24,6 +24,8 @@ name: Coverage
 # the native probes of every source language straight to its own languages, as the published rows define the cells.
 # The publish job writes the matrix to coverage.json (its features in features/pairs/<source>-to-<target>.json), to
 # COVERAGE.md and to one pairs/<source>-to-<target>.md page of gaps per cell; a push to main keeps the last matrix.
+# GitHub starts the nightly run hours late, so a push that publishes a matrix older than MATRIX_AGE_HOURS
+# (tools/coverage/model.py) starts a manual run, unless a nightly or manual run is already under way (the refresh job).
 # It also writes one languages/<language>.md page per language, linked from the README (tools/coverage/docs.py).
 #
 # Coverage is reported, not enforced: a gap or a wrong result becomes an issue, never a failed check. The jobs fail
@@ -831,9 +833,58 @@ jobs:
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
 
+  # The rows of a push are hours newer than the matrix they carry when the nightly run started late. A manual run
+  # measures both, as the nightly run does, so every leg measures the cells of the same commit.
+  refresh:
+    name: Refresh the translation matrix
+    needs: publish
+    if: >-
+      !cancelled() && github.event_name == 'push' && needs.publish.result == 'success'
+      && needs.publish.outputs.published != 'false'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Starting a workflow run needs actions: write; GitHub starts the runs that GITHUB_TOKEN dispatches.
+    permissions:
+      actions: write
+      contents: read
+    concurrency:
+      group: coverage-refresh
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # Deciding needs only the standard library and gh, so nothing is installed.
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.13"
+
+      - name: Start a manual run if the published matrix is old
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet --depth=1 origin coverage
+          git show FETCH_HEAD:coverage.json > "$RUNNER_TEMP/published.json"
+          due="$(python -m tools.coverage matrix-due "$RUNNER_TEMP/published.json")"
+          if [ "$due" != due=true ]; then
+            exit 0
+          fi
+          for event in schedule workflow_dispatch; do
+            running="$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/coverage.yml/runs?event=$event&per_page=5" \
+              --jq '[.workflow_runs[] | select(.status != "completed")] | length')"
+            if [ "$running" != 0 ]; then
+              echo "A $event run is under way and measures the matrix."
+              exit 0
+            fi
+          done
+          gh workflow run coverage.yml --repo "$GITHUB_REPOSITORY" --ref main
+          echo "Started a manual Coverage run on main to measure the translation matrix." >> "$GITHUB_STEP_SUMMARY"
+
   result:
     name: Coverage result
-    needs: [plan, linux, compute, rust, metal, d3d12, report, publish, issues]
+    needs: [plan, linux, compute, rust, metal, d3d12, report, publish, issues, refresh]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5

@@ -41,7 +41,10 @@ touches Metal or Direct3D.
   the merge queue: conformance and ComputeSharp test the push to `main`, and
   the corpus tests `main` nightly.
   The MLX tier, the Complete Test Suite, conformance, the corpus and
-  coverage also run nightly, and fuzzing runs weekly.
+  coverage also run nightly, and fuzzing runs weekly. The nightly coverage
+  run also measures the translation matrix; because GitHub starts it hours
+  late, a push to `main` that finds the published matrix more than six hours
+  old starts a manual coverage run, which measures it as well.
 
 A maintainer can request the merge-queue tier on a pull request before
 queueing it. The `ci:full` label applies from the next push, and

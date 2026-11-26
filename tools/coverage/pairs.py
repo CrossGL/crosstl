@@ -16,12 +16,15 @@ the translation on the same runtime, and a translation that computes something e
 
 ``python -m tools.coverage run --pairs REPORT --backend B`` measures the cells into B that a merged report of every
 row defines, and ``merge`` adds them to the rows as the report's ``pairs``, made to agree with the rows measured
-beside them (:func:`reconcile`). CI measures cells only in its nightly run, so ``publish`` carries the last measured
-matrix into the reports of the runs between, with the commit it was measured at.
+beside them (:func:`reconcile`). CI measures cells in its nightly and manual runs only, so ``publish`` carries the
+last measured matrix into the reports of the runs between, with the commit it was measured at. GitHub starts the
+nightly run hours late, so a push to ``main`` that finds the published matrix older than :data:`MAX_AGE` starts a
+manual run (:func:`due`).
 """
 
 from __future__ import annotations
 
+import datetime
 import re
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field, replace
@@ -37,9 +40,10 @@ from . import (
     spirv_input,
     validators,
 )
-from .model import PAIR, ROUND_TRIPS, Feature, Result, Score, Type
+from .model import MATRIX_AGE_HOURS, PAIR, ROUND_TRIPS, Feature, Result, Score, Type
 
 DIRECTION = PAIR
+MAX_AGE = datetime.timedelta(hours=MATRIX_AGE_HOURS)
 # The stages a target cannot hold a program of, and why. Every WebGL probe is a fragment shader because GLSL ES 3.00
 # has no compute stage (:class:`.languages.WebGL`), so another language's compute probe has no translation to it.
 _MISSING_STAGES = {"webgl": {"compute": "GLSL ES 3.00 has no compute stage"}}
@@ -301,6 +305,29 @@ def reconcile(report: dict, previous: dict | None = None) -> dict:
             features.append(feature)
         kept.append({**cell, **_scored(features), "features": features})
     return {**report, "pairs": kept, "matrix": stamp}
+
+
+def due(
+    published: dict | None,
+    now: datetime.datetime,
+    max_age: datetime.timedelta = MAX_AGE,
+) -> bool:
+    """Whether a run should measure the matrix again: ``published``, the report the coverage branch carries, has no
+    cells, or has cells measured more than ``max_age`` before ``now``.
+
+    The age is that of the stamp :func:`reconcile` writes, falling back to the report's own date; a stamp without a
+    readable date counts as old, so that a matrix is never kept for want of one.
+    """
+    if not published or not published.get("pairs"):
+        return True
+    stamp = published.get("matrix") or {"date": published.get("date", "")}
+    try:
+        measured = datetime.datetime.fromisoformat(str(stamp.get("date", "")))
+    except ValueError:
+        return True
+    if measured.tzinfo is None:
+        measured = measured.replace(tzinfo=datetime.UTC)
+    return now - measured > max_age
 
 
 def _partner_rejection(
