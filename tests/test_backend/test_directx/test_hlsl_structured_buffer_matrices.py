@@ -230,20 +230,22 @@ def test_metal_converts_a_subscripted_vector_element_once(tmp_path):
     compile_metal(metal, tmp_path)
 
 
-def test_metal_refuses_partial_stores_to_structured_buffer_matrices():
-    with pytest.raises(ValueError, match="part of HLSL structured-buffer matrix 'm'"):
-        generate_metal("""
-            struct Item { float s; float3x3 m; };
-            RWStructuredBuffer<Item> items : register(u0);
-            [numthreads(1, 1, 1)]
-            void main(uint3 id : SV_DispatchThreadID) { items[0].m[2][0] = 5.0; }
-            """)
-    with pytest.raises(ValueError, match="matrix element of HLSL structured buffer"):
-        generate_metal("""
-            RWStructuredBuffer<float2x2> mats : register(u0);
-            [numthreads(1, 1, 1)]
-            void main(uint3 id : SV_DispatchThreadID) { mats[1][0].y += 2.0; }
-            """)
+def test_metal_stores_structured_buffer_matrix_elements_in_place():
+    # One element is one of the words the matrix is held as: the store writes that word, at the index the
+    # ``_store`` helper gives the element (column-major: HLSL m[r][c] is word rows * c + r).
+    metal = generate_metal("""
+        struct Item { float s; float3x3 m; };
+        RWStructuredBuffer<Item> items : register(u0);
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) { items[0].m[2][0] = 5.0; }
+        """)
+    assert "items[0].m.v[2] = 5.0;" in metal
+    metal = generate_metal("""
+        RWStructuredBuffer<float2x2> mats : register(u0);
+        [numthreads(1, 1, 1)]
+        void main(uint3 id : SV_DispatchThreadID) { mats[1][0].y += 2.0; }
+        """)
+    assert "mats[1].v[2] += 2.0;" in metal
 
 
 def test_structured_buffer_matrices_execute_on_metal(tmp_path):
