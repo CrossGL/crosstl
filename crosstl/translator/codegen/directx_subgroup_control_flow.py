@@ -336,6 +336,7 @@ class DirectXSubgroupControlFlowMixin:
         operator = self.map_operator(condition.operator)
         left = condition.left
         offset = 0
+        offset_node = None
         offset_names = set()
         if isinstance(left, BinaryOpNode) and self.map_operator(left.operator) == "+":
             if self.expression_name(left.left) == name:
@@ -384,17 +385,30 @@ class DirectXSubgroupControlFlowMixin:
                 stride
             )
         type_name = self.type_name_string(declaration.var_type)
-        if step is None or not (
-            stops
-            and (
-                start is not None
-                and offset_counter_loop_terminates(
-                    type_name, start, offset, stops, step, operator
-                )
-                or any_start_counter_loop_terminates(
-                    type_name, offset, stops, step, operator
-                )
+        terminates = bool(stops) and (
+            start is not None
+            and offset_counter_loop_terminates(
+                type_name, start, offset, stops, step, operator
             )
+            or any_start_counter_loop_terminates(
+                type_name, offset, stops, step, operator
+            )
+        )
+        rebased = None
+        if (
+            step is not None
+            and stops
+            and not terminates
+            and offset_node is not None
+            and self.hlsl_rebased_offset_counter_loop_terminates(
+                type_name, offset, stops, step, operator
+            )
+        ):
+            # Emitted as ``c OP stop - offset``, which cannot overflow.
+            rebased = self.hlsl_rebased_offset_condition(condition, offset_node, bound)
+            terminates = True
+        if step is None or not (
+            terminates
             or wrapping_counter_loop_uniform(type_name, offset, step, operator)
         ):
             return False
@@ -403,6 +417,8 @@ class DirectXSubgroupControlFlowMixin:
         ):
             return False
         self.hlsl_software_subgroup_proven_counter_loops.add(id(node))
+        if rebased is not None:
+            self.hlsl_software_subgroup_rebased_conditions[id(node)] = rebased
         return True
 
     def hlsl_software_subgroup_loop_controls_preserved(
@@ -1167,12 +1183,7 @@ class DirectXSubgroupControlFlowMixin:
             return None
         loop_name = initializer.name
         loop_type = self.map_type(getattr(initializer, "var_type", None))
-        if loop_type not in {
-            "int",
-            "uint",
-        } or not self.hlsl_software_subgroup_subgroup_id_expression(
-            getattr(initializer, "initial_value", None)
-        ):
+        if loop_type not in {"int", "uint"}:
             return None
         names = set(uniform_names) - {loop_name}
         components = {
@@ -1180,6 +1191,11 @@ class DirectXSubgroupControlFlowMixin:
             for name, value in uniform_components.items()
             if name != loop_name
         }
+        start = self.hlsl_software_subgroup_strided_start(
+            getattr(initializer, "initial_value", None), names, components, loop_name
+        )
+        if start is None:
+            return None
         condition = getattr(node, "condition", None)
         if (
             not isinstance(condition, BinaryOpNode)
@@ -1306,13 +1322,16 @@ class DirectXSubgroupControlFlowMixin:
             "hoistedPrefixDeclarationIndices": tuple(hoisted),
             "loopType": loop_type,
             "step": step,
+            # The workgroup-uniform part of the start, or None, and the
+            # subgroup index the start adds to it.
+            "start": start,
         }
 
     def generate_hlsl_software_subgroup_strided_for(self, node, indent, plan):
         """Emit a subgroup-strided loop as uniform rounds of the workgroup."""
         initializer = node.init
         declaration = self.generate_for_initializer(initializer)
-        target, separator, initial_value = declaration.partition(" = ")
+        target, separator, _initial_value = declaration.partition(" = ")
         if not separator:
             raise self.hlsl_software_subgroup_error(
                 "DirectX subgroup-strided loops require an initialized counter",
@@ -1336,14 +1355,12 @@ class DirectXSubgroupControlFlowMixin:
         bound = self.generate_expression_with_expected(
             node.condition.right, getattr(initializer, "var_type", None)
         )
-        suffix_u = "u" if loop_type == "uint" else ""
+        header, counter = self.hlsl_software_subgroup_strided_header(
+            node, plan, base_name, bound
+        )
         indent_str = "    " * indent
         body_indent = "    " * (indent + 1)
-        code = (
-            f"{indent_str}for ({loop_type} {base_name} = 0{suffix_u}; "
-            f"{base_name} < {bound}; {base_name} += {plan['step']}{suffix_u}) {{\n"
-            f"{body_indent}{target} = ({base_name} + {initial_value});\n"
-        )
+        code = f"{indent_str}{header}\n" f"{body_indent}{target} = {counter};\n"
         statements = self.hlsl_software_subgroup_statement_list(node.body)
         operation_if_index = plan["operationIfIndex"]
         prefix = list(statements[:operation_if_index])

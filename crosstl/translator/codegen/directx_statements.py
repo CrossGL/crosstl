@@ -635,9 +635,14 @@ class DirectXStatementMixin:
                         self, node.condition, indent + 1
                     )
                 else:
+                    # A proven software-subgroup counter loop may test an
+                    # equivalent condition that cannot overflow.
+                    source_condition = getattr(
+                        self, "hlsl_software_subgroup_rebased_conditions", {}
+                    ).get(id(node), node.condition)
                     condition = self.hlsl_precise_condition(
-                        node.condition,
-                        self.generate_expression(node.condition).strip().rstrip(";"),
+                        source_condition,
+                        self.generate_expression(source_condition).strip().rstrip(";"),
                     )
 
             if hasattr(node, "update") and node.update:
