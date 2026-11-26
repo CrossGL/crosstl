@@ -20411,6 +20411,53 @@ def test_rust_generic_operator_function_emits_copy_bound_and_compiles(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_rust_generic_uninitialized_local_array_emits_default_bound_and_compiles(
+    tmp_path,
+):
+    """An uninitialised local array of a type parameter is filled with Default::default(), so T needs Default (#5192)."""
+    code = """
+    shader S {
+        generic<T> T pick(T a, T b, int k) {
+            T arr[2];
+            arr[0] = a;
+            arr[1] = b;
+            return arr[k];
+        }
+        generic<T> T forward(T a, T b) {
+            return pick(a, b, 1);
+        }
+        generic<T> T grid(T a) {
+            T g[2][3];
+            g[1][2] = a;
+            return g[1][2];
+        }
+        generic<T> T one(T a) {
+            T x;
+            x = a;
+            return x;
+        }
+        compute {
+            layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+            buffer float* fin;
+            buffer float* outp;
+            void main() {
+                uint i = gl_GlobalInvocationID.x;
+                outp[i] = pick(fin[i], 2.0, int(i & 1u)) + forward(fin[i], 1.0) + grid(fin[i]) + one(fin[i]);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert "pub fn pick<T: Copy + Default>(a: T, b: T, k: i32) -> T" in generated_code
+    assert "let mut arr: [T; 2] = [Default::default(); 2];" in generated_code
+    # A caller passes its own T on, so it needs the bound too.
+    assert "pub fn forward<T: Copy + Default>(a: T, b: T) -> T" in generated_code
+    assert "pub fn grid<T: Copy + Default>(a: T) -> T" in generated_code
+    # A scalar local is assigned before use and is not filled, so it needs no Default.
+    assert "pub fn one<T: Copy>(a: T) -> T" in generated_code
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_rust_generic_bitwise_shift_compound_operators_emit_bounds_and_compile(
     tmp_path,
 ):
