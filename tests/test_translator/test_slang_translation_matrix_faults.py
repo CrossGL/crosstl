@@ -71,7 +71,9 @@ void main(uint3 id : SV_DispatchThreadID) {
 def test_switch_cases_keep_their_own_scopes(tmp_path):
     output = translate(tmp_path, HLSL_SWITCH, ".hlsl", entry="main")
     assert output.count("float t = ") == 2
-    assert "case 0: {" in output and "default: {" in output
+    # clang-format may put a case's brace on its own line.
+    flat = " ".join(output.split())
+    assert "case 0: {" in flat and "default: {" in flat
 
 
 def test_switch_case_that_falls_through_shares_its_local(tmp_path):
