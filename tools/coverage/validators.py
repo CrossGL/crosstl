@@ -527,14 +527,29 @@ def _glsl(name: str, source: str, stage: str, target: str, scratch: str) -> Verd
     return run([*command("glslangValidator"), *environment, name], scratch)
 
 
+# The function a ``[shader("...")]`` attribute marks, past any other attributes before its return type.
+_SLANG_ATTRIBUTED_ENTRY = re.compile(
+    r"\[shader\(\s*\"\w+\"\s*\)\]\s*(?:\[[^\]]*\]\s*)*[\w<>:, ]*?\b(\w+)\s*\("
+)
+
+
+def slang_entry(source: str) -> str:
+    """The entry point of a Slang shader: the first function a ``[shader(...)]`` attribute marks, or ``main``."""
+    match = _SLANG_ATTRIBUTED_ENTRY.search(source)
+    return match.group(1) if match else "main"
+
+
 def _slang(
     name: str, source: str, stage: str, entry: str, target: str, scratch: str
 ) -> Verdict:
-    # A ``[shader(...)]`` attribute names the entry point and its stage; without one, slangc is told both. For a
-    # source target the output must follow the entry point it holds.
+    # A ``[shader(...)]`` attribute names the entry point and its stage; without one, slangc is told both. A
+    # compiler target other than the usual one needs the entry named even so, and a translation keeps the entry
+    # name of its source (a Metal probe's ``probe``), so the attributed function is the entry. For a source target
+    # the output must follow the entry point it holds.
     attributed = "[shader(" in source
+    entry = entry or slang_entry(source)
     entry_point = [
-        *(["-entry", entry or "main"] if target or not attributed else []),
+        *(["-entry", entry] if target or not attributed else []),
         *([] if attributed else ["-stage", SLANG_STAGES.get(stage, stage)]),
     ]
     output = f"probe{SUFFIX[target]}" if target in SLANG_SOURCE_TARGETS else "probe.spv"
@@ -563,7 +578,8 @@ def _slang(
     dropped = _UNSUPPORTED_IN_HLSL.search(generated)
     if dropped:
         return Verdict(False, f"error: slangc emits {dropped.group(0)}")
-    return _dxc(output, generated, stage, "", scratch)
+    # slangc keeps the entry point's name.
+    return _dxc(output, generated, stage, entry, scratch)
 
 
 def spirv_environment(assemblies: list[str]) -> str:

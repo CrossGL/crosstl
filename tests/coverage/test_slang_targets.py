@@ -1,6 +1,8 @@
 """How Slang probes are checked: slangc's SPIR-V first, then the HLSL or CUDA source slangc writes, compiled by DXC
 or nvcc, and how slangc's error logs become causes."""
 
+from pathlib import Path
+
 import pytest
 
 from tools.coverage import lowering, runner, validators
@@ -253,3 +255,41 @@ def test_strict_run_names_the_compiler_a_slang_target_needs(monkeypatch, capsys)
     assert capsys.readouterr().err.strip() == (
         "error: missing tools for slang for cuda (nvcc)"
     )
+
+
+def test_a_slang_entry_is_the_function_its_shader_attribute_marks():
+    domain = (
+        '[domain("tri")]\n[shader("domain")]\n'
+        "float4 probe(Patch patch, OutputPatch<ControlPoint, 3> points) : SV_Position\n{}\n"
+    )
+    assert validators.slang_entry(domain) == "probe"
+    assert (
+        validators.slang_entry(
+            '[shader("compute")]\n[numthreads(1, 1, 1)]\nvoid main() {}'
+        )
+        == "main"
+    )
+    assert validators.slang_entry("float4 helper() { return 0; }") == "main"
+
+
+def test_a_translation_checked_for_hlsl_names_the_entry_its_source_kept(monkeypatch):
+    # A Metal probe's entry is ``probe``, and the Slang translation keeps it; slangc needs the name for a target
+    # other than SPIR-V, and DXC for the HLSL slangc writes.
+    commands = []
+
+    def run(arguments, scratch, *rest, **options):
+        # slangc writes the HLSL it compiles to, which keeps the entry's name.
+        commands.append(arguments)
+        if arguments[0] == "slangc":
+            Path(scratch, arguments[arguments.index("-o") + 1]).write_text(
+                "[numthreads(1, 1, 1)]\nvoid probe() {}\n"
+            )
+        return validators.Verdict(True)
+
+    monkeypatch.setattr(validators, "run", run)
+    monkeypatch.setattr(validators, "command", lambda tool: [tool])
+    source = '[shader("compute")]\n[numthreads(1, 1, 1)]\nvoid probe() {}\n'
+    assert validators.validate("slang", source, "compute", "", "hlsl").accepted
+    slangc, dxc = commands
+    assert slangc[slangc.index("-entry") + 1] == "probe"
+    assert dxc[dxc.index("-E") + 1] == "probe"

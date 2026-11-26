@@ -139,11 +139,24 @@ def cells(backends: list[dict]) -> dict[tuple[str, str], list[Member]]:
     return matrix
 
 
-def choose_partner(candidates: list[Feature]) -> Feature:
-    """The feature of the target whose checks a cell's translation gets: one probed for the target language's usual
-    compiler target when there is one, so the translation is validated as a user's would be.
+def choose_partner(candidates: list[Feature], feature: Feature) -> Feature:
+    """The feature of the target whose checks a cell's translation of ``feature`` gets.
+
+    The target's feature of the same name comes first, as HLSL's InterlockedCompareExchangeFloatBitwise translates
+    to Slang's: the translation is validated for the compiler target the target's row probes that feature for, which
+    is Slang's fallback target when SPIR-V cannot express it, though another feature of the same meaning compiles
+    for SPIR-V. Otherwise the partner is one probed for the target language's usual compiler target when there is
+    one, so the translation is validated as a user's would be.
     """
-    return min(candidates, key=lambda f: (f.target != "", f.category, f.name))
+    return min(
+        candidates,
+        key=lambda f: (
+            (f.category, f.name) != (feature.category, feature.name),
+            f.target != "",
+            f.category,
+            f.name,
+        ),
+    )
 
 
 def outside(feature: Feature, target: str) -> str:
@@ -237,7 +250,7 @@ def plan(
             ]
             if candidates:
                 measured.jobs.append(
-                    (feature, DIRECTION, target, choose_partner(candidates))
+                    (feature, DIRECTION, target, choose_partner(candidates, feature))
                 )
     return measured
 
@@ -327,6 +340,33 @@ def _partner_rejection(
     return partner, "" if verdict.accepted else verdict.log
 
 
+def _fallback_target(feature: Feature, target: str, partner: Feature) -> str:
+    """``target``'s fallback compiler target (:data:`.runner.FALLBACK_TARGETS`) when the target's own probe of
+    ``partner`` with the types of ``feature``'s probe compiles only for it; empty otherwise.
+
+    The partner's probe can use other types than the source's: Slang's InterlockedCompareStoreFloatBitwise is
+    generic, its probe stores ints and compiles for SPIR-V, while an HLSL probe stores floats, which slangc compiles
+    only for HLSL. A translation the usual compiler target rejects is then validated for the fallback one, as the
+    target's row validates its own probe of that program (:func:`.runner._native_verdict`).
+    """
+    fallback = runner.FALLBACK_TARGETS.get(target, "")
+    if (
+        not fallback
+        or partner.target
+        or feature.signature is None
+        or target not in probes.DIALECTS
+        or not validators.available(target, fallback)
+    ):
+        return ""
+    same = replace(partner, signature=feature.signature)
+    try:
+        native = probes.build(same, target)
+    except probes.ProbeError:
+        return ""
+    probed, verdict = runner._native_verdict(same, target, native.source, native.entry)
+    return fallback if verdict.accepted and probed.target == fallback else ""
+
+
 def run_pair(feature: Feature, source: str, target: str, partner: Feature) -> Result:
     """Translate ``feature``'s native probe in ``source`` straight to ``target`` and classify the translation.
 
@@ -376,6 +416,11 @@ def run_pair(feature: Feature, source: str, target: str, partner: Feature) -> Re
         tool = validators.missing(target, partner.target) or validators.TOOLS[target]
         return result("untested", f"{tool} is not installed")
     verdict = runner._validated(target, translated, stage, "", partner.target)
+    if not verdict.accepted:
+        fallback = _fallback_target(feature, target, partner)
+        if fallback:
+            partner = replace(partner, target=fallback)
+            verdict = runner._validated(target, translated, stage, "", fallback)
     if not verdict.accepted:
         return result("wrong", verdict.log)
     comment = placeholders.placeholder(translated)
