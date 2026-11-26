@@ -140,6 +140,39 @@ def test_a_function_with_no_id_takes_the_one_id_of_functions_spelled_alike():
     assert features["metal/Load"]["members"] == ["metal/texture2d.read"]
 
 
+def test_a_function_written_as_another_functions_expression_lends_no_id():
+    sinpi = "GLSL.std.450:Sin+OpVectorTimesScalar"
+    entry = ir.build(
+        [
+            row(
+                "slang",
+                (
+                    "sinpi",
+                    "supported",
+                    {"semantic": sinpi, "crossgl": "sin(3.14159274 * {})"},
+                ),
+                (
+                    "select",
+                    "supported",
+                    {"semantic": "OpSelect", "crossgl": "select({2}, {1}, {0})"},
+                ),
+            ),
+            row(
+                "cuda",
+                ("sinpif", "refused", {"crossgl": "sinpi", "detail": "gap"}),
+            ),
+            row("metal", ("sinpi", "supported", {}), ("select", "supported", {})),
+        ]
+    )
+    features = by_name(entry)
+    # Slang's sinpi is sin(pi * x), and CUDA's and Metal's are CrossGL's exact sinpi: two features.
+    assert features[sinpi]["members"] == ["slang/sinpi"]
+    assert features["crossgl/sinpi"]["members"] == ["cuda/sinpif", "metal/sinpi"]
+    assert features["crossgl/sinpi"]["via"] == ["metal"]
+    # Slang's select is CrossGL's with its arguments reordered, so Metal's takes its id.
+    assert features["OpSelect"]["members"] == ["metal/select", "slang/select"]
+
+
 def test_a_metal_function_takes_the_id_of_the_glsl_function_spirv_cross_writes_it_for():
     rotate = "OpGroupNonUniformRotateKHR"
     entry = ir.build(

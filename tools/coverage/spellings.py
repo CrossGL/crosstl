@@ -373,6 +373,12 @@ OTHER_NAMES = {
         "unpackUnorm2x16ToHalf": "f16vec2(unpackUnorm2x16({}))",
         "unpackSnorm4x8ToHalf": "f16vec4(unpackSnorm4x8({}))",
         "unpackUnorm4x8ToHalf": "f16vec4(unpackUnorm4x8({}))",
+        # Outside Metal, Slang's sinpi, cospi and tanpi multiply by T.getPi() and call sin, cos and tan
+        # (hlsl.meta.slang), where CrossGL's, like MSL's, are exact at integers and half-integers. 3.14159274 is
+        # T.getPi() for the float probes.
+        "sinpi": "sin(3.14159274 * {})",
+        "cospi": "cos(3.14159274 * {})",
+        "tanpi": "tan(3.14159274 * {})",
     },
     # WGSL's quad operations are HLSL's. Its leading and trailing zero counts are Metal's clz and ctz, which count
     # every bit of a zero operand, as WGSL's do (MSL 4.1, "Integer Functions"). Mojo's are the same functions.

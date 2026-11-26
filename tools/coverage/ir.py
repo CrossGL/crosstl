@@ -43,12 +43,23 @@ def groups(backends: list[dict]) -> dict[str, list[tuple[str, dict]]]:
         if f.get("semantic")
     }
     # The ids of the functions of every language that CrossGL spells alike. A function without an id of its own or
-    # its lender's takes the id when there is only one: CUDA ``cospi``, which no compiler here lowers, and Slang
-    # ``cospi`` are one feature. A method's name says nothing without its object's type, so methods take none.
+    # its lender's takes the id when there is only one: CUDA ``__brev``, which no compiler here lowers, and HLSL
+    # ``reversebits`` are one feature. A method's name says nothing without its object's type, so methods take none. A
+    # function CrossGL writes as an expression is the CrossGL function its name spells only when the expression calls
+    # that function alone: HLSL's ``select`` is CrossGL's with its arguments reordered, but Slang's ``sinpi`` is
+    # ``sin(3.14159274 * x)``, where CUDA's and Metal's are CrossGL's exact ``sinpi``.
     shared: dict[str, set[str]] = {}
     for backend in outputs:
         for feature in backend["features"]:
-            if feature.get("semantic") and feature["category"] == "function":
+            spelled = feature.get("crossgl") or ""
+            if (
+                feature.get("semantic")
+                and feature["category"] == "function"
+                and (
+                    not spellings.is_expression(spelled)
+                    or spellings.named(spelled) == [feature["name"]]
+                )
+            ):
                 shared.setdefault(spelling(feature), set()).add(feature["semantic"])
     alike = {
         spelled: found.pop() for spelled, found in shared.items() if len(found) == 1
