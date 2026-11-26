@@ -20,6 +20,10 @@ from .enum_utils import (
 from .generic_struct_utils import (
     generate_struct_constructor_expression,
 )
+from .hlsl_pointer_comparisons import (
+    hlsl_pointer_comparison,
+    refuse_hlsl_pointer_truth_value,
+)
 from .hlsl_wave_extended import (
     hlsl_subgroup_lane_mask_expression,
 )
@@ -189,6 +193,9 @@ class DirectXExpressionFormMixin:
                     reason="bare-pointer-expression",
                     source_location=getattr(expr, "source_location", None),
                 )
+        pointer_comparison = hlsl_pointer_comparison(self, expr, mapped_op)
+        if pointer_comparison is not None:
+            return pointer_comparison
         if mapped_op in {"==", "!=", "<", "<=", ">", ">=", "&&", "||", "<<", ">>"}:
             previous_expected_type = self.current_expression_expected_type
             self.current_expression_expected_type = None
@@ -312,6 +319,12 @@ class DirectXExpressionFormMixin:
         self.generate_hlsl_resource_pointer_step(expr, statement_context=False)
         op = getattr(expr, "operator", getattr(expr, "op", "+"))
         mapped_op = self.map_operator(op)
+        if mapped_op == "!":
+            refused = refuse_hlsl_pointer_truth_value(
+                self, getattr(expr, "operand", None)
+            )
+            if refused is not None:
+                return refused
         if mapped_op in {"++", "--"}:
             self.hlsl_tall_matrix_rows.mark_chain(getattr(expr, "operand", None))
             self.hlsl_private_pointer_word_view_write_error(
