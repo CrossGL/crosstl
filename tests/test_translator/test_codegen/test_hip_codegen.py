@@ -2282,9 +2282,7 @@ class TestHipCodeGen:
 
         # Native half2 has no % operator and cannot be passed to fmodf. Both
         # lanes must be converted to float, reduced, and packed again.
-        assert (
-            "__float2half(fmodf(__half2float(lhs.x), __half2float(rhs)))" in hip_code
-        )
+        assert "__float2half(fmodf(__half2float(lhs.x), __half2float(rhs)))" in hip_code
         assert "return __halves2half2(" in hip_code
         assert "return cgl_half2_mod_scalar(v, s);" in hip_code
         assert "return cgl_half2_glsl_mod_scalar(v, s);" in hip_code
