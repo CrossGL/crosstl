@@ -383,16 +383,83 @@ def test_wgsl_nested_matrix_select_is_refused(statement):
         WGSLCodeGen().generate(parse(source))
 
 
-def test_slang_matrix_select_keeps_matrix_type_in_vector_product():
-    source = """shader MatrixSelectProduct {
-        vec3 choose(mat3 m0, mat3 m1, bool flag, vec3 value) {
-            return select(m1, m0, flag) * value;
-        }
-    }"""
+def _slangc_compiles(code, tmp_path):
+    slangc = shutil.which("slangc")
+    if slangc:
+        (tmp_path / "out.slang").write_text(code, encoding="utf-8")
+        _check(
+            [slangc, "out.slang", "-target", "spirv", "-stage", "compute"]
+            + ["-entry", "main", "-o", "out.spv"],
+            tmp_path,
+        )
+
+
+@pytest.mark.parametrize(
+    "return_type, product, expected",
+    [
+        ("vec3", "select(m1, m0, flag) * value", "mul((flag ? m0 : m1), value)"),
+        ("vec3", "value * select(m1, m0, flag)", "mul(value, (flag ? m0 : m1))"),
+        ("mat3", "select(m1, m0, flag) * m0", "mul((flag ? m0 : m1), m0)"),
+    ],
+)
+def test_slang_matrix_select_products_use_mul(return_type, product, expected):
+    source = f"""shader MatrixSelectProduct {{
+        {return_type} choose(mat3 m0, mat3 m1, bool flag, vec3 value) {{
+            return {product};
+        }}
+    }}"""
 
     slang = SlangCodeGen().generate(parse(source))
 
-    assert "return (flag ? m0 : m1) * value;" in slang
+    assert f"return {expected};" in slang
+
+
+def test_slang_matrix_select_times_vector_compiles(tmp_path):
+    source = """shader MatrixSelectProduct {
+    compute {
+        layout(local_size_x = 8, local_size_y = 1, local_size_z = 1) in;
+        buffer float* fin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float a = fin[i];
+            mat3 m = mat3(vec3(1.0, a, 0.0), vec3(2.0, 0.0, 1.0), vec3(0.0, 3.0, a));
+            mat3 n = mat3(1.0);
+            vec3 v = vec3(a, 1.0, 2.0);
+            vec3 s = select(n, m, a > 0.5) * v;
+            outp[i] = s.x + s.y * 10.0 + s.z * 100.0;
+        }
+    }
+}"""
+    path = tmp_path / "select_product.cgl"
+    path.write_text(source, encoding="utf-8")
+
+    slang = crosstl.translate(str(path), backend="slang", format_output=False)
+
+    assert "mul((a > 0.5 ? m : n), v)" in slang
+    _slangc_compiles(slang, tmp_path)
+
+
+def test_hlsl_mul_of_matrix_select_keeps_mul_in_slang(tmp_path):
+    path = tmp_path / "select_product.hlsl"
+    path.write_text(
+        """RWStructuredBuffer<float> outp : register(u0);
+[numthreads(8, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID) {
+    float a = (float)id.x;
+    float3x3 m = float3x3(1, a, 0, 2, 0, 1, 0, 3, a);
+    float3x3 n = float3x3(1, 0, 0, 0, 1, 0, 0, 0, 1);
+    float3 s = mul(select(a > 0.5, m, n), float3(a, 1.0, 2.0));
+    outp[id.x] = s.x;
+}
+""",
+        encoding="utf-8",
+    )
+
+    slang = crosstl.translate(str(path), backend="slang", format_output=False)
+
+    assert "mul((a > 0.5 ? m : n), float3(a, 1.0, 2.0))" in slang
+    _slangc_compiles(slang, tmp_path)
 
 
 def test_wgsl_boolean_mix_with_an_inline_comparison_selector(tmp_path):
