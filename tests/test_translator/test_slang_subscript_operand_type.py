@@ -34,7 +34,14 @@ def test_component_of_a_sampled_texel_is_read_from_the_vector(tmp_path):
     source = tmp_path / "out.slang"
     source.write_text(slang)
     result = subprocess.run(
-        [slangc, str(source), "-target", "spirv-asm", "-o", str(tmp_path / "out.spvasm")],
+        [
+            slangc,
+            str(source),
+            "-target",
+            "spirv-asm",
+            "-o",
+            str(tmp_path / "out.spvasm"),
+        ],
         capture_output=True,
         text=True,
     )

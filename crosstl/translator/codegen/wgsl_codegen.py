@@ -48,7 +48,6 @@ from .relational_builtins import lower_relational_builtins, wgsl_logical_not_ope
 from .sampler_pairs import canonicalize_separate_textures
 from .spirv_union_storage import lower_union_storage
 from .stage_utils import normalize_stage_name, requested_stage_name
-from .wgsl_foreign_types import WGSLForeignTypeMixin
 from .wgsl_array_constructors import (
     wgsl_array_constructor,
     wgsl_array_constructor_type,
@@ -83,6 +82,7 @@ from .wgsl_float_classification import (
     is_float_classification_call,
     wgsl_float_classification_call,
 )
+from .wgsl_foreign_types import WGSLForeignTypeMixin
 from .wgsl_frexp_modf import (
     is_two_argument_frexp_or_modf,
     wgsl_frexp_modf_call,
