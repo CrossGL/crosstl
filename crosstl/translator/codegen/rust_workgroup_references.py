@@ -14,11 +14,14 @@ helpers it is threaded to, which Rust reborrows.
 
 from __future__ import annotations
 
+from .rust_gpu_geometry import STAGE_OUTPUT_KIND
 from .rust_gpu_interface import WORKGROUP_KIND
 
 __all__ = ["RustWorkgroupReferenceMixin", "workgroup_reference_pointee"]
 
 _REFERENCE_PREFIX = "&mut "
+# Workgroup variables and geometry outputs (:mod:`.rust_gpu_geometry`) are both ``&mut T`` entry parameters.
+_REFERENCE_KINDS = frozenset({WORKGROUP_KIND, STAGE_OUTPUT_KIND})
 
 
 def workgroup_reference_pointee(type_name):
@@ -48,7 +51,7 @@ class RustWorkgroupReferenceMixin:
         references = {}
         for name in names:
             info = infos.get(name)
-            if not info or info.get("kind") != WORKGROUP_KIND:
+            if not info or info.get("kind") not in _REFERENCE_KINDS:
                 continue
             pointee = workgroup_reference_pointee(self.variable_types.get(name))
             if pointee is None:

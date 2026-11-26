@@ -18648,7 +18648,8 @@ def test_rust_invalid_shader_struct_only_no_stage(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
-def test_rust_mesh_task_stages_lower_to_metadata_and_intrinsic_placeholders(tmp_path):
+def test_rust_task_stage_local_payload_is_refused(tmp_path):
+    """A payload that is a local of the task entry, not the module-scope task payload, is refused by name."""
     code = """
     shader RustMeshTaskPipeline {
         struct MeshPayload {
@@ -18700,7 +18701,7 @@ def test_rust_mesh_task_stages_lower_to_metadata_and_intrinsic_placeholders(tmp_
 
     with pytest.raises(
         RustLoweringRefused,
-        match="stage: Rust output writes rust-gpu compute, vertex and fragment entry points",
+        match="hands on a payload that is not the task payload variable",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -18784,7 +18785,7 @@ def test_rust_mesh_task_stages_validate_metadata_and_intrinsics():
         generate_code(parse_code(tokenize_code(bad_count_type)))
 
 
-def test_rust_qualified_mesh_stage_uses_deterministic_entry_name(tmp_path):
+def test_rust_stage_qualified_mesh_function_is_refused(tmp_path):
     ast = ShaderNode(
         name="QualifiedRustMeshStage",
         execution_model=ExecutionModel.GRAPHICS_PIPELINE,
@@ -18802,23 +18803,21 @@ def test_rust_qualified_mesh_stage_uses_deterministic_entry_name(tmp_path):
 
     with pytest.raises(
         RustLoweringRefused,
-        match="stage: Rust output writes rust-gpu compute, vertex and fragment entry points",
+        match="is a stage-qualified function; rust-gpu output writes mesh and task entry points from stage blocks",
     ):
         generate_code(ast)
 
 
-def test_direct_mesh_ir_node_lowers_to_rust_helper_without_ast_repr():
+def test_direct_mesh_ir_node_lowers_to_spirv_std_calls():
     codegen = RustCodeGen()
 
     codegen.current_shader_type = "mesh"
     counts_expr = codegen.generate_expression(MeshOpNode("SetMeshOutputCounts", [1, 1]))
-    assert counts_expr == "_crossgl_set_mesh_output_counts(1, 1)"
-    assert "set_mesh_output_counts" in codegen.required_mesh_helpers
+    assert counts_expr == "unsafe { spirv_std::arch::set_mesh_outputs_ext(1, 1) }"
 
     codegen.current_shader_type = "task"
     dispatch_expr = codegen.generate_expression(MeshOpNode("DispatchMesh", [1, 1, 1]))
-    assert dispatch_expr == "_crossgl_dispatch_mesh_without_payload(1, 1, 1)"
-    assert "dispatch_mesh" in codegen.required_mesh_helpers
+    assert dispatch_expr == "unsafe { spirv_std::arch::emit_mesh_tasks_ext(1, 1, 1) }"
 
 
 def test_rust_tessellation_stages_lower_with_metadata_and_patch_placeholders(tmp_path):
@@ -18867,7 +18866,7 @@ def test_rust_tessellation_stages_lower_with_metadata_and_patch_placeholders(tmp
 
     with pytest.raises(
         RustLoweringRefused,
-        match="stage: Rust output writes rust-gpu compute, vertex and fragment entry points",
+        match="stage: Rust output writes rust-gpu compute, vertex, fragment, geometry, mesh and task entry points",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -18950,7 +18949,7 @@ def test_rust_tessellation_stages_validate_metadata_and_patch_shapes():
         generate_code(parse_code(tokenize_code(invalid_patch_shape)))
 
 
-def test_rust_geometry_stage_lowers_with_metadata_and_stream_placeholders(tmp_path):
+def test_rust_geometry_stage_in_hlsl_stream_form_is_refused(tmp_path):
     code = """
     shader RustGeometryExpansion {
         struct GSInput {
@@ -18978,7 +18977,7 @@ def test_rust_geometry_stage_lowers_with_metadata_and_stream_placeholders(tmp_pa
 
     with pytest.raises(
         RustLoweringRefused,
-        match="stage: Rust output writes rust-gpu compute, vertex and fragment entry points",
+        match="geometry entry point 'main' takes parameters or returns a value",
     ):
         generate_code(parse_code(tokenize_code(code)))
 
@@ -19117,7 +19116,7 @@ def test_rust_ray_tracing_stages_emit_metadata_and_compile(tmp_path):
 
     with pytest.raises(
         RustLoweringRefused,
-        match="stage: Rust output writes rust-gpu compute, vertex and fragment entry points",
+        match="stage: Rust output writes rust-gpu compute, vertex, fragment, geometry, mesh and task entry points",
     ):
         generate_code(parse_code(tokenize_code(code)))
 

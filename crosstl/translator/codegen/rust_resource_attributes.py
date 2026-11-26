@@ -15,6 +15,7 @@ from .array_utils import prepend_array_dimension
 from .glsl_buffer_layout import glsl_buffer_block_node_type
 from .push_constant_blocks import is_push_constant
 from .rust_exact_lookups import rust_resource_kind_of_spelling
+from .rust_gpu_geometry import STAGE_INPUT_KIND, STAGE_OUTPUT_KIND
 from .rust_gpu_images import (
     input_attachment_attributes,
     rust_gpu_image_kind,
@@ -759,6 +760,8 @@ class RustResourceAttributeMixin:
             return spec_constant_parameter(name, resource_info)
         if kind == WORKGROUP_KIND:
             return f"#[spirv(workgroup)] {name}: {self.map_type(type_name)}"
+        if kind in (STAGE_INPUT_KIND, STAGE_OUTPUT_KIND):
+            return f"#[spirv({resource_info['attribute']})] {name}: {self.map_type(type_name)}"
         attribute = self.rust_resource_parameter_attribute(node, type_name)
         if kind == UNIFORM_VALUE_KIND:
             return f"{attribute}{name}: &{self.map_type(type_name)}"
