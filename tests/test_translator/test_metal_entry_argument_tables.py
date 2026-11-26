@@ -333,6 +333,12 @@ def test_an_entry_artifact_takes_only_its_own_args_block(tmp_path, entry, other)
     assert result == expected[entry]
 
 
+def _binds(kernel, name, index):
+    # clang-format writes "float *part", the unformatted output "float* part".
+    pattern = rf"\*\s*{name} \[\[buffer\({index}\)\]\]"
+    return re.search(pattern, kernel) is not None
+
+
 def test_entry_artifacts_of_kernels_naming_buffers_alike_bind_their_own(tmp_path):
     path = tmp_path / "k.cu"
     path.write_text(CUDA_SAME_NAME_ACCESS)
@@ -340,10 +346,10 @@ def test_entry_artifacts_of_kernels_naming_buffers_alike_bind_their_own(tmp_path
     partial, merge = artifacts["partial"], artifacts["merge"]
     assert partial == _translate(tmp_path, "k.cu", CUDA_SAME_NAME_ACCESS, "partial")
     partial_kernel = _kernel(partial, "kernel_partial")
-    assert "*part [[buffer(0)]]" in partial_kernel and "*data [[buffer(1)]]" in partial
+    assert _binds(partial_kernel, "part", 0) and _binds(partial_kernel, "data", 1)
     merge_kernel = _kernel(merge, "kernel_merge")
-    assert "*hist [[buffer(0)]]" in merge_kernel
-    assert "*part [[buffer(1)]]" in merge_kernel
+    assert _binds(merge_kernel, "hist", 0)
+    assert _binds(merge_kernel, "part", 1)
     assert "kernel_merge" not in partial and "kernel_partial" not in merge
     for metal in (partial, merge):
         _compile(tmp_path, metal)
