@@ -884,7 +884,7 @@ jobs:
 
   result:
     name: Coverage result
-    needs: [plan, linux, compute, rust, metal, d3d12, report, publish, issues]
+    needs: [plan, linux, compute, rust, metal, d3d12, report, publish, issues, refresh]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
