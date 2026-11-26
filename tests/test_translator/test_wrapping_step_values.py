@@ -154,7 +154,7 @@ def test_step_helpers_keep_inout_parameters(tmp_path, backend, parameter):
     assert "a++" not in output
 
 
-@pytest.mark.parametrize("backend", ["cuda", "hip", "mojo"])
+@pytest.mark.parametrize("backend", ["mojo"])
 def test_increment_used_as_a_value_is_refused_without_inout_write_back(
     tmp_path, backend
 ):
@@ -421,3 +421,50 @@ def test_metal_refuses_a_stepped_copy_from_threadgroup_storage(tmp_path):
 
     with pytest.raises(Exception, match="operands have effects"):
         crosstl.translate(str(path), backend="metal")
+
+
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_cuda_and_hip_step_helpers_take_references(tmp_path, backend):
+    # CUDA and HIP write an inout parameter as a C++ reference, which binds to the argument itself.
+    assert backend in STEP_HELPER_TARGETS
+    output = translate(tmp_path, HLSL_STEPS, backend, ".hlsl")
+    assert "int cgl_rule_wrap_postinc(int& x0)" in output
+    assert "static_cast<int>((static_cast<unsigned int>(x0) + 1u))" in output
+    assert "cgl_rule_wrap_postinc(a)" in output
+    assert "Pass(cgl_rule_wrap_postdec(c))" in output
+    assert "a++" not in output
+    lvalues = translate(tmp_path, GLSL_STEP_LVALUES, backend, ".comp")
+    # A buffer element, a structure member, a vector component and a shared array element are all lvalues.
+    for call in (
+        "cgl_rule_wrap_postinc(outp.o[0])",
+        "cgl_rule_wrap_postdec(s.m)",
+        "cgl_rule_wrap_preinc(s.v.y)",
+        "cgl_rule_wrap_postinc(counts[1])",
+        "cgl_rule_wrap_postinc(k)",
+    ):
+        assert call in lvalues
+
+
+@pytest.mark.parametrize(
+    ("backend", "tool", "arguments", "suffix"),
+    [
+        ("cuda", "nvcc", ["-std=c++17", "-c"], ".cu"),
+        ("hip", "hipcc", ["-std=c++17", "-c", "--offload-arch=gfx90a"], ".hip"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("source", "source_suffix"), [(HLSL_STEPS, ".hlsl"), (GLSL_STEP_LVALUES, ".comp")]
+)
+def test_cuda_and_hip_step_helpers_compile(
+    tmp_path, backend, tool, arguments, suffix, source, source_suffix
+):
+    if shutil.which(tool) is None:
+        pytest.skip(f"{tool} is not installed")
+    kernel = tmp_path / f"steps{suffix}"
+    kernel.write_text(translate(tmp_path, source, backend, source_suffix))
+    result = subprocess.run(
+        [tool, *arguments, str(kernel), "-o", str(tmp_path / "steps.o")],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
