@@ -132,7 +132,7 @@ so its programs can be translated through CrossGL to the targets above.
      - ``.glsl`` and stage extensions such as ``.vert``, ``.frag``,
        ``.comp``, ``.geom``, ``.tesc``, ``.tese``, ``.mesh``, ``.task`` and
        ``.rgen``
-   * - WebGL 2 / GLSL ES 3.00
+   * - GLSL ES 3.x (WebGL 2, OpenGL ES)
      - ``opengl``, named as ``webgl``, ``webgl2``, ``essl`` or ``glsl-es``
      - the GLSL extensions; ``.webgl.glsl`` when the source backend is named
    * - Metal
