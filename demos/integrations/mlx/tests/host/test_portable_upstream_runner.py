@@ -7,6 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from demos.integrations.mlx.ci_conditions import job_condition
 from demos.integrations.mlx.portable_host import (
     upstream_runner,
     verify_upstream_fp_qmv,
@@ -387,7 +388,7 @@ def test_ci_runs_every_upstream_test_on_every_quantized_host_platform():
 
     workflow = yaml.safe_load(WORKFLOW.read_text())
     job = workflow["jobs"]["quantized-upstream-host"]
-    assert job["if"] == "needs.ci-plan.outputs.heavy == 'true'"
+    assert job["if"] == job_condition("quantized-upstream-host")
     assert job["needs"] == ["ci-plan", "portable-host"]
     assert "continue-on-error" not in job
     assert "quantized-upstream-host" in workflow["jobs"]["result"]["needs"]

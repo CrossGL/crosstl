@@ -875,9 +875,7 @@ def test_ci_requires_native_random_parity():
         workflow, "mlx-metal-porting", "Checkout current MLX kernel tree"
     )
     # The known-answer source lives in MLX's C++ test directory.
-    assert (
-        "sparse-checkout set mlx/backend/metal/kernels python/tests tests" in checkout
-    )
+    assert "--sparse mlx/backend/metal/kernels python/tests tests\n" in checkout
     upload = workflow_text.workflow_job_step_section(
         workflow, "mlx-metal-porting", "Upload current MLX runtime diagnostics"
     )

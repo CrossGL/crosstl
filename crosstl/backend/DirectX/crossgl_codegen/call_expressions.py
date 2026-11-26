@@ -25,6 +25,10 @@ from ..helper_lanes import (
 from ..select_overload_error import (
     HLSLSelectOverloadError,
 )
+from ..tiled_status_reads import (
+    check_access_fully_mapped_expression,
+    status_read_expression,
+)
 
 
 class CallExpressionMixin:
@@ -42,6 +46,15 @@ class CallExpressionMixin:
         if struct_method_call is not None:
             return struct_method_call
         if isinstance(expr.name, MemberAccessNode):
+            status_read = status_read_expression(
+                self,
+                expr,
+                self.expression_raw_type(expr.name.object),
+                is_main,
+                raw_texel=not narrow_texel,
+            )
+            if status_read is not None:
+                return status_read
             obj = self.generate_expression(expr.name.object, is_main)
             member = expr.name.member
             method_member = self.templated_method_base(member)
@@ -73,9 +86,6 @@ class CallExpressionMixin:
                 method_member, len(expr.args), resource_type
             )
             if descriptor:
-                descriptor = self.refine_texture_load_status_descriptor(
-                    method_member, expr.args, descriptor
-                )
                 byte_address_atomic = self.byte_address_atomic_method_expression(
                     obj, rendered_args, descriptor, expr.args, is_main
                 )
@@ -128,11 +138,7 @@ class CallExpressionMixin:
             if sizeof_value is not None:
                 return sizeof_value
         if func_name == "CheckAccessFullyMapped":
-            return self.refuse_import(
-                "DirectX tiled-resource status check CheckAccessFullyMapped: "
-                "CrossGL has no residency status, so the mapped result is unknown",
-                "true",
-            )
+            return check_access_fully_mapped_expression(self, expr.args, is_main)
         interlocked_image_atomic = self.interlocked_storage_image_atomic_expression(
             func_name, expr.args, is_main
         )
