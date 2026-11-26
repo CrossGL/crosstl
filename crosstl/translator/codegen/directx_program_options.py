@@ -59,6 +59,10 @@ from .generic_pointer_spaces import (
     refuse_written_generic_pointers,
 )
 from .hlsl_builtin_input_members import lower_hlsl_builtin_input_members
+from .hlsl_entry_arguments import (
+    drop_other_entry_arguments,
+    separate_entry_argument_names,
+)
 from .hlsl_intrinsic_functions import rename_hlsl_intrinsic_functions
 from .hlsl_keyword_names import legalize_hlsl_keyword_names
 from .hlsl_work_graph_nodes import pin_hlsl_node_names
@@ -337,6 +341,7 @@ class DirectXProgramOptionMixin:
                 for function in getattr(stage, "local_functions", []) or []
                 if getattr(function, "name", None) in reachable_names
             ]
+        drop_other_entry_arguments(scoped_ast, entry_point)
         self.prune_entry_scoped_declarations(scoped_ast, selected_copy_function)
         return scoped_ast
 
@@ -616,6 +621,7 @@ class DirectXProgramOptionMixin:
 
         Raises :class:`DirectXLoweringRefused` listing every construct that has no faithful HLSL lowering.
         """
+        ast = separate_entry_argument_names(ast)
         pin_hlsl_node_names(ast)
         ast = legalize_hlsl_keyword_names(ast)
         ast = rename_hlsl_intrinsic_functions(ast)
