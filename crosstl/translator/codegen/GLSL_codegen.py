@@ -10690,6 +10690,34 @@ class GLSLCodeGen(
             reject("invalid-arity")
         if any(item is None for item in types):
             reject("unresolved-operand-type")
+        if func_name == "select" and self.is_matrix_value_type(self.map_type(types[0])):
+            if self.map_type(types[0]) != self.map_type(types[1]):
+                reject("matrix-operand-type-mismatch")
+            condition = args[2]
+            condition_is_matrix_comparison = (
+                isinstance(condition, BinaryOpNode)
+                and self.map_operator(condition.op)
+                in self.GLSL_VECTOR_RELATIONAL_FUNCTIONS
+                and any(
+                    self.is_matrix_value_type(
+                        self.map_type(self.glsl_source_expression_type(operand))
+                    )
+                    for operand in (condition.left, condition.right)
+                )
+            )
+            if self.map_type(types[2]) != "bool" or condition_is_matrix_comparison:
+                reject("matrix-condition-not-scalar-bool")
+            false_value, true_value, condition = args
+            if not all(
+                self.glsl_side_effect_free_expression(value)
+                for value in (false_value, true_value)
+            ):
+                reject("matrix-select-evaluates-both-value-arguments")
+            return (
+                f"({self.generate_glsl_boolean_context(condition)} ? "
+                f"{self.generate_expression(true_value)} : "
+                f"{self.generate_expression(false_value)})"
+            )
         infos = [self.glsl_value_type_info(item) for item in types]
         if any(info is None or info["width"] not in {1, 2, 3, 4} for info in infos):
             reject("unsupported-operand-type")

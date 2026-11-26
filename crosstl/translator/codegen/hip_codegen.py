@@ -34,6 +34,7 @@ from .comma_expressions import (
     is_comma_expression,
 )
 from .cooperative_matrix_refusals import refuse_cooperative_matrices
+from .cuda_componentwise_math import componentwise_math_result_type
 from .cuda_hip_array_copies import generate_cpp_array_initializer
 from .cuda_library_functions import rename_cuda_library_functions
 from .cuda_reserved_names import rename_reserved_program_names
@@ -700,7 +701,7 @@ class HipCodeGen(
 
     def hip_half_constructor_expression(self, constructor_type, raw_args, args):
         """Lower CrossGL FP16 constructors to HIP's documented half intrinsics."""
-        if constructor_type in {"f16", "half", "float16"}:
+        if constructor_type in {"f16", "half", "float16", "float16_t"}:
             if not args:
                 return "half{}"
             return f"__float2half({args[0]})"
@@ -913,6 +914,11 @@ class HipCodeGen(
                 return self.function_return_types.get(func_name)
             if func_name in HIP_SCALAR_CONSTRUCTOR_TYPE_ALIASES and len(raw_args) <= 1:
                 return func_name
+            componentwise_type = componentwise_math_result_type(
+                self, func_name, raw_args
+            )
+            if componentwise_type is not None:
+                return componentwise_type
             if func_name in HIP_WAVE_OP_ARITIES:
                 return self.wave_result_type(
                     func_name,

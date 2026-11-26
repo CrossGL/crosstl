@@ -14,7 +14,11 @@ image operations the HLSL importer writes:
 - ``Interlocked*`` on a texel becomes ``imageAtomic*``, on any other location
   (buffer elements, groupshared variables) ``atomic*``, and a
   ``RWByteAddressBuffer`` ``Interlocked*`` method ``atomic*(buffer, offset,
-  ...)``; an ``original`` argument receives the returned value.
+  ...)``; an ``original`` argument receives the returned value;
+- ``InterlockedCompareExchangeFloatBitwise(dest, compare, value, original)`` and
+  ``InterlockedCompareStoreFloatBitwise(dest, compare, value)`` on a ``float``
+  location stay calls of those names, the CrossGL form the HLSL importer writes
+  and the shared atomic canonicalization rewrites to a bitwise ``atomicCompSwap``.
 
 Every other texel write (one inside an expression, an atomic on float texels)
 and every ``Interlocked*`` operation CrossGL has no atomic for is refused
@@ -64,6 +68,12 @@ _INTERLOCKED = {
         2,
         (3,),
     ),
+}
+
+# Shader model 6.6 float compare-exchanges -> argument count. They compare the operands' bits.
+_FLOAT_BITWISE = {
+    "InterlockedCompareExchangeFloatBitwise": 4,
+    "InterlockedCompareStoreFloatBitwise": 3,
 }
 
 _TEXEL_SCALAR = re.compile(
@@ -401,6 +411,8 @@ class SlangStorageImageAccessMixin:
         if expr.name in self.user_function_names:
             return None
         args = list(expr.args or [])
+        if function_name in _FLOAT_BITWISE:
+            return self.float_bitwise_interlocked_call(function_name, args, is_main)
         location_atomic, image_atomic, value_count = self.interlocked_operation(
             function_name, args, function_name
         )
@@ -429,6 +441,27 @@ class SlangStorageImageAccessMixin:
         return self.atomic_call_text(
             call_name, operands, args[1:], value_count, family, is_main
         )
+
+    def float_bitwise_interlocked_call(self, function_name, args, is_main):
+        """``InterlockedCompare*FloatBitwise(...)`` on a ``float`` location, kept as the HLSL importer keeps it."""
+        if len(args) != _FLOAT_BITWISE[function_name]:
+            raise SlangImportRefused(
+                [
+                    f"Slang {function_name} takes {_FLOAT_BITWISE[function_name]} "
+                    f"arguments, not {len(args)}"
+                ]
+            )
+        target = args[0]
+        resource_type = self.storage_image_texel_resource(target)
+        if resource_type is not None:
+            self.refuse_storage_image_texel(
+                target, f"{function_name} has no CrossGL image atomic"
+            )
+        shape = self.storage_image_value_shape(target)
+        if shape is not None and shape != ("float", 1):
+            raise SlangImportRefused([f"Slang {function_name} needs a float location"])
+        rendered = [self.generate_expression(arg, is_main) for arg in args]
+        return f"{function_name}({', '.join(rendered)})"
 
     def generate_byte_address_interlocked_call(self, expr, obj, is_main=False):
         """``atomic*(buffer, offset, ...)`` for a byte-address ``Interlocked*`` method."""

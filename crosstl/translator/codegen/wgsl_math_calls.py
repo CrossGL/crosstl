@@ -441,6 +441,9 @@ class WGSLMathCallMixin:
                 operand_type = self.expression_type(expr.left) or (
                     self.expression_type(expr.right)
                 )
+                matrix_shape = self.matrix_shape(operand_type)
+                if matrix_shape is not None:
+                    return matrix_shape[1] * matrix_shape[2]
                 return self.vector_component_count(operand_type) or 1
             return None
         if isinstance(expr, UnaryOpNode) and expr.operator == "!":

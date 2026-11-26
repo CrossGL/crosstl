@@ -216,16 +216,21 @@ FOLDED = frozenset({"BuiltIn.WorkgroupSize"})
 # format. A translation back into the probe's own language is, since it can spell what the probe spells.
 _FORMAT = frozenset({"ImageFormat"})
 HOSTED = dict.fromkeys(("opencl", "metal", "cuda", "hip", "hlsl"), _FORMAT)
-# The built-ins a language has no variable for, whose probes compute them from the built-ins it has, so no
-# translation imported from them can carry the anchor. CUDA's built-in variables are ``gridDim``, ``blockIdx``,
-# ``blockDim``, ``threadIdx`` and ``warpSize`` (CUDA C++ Programming Guide, "Built-in Variables"), so its probes
-# compute the flattened thread index, the lane and warp indices and the number of warps (:mod:`.templates.subgroups`).
-# HIP has the same variables and ``__lane_id()``, which its lane-index probe reads.
+# The built-ins a language has no variable for, or only a constant for, whose probes compute them from the built-ins
+# it has, so no translation imported from them can carry the anchor. CUDA's built-in variables are ``gridDim``,
+# ``blockIdx``, ``blockDim``, ``threadIdx`` and ``warpSize`` (CUDA C++ Programming Guide, "Built-in Variables"), so its
+# probes compute the flattened thread index, the lane and warp indices and the number of warps
+# (:mod:`.templates.subgroups`).
+# HIP has the same variables and ``__lane_id()``, which its lane-index probe reads. CUDA's ``warpSize`` is a
+# constant too: the warp size is 32 on every compute capability (CUDA C++ Programming Guide, "Compute Capabilities",
+# "Technical Specifications per Compute Capability"), so the CUDA frontend imports it as the value 32, and a
+# translation from CUDA keeps no subgroup-size built-in. HIP's ``warpSize`` depends on the device (32 or 64), and its
+# translation keeps the built-in.
 _FLATTENED = frozenset(
     {"BuiltIn.LocalInvocationIndex", "BuiltIn.NumSubgroups", "BuiltIn.SubgroupId"}
 )
 COMPUTED = {
-    "cuda": _FLATTENED | {"BuiltIn.SubgroupLocalInvocationId"},
+    "cuda": _FLATTENED | {"BuiltIn.SubgroupLocalInvocationId", "BuiltIn.SubgroupSize"},
     "hip": _FLATTENED,
 }
 # How :func:`lost` begins, which the bug issue for a translation that drops an anchor recognizes.

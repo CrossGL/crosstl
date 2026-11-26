@@ -20411,6 +20411,104 @@ def test_rust_generic_operator_function_emits_copy_bound_and_compiles(tmp_path):
     assert_generated_rust_smoke_compiles(generated_code, tmp_path)
 
 
+def test_rust_generic_bitwise_shift_compound_operators_emit_bounds_and_compile(
+    tmp_path,
+):
+    """Generic functions using &, |, ^, <<, >>, ~ and += need operator bounds (#4909)."""
+    code = """
+    shader Bits {
+        generic<T> T mix_bits(T a, T b) {
+            return (a & b) | (a ^ b);
+        }
+        generic<T> T shifted(T a, T b) {
+            return a << b;
+        }
+        generic<T> T shifted_not(T a, T b) {
+            return (a >> b) | ~a;
+        }
+        generic<T> T accumulate(T a, T b) {
+            T s = a;
+            s += b;
+            return s;
+        }
+        generic<T> T shift_lit(T a) {
+            return a << 1u;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* values;
+            void main() {
+                uint a = values[0];
+                uint b = values[1];
+                values[2] = mix_bits(a, b) + shifted(a, b) + accumulate(a, b);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert (
+        "pub fn mix_bits<T: Copy + core::ops::BitAnd<Output = T> "
+        "+ core::ops::BitXor<Output = T> + core::ops::BitOr<Output = T>>"
+        "(a: T, b: T) -> T" in generated_code
+    )
+    assert (
+        "pub fn shifted<T: Copy + core::ops::Shl<Output = T>>(a: T, b: T) -> T"
+        in generated_code
+    )
+    assert (
+        "pub fn shifted_not<T: Copy + core::ops::Shr<Output = T> "
+        "+ core::ops::Not<Output = T> + core::ops::BitOr<Output = T>>"
+        "(a: T, b: T) -> T" in generated_code
+    )
+    assert (
+        "pub fn accumulate<T: Copy + core::ops::AddAssign>(a: T, b: T) -> T"
+        in generated_code
+    )
+    assert (
+        "pub fn shift_lit<T: Copy + core::ops::Shl<u32, Output = T>>(a: T) -> T"
+        in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
+def test_rust_generic_compound_assignments_emit_bounds_and_compile(tmp_path):
+    """Every compound assignment needs its *Assign bound on a generic (#4909)."""
+    code = """
+    shader Compound {
+        generic<T> T compound_all(T a, T b) {
+            T s = a;
+            s -= b;
+            s *= b;
+            s /= b;
+            s %= b;
+            s &= b;
+            s |= b;
+            s ^= b;
+            s <<= b;
+            s >>= b;
+            return s;
+        }
+        compute {
+            layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+            buffer uint* values;
+            void main() {
+                uint a = values[0];
+                uint b = values[1];
+                values[0] = compound_all(a, b);
+            }
+        }
+    }
+    """
+    generated_code = generate_code(parse_code(tokenize_code(code)))
+    assert (
+        "pub fn compound_all<T: Copy + core::ops::SubAssign + core::ops::MulAssign "
+        "+ core::ops::DivAssign + core::ops::RemAssign + core::ops::BitAndAssign "
+        "+ core::ops::BitOrAssign + core::ops::BitXorAssign + core::ops::ShlAssign "
+        "+ core::ops::ShrAssign>(a: T, b: T) -> T" in generated_code
+    )
+    assert_generated_rust_smoke_compiles(generated_code, tmp_path)
+
+
 def test_rust_generic_multi_use_by_value_emits_copy_bound_and_compiles(tmp_path):
     """Generic values used by value more than once need Copy even without operators (#4748)."""
     code = """

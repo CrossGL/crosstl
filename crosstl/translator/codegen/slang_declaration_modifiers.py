@@ -18,6 +18,7 @@ The other attributes in :data:`SLANG_DECLARATION_METADATA_ATTRIBUTES` never name
 - GLSL ``invariant`` has no HLSL or Slang spelling; the DirectX generator drops it in the same way.
 - ``buffer_layout`` is the layout contract the buffer planners read.
 - ``hlsl_program_constant`` and ``source_resource`` record where a declaration came from.
+- ``rasterizer_ordered`` selects a resource's ``RasterizerOrdered*`` type (``slang_rasterizer_order.py``).
 """
 
 from __future__ import annotations
@@ -50,6 +51,7 @@ SLANG_DECLARATION_METADATA_ATTRIBUTES = frozenset(
         "buffer_layout",
         "hlsl_program_constant",
         "source_resource",
+        "rasterizer_ordered",
     }
 )
 

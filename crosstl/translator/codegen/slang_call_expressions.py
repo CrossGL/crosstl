@@ -1,7 +1,11 @@
 """Slang rendering of CrossGL function-call expressions."""
 
 from ..ast import (
+    AssignmentNode,
+    BinaryOpNode,
+    FunctionCallNode,
     MemberAccessNode,
+    UnaryOpNode,
 )
 from .enum_utils import (
     generate_enum_constructor_call,
@@ -63,6 +67,54 @@ class SlangCallExpressionMixin:
             callee = func_expr
         else:
             callee = self.generate_expression(func_expr)
+        if (
+            callee == "select"
+            and callee not in self.user_function_names
+            and len(node.args) == 3
+            and all(
+                self.is_matrix_value_type(self.expression_result_type(argument))
+                for argument in node.args[:2]
+            )
+        ):
+            false_value, true_value, condition = node.args
+            condition_is_matrix_comparison = (
+                isinstance(condition, BinaryOpNode)
+                and str(getattr(condition, "op", getattr(condition, "operator", "")))
+                in {"<", ">", "<=", ">=", "==", "!="}
+                and any(
+                    self.is_matrix_value_type(self.expression_result_type(operand))
+                    for operand in (condition.left, condition.right)
+                )
+            )
+            if (
+                self.convert_type(self.expression_result_type(condition)) != "bool"
+                or condition_is_matrix_comparison
+            ):
+                return self.refuse_lowering(
+                    "matrix select condition must be a scalar bool",
+                    self.generate_expression(false_value),
+                )
+            if any(
+                any(
+                    isinstance(item, (FunctionCallNode, AssignmentNode))
+                    or (
+                        isinstance(item, UnaryOpNode)
+                        and str(getattr(item, "op", "")) in {"++", "--"}
+                    )
+                    for item in self.walk_ast(value)
+                )
+                for value in (false_value, true_value)
+            ):
+                return self.refuse_lowering(
+                    "matrix select evaluates both value arguments, but a "
+                    "conditional expression would skip one side-effecting argument",
+                    self.generate_expression(false_value),
+                )
+            return (
+                f"({self.generate_expression(condition)} ? "
+                f"{self.generate_expression(true_value)} : "
+                f"{self.generate_expression(false_value)})"
+            )
         numeric_trait_call = generate_numeric_trait_method_call(
             self,
             func_expr,
