@@ -930,7 +930,8 @@ class OpenGLProgramOptionMixin:
         """Whether a call to ``function_name`` inside ``scope`` names a user function.
 
         A helper declared inside one stage block is emitted only in that stage, so
-        a call from any other stage still names the built-in.
+        a call from any other stage — or from a program-scope function, which is
+        emitted in every stage — still names the built-in.
         """
         if function_name not in self.function_return_types:
             return False

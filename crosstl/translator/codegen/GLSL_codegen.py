@@ -540,6 +540,7 @@ class GLSLCodeGen(
         self.current_glsl_function_key = None
         self.current_glsl_source_function_id = None
         self.current_glsl_source_function_name = None
+        self.current_glsl_function_stage = None
         self.glsl_function_stage_contexts = {}
         self.glsl_stage_local_function_owners = {}
         self.glsl_stage_local_function_names = {}
@@ -2944,6 +2945,7 @@ class GLSLCodeGen(
         self.current_glsl_function_key = None
         self.current_glsl_source_function_id = None
         self.current_glsl_source_function_name = None
+        self.current_glsl_function_stage = None
         self.glsl_function_stage_contexts = {}
         self.glsl_stage_local_function_owners = {}
         self.glsl_stage_local_function_names = {}
@@ -8700,6 +8702,7 @@ class GLSLCodeGen(
         previous_glsl_function_key = self.current_glsl_function_key
         previous_glsl_source_function_id = self.current_glsl_source_function_id
         previous_glsl_source_function_name = self.current_glsl_source_function_name
+        previous_glsl_function_stage = self.current_glsl_function_stage
         emitted_function_name = (
             (entry_name or "main")
             if shader_type in stage_entry_types
@@ -8713,6 +8716,9 @@ class GLSLCodeGen(
             func,
             emitted_function_name,
             stage_context=stage_context,
+        )
+        self.current_glsl_function_stage = normalize_stage_name(
+            stage_context or shader_type
         )
         self.current_glsl_source_function_id = (
             getattr(func, "_glsl_resource_source_function_id", None)
@@ -9021,6 +9027,7 @@ class GLSLCodeGen(
         self.current_glsl_function_key = previous_glsl_function_key
         self.current_glsl_source_function_id = previous_glsl_source_function_id
         self.current_glsl_source_function_name = previous_glsl_source_function_name
+        self.current_glsl_function_stage = previous_glsl_function_stage
         self.current_glsl_private_pointer_function_name = (
             previous_private_pointer_function_name
         )

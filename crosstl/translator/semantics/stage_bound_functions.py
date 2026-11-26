@@ -11,7 +11,8 @@ GLSL declares a stage's interface at file scope.
 :func:`bind_stage_functions` gives such a function the scope its names need. A shader-scope function *needs* a stage
 when its body names a variable, constant buffer or constant-buffer member, structure or function the stage declares
 and neither the shader nor the function itself declares, or when it calls a shader-scope function that needs the
-stage. Every stage whose entry point or functions call it, directly or through other shader-scope functions, and
+stage. A call to a built-in function never needs a stage: the call resolves to the built-in from shader scope even
+when a stage declares a helper of the same name. Every stage whose entry point or functions call it, directly or through other shader-scope functions, and
 that it needs, gets its own copy of the function (each overload, in program order) ahead of the stage's functions.
 The shader-scope declaration is removed when every stage that calls it took a copy; otherwise it stays for the stages
 that resolve its names at shader scope, as it did before. A function no stage calls is left alone.
@@ -22,6 +23,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from .. import ast as A
+from .builtin_function_names import BUILTIN_FUNCTION_NAMES
 from .hub_types import call_name
 from .rewrite import child_slots, get_child
 
@@ -45,6 +47,10 @@ def bind_stage_functions(program) -> int:
         overloads.setdefault(function.name, []).append(function)
     shader_names = _shader_names(program)
     free = {name: _free_names(group) for name, group in overloads.items()}
+    builtin_calls = {
+        name: _called_names(group) & BUILTIN_FUNCTION_NAMES
+        for name, group in overloads.items()
+    }
     calls = {
         name: _called_names(group) & set(overloads) for name, group in overloads.items()
     }
@@ -55,7 +61,9 @@ def bind_stage_functions(program) -> int:
         stage_names = _stage_names(stage) - shader_names
         if not stage_names or not reached:
             continue
-        needs = {name for name in reached if free[name] & stage_names}
+        needs = {
+            name for name in reached if (free[name] - builtin_calls[name]) & stage_names
+        }
         changed = bool(needs)
         while changed:
             changed = False

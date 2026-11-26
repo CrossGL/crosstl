@@ -1,0 +1,1 @@
+GLSL output keeps a program-scope function's call to a built-in such as `subgroupBarrier()` when one stage declares a helper of that name, and no longer copies the function into that stage. It used to rename the call to the stage's helper, which no stage declares at program scope, and define the function twice in the stage (#5046).
