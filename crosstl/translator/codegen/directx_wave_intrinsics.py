@@ -17,6 +17,7 @@ from .hlsl_alias_offsets import (
     hlsl_alias_offset_for_source,
     hlsl_source_identifier_name,
 )
+from .hlsl_pointer_buffer_calls import hlsl_pointer_buffer_call
 
 
 class DirectXWaveIntrinsicMixin:
@@ -1063,6 +1064,15 @@ class DirectXWaveIntrinsicMixin:
             return None
 
         self.validate_buffer_call_access(func_name, args)
+        pointer_call = hlsl_pointer_buffer_call(
+            self,
+            func_name,
+            args,
+            rendered_value=rendered_value,
+            statement_context=statement_context,
+        )
+        if pointer_call is not None:
+            return pointer_call
 
         vector_load_methods = {
             "buffer_load2": "Load2",
