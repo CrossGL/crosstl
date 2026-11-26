@@ -78,13 +78,13 @@ def glsl_implicit_literal_conversion(codegen, actual_family, expected_family):
         return True
     if not codegen.GLSL_IMPLICIT_LITERAL_CONVERSIONS:
         return False
-    if expected_family != "uint":
-        return True
     version_line = getattr(codegen, "current_glsl_version_line", None)
     number, profile = parse_version_line(version_line)
-    if number is None:
+    if profile == "es":
+        return False
+    if expected_family != "uint" or number is None:
         return True
-    return profile != "es" and number >= _IMPLICIT_INT_TO_UINT_VERSION
+    return number >= _IMPLICIT_INT_TO_UINT_VERSION
 
 
 # ``mix`` with a boolean selector on integer or boolean values: GLSL 4.50 and GLSL ES 3.10 (section 8.3 of both),

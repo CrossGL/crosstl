@@ -91,6 +91,30 @@ def test_opengl_keeps_desktop_spellings(tmp_path):
     _validate(tmp_path, code, "frag")
 
 
+LITERAL_CONVERSION_CGL = """
+shader main {
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer int* iin;
+        buffer float* outp;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            float x = iin[i];
+            float y = x * 0.5 + 1;
+            outp[i] = y + x / 4;
+        }
+    }
+}
+"""
+
+
+def test_gles_spells_literal_conversions(tmp_path):
+    code = _translate(tmp_path, LITERAL_CONVERSION_CGL, ".cgl", "gles")
+
+    assert "+ 1.0)" in code and "/ 4.0)" in code
+    _validate(tmp_path, code, "comp")
+
+
 ARRAY_LENGTH_CGL = """
 shader main {
     fragment {
