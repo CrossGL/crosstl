@@ -7,7 +7,8 @@ lowers:
 
 * ``m[i]`` is row ``i`` in HLSL and column ``i`` in CrossGL (GLSL 4.60 section 5.6). A constant column becomes
   the matrix swizzle ``m._m0i_m1i...``, which is also an lvalue; a dynamic column read becomes
-  ``transpose(m)[i]``; a dynamic column write calls a helper; ``m[i][j]`` becomes ``m[j][i]``.
+  ``transpose(m)[i]``; a dynamic column write calls a helper (:mod:`.hlsl_matrix_column_writes`); ``m[i][j]``
+  becomes ``m[j][i]``.
 * ``floatRxC(a, b, ...)`` fills rows, while CrossGL constructors fill columns (GLSL 4.60 section 5.4.2), so a
   constructor with several arguments becomes ``transpose(floatCxR(a, b, ...))``. ``floatRxC(s)`` splats ``s``
   while ``matCxR(s)`` is ``s`` on the diagonal and zero elsewhere.
@@ -20,7 +21,7 @@ import re
 
 from ..ast import ArrayAccessNode, MemberAccessNode
 from ..matrix_shape import crossgl_matrix_shape
-from .glsl_buffer_block_arrays import glsl_buffer_matrix_column_access
+from .hlsl_matrix_column_writes import hlsl_column_write
 
 __all__ = ["HLSLMatrixOrientation"]
 
@@ -201,44 +202,10 @@ class HLSLMatrixOrientation:
         return f"transpose({base})[{generator.generate_expression(index_expr)}]"
 
     def column_assignment(self, target, value, op, statement_context):
-        """``m[i] op= v`` for a dynamic column ``i``; ``None`` for every other assignment."""
-        if not isinstance(target, ArrayAccessNode):
-            return None
-        matrix_expr = _array(target)
-        index_expr = _index(target)
-        dimensions = self.expression_dimensions(matrix_expr)
-        if dimensions is None or self.constant_index(index_expr) is not None:
-            return None
-        generator = self.generator
-        if glsl_buffer_matrix_column_access(generator, target) is not None:
-            # A buffer block matrix has no HLSL lvalue; its store writes the column's bytes.
-            return None
-        if not statement_context:
-            return generator.refuse_lowering(
-                "DirectX cannot use a dynamic matrix column assignment as a value"
-            )
-        repeatable = generator.hlsl_expression_is_repeatable
-        if not repeatable(matrix_expr) or (op != "=" and not repeatable(index_expr)):
-            return generator.refuse_lowering(
-                "DirectX writes a dynamic matrix column through a copy of the matrix, which "
-                "needs a matrix and column expression without side effects"
-            )
-        scalar, rows, columns = dimensions
-        base = generator.generate_expression(matrix_expr)
-        index = generator.generate_expression(index_expr)
-        rendered_value = generator.generate_expression(value)
-        if op != "=":
-            operator = op[:-1]
-            if operator == "*" and self.expression_dimensions(value) is not None:
-                return generator.refuse_lowering(
-                    "DirectX has no lowering for a column-times-matrix compound assignment "
-                    "with a dynamic column"
-                )
-            rendered_value = (
-                f"(transpose({_operand(base)})[{index}] {operator} ({rendered_value}))"
-            )
-        helper = self.column_setter(scalar, rows, columns)
-        return f"{base} = {helper}({base}, {index}, {rendered_value})"
+        """``m[i] op= v`` or ``m[i].yx op= v`` for a dynamic column ``i``; ``None`` for every other assignment."""
+        return hlsl_column_write(
+            self.generator, target, value, op, discarded=statement_context
+        )
 
     def column_setter(self, scalar, rows, columns):
         name = f"__crossgl_set_column_{scalar}{rows}x{columns}"

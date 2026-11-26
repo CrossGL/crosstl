@@ -20,6 +20,7 @@ from .enum_utils import (
 from .generic_struct_utils import (
     generate_struct_constructor_expression,
 )
+from .hlsl_matrix_column_writes import hlsl_column_increment
 from .hlsl_wave_extended import (
     hlsl_subgroup_lane_mask_expression,
 )
@@ -307,6 +308,11 @@ class DirectXExpressionFormMixin:
                     "interpreted-increment-unsupported",
                     "increment and decrement require a canonical union lvalue",
                 )
+            column_increment = hlsl_column_increment(
+                self, expr, getattr(expr, "operand", None), mapped_op
+            )
+            if column_increment is not None:
+                return column_increment
         if mapped_op == "*" and not getattr(expr, "is_postfix", False):
             postincrement_load = self.hlsl_resource_pointer_postincrement_load(expr)
             if postincrement_load is not None:

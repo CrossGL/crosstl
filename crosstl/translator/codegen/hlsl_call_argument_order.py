@@ -33,7 +33,11 @@ effect (``discard``, a built-in that writes memory, synchronizes or emits, see
 :func:`~.wgsl_conditional_effects.is_effectful_builtin`, a write to a module-scope variable, a pointer or a
 resource) can change anything, so every other argument that is not a constant depends on it.
 
-A call is left alone when it has fewer than two arguments or no such dependence. A call whose ordered arguments
+An ``out`` or ``inout`` argument that writes through a dynamic matrix column (``m[k]`` or ``m[k].y``, read as
+``transpose(m)[k]``, which is not an lvalue) always goes through a temporary whose elements are stored back after
+the call (:mod:`.hlsl_matrix_column_writes`), and so do the arguments before it.
+
+A call is left alone when it has fewer than two arguments or no such dependence, and no dynamic column argument. A call whose ordered arguments
 include one that HLSL cannot hold in a temporary (a value of unknown type, a pointer or resource view whose
 location cannot be fixed) is refused rather than emitted in DXC's order.
 """
@@ -59,6 +63,7 @@ from ..ast import (
     VariableNode,
 )
 from .array_utils import split_array_type_suffix
+from .hlsl_matrix_column_writes import column_copy_back, dynamic_matrix_column
 from .wgsl_conditional_effects import (
     _callee_name,
     _nodes,
@@ -517,6 +522,60 @@ def _special_parameter_indices(codegen, name):
     return indices
 
 
+# Built-ins whose reference arguments receive a result (GLSL 4.60 section 8.3, 8.8): the argument may be passed
+# through a temporary that is copied back. The other reference arguments of built-ins name memory.
+_RESULT_BUILTINS = frozenset(
+    {
+        "modf",
+        "frexp",
+        "uaddcarry",
+        "usubborrow",
+        "umulextended",
+        "imulextended",
+        "sincos",
+    }
+)
+
+
+def _result_builtin_type(sequencer, name, arguments):
+    """The value type of a built-in that also writes a result argument: its first argument's type."""
+    if (name or "").lower() not in {"modf", "frexp", "uaddcarry", "usubborrow"}:
+        return None
+    return sequencer.source_type(arguments[0]) if arguments else None
+
+
+def _column_references(codegen, name, arguments, parameters):
+    """``{index: copy_in}`` for the arguments that write through a dynamic matrix column, or a refusal reason.
+
+    ``transpose(m)[k]`` is not an lvalue, so such an argument always goes through a temporary that the column
+    setter stores back (:mod:`.hlsl_matrix_column_writes`).
+    """
+    references = {}
+    if parameters is not None:
+        special = _special_parameter_indices(codegen, name)
+        for index, argument in enumerate(arguments):
+            if index >= len(parameters) or index in special:
+                continue
+            qualifiers = set(codegen.hlsl_parameter_qualifiers(parameters[index]))
+            if qualifiers & {"out", "inout"} and dynamic_matrix_column(
+                codegen, argument, buffers=True
+            ):
+                references[index] = "inout" in qualifiers
+        return references
+    for index in sorted(_builtin_reference_positions(name, len(arguments))):
+        if index >= len(arguments):
+            continue
+        if dynamic_matrix_column(codegen, arguments[index], buffers=True) is None:
+            continue
+        if (name or "").lower() not in _RESULT_BUILTINS:
+            return (
+                f"argument {index + 1} of '{name}' names memory through a dynamic matrix column, "
+                "which has no HLSL lvalue"
+            )
+        references[index] = False
+    return references
+
+
 def _ordered_argument(
     codegen, sequencer, name, index, arguments, parameters, special, memory
 ):
@@ -652,12 +711,14 @@ class _Sequencer:
         if copy_in:
             rendered = self.codegen.generate_expression_with_expected(stable, None)
             self.steps.append(f"{name} = {rendered}")
-        # The generator's assignment lowering writes buffer elements and other lowered storage.
-        self.copy_backs.append(
-            self.codegen.generate_expression(
+        # A dynamic matrix column is stored back with the column setter; the generator's assignment
+        # lowering writes buffer elements and other lowered storage.
+        copy_back = column_copy_back(self.codegen, copy.deepcopy(stable), name)
+        if copy_back is None:
+            copy_back = self.codegen.generate_expression(
                 AssignmentNode(copy.deepcopy(stable), IdentifierNode(name))
             )
-        )
+        self.copy_backs.append(copy_back)
         return IdentifierNode(name)
 
 
@@ -696,7 +757,7 @@ def hlsl_ordered_call_expression(codegen, expr):
     if not isinstance(expr, FunctionCallNode):
         return None
     arguments = list(getattr(expr, "arguments", None) or [])
-    if len(arguments) < 2 or codegen.hlsl_wide_integer_compound_indices is None:
+    if not arguments:
         return None
     active = codegen.__dict__.setdefault(_ACTIVE, set())
     if id(expr) in active:
@@ -704,12 +765,24 @@ def hlsl_ordered_call_expression(codegen, expr):
     name = _callee_name(expr)
     if name is None or _CONSTRUCTOR.match(name):
         return None
-    effects = _Effects(codegen)
-    last = _needs_order(codegen, effects, arguments)
+    parameters = _callee_parameters(codegen, expr, name, arguments)
+    columns = _column_references(codegen, name, arguments, parameters)
+    if isinstance(columns, str):
+        return _Sequencer(codegen, expr).refuse(columns)
+    if codegen.hlsl_wide_integer_compound_indices is None:
+        if columns:
+            return _Sequencer(codegen, expr).refuse(
+                "a dynamic matrix column argument needs a function-scope temporary"
+            )
+        return None
+    last = None
+    if len(arguments) >= 2:
+        last = _needs_order(codegen, _Effects(codegen), arguments)
+    if columns:
+        last = max(columns) if last is None else max(last, max(columns))
     if last is None:
         return None
 
-    parameters = _callee_parameters(codegen, expr, name, arguments)
     special = _special_parameter_indices(codegen, name) if parameters else set()
     builtin_references = (
         set()
@@ -719,6 +792,14 @@ def hlsl_ordered_call_expression(codegen, expr):
     sequencer = _Sequencer(codegen, expr)
     ordered = list(arguments)
     for index, argument in enumerate(arguments[: last + 1]):
+        if index in columns:
+            replacement = sequencer.reference(argument, copy_in=columns[index])
+            if replacement is None:
+                return sequencer.refuse(
+                    f"argument {index + 1} of '{name}' has no type HLSL can hold in a temporary"
+                )
+            ordered[index] = replacement
+            continue
         if _stable(codegen, argument):
             continue
         replacement = _ordered_argument(
@@ -747,8 +828,10 @@ def hlsl_ordered_call_expression(codegen, expr):
     steps = list(sequencer.steps)
     result_type = sequencer.source_type(expr)
     if result_type is None and parameters is None:
-        result_type = _builtin_result_type(name) or _shared_argument_type(
-            sequencer, name, arguments
+        result_type = (
+            _builtin_result_type(name)
+            or _shared_argument_type(sequencer, name, arguments)
+            or _result_builtin_type(sequencer, name, arguments)
         )
     mapped = str(codegen.map_type(result_type)) if result_type is not None else "void"
     if sequencer.copy_backs:
