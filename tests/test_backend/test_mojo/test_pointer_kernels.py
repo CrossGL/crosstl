@@ -156,3 +156,24 @@ def probe({parameter}):
 )
 def test_unsafe_pointer_arguments(vtype, expected):
     assert unsafe_pointer_arguments(vtype) == expected
+
+
+_UNTYPED_INDEX = """from std.gpu import block_dim, block_idx, thread_idx
+
+
+def probe(fin: UnsafePointer[Float32, ImmutAnyOrigin], outp: UnsafePointer[Float32, MutAnyOrigin]):
+    var tid = block_idx.x * block_dim.x + thread_idx.x
+    var pair = 2 * thread_idx.x + 1
+    outp[tid] = fin[pair]
+"""
+
+
+def test_an_untyped_local_of_index_arithmetic_is_unsigned(tmp_path):
+    # std.gpu's block_idx, block_dim and thread_idx fields are UInt, and so is arithmetic on them with literals.
+    crossgl = _flat(_import(tmp_path, _UNTYPED_INDEX))
+    assert (
+        "uint tid = ((gl_WorkGroupID.x * gl_WorkGroupSize.x) + gl_LocalInvocationID.x);"
+        in crossgl
+    )
+    assert "uint pair = ((2 * gl_LocalInvocationID.x) + 1);" in crossgl
+    assert "uint tid" in _flat(_onward(tmp_path, crossgl, "metal"))

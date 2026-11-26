@@ -1234,8 +1234,27 @@ class MojoToCrossGLConverter(ImportRefusalMixin):
             and isinstance(value, BinaryOpNode)
             and self.expression_uses_mojo_gpu_builtins(value)
         ):
+            # std.gpu's block_idx, thread_idx, block_dim and global_idx fields are UInt, and so is arithmetic on
+            # them and integer literals alone.
+            if self.is_mojo_gpu_index_arithmetic(value):
+                return "uint"
             return "int"
         return None
+
+    def is_mojo_gpu_index_arithmetic(self, node):
+        """Whether ``node`` is ``+``, ``-``, ``*``, ``//`` and ``%`` of std.gpu index fields and integer literals."""
+        if isinstance(node, BinaryOpNode):
+            return node.op in {"+", "-", "*", "//", "%"} and all(
+                self.is_mojo_gpu_index_arithmetic(side)
+                for side in (node.left, node.right)
+            )
+        if isinstance(node, MemberAccessNode):
+            return (
+                isinstance(node.object, VariableNode)
+                and node.object.name in self.MOJO_GPU_BUILTIN_MAP
+                and node.member in {"x", "y", "z"}
+            )
+        return self.is_integer_literal(node)
 
     def is_integer_literal(self, value):
         if isinstance(value, int) and not isinstance(value, bool):
