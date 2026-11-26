@@ -528,8 +528,9 @@ class DirectXSubgroupControlFlowMixin:
         if (
             not isinstance(condition, BinaryOpNode)
             or self.expression_name(condition.left) != loop_name
-            or loop_name
-            in self.hlsl_software_subgroup_expression_identifier_names(condition.right)
+            or loop_name in self.hlsl_software_subgroup_expression_identifier_names(
+                condition.right
+            )
         ):
             return False
         operator = self.map_operator(
@@ -862,8 +863,7 @@ class DirectXSubgroupControlFlowMixin:
                 parameter.name
                 for parameter in getattr(entry_function, "parameters", []) or []
                 if getattr(parameter, "name", None)
-                and "gl_SubgroupID"
-                in {
+                and "gl_SubgroupID" in {
                     self.semantic_from_node(parameter),
                     self.hlsl_canonical_semantic(self.semantic_from_node(parameter)),
                 }
@@ -1204,8 +1204,9 @@ class DirectXSubgroupControlFlowMixin:
             )
             != "<"
             or self.expression_name(condition.left) != loop_name
-            or loop_name
-            in self.hlsl_software_subgroup_expression_identifier_names(condition.right)
+            or loop_name in self.hlsl_software_subgroup_expression_identifier_names(
+                condition.right
+            )
             or not self.hlsl_software_subgroup_uniform_expression(
                 condition.right, names, components
             )

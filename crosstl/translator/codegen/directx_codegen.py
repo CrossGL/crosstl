@@ -5148,8 +5148,9 @@ class HLSLCodeGen(
                 code += self.generate_statement_body(body, indent + 1)
             declarations = "".join(
                 f"{'    ' * (indent + 1)}{vtype} {name};\n"
-                for vtype, name in self.hlsl_wide_integer_compound_indices
-                + list(self.hlsl_precise_captures or ())
+                for vtype, name in self.hlsl_wide_integer_compound_indices + list(
+                    self.hlsl_precise_captures or ()
+                )
             )
             code = (
                 code[:compound_declaration_offset]
@@ -6266,8 +6267,7 @@ class HLSLCodeGen(
                 if matrix_call_type is not None:
                     return matrix_call_type
             if (
-                func_name
-                in {
+                func_name in {
                     "frac",
                     "fract",
                     "inverseSqrt",
@@ -6292,9 +6292,9 @@ class HLSLCodeGen(
                     "ddy_fine",
                     "ddx_coarse",
                     "ddy_coarse",
-                }
-                and args
-                and func_name not in getattr(self, "function_return_types", {})
+                } and args and func_name not in getattr(
+                    self, "function_return_types", {}
+                )
             ):
                 return self.expression_result_type(args[0])
             if func_name in {
@@ -6304,8 +6304,7 @@ class HLSLCodeGen(
             } and func_name not in getattr(self, "function_return_types", {}):
                 return "float"
             if (
-                func_name
-                in {
+                func_name in {
                     "clamp",
                     "lerp",
                     "max",
