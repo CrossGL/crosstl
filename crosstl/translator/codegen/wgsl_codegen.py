@@ -82,6 +82,7 @@ from .wgsl_float_classification import (
     is_float_classification_call,
     wgsl_float_classification_call,
 )
+from .wgsl_foreign_types import WGSLForeignTypeMixin
 from .wgsl_frexp_modf import (
     is_two_argument_frexp_or_modf,
     wgsl_frexp_modf_call,
@@ -178,6 +179,7 @@ class WGSLAggregateInitializerError(ValueError):
 
 class WGSLCodeGen(
     WGSLStageInterfaceMixin,
+    WGSLForeignTypeMixin,
     WGSLFunctionMixin,
     WGSLGenericStructMixin,
     WGSLGlobalDeclarationMixin,
@@ -326,6 +328,14 @@ class WGSLCodeGen(
         "gl_WorkGroupID": "workgroup_id",
         "SV_GroupID": "workgroup_id",
         "gl_NumWorkGroups": "num_workgroups",
+        # The vertex and fragment inputs GLSL reads by name (GLSL 4.60 sections 7.1.1 and 7.1.5).
+        "gl_VertexID": "vertex_index",
+        "gl_VertexIndex": "vertex_index",
+        "gl_InstanceID": "instance_index",
+        "gl_InstanceIndex": "instance_index",
+        "gl_FrontFacing": "front_facing",
+        "gl_SampleID": "sample_index",
+        "gl_PrimitiveID": "primitive_index",
         # The subgroup built-in inputs (WGSL section 13.3.1.1), which need `enable subgroups;`
         # (wgsl_subgroup_directives).
         "gl_SubgroupSize": "subgroup_size",
@@ -333,11 +343,25 @@ class WGSLCodeGen(
         "gl_NumSubgroups": "num_subgroups",
         "gl_SubgroupID": "subgroup_id",
     }
+    # GLSL types these inputs ``int``; WGSL delivers them as ``u32`` and the read converts them once.
+    SIGNED_BUILTIN_IDENTIFIERS = frozenset(
+        {
+            "gl_VertexID",
+            "gl_VertexIndex",
+            "gl_InstanceID",
+            "gl_InstanceIndex",
+            "gl_SampleID",
+            "gl_PrimitiveID",
+        }
+    )
     WORKGROUP_SIZE_IDENTIFIER_ALIASES = {"gl_WorkGroupSize"}
     INPUT_BUILTIN_TYPE_MAP = {
         "position": "vec4<f32>",
         "vertex_index": "u32",
         "instance_index": "u32",
+        "front_facing": "bool",
+        "sample_index": "u32",
+        "primitive_index": "u32",
         "global_invocation_id": "vec3<u32>",
         "local_invocation_id": "vec3<u32>",
         "local_invocation_index": "u32",
@@ -406,7 +430,14 @@ class WGSLCodeGen(
     }
     STAGE_INPUT_BUILTINS = {
         "vertex": {"instance_index", "vertex_index"},
-        "fragment": {"position", "subgroup_invocation_id", "subgroup_size"},
+        "fragment": {
+            "front_facing",
+            "position",
+            "primitive_index",
+            "sample_index",
+            "subgroup_invocation_id",
+            "subgroup_size",
+        },
         "compute": {
             "global_invocation_id",
             "local_invocation_id",
@@ -1013,7 +1044,7 @@ class WGSLCodeGen(
             lines,
         )
         add_subgroup_directives(lines)
-        return "\n".join(lines).rstrip() + "\n"
+        return self.refuse_written_foreign_wgsl_types("\n".join(lines).rstrip() + "\n")
 
     def stage_output_lowerings(self, ast, target_stage, existing_structs):
         used_struct_names = {
@@ -1219,6 +1250,9 @@ class WGSLCodeGen(
             )
             if splat is not None:
                 return splat
+        converted = self.vector_element_conversion(rendered, target_type, source_type)
+        if converted is not None:
+            return converted
         target_scalar = self.scalar_type_name(target_type)
         source_scalar = self.scalar_type_name(source_type)
         if target_scalar == "i32" and source_scalar == "u32":
@@ -1227,6 +1261,15 @@ class WGSLCodeGen(
             return f"u32({self.concrete_negative_integer_literal(expr, rendered)})"
         if target_scalar == "f32" and source_scalar in {"i32", "u32"}:
             return f"f32({rendered})"
+        if target_scalar in {"i32", "u32"} and source_scalar == "f32":
+            # HLSL's implicit float-to-int conversion, as in ``int r = sign(f)``, truncates as WGSL's does.
+            return f"{target_scalar}({rendered})"
+        if (target_scalar == "bool") != (source_scalar == "bool") and {
+            target_scalar,
+            source_scalar,
+        } <= {"bool", "f32", "i32", "u32"}:
+            # C++'s and HLSL's implicit conversions between bool and a number: nonzero is true, true is 1.
+            return f"{target_scalar}({rendered})"
         return rendered
 
     def generate_padded_array_literal(self, expr, target_type):
@@ -1253,7 +1296,10 @@ class WGSLCodeGen(
                 expected_element_count=declared_size,
             )
         size = self.literal_integer_value(target_type.size)
-        if size is None or not 0 < len(expr.elements) < size:
+        if size is None and not expr.elements and declared_size is not None:
+            # ``T a[COUNT] = {}`` is the zero value; WGSL cannot infer an empty ``array()``.
+            return f"{self.type_name_string(target_type)}()"
+        if size is None or not 0 <= len(expr.elements) < size:
             return None
         element_type = target_type.element_type
         element = self.type_name_string(element_type)
@@ -1290,6 +1336,8 @@ class WGSLCodeGen(
                 return self.generate_workgroup_size_literal()
             mapped_builtin = self.BUILTIN_IDENTIFIER_ALIASES.get(expr.name)
             if mapped_builtin:
+                if expr.name in self.SIGNED_BUILTIN_IDENTIFIERS:
+                    return f"i32({mapped_builtin})"
                 return mapped_builtin
             if self.is_reference_parameter_name(expr.name):
                 return self.reference_parameter_expression(expr.name)
@@ -1845,6 +1893,8 @@ class WGSLCodeGen(
                 return "vec3<u32>"
             mapped_builtin = self.BUILTIN_IDENTIFIER_ALIASES.get(expr.name)
             if mapped_builtin:
+                if expr.name in self.SIGNED_BUILTIN_IDENTIFIERS:
+                    return "i32"
                 return self.INPUT_BUILTIN_TYPE_MAP.get(mapped_builtin)
             value_type = self.value_type(expr.name)
             if value_type is not None:

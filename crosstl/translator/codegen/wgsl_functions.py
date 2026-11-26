@@ -281,6 +281,8 @@ class WGSLFunctionMixin:
             if builtin not in referenced.values() or builtin in existing:
                 continue
             parameters.append(f"@builtin({builtin}) {builtin}: {builtin_type}")
+            if builtin == "primitive_index":
+                self._uses_primitive_index = True
         return tuple(parameters)
 
     def validate_helper_function_references(self, function):

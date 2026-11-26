@@ -5,6 +5,10 @@ import re
 from ..ast import IdentifierNode
 from ..refusals import WGSLRefusal
 from .stage_io_semantic_locations import semantic_location as shared_semantic_location
+from .wgsl_entry_resources import (
+    METAL_BINDING_CLASSES,
+    is_entry_opaque_resource_parameter,
+)
 from .wgsl_stage_io import is_system_semantic_key
 
 
@@ -14,6 +18,10 @@ class WGSLBindingMixin:
     def stage_return_attributes(self, stage_name, function):
         attributes = getattr(function, "attributes", []) or []
         if not attributes and stage_name == "vertex":
+            # A vertex entry that returns a bare float4, as MSL's ``vertex float4 f(...)`` does, returns the
+            # clip-space position (MSL section 5.2.3.3), the HLSL output's SV_Position.
+            if self.vector_shape(getattr(function, "return_type", None)) == ("f32", 4):
+                return ("@builtin(position)",)
             return ()
         if not attributes and stage_name == "fragment":
             return_type = getattr(function, "return_type", None)
@@ -287,9 +295,12 @@ class WGSLBindingMixin:
             arguments = getattr(attr, "arguments", []) or []
             if key in {"group", "set", "space"} and arguments:
                 group = self.generate_attribute_argument(arguments[0])
-            elif key in {"binding", "buffer"} and arguments:
+            elif key == "binding" and arguments:
                 binding = self.generate_attribute_argument(arguments[0])
                 register_class = None
+            elif key in METAL_BINDING_CLASSES and arguments:
+                binding = self.generate_attribute_argument(arguments[0])
+                register_class = METAL_BINDING_CLASSES[key]
             elif key == "register" and arguments:
                 binding, group, register_class = self.register_attribute_components(
                     arguments, group
@@ -457,4 +468,4 @@ class WGSLBindingMixin:
             return True
         if self.stage_uniform_parameter_type(parameter) is not None:
             return True
-        return False
+        return is_entry_opaque_resource_parameter(self, parameter)

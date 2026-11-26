@@ -3,6 +3,10 @@
 import re
 
 from ..refusals import WGSLRefusal
+from .wgsl_entry_resources import (
+    generate_entry_opaque_resource,
+    is_entry_opaque_resource_parameter,
+)
 from .wgsl_uniform_registers import wgsl_register_block_lines
 from .wgsl_workgroup_locals import WORKGROUP_QUALIFIERS
 
@@ -189,6 +193,8 @@ class WGSLGlobalDeclarationMixin:
                 f"{self.module_identifier_name(node.name)}: "
                 f"{self.type_name_string(param_type, allow_storage_resources=True)};"
             )
+        if is_entry_opaque_resource_parameter(self, node):
+            return generate_entry_opaque_resource(self, node)
         uniform_type = self.stage_uniform_parameter_type(node)
         if uniform_type is not None:
             self.validate_uniform_binding_type(uniform_type)

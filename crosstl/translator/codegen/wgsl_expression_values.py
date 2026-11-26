@@ -134,6 +134,25 @@ class WGSLExpressionValueMixin:
             return narrowed
         return f"{self.type_name_string(target_type)}({narrowed})"
 
+    def vector_element_conversion(self, rendered, target_type, source_type):
+        """A vector stored to a vector of the same width and another element type, else ``None``.
+
+        HLSL and CrossGL convert ``int2 r = sign(f)`` or ``uint2 r = countbits(i)`` implicitly; WGSL has no
+        implicit conversion between ``vecN<i32>``, ``vecN<u32>``, ``vecN<f32>`` and ``vecN<bool>``, so the value
+        becomes the value conversion ``vecN<T>(value)`` (WGSL section 17.1.2), which converts each component as
+        the scalar conversion does.
+        """
+        target_shape = self.vector_shape(target_type)
+        source_shape = self.vector_shape(source_type)
+        if target_shape is None or source_shape is None:
+            return None
+        elements = {"bool", "f16", "f32", "i32", "u32"}
+        if target_shape[1] != source_shape[1] or target_shape[0] == source_shape[0]:
+            return None
+        if target_shape[0] not in elements or source_shape[0] not in elements:
+            return None
+        return f"{self.type_name_string(target_type)}({rendered})"
+
     def normalized_type_name(self, vtype):
         try:
             return self.type_name_string(vtype) if vtype is not None else None

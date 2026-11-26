@@ -600,7 +600,13 @@ def helpers_in(tmp_path, build, body, helpers=""):
     """The binary16 helpers in the WGSL translation; the SPIR-V one validates and defines as many functions."""
     wgsl = build(tmp_path, body, "wgsl", helpers)
     vulkan = build(tmp_path, body, "vulkan", helpers)
-    functions = re.findall(r"^fn (\w+)\(", wgsl, flags=re.M)
+    # WGSL alone makes NaN and infinity bit constants through a function call, because a const-expression
+    # that is not a finite f32 is a WGSL shader-creation error; SPIR-V writes them as OpConstant.
+    functions = [
+        name
+        for name in re.findall(r"^fn (\w+)\(", wgsl, flags=re.M)
+        if name != "cgl_f32_from_bits"
+    ]
     assert vulkan.count(" OpFunction ") == len(functions)
     return wgsl, [name for name in functions if name.startswith("cgl_half")]
 
@@ -842,7 +848,7 @@ def test_initializers_outside_function_bodies_are_legalized(tmp_path):
     assert names == ["cgl_half_round"]
     assert "scale: f32 = 0.0999755859375;" in wgsl
     assert "-65504.0" in wgsl and "f32(0.0999755859375)" in wgsl
-    assert "cgl_half_round(f32(bitcast<f32>(2139095040u)))" in wgsl
+    assert "cgl_half_round(f32(cgl_f32_from_bits(bitcast<u32>(2139095040u))))" in wgsl
     glsl_helpers = "const float16_t bias = float16_t(0.1);\n"
     body = "    float16_t h = float16_t(a[i]) + bias;\n    o[i] = float(h);"
     wgsl, _ = helpers_in(tmp_path, glsl, body, glsl_helpers)
