@@ -208,6 +208,12 @@ def test_slang_functions_crossgl_names_otherwise_take_crossgl_names():
     assert spellings.spelling("slang", "getRealtimeClockLow", set()) == (
         "clockRealtime2x32EXT().x"
     )
+    # Outside Metal, Slang's sinpi, cospi and tanpi call sin, cos and tan of pi times the argument, which CrossGL's
+    # exact functions of the same names are not (hlsl.meta.slang).
+    assert spellings.spelling("slang", "sinpi", {"sin"}) == "sin(3.14159274 * {})"
+    assert spellings.spelling("slang", "cospi", {"cos"}) == "cos(3.14159274 * {})"
+    assert spellings.spelling("slang", "tanpi", {"tan"}) == "tan(3.14159274 * {})"
+    assert spellings.spelling("metal", "sinpi", {"sin"}) == "sinpi"
 
 
 def test_other_names_are_names_crossgl_defines():
