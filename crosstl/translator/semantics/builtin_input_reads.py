@@ -45,6 +45,9 @@ A fragment shader's ``gl_Layer``, ``gl_ViewportIndex``, ``gl_ViewIndex`` and ``g
 ``gl_SampleMaskIn`` is an array of 32-bit words, and these targets deliver one word, so a read of
 ``gl_SampleMaskIn[0]`` becomes the scalar input and any other read is refused.
 
+A function-form stage entry (``@compute fn probe(...)``, which the CUDA, HIP, OpenCL C and Mojo imports write) has no
+stage block: its helpers are the program's other functions, and it is threaded the same way.
+
 SPIR-V and HIP input declare a compute built-in as a stage variable (``uint3 gl_GlobalInvocationID @input
 @gl_GlobalInvocationID;``) that module-scope helpers read by name. The generators bind it in the entry point only,
 so a helper that reads it takes it as a trailing parameter, and the entry point passes the variable by its own name.
@@ -55,6 +58,7 @@ from __future__ import annotations
 import copy
 
 from .. import ast as A
+from ..stage_utils import STAGE_QUALIFIER_NAMES, normalize_stage_name
 from .builtin_values import BuiltinValueUnsupportedError, glsl_builtin_name
 from .hub_types import call_name
 from .rewrite import child_slots, get_child, set_child
@@ -134,6 +138,58 @@ _UNSIGNED = frozenset(
 def _stages(program):
     stages = getattr(program, "stages", None) or {}
     return list(stages.values() if isinstance(stages, dict) else stages)
+
+
+def _function_stage(function):
+    """The stage a function-form entry (``@compute fn``) names, or ``None`` for any other function."""
+    names = list(getattr(function, "qualifiers", None) or [])[:1] + [
+        getattr(attribute, "name", attribute)
+        for attribute in getattr(function, "attributes", None) or []
+    ]
+    for name in names:
+        stage = normalize_stage_name(name)
+        if stage in STAGE_QUALIFIER_NAMES:
+            return stage
+    return None
+
+
+def _entries(program):
+    """``(kind, entry, helpers, stage)`` for each stage block and each function-form stage entry of ``program``."""
+    functions = list(getattr(program, "functions", None) or [])
+    function_entries = [
+        function for function in functions if _function_stage(function) is not None
+    ]
+    module_helpers = [
+        function
+        for function in functions
+        if not any(function is entry for entry in function_entries)
+    ]
+    entries = [
+        (
+            _stage_kind(stage),
+            getattr(stage, "entry_point", None),
+            module_helpers + list(getattr(stage, "local_functions", None) or []),
+            stage,
+        )
+        for stage in _stages(program)
+    ]
+    entries += [
+        (_function_stage(entry), entry, module_helpers, None)
+        for entry in function_entries
+    ]
+    return [
+        (
+            kind,
+            entry,
+            [
+                function
+                for function in helpers
+                if function is not entry and getattr(function, "body", None) is not None
+            ],
+            stage,
+        )
+        for kind, entry, helpers, stage in entries
+    ]
 
 
 def _type_node(name):
@@ -384,19 +440,10 @@ def pass_builtin_inputs(program, target) -> int:
     # by every stage, so a later stage that reads the same built-in passes it to the parameter already there.
     threaded = {}
     changed = 0
-    for stage in _stages(program):
-        entry = getattr(stage, "entry_point", None)
-        kind = _stage_kind(stage)
+    for kind, entry, helpers, stage in _entries(program):
         inputs = _STAGE_INPUTS.get(kind)
         if inputs is None or not isinstance(getattr(entry, "body", None), A.BlockNode):
             continue
-        helpers = [
-            function
-            for function in list(getattr(program, "functions", None) or []) + list(
-                getattr(stage, "local_functions", None) or []
-            )
-            if function is not entry and getattr(function, "body", None) is not None
-        ]
         candidates = set(inputs) - program_names
         if "gl_SampleMaskIn" in candidates:
             _read_sample_mask_word([entry, *helpers], index, target, program_names)
