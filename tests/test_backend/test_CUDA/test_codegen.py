@@ -9202,10 +9202,11 @@ class TestCudaCodeGen:
             CudaToCrossGLConverter().generate, ast
         )
 
-        assert "sampler1D lineTex" in result
-        assert "sampler1D objectTex" in result
-        assert "var fetched: vec4<f32> = texelFetch(lineTex, x, 0);" in result
-        assert "var objectFetched: vec4<f32> = texelFetch(objectTex, x, 0);" in result
+        # tex1Dfetch reads a texture bound to linear memory: a texel buffer, read by element.
+        assert "samplerBuffer lineTex" in result
+        assert "samplerBuffer objectTex" in result
+        assert "var fetched: vec4<f32> = texelFetch(lineTex, x);" in result
+        assert "var objectFetched: vec4<f32> = texelFetch(objectTex, x);" in result
         assert "CUDA texture.tex1Dfetch sparse residency has no CrossGL form" in message
         assert "tex1Dfetch<float4>(" not in result
 

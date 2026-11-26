@@ -8,6 +8,7 @@ from ..CUDA.array_extents import IntegerConstants
 from ..CUDA.block_votes import BlockVoteLibrary, insert_block_vote_functions
 from ..CUDA.buffer_layout_import import EmittedBufferLayouts
 from ..CUDA.buffer_memory_qualifiers import buffer_memory_attributes
+from ..CUDA.callee_resource_hints import CalleeResourceHintMixin
 from ..CUDA.directed_rounding import (
     DirectedRoundingLibrary,
     insert_directed_rounding_functions,
@@ -116,6 +117,7 @@ class HipToCrossGLConverter(
     HipIntrinsicMixin,
     HipMathIntrinsicMixin,
     HipTextureMixin,
+    CalleeResourceHintMixin,
     HipSurfaceMixin,
     HipExpressionMixin,
     HipStatementMixin,
@@ -672,13 +674,21 @@ class HipToCrossGLConverter(
             for stmt in getattr(ast_node, "statements", None) or []
             if isinstance(stmt, FunctionNode)
         )
+        # The HIP program keeps its globals among its statements.
         self.global_surface_variable_types = {
             var.name: var.vtype
-            for var in getattr(ast_node, "global_variables", []) or []
+            for var in getattr(ast_node, "statements", []) or []
             if isinstance(var, VariableNode) and var.name
         }
         self.global_resource_object_type_hints = (
             self.collect_global_resource_object_type_hints(ast_node)
+        )
+        self.collect_callee_parameter_resource_hints(
+            [
+                stmt
+                for stmt in getattr(ast_node, "statements", None) or []
+                if isinstance(stmt, FunctionNode)
+            ]
         )
         self.resource_object_hint_scopes = []
         self.cooperative_group_scopes = [{}]
@@ -848,6 +858,7 @@ class HipToCrossGLConverter(
                             ),
                             resource_type,
                         )
+                self.collect_callee_resource_hints(hints, current)
                 # A global surface's element is merged over the whole program instead.
                 self.collect_surface_element_hint(
                     hints, current, variable_types, declared_names

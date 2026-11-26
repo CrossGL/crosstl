@@ -57,8 +57,15 @@ class CudaImportTypeMixin:
 
     def convert_cuda_resource_object_base_type(self, cuda_type, hint):
         cuda_type = self.strip_type_qualifiers(cuda_type)
-        if cuda_type == "cudaTextureObject_t" and hint.startswith("sampler"):
+        if cuda_type == "cudaTextureObject_t" and hint.startswith(
+            ("sampler", "isampler", "usampler")
+        ):
             return hint
+        if hint.endswith("samplerBuffer") and cuda_type.startswith("texture<"):
+            # A 1D texture reference read by tex1Dfetch is bound to linear memory: a texel buffer.
+            return self.texture_reference_sampler(
+                cuda_type, self.CUDA_TEXTURE_TYPE_MAPPING, texel_buffer=True
+            )
         if cuda_type == "cudaSurfaceObject_t" and "image" in hint:
             return hint
         return None
@@ -163,10 +170,19 @@ class CudaImportTypeMixin:
             return self.sanitize_crossgl_type_identifier(type_name)
         return type_name
 
+    def texture_element_crossgl_type(self, template_args):
+        """The CrossGL type of a texture fetch's element type ``T``, or ``None`` when the fetch names none."""
+        if not template_args:
+            return None
+        return self.convert_cuda_type_to_crossgl(template_args[0])
+
     def convert_cuda_resource_type(self, cuda_type):
         base_name, template_args = self.parse_cpp_template(cuda_type)
-        if base_name == "texture" and len(template_args) >= 2:
-            return self.CUDA_TEXTURE_TYPE_MAPPING.get(template_args[1])
+        if base_name == "texture" and template_args:
+            # texture<T, dim, mode>: the sampler of the value its fetches return (texture_elements).
+            return self.texture_reference_sampler(
+                cuda_type, self.CUDA_TEXTURE_TYPE_MAPPING
+            )
         if base_name == "surface" and len(template_args) >= 2:
             return self.CUDA_SURFACE_TYPE_MAPPING.get(template_args[1])
         return None

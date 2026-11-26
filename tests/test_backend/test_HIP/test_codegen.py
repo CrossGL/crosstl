@@ -2757,7 +2757,8 @@ class TestHipCodeGen:
         assert "var ambiguous: sampler;" in result
         assert "var surf: image2D;" in result
         assert "var lineSurf: image1D;" in result
-        assert "var lineTex: sampler1D;" in result
+        # tex1Dfetch reads a texture bound to linear memory: a texel buffer.
+        assert "var lineTex: samplerBuffer;" in result
         assert "var legacyTex: sampler2D;" in result
         assert "var lineSurface: image1D;" in result
         assert "var lineLayerSurface: image1DArray;" in result
@@ -2768,9 +2769,7 @@ class TestHipCodeGen:
         assert "var cubeSurface: imageCube;" in result
         assert "var cubeLayerSurface: imageCubeArray;" in result
         assert "var sampled: vec4<f32> = texture(tex, vec2<f32>(uv.x, uv.y));" in result
-        assert (
-            "var fetchedLine: vec4<f32> = texelFetch(lineTex, lineIndex, 0);" in result
-        )
+        assert "var fetchedLine: vec4<f32> = texelFetch(lineTex, lineIndex);" in result
         assert "var arraySample: vec4<f32> = texture(textures[1], uv);" in result
         assert "var paramSample: vec4<f32> = texture(paramTex, uv);" in result
         assert "var globalSample: vec4<f32> = texture(globalTex, uv);" in result
@@ -3198,7 +3197,8 @@ class TestHipCodeGen:
             HipToCrossGLConverter().generate, ast
         )
 
-        assert "sampler1D lineTex" in result
+        # lineTex is read both as a texel buffer (tex1Dfetch) and as a 1D texture (tex1D), so it takes no shape.
+        assert "sampler lineTex" in result
         assert "sampler2D tex" in result
         assert "sampler3D volumeTex" in result
         assert "sampler2DArray layerTex" in result

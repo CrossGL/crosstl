@@ -1877,8 +1877,9 @@ def test_external_rocm_texture_management_tex2d_atomic_codegen_reparse():
     assert body[5].value.name == "tex2D<unsigned char>"
     assert isinstance(body[8], AtomicOperationNode)
     assert body[8].operation == "atomicAdd"
-    assert "sampler2D tex_obj" in crossgl
-    assert "var val: u8 = texture(tex_obj, vec2<f32>(u, v));" in crossgl
+    # An unsigned char fetch reads an unsigned integer texture, whose first component is the byte.
+    assert "usampler2D tex_obj" in crossgl
+    assert "var val: u8 = u8(texture(tex_obj, vec2<f32>(u, v)).x);" in crossgl
     assert "atomicAdd(histogram[bin_idx], 1);" in crossgl
 
 

@@ -228,7 +228,8 @@ def test_native_hip_texture_fetch_modes_parse_and_compile_if_available(
     crossgl = convert_native_hip_to_crossgl(hip_code)
 
     assert "// Kernel: texture_fetch_modes" in crossgl
-    assert "sampler1D ramp" in crossgl
+    # tex1Dfetch reads a texture bound to linear memory: a texel buffer, read by element.
+    assert "samplerBuffer ramp" in crossgl
     assert "sampler2D tex" in crossgl
     assert "sampler3D volume" in crossgl
     assert (
@@ -237,7 +238,7 @@ def test_native_hip_texture_fetch_modes_parse_and_compile_if_available(
     )
     assert "var uv: vec2<f32> = vec2<f32>(0.25f, 0.75f);" in crossgl
     assert "var uvw: vec3<f32> = vec3<f32>(0.25f, 0.5f, 0.75f);" in crossgl
-    assert "var sample1D: f32 = texelFetch(ramp, gl_LocalInvocationID.x, 0);" in crossgl
+    assert "var sample1D: f32 = texelFetch(ramp, gl_LocalInvocationID.x).x;" in crossgl
     assert "var sample2D: vec4<f32> = texture(tex, vec2<f32>(uv.x, uv.y));" in crossgl
     assert (
         "var sample3D: vec4<f32> = texture("
