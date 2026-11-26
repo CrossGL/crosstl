@@ -19,6 +19,7 @@ shader Resources {
     const float WEIGHTS[4] = {0.125, 0.25, 0.5, 1.0};
     const vec2 OFFSET = vec2(1.0, 2.0);
     const int COUNT = 3;
+    device float acc[64] = {1.0, 2.0, 4.0};
     compute {
         layout(local_size_x = 64) in;
         buffer float* values;
@@ -47,6 +48,8 @@ shader Resources {
             ivec2 size = imageSize(target);
             outv[i] = tile[gl_LocalInvocationID.x] * weights[i] + BIAS + k + float(n + uint(size.x));
             outv[i] += WEIGHTS[i & 3u] + OFFSET.y + TINT.z + float(COUNT);
+            acc[i & 63u] = acc[i & 63u] * 2.0 + values[i];
+            outv[i] += acc[i & 63u];
             counts[i] = n;
         }
     }
@@ -77,6 +80,13 @@ def test_storage_buffers_are_device_globals(backend):
         for line in declarations
     )
     assert "float* values;" not in declarations
+
+
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_explicit_device_variables_are_device_globals(backend):
+    declarations = _declarations(_generate(backend))
+    assert "__device__ float acc[64] = {1.0f, 2.0f, 4.0f};" in declarations
+    assert "float acc[64] = {1.0f, 2.0f, 4.0f};" not in declarations
 
 
 @pytest.mark.parametrize("backend", ["cuda", "hip"])
