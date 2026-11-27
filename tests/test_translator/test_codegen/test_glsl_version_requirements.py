@@ -503,3 +503,67 @@ def test_noperspective_requirement_ignores_identifiers():
     assert needs_noperspective("noperspective vec2 uv;")
     assert not needs_noperspective("float noperspective_weight = 1.0;")
     assert not needs_noperspective("smooth in vec2 uv;")
+
+
+EARLY_FRAGMENT_TESTS_SHADER = """
+{version}
+shader EarlyFragmentTests {{
+    struct FragmentInput {{ vec2 uv; }}
+    struct FragmentOutput {{ vec4 color; }}
+    fragment {{
+        layout(early_fragment_tests) in;
+        FragmentOutput main(FragmentInput input) {{
+            FragmentOutput output;
+            output.color = vec4(input.uv, 0.0, 1.0);
+            return output;
+        }}
+    }}
+}}
+"""
+
+
+@pytest.mark.parametrize(
+    "version,emitted",
+    [
+        ("#version 330 core", "#version 420 core"),
+        ("#version 300 es", "#version 310 es"),
+    ],
+)
+def test_early_fragment_tests_raises_version(tmp_path, version, emitted):
+    # layout(early_fragment_tests) in; arrived in GLSL 4.20 and GLSL ES 3.10
+    # (section 4.4.1.3; #5059).
+    code = generate(EARLY_FRAGMENT_TESTS_SHADER.format(version=version), "fragment")
+
+    assert code.startswith(f"{emitted}\n")
+    assert "layout(early_fragment_tests) in;" in code
+    compile_with_glslang(tmp_path, code, "frag")
+
+
+def test_webgl_refuses_early_fragment_tests():
+    with pytest.raises(WebGLLoweringRefused) as raised:
+        generate(
+            EARLY_FRAGMENT_TESTS_SHADER.format(version=""),
+            "fragment",
+            codegen=WebGLCodeGen,
+        )
+
+    assert (
+        "GLSL version requirement: layout(early_fragment_tests) requires GLSL ES 3.10; "
+        "the target is #version 300 es" in str(raised.value)
+    )
+
+
+def test_early_fragment_tests_extension_and_identifiers():
+    requirements = generated_program_requirements(
+        "layout(early_fragment_tests) in;", ["fragment"]
+    )
+    assert len(requirements) == 1
+    assert resolve_version_line(
+        "#version 330 core", requirements, {"GL_ARB_shader_image_load_store"}
+    ) == ("#version 330 core", [])
+    assert (
+        generated_program_requirements(
+            "float early_fragment_tests = 1.0;", ["fragment"]
+        )
+        == []
+    )
