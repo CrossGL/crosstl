@@ -8110,6 +8110,35 @@ class TestCudaCodeGen:
         if shutil.which("nvcc") is not None:
             compile_cuda_if_nvcc_available(cuda_code, tmp_path)
 
+    def test_uint64_t_atomic_target_is_cast_to_unsigned_long_long(self):
+        source_code = """
+        shader Atomic64Uint64T {
+            compute {
+                void main(uint64_t* counters, uint index, uint64_t value) {
+                    uint64_t direct = atomicAdd(counters, value);
+                    uint64_t indexed = atomicAdd(counters[index], value);
+                    uint64_t block = atomicAdd_block(counters, value);
+                }
+            }
+        }
+        """
+
+        cuda_code = CudaCodeGen().generate(Parser(Lexer(source_code).tokens).parse())
+
+        assert (
+            "uint64_t direct = atomicAdd("
+            "reinterpret_cast<unsigned long long*>(counters), value);" in cuda_code
+        )
+        assert (
+            "uint64_t indexed = atomicAdd("
+            "reinterpret_cast<unsigned long long*>(&counters[index]), value);"
+            in cuda_code
+        )
+        assert (
+            "uint64_t block = atomicAdd_block("
+            "reinterpret_cast<unsigned long long*>(counters), value);" in cuda_code
+        )
+
     def test_scoped_atomics_emit_cuda_pointer_atomics(self, tmp_path):
         source_code = """
         shader ScopedAtomicsCUDA {

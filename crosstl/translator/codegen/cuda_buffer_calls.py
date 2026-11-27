@@ -352,8 +352,11 @@ class CudaBufferCallMixin:
             )
 
         target_expr = self.visit(target["target_expr"])
+        target_pointer = self.cuda_atomic_target_pointer(
+            f"&{target_expr}", target_type, scalar_kind
+        )
         value_args = ", ".join(args[1:])
-        return f"{intrinsic}(&{target_expr}, {value_args})"
+        return f"{intrinsic}({target_pointer}, {value_args})"
 
     def generate_plain_atomic_call(self, func_name, raw_args, args):
         """Lower CUDA atomics on ordinary scalar lvalues to pointer operands."""
@@ -439,8 +442,20 @@ class CudaBufferCallMixin:
             target_pointer = target_code
         else:
             target_pointer = f"&{target_code}"
+        target_pointer = self.cuda_atomic_target_pointer(
+            target_pointer, atomic_type, scalar_kind
+        )
         value_args = ", ".join(args[1:])
         return f"{intrinsic}({target_pointer}, {value_args})"
+
+    def cuda_atomic_target_pointer(self, target_pointer, atomic_type, scalar_kind):
+        """CUDA declares its 64-bit atomics only for ``unsigned long long*``, which
+        ``uint64_t`` is not on 64-bit Linux (``unsigned long``), so cast the target."""
+        if scalar_kind != "uint64" or self.convert_crossgl_type_to_cuda(
+            self.type_name_string(atomic_type)
+        ) in {"unsigned long long", "unsigned long long int"}:
+            return target_pointer
+        return f"reinterpret_cast<unsigned long long*>({target_pointer})"
 
     def is_plain_atomic_lvalue(self, expr):
         """Return whether an expression can be addressed for a CUDA atomic."""
