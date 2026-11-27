@@ -2269,6 +2269,26 @@ class TestHipCodeGen:
         assert "fmodf(a, b)" not in hip_code
         assert "fmodf(v, w)" not in hip_code
 
+    def test_native_half2_remainder_with_half_scalar_uses_float_helpers(self):
+        source_code = """
+        shader Mod {
+            f16vec2 p(f16vec2 v, half s) { return v % s; }
+            f16vec2 q(f16vec2 v, half s) { return mod(v, s); }
+        }
+        """
+
+        ast = Parser(Lexer(source_code).tokens).parse()
+        hip_code = HipCodeGen().generate(ast)
+
+        # Native half2 has no % operator and cannot be passed to fmodf. Both
+        # lanes must be converted to float, reduced, and packed again.
+        assert "__float2half(fmodf(__half2float(lhs.x), __half2float(rhs)))" in hip_code
+        assert "return __halves2half2(" in hip_code
+        assert "return cgl_half2_mod_scalar(v, s);" in hip_code
+        assert "return cgl_half2_glsl_mod_scalar(v, s);" in hip_code
+        assert "return (v % s);" not in hip_code
+        assert "return fmodf(v, s);" not in hip_code
+
     def test_half_vector_with_half_scalar_uses_scalar_helpers(self):
         source_code = """
         shader TestShader {

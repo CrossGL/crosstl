@@ -431,6 +431,23 @@ class VectorArithmeticMixin:
             }
         return None
 
+    def arithmetic_vector_type_info(self, type_name):
+        """Vector info for arithmetic helper generation, including native half2.
+
+        ``vector_type_info`` deliberately leaves native ``half2`` undescribed so
+        its arithmetic stays native. Binary ``%`` and ``mod`` cannot stay native
+        for half components, so use ``math_vector_type_info`` for that case. Its
+        constructor takes floats, while the helpers assemble already-converted
+        ``__half`` components, hence the constructor swap.
+        """
+        info = self.vector_type_info(type_name)
+        if info is not None:
+            return info
+        info = self.math_vector_type_info(type_name)
+        if info is not None and info.get("component_type") == "half":
+            return {**info, "constructor": "__halves2half2"}
+        return None
+
     def is_repeat_safe_expression(self, expr):
         """Return whether an expression can be safely emitted more than once."""
         if isinstance(expr, (IdentifierNode, VariableNode, LiteralNode)):
@@ -1022,6 +1039,20 @@ class VectorArithmeticMixin:
         right_type = self.expression_result_type(right_node)
         left_info = self.vector_type_info(left_type)
         right_info = self.vector_type_info(right_type)
+        if operator in {"%", "mod"}:
+            # Native half2 is deliberately absent from vector_type_info. Only
+            # half2 combined with a half scalar needs a vector helper here;
+            # half2 against half2 is handled by the dedicated remainder helper.
+            left_mapped = (
+                self.map_vector_arithmetic_type(left_type) if left_type else None
+            )
+            right_mapped = (
+                self.map_vector_arithmetic_type(right_type) if right_type else None
+            )
+            if left_mapped == "half2" and right_mapped == "half":
+                left_info = self.arithmetic_vector_type_info(left_type)
+            elif right_mapped == "half2" and left_mapped == "half":
+                right_info = self.arithmetic_vector_type_info(right_type)
         if not left_info and not right_info:
             return None
         if left_info and right_info:
