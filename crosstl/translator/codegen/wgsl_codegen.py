@@ -56,6 +56,7 @@ from .wgsl_array_constructors import (
 from .wgsl_bindings import WGSLBindingMixin
 from .wgsl_boolean_xor import wgsl_boolean_xor
 from .wgsl_buffer_atomics import ATOMIC_NAMES, WGSLBufferAtomicsMixin
+from .wgsl_buffer_dereferences import buffer_dereference_access
 from .wgsl_buffer_resources import WGSLBufferResourceMixin
 from .wgsl_builtin_options import WGSLBuiltinOptionMixin
 from .wgsl_call_lowering import WGSLCallLoweringMixin
@@ -904,6 +905,7 @@ class WGSLCodeGen(
         self._used_access_mode_identifiers = set()
         self._read_only_module_names = set()
         self._addressable_module_names = set()
+        self._buffer_pointer_module_names = set()
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
@@ -1341,6 +1343,9 @@ class WGSLCodeGen(
         if isinstance(expr, UnaryOpNode):
             if is_increment(expr):
                 self.reject_unordered_side_effect(expr)
+            element_access = buffer_dereference_access(self, expr)
+            if element_access is not None:
+                return self.generate_expression(element_access)
             operand = self.generate_expression(expr.operand)
             if expr.is_postfix:
                 return f"{operand}{expr.operator}"
