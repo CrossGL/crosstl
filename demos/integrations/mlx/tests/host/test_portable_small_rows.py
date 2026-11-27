@@ -22,6 +22,7 @@ from demos.integrations.mlx.portable_host import (
     small_row_packages,
     verify_small_rows,
 )
+from demos.integrations.mlx.tests.metal_fixture_macros import INSTANTIATE_KERNEL_DEFINE
 from tests.ci_helpers import assert_paths_covered
 
 ENTRY = "row_reduce_small_1_reduce_sumfloat32"
@@ -890,6 +891,7 @@ def test_cache_real_package_roundtrip_and_tampering(
         "#include <metal_stdlib>\nusing namespace metal;\n"
         "template <typename T>\n[[kernel]] void small_row(device T* out [[buffer(0)]], "
         "uint tid [[thread_position_in_grid]]) { out[tid] = T(simd_sum(tid)); }\n"
+        f"{INSTANTIATE_KERNEL_DEFINE}\n"
         f'instantiate_kernel("{ENTRY}", small_row, float)\n'
     )
     # This checks the package boundary with a synthetic kernel, not MLX coverage.

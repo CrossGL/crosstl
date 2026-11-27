@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 import pytest
 
+from demos.integrations.mlx.tests.metal_fixture_macros import INSTANTIATE_KERNEL_DEFINE
+
 ROOT = Path(__file__).resolve().parents[4]
 PINNED_MLX_COMMIT = "4367c73b60541ddd5a266ce4644fd93d20223b6e"
 CURRENT_MLX_COMMIT = "846d176227a0ac13d2667e58d2bb68b322109ab0"
@@ -579,7 +581,7 @@ template <int TAG>
   output[index] = value;
 }
 
-""" + "\n".join(instantiations) + "\n",
+""" + INSTANTIATE_KERNEL_DEFINE + "\n" + "\n".join(instantiations) + "\n",
         encoding="utf-8",
     )
     source_hash = hashlib.sha256(source_path.read_bytes()).hexdigest()
