@@ -7,6 +7,7 @@ from ..ast import (
     MemberAccessNode,
 )
 from .c_reference_parameters import (
+    mismatched_output_arguments,
     multi_component_swizzle_arguments,
     overlapping_output_arguments,
 )
@@ -511,6 +512,32 @@ class CudaTypeMixin:
                     "and assign it back"
                 ]
             )
+        mismatched = mismatched_output_arguments(
+            params,
+            raw_args,
+            self.cuda_output_parameter_type,
+            self.cuda_output_argument_type,
+        )
+        if mismatched:
+            raise CudaLoweringRefused(
+                [
+                    f"out/inout argument of another type: {func_name} receives "
+                    + ", ".join(
+                        f"argument {position} of type {actual} for a parameter of type {expected}"
+                        for position, actual, expected in mismatched
+                    )
+                    + "; a CUDA reference binds only an object of its own type; copy "
+                    "it into a local of the parameter type, pass that and assign it back"
+                ]
+            )
+
+    def cuda_output_parameter_type(self, parameter):
+        type_node = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        return self.map_type(type_node) if type_node is not None else None
+
+    def cuda_output_argument_type(self, argument):
+        type_node = self.expression_result_type(argument)
+        return self.map_type(type_node) if type_node else None
 
     def cuda_user_function_call_arguments(self, func_name, raw_args, args):
         """Expand user calls with CUDA sidecar resource arguments."""
