@@ -1762,11 +1762,25 @@ class SlangCodeGen(
                     node.operation, target_reason
                 )
 
-        # Each operand has its own type (a lane index is uint whatever the value is), so the
-        # expression the wave op result is assigned to does not type its operands.
-        args = ", ".join(
-            self.generate_expression_without_expected(arg) for arg in node.arguments
-        )
+        if (
+            node.operation in {"WaveReadLaneAt", "QuadReadLaneAt"}
+            and len(node.arguments) > 1
+        ):
+            rendered_args = [
+                self.generate_expression_without_expected(node.arguments[0]),
+                self.generate_expression_with_expected(node.arguments[1], "uint"),
+                *(
+                    self.generate_expression_without_expected(arg)
+                    for arg in node.arguments[2:]
+                ),
+            ]
+            args = ", ".join(rendered_args)
+        else:
+            # Each operand has its own type (a lane index is uint whatever the value is), so the
+            # expression the wave op result is assigned to does not type its operands.
+            args = ", ".join(
+                self.generate_expression_without_expected(arg) for arg in node.arguments
+            )
         call = f"{node.operation}({args})"
         return f"{conversion}({call})" if conversion else call
 
