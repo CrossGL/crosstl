@@ -4340,5 +4340,73 @@ def test_constant_buffer_codegen_from_colon_body():
         pytest.fail("Constant buffer parsing or code generation not implemented.")
 
 
+def test_mojo_kernel_unsafe_pointer_params_and_global_idx_codegen():
+    # Issue #2799: a Mojo GPU kernel over UnsafePointer buffers that reads
+    # MAX's global_idx was copied into CrossGL verbatim, so every target
+    # refused it with an undeclared-type error for the origin.
+    code = """
+    from std.math import *
+    from max.gpu import global_idx
+
+    def probe(inp: UnsafePointer[Float32, MutAnyOrigin], outp: UnsafePointer[Float32, MutAnyOrigin]):
+        var i: Int = global_idx.x
+        outp[i] = sqrt(inp[i])
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert "compute {" in generated_code
+    assert (
+        "void probe(RWStructuredBuffer<float> inp, " "RWStructuredBuffer<float> outp)"
+    ) in generated_code
+    assert "int i = gl_GlobalInvocationID.x;" in generated_code
+    assert "outp[i] = sqrt(inp[i]);" in generated_code
+    assert "UnsafePointer" not in generated_code
+    assert "MutAnyOrigin" not in generated_code
+    assert "global_idx" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_mojo_kernel_immut_unsafe_pointer_param_is_read_only_buffer_codegen():
+    # Issue #2799: mutability comes from the origin — an ImmutAnyOrigin
+    # buffer is read-only, a MutAnyOrigin buffer is read-write.
+    code = """
+    from max.gpu import global_idx
+
+    def probe(inp: UnsafePointer[Float32, ImmutAnyOrigin], outp: UnsafePointer[Float32, MutAnyOrigin]):
+        var i: Int = global_idx.x
+        outp[i] = inp[i]
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "void probe(StructuredBuffer<float> inp, " "RWStructuredBuffer<float> outp)"
+    ) in generated_code
+    assert "UnsafePointer" not in generated_code
+    assert "ImmutAnyOrigin" not in generated_code
+    parse_crossgl(generated_code)
+
+
+def test_mojo_kernel_scalar_dtype_unsafe_pointer_param_codegen():
+    # Issue #2799: UnsafePointer[Scalar[DType.x], Origin] lowers the same way.
+    code = """
+    from max.gpu import global_idx
+
+    def probe(inp: UnsafePointer[Scalar[DType.int32], MutAnyOrigin], outp: UnsafePointer[Scalar[DType.int32], MutAnyOrigin]):
+        var i: Int = global_idx.x
+        outp[i] = inp[i] + 1
+    """
+    ast = parse_code(tokenize_code(code))
+    generated_code = generate_code(ast)
+
+    assert (
+        "void probe(RWStructuredBuffer<int> inp, " "RWStructuredBuffer<int> outp)"
+    ) in generated_code
+    assert "UnsafePointer" not in generated_code
+    assert "Scalar[DType.int32]" not in generated_code
+    parse_crossgl(generated_code)
+
+
 if __name__ == "__main__":
     pytest.main()

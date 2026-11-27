@@ -152,6 +152,7 @@ class MojoToCrossGLConverter:
         "block_idx": "gl_WorkGroupID",
         "block_dim": "gl_WorkGroupSize",
         "thread_idx": "gl_LocalInvocationID",
+        "global_idx": "gl_GlobalInvocationID",
     }
     MOJO_DTYPE_TYPE_MAP = {
         "DType.float16": "half",
@@ -511,7 +512,22 @@ class MojoToCrossGLConverter:
             param_type = getattr(parameter, "vtype", None)
             if isinstance(param_type, str) and param_type.startswith("TileTensor["):
                 return True
+            if isinstance(param_type, str) and self.is_mojo_unsafe_pointer_type(
+                param_type
+            ):
+                return True
         return False
+
+    def is_mojo_unsafe_pointer_type(self, mojo_type):
+        """Return True when ``mojo_type`` is an UnsafePointer[T, Origin] that
+        lowers to a CrossGL buffer (see map_mojo_unsafe_pointer_type)."""
+        if not (
+            isinstance(mojo_type, str)
+            and mojo_type.startswith("UnsafePointer[")
+            and mojo_type.endswith("]")
+        ):
+            return False
+        return self.map_mojo_unsafe_pointer_type(mojo_type) is not None
 
     def collect_reachable_gpu_function_names(self, ast, kernel_names):
         if not kernel_names:
@@ -1840,21 +1856,55 @@ class MojoToCrossGLConverter:
 
     def map_mojo_gpu_resource_type(self, mojo_type):
         if not (
-            self.current_function_is_mojo_gpu_kernel
-            and isinstance(mojo_type, str)
-            and mojo_type.startswith("TileTensor[")
-            and mojo_type.endswith("]")
+            self.current_function_is_mojo_gpu_kernel and isinstance(mojo_type, str)
         ):
             return None
+        if mojo_type.startswith("TileTensor[") and mojo_type.endswith("]"):
+            payload = mojo_type[len("TileTensor[") : -1]
+            parts = self.split_top_level_comma_list(payload)
+            if not parts:
+                return None
+            dtype = self.resolve_mojo_dtype_type(parts[0])
+            if dtype is None:
+                return None
+            return f"RWStructuredBuffer<{dtype}>"
+        if mojo_type.startswith("UnsafePointer[") and mojo_type.endswith("]"):
+            return self.map_mojo_unsafe_pointer_type(mojo_type)
+        return None
 
-        payload = mojo_type[len("TileTensor[") : -1]
+    def map_mojo_unsafe_pointer_type(self, mojo_type):
+        """Lower an ``UnsafePointer[T, Origin]`` kernel parameter to a CrossGL
+        buffer of ``T``.
+
+        The element type comes from ``T`` — a plain scalar name, a ``DType``
+        spelling, or ``Scalar[DType.x]``. Mutability comes from the origin:
+        an ``Immut`` origin is a read-only ``StructuredBuffer`` and a mutable
+        origin is an ``RWStructuredBuffer``. Returns None when the pointer
+        cannot be lowered (unknown element type or a shared address space),
+        so the caller keeps the verbatim spelling.
+        """
+        payload = mojo_type[len("UnsafePointer[") : -1]
         parts = self.split_top_level_comma_list(payload)
-        if not parts:
+        if len(parts) < 2:
             return None
-        dtype = self.resolve_mojo_dtype_type(parts[0])
+        if any("address_space" in part for part in parts):
+            return None
+        dtype = self.resolve_mojo_pointer_element_type(parts[0])
         if dtype is None:
             return None
+        origin = ", ".join(parts[1:])
+        if "Immut" in origin:
+            return f"StructuredBuffer<{dtype}>"
         return f"RWStructuredBuffer<{dtype}>"
+
+    def resolve_mojo_pointer_element_type(self, element_expr):
+        element_expr = element_expr.strip()
+        if element_expr.startswith("Scalar[") and element_expr.endswith("]"):
+            inner = element_expr[len("Scalar[") : -1].strip()
+            dtype = self.resolve_mojo_dtype_type(inner)
+            if dtype is not None:
+                return dtype
+        return self.resolve_mojo_dtype_type(element_expr)
 
     def resolve_mojo_dtype_type(self, dtype_expr):
         dtype_expr = dtype_expr.strip()
