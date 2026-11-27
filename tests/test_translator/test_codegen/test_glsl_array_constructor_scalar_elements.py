@@ -79,6 +79,48 @@ def test_glsl_array_constructors_leave_typed_elements_and_scalar_arrays_alone():
     assert "float f[2] = float[2](1.0, 2.0);" in code
 
 
+NON_ARRAY_SCALAR_TO_MATRIX_CGL = """
+shader Probe5077 {
+    buffer float* outp;
+    mat4 scale(mat4 m) { return m; }
+    mat4 pick() { return 5.0; }
+    compute {
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        void main() {
+            uint i = gl_GlobalInvocationID.x;
+            mat4 m;
+            m = 2.0;
+            mat4 d = 2.0;
+            mat4 k = scale(3.0);
+            mat4 r = pick();
+            outp[i] = m[0][1] + d[0][1] + k[0][1] + r[0][1];
+        }
+    }
+}
+"""
+
+
+def test_glsl_scalar_to_matrix_stays_bare_outside_array_constructors():
+    # #5077 review: #3636 settles what a scalar means only for array
+    # elements (``mat4(1.0)`` is the identity there). CrossGL has no rule
+    # for an implicit scalar-to-matrix conversion anywhere else, so a scalar
+    # assigned to a matrix variable, used as a matrix initializer, returned
+    # from a matrix function, or passed to a matrix parameter must be left
+    # exactly as written -- glslang rejects it, so the problem stays visible
+    # instead of silently compiling with diagonal semantics nobody chose.
+    code = GLSLCodeGen().generate_stage(
+        crosstl.translator.parse(NON_ARRAY_SCALAR_TO_MATRIX_CGL), "compute"
+    )
+
+    assert "m = 2.0;" in code
+    assert "mat4 d = 2.0;" in code
+    assert "scale(3.0)" in code
+    assert "return 5.0;" in code
+    assert "mat4(2.0)" not in code
+    assert "mat4(3.0)" not in code
+    assert "mat4(5.0)" not in code
+
+
 def test_glsl_array_constructor_scalar_elements_validate_if_available(tmp_path):
     glslang = shutil.which("glslangValidator")
     if glslang is None:

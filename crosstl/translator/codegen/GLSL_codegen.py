@@ -9778,7 +9778,9 @@ class GLSLCodeGen(
             for function in generator.collect_functions(ast)
         )
 
-    def glsl_expected_type_conversion(self, expr, generated, expected_type):
+    def glsl_expected_type_conversion(
+        self, expr, generated, expected_type, is_array_constructor_element=False
+    ):
         if expected_type is None or not isinstance(generated, str):
             return generated
         registered_binding = self.glsl_registered_scalar_structure_contract(
@@ -9840,9 +9842,15 @@ class GLSLCodeGen(
         expected = self.glsl_value_type_info(expected_type)
         if expected is None:
             # Matrices are not arithmetic types, so a matrix expected type
-            # has no value info; a scalar for one is still written as the
-            # matrix constructor, as in an array constructor's ``mat4(1.0)``
-            # element. A matrix or vector source is left exactly as before.
+            # has no value info. A scalar for one is written as the matrix
+            # constructor ONLY for an array constructor's element (#3636:
+            # ``mat4(1.0)`` there is the identity, so the meaning is
+            # settled). Everywhere else CrossGL has no rule for an implicit
+            # scalar-to-matrix conversion, so the scalar is left exactly as
+            # written and glslang rejects it instead of silently compiling
+            # with diagonal semantics (#5077 review).
+            if not is_array_constructor_element:
+                return generated
             try:
                 mapped_expected_type = self.map_type(expected_type)
             except OpenGLTemplateTypeError:
@@ -10042,7 +10050,12 @@ class GLSLCodeGen(
         is written as the element type's constructor (``vec3(1.0)``,
         ``mat4(1.0)``); every other argument keeps no expected type and is
         written exactly as before. Returns ``None`` when the callee is not
-        an array constructor whose element type is a vector or matrix.
+        an array constructor whose element type is a vector or matrix. Each
+        returned info is ``(name, expected_type, qualifiers,
+        is_array_constructor_element)``; the flag marks the expected types
+        this helper assigned, so ``glsl_expected_type_conversion`` wraps a
+        scalar for a matrix expected type only here and never for an
+        assignment, initializer, return, or call argument (#5077 review).
         """
         if func_name is None:
             func_name = self.glsl_array_of_arrays_constructor_name(
@@ -10075,7 +10088,7 @@ class GLSLCodeGen(
                     and info["family"] in {"float", "int", "uint"}
                 ):
                     expected_type = element_type
-            parameter_infos.append((None, expected_type, ()))
+            parameter_infos.append((None, expected_type, (), expected_type is not None))
         return parameter_infos
 
     @staticmethod
