@@ -84,6 +84,9 @@ VEC4_ALIGNMENT = 16
 CROSSGL_SCALARS = {
     "float": "float",
     "int": "int",
+    "float16": "float16",
+    "float16_t": "float16",
+    "half": "float16",
     "uint": "uint",
     "bool": "bool",
     "double": "double",
@@ -91,11 +94,19 @@ CROSSGL_SCALARS = {
 CROSSGL_VECTOR_PREFIXES = {
     "vec": "float",
     "ivec": "int",
+    "f16vec": "float16",
     "uvec": "uint",
     "bvec": "bool",
     "dvec": "double",
 }
 CROSSGL_MATRIX_PREFIXES = {"mat": "float", "dmat": "double"}
+
+
+# HLSL-style half-precision vector spellings the HLSL importer emits.
+_HALF_VECTOR_ALIASES = {
+    **{f"half{n}": ("float16", n) for n in (2, 3, 4)},
+    **{f"float16{n}": ("float16", n) for n in (2, 3, 4)},
+}
 
 
 def declared_buffer_layout(attributes):
@@ -407,6 +418,16 @@ def crossgl_layout_type(
     if type_name in CROSSGL_SCALARS:
         return scalar_type(CROSSGL_SCALARS[type_name])
     vector_match = re.fullmatch(r"(vec|ivec|uvec|bvec|dvec)([234])", type_name)
+    # Half-precision vector spellings: ``half2``/``half3``/``half4``,
+    # ``float162``/``float163``/``float164`` and ``f16vec[234]``.
+    if type_name in _HALF_VECTOR_ALIASES:
+        scalar, components = _HALF_VECTOR_ALIASES[type_name]
+        return vector_type(scalar, components)
+    f16vec_match = re.fullmatch(r"(f16vec)([234])", type_name)
+    if f16vec_match is not None:
+        return vector_type(
+            CROSSGL_VECTOR_PREFIXES[f16vec_match.group(1)], int(f16vec_match.group(2))
+        )
     if vector_match is not None:
         return vector_type(
             CROSSGL_VECTOR_PREFIXES[vector_match.group(1)], int(vector_match.group(2))
