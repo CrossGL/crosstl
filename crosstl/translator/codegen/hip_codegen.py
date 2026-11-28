@@ -257,6 +257,7 @@ class HipCodeGen(
         self.query_resource_names = set()
         self.query_metadata_function_params = {}
         self.query_functions_by_name = {}
+        self.overloaded_function_names = set()
         self.structured_buffer_length_names = set()
         self.structured_buffer_length_function_params = {}
         self.current_structured_buffer_length_parameters = {}
@@ -396,6 +397,12 @@ class HipCodeGen(
         }
         self.query_functions_by_name = {
             name: func for name, func in self.query_functions_by_name.items() if name
+        }
+        function_names = [
+            getattr(func, "name", None) for func in self.query_collect_functions(node)
+        ]
+        self.overloaded_function_names = {
+            name for name in function_names if name and function_names.count(name) > 1
         }
         self.reserve_explicit_hip_resource_bindings(node)
 

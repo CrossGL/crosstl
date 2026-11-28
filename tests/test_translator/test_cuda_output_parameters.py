@@ -226,3 +226,31 @@ def test_output_arguments_of_another_type_are_refused(
         _translate(tmp_path, source, backend)
     assert "out/inout argument of another type" in str(error.value)
     assert message in str(error.value)
+
+
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_output_argument_types_of_overloads_and_generics_are_not_compared(
+    tmp_path, backend
+):
+    # The function index keeps one overload per name, and a generic ``T`` is
+    # deduced from the call, so neither is compared with the argument's type.
+    source = """
+    shader main {
+        buffer float* results;
+        void inc(inout float value) { value = value + 1.0; }
+        void inc(inout int value) { value = value + 1; }
+        void bump<T>(inout T value) { value = value + T(1.0); }
+        compute {
+        @ numthreads(1, 1, 1)
+        void main() {
+            float f = 1.0;
+            int n = 1;
+            inc(f);
+            inc(n);
+            bump(f);
+            results[0] = f + float(n);
+        }
+        }
+    }
+    """
+    _translate(tmp_path, source, backend)

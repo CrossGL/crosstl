@@ -307,12 +307,21 @@ class HipBufferMetadataMixin:
                     "and assign it back"
                 ]
             )
-        mismatched = mismatched_output_arguments(
-            params,
-            raw_args,
-            self.hip_output_parameter_type,
-            self.hip_output_argument_type,
-        )
+        # The function index keeps one overload per name, so the parameters of an
+        # overloaded name may belong to another overload than the one called.
+        mismatched = []
+        if func_name not in self.overloaded_function_names:
+            callee = self.query_functions_by_name.get(func_name)
+            mismatched = mismatched_output_arguments(
+                params,
+                raw_args,
+                self.hip_output_parameter_type,
+                self.hip_output_argument_type,
+                {
+                    getattr(generic, "name", generic)
+                    for generic in getattr(callee, "generic_params", None) or []
+                },
+            )
         if mismatched:
             raise HipLoweringRefused(
                 [
