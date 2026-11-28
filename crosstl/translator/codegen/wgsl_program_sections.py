@@ -19,6 +19,7 @@ from .global_specialization_constants import (
 from .stage_utils import (
     normalize_stage_name,
 )
+from .wgsl_buffer_dereferences import buffer_pointer_module_names
 from .wgsl_clip_distances import (
     CLIP_DISTANCES_ENABLE_DIRECTIVE,
     collect_clip_distance_members,
@@ -108,6 +109,7 @@ class WGSLProgramSectionMixin:
         self._used_access_mode_identifiers = set()
         self._read_only_module_names = set()
         self._addressable_module_names = set()
+        self._buffer_pointer_module_names = set()
         self._module_storage_texture_access_modes = {}
         self._inferred_storage_texture_access_modes = {}
         self._module_resource_bindings = {}
@@ -352,6 +354,9 @@ class WGSLProgramSectionMixin:
         )
         self._addressable_module_names = addressable_module_names(
             self, global_variable_nodes, stage_resource_parameters
+        )
+        self._buffer_pointer_module_names = buffer_pointer_module_names(
+            self, global_variable_nodes
         )
         self._inferred_storage_texture_access_modes = (
             self.inferred_storage_texture_access_modes(
