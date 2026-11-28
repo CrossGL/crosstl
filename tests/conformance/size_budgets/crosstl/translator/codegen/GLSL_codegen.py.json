@@ -1,7 +1,7 @@
 {
  "functions": {
   "GLSLCodeGen.__init__": 770,
-  "GLSLCodeGen._generate_program_attempt": 1807,
+  "GLSLCodeGen._generate_program_attempt": 1824,
   "GLSLCodeGen.annotate_glsl_control_flow_intervals": 1660,
   "GLSLCodeGen.annotate_glsl_control_flow_intervals.<locals>.visit": 682,
   "GLSLCodeGen.collect_private_pointer_array_size_hints": 420,
@@ -21,5 +21,5 @@
   "GLSLCodeGen.glsl_workgroup_pointer_direct_access_intervals.<locals>.visit": 837,
   "GLSLCodeGen.validate_glsl_software_subgroup_helpers": 516
  },
- "module": 13349
+ "module": 13451
 }
