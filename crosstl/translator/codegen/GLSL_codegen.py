@@ -4151,6 +4151,13 @@ class GLSLCodeGen(
                     memory_qualifiers = " ".join(
                         part for part in (memory_qualifiers, "writeonly") if part
                     )
+                es_access = self.glsl_es_image_access_qualifier(
+                    vtype, node, memory_qualifiers
+                )
+                if es_access:
+                    memory_qualifiers = " ".join(
+                        part for part in (memory_qualifiers, es_access) if part
+                    )
                 precision_qualifiers = self.resource_precision_qualifiers(node)
                 qualifier_parts = []
                 if layout:
