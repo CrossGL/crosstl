@@ -47735,6 +47735,86 @@ def test_glsl_cube_storage_image_access_rejects_indexed_writeonly_load():
         GLSLCodeGen().generate(ast)
 
 
+GLSL_ES_STORAGE_IMAGE_SHADER = """
+shader GLSLESStorageImageAccess {{
+    compute {{
+        layout(local_size_x = 1, local_size_y = 1, local_size_z = 1) in;
+        buffer vec4* outp;
+        layout({image_format}) uniform image2D img;
+        void main() {{
+            uint i = gl_GlobalInvocationID.x;
+            {body}
+        }}
+    }}
+}}
+"""
+
+
+def glsl_es_storage_image_code(body, image_format="rgba32f", target_profile="gles"):
+    shader = GLSL_ES_STORAGE_IMAGE_SHADER.format(image_format=image_format, body=body)
+    return GLSLCodeGen(target_profile=target_profile).generate(
+        crosstl.translator.parse(shader)
+    )
+
+
+@pytest.mark.parametrize(
+    ("body", "qualifier"),
+    [
+        pytest.param("outp[i] = imageLoad(img, ivec2(0, 0));", "readonly", id="load"),
+        pytest.param(
+            "outp[i] = vec4(float(imageSize(img).x));", "readonly", id="size-query"
+        ),
+        pytest.param("imageStore(img, ivec2(0, 0), outp[i]);", "writeonly", id="store"),
+    ],
+)
+def test_glsl_es_storage_image_gets_the_access_qualifier_its_format_requires(
+    tmp_path, body, qualifier
+):
+    # GLSL ES 3.10 section 4.10: only r32f, r32i and r32ui images may be both read and written.
+    generated_code = glsl_es_storage_image_code(body)
+
+    assert re.search(
+        rf"layout\(rgba32f, [^)]*\)\) {qualifier} uniform image2D img;", generated_code
+    )
+    glslang = shutil.which("glslangValidator")
+    if glslang is None:
+        pytest.skip("glslangValidator is not installed")
+    shader_path = tmp_path / "image.comp"
+    shader_path.write_text(generated_code, encoding="utf-8")
+    result = subprocess.run(
+        [glslang, str(shader_path)], capture_output=True, text=True, timeout=60
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+GLSL_ES_READ_WRITE_IMAGE_BODY = (
+    "vec4 v = imageLoad(img, ivec2(0, 0)); imageStore(img, ivec2(0, 0), v + outp[i]);"
+)
+
+
+def test_glsl_es_refuses_a_read_write_storage_image_of_another_format():
+    with pytest.raises(
+        ValueError, match="read-write access only to r32f, r32i and r32ui images"
+    ):
+        glsl_es_storage_image_code(GLSL_ES_READ_WRITE_IMAGE_BODY)
+
+
+def test_glsl_es_read_write_storage_image_keeps_a_single_channel_format_unqualified():
+    generated_code = glsl_es_storage_image_code(
+        GLSL_ES_READ_WRITE_IMAGE_BODY, image_format="r32f"
+    )
+
+    assert re.search(r"layout\(r32f, [^)]*\)\) uniform image2D img;", generated_code)
+
+
+def test_desktop_glsl_storage_image_is_left_without_an_access_qualifier():
+    generated_code = glsl_es_storage_image_code(
+        "outp[i] = imageLoad(img, ivec2(0, 0));", target_profile=None
+    )
+
+    assert re.search(r"layout\(rgba32f, [^)]*\)\) uniform image2D img;", generated_code)
+
+
 def test_glsl_multisample_storage_images_lower_load_store_and_atomics():
     shader = """
     shader GLSLMultisampleStorageImages {

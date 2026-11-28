@@ -1334,6 +1334,39 @@ class OpenGLResourceBindingMixin:
             return "r32ui"
         return None
 
+    GLSL_ES_READ_WRITE_IMAGE_FORMATS = frozenset({"r32f", "r32i", "r32ui"})
+
+    def glsl_es_image_access_qualifier(self, vtype, node, memory_qualifiers):
+        """The access qualifier a GLSL ES storage image needs and lacks, or ``""``.
+
+        GLSL ES 3.10 (section 4.10) lets only ``r32f``, ``r32i`` and ``r32ui`` images be both read and
+        written, so an image of any other format must be declared ``readonly`` or ``writeonly``. An image
+        that is only loaded from or size-queried is ``readonly``, and one that is only stored to is
+        ``writeonly``. One that is both, or that is passed to a program function, has no valid declaration.
+        """
+        if not self.glsl_es_target or not self.is_storage_image_type(vtype):
+            return ""
+        if {"readonly", "writeonly"} & set(memory_qualifiers.split()):
+            return ""
+        image_format = self.image_format_qualifier(vtype, node)
+        if not image_format or image_format in self.GLSL_ES_READ_WRITE_IMAGE_FORMATS:
+            return ""
+        names = {self.resource_node_name(node)}
+        if getattr(node, "name", None):
+            names.add(self.glsl_global_identifier_name(node.name))
+        usages = set()
+        for name in names:
+            usages |= self.glsl_image_usages.get(name, set())
+        if not usages - {"load"}:
+            return "readonly"
+        if usages == {"store"}:
+            return "writeonly"
+        raise OpenGLRefusal(
+            f"GLSL ES storage image '{self.resource_node_name(node)}' has format "
+            f"{image_format} and is both read and written or passed to a function; "
+            "GLSL ES allows read-write access only to r32f, r32i and r32ui images"
+        )
+
     def opaque_resource_layout(self, vtype, binding, node=None):
         image_format = self.image_format_qualifier(vtype, node)
         return self.glsl_resource_layout_prefix(
