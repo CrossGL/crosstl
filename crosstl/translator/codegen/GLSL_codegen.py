@@ -9836,7 +9836,9 @@ class GLSLCodeGen(
             for function in generator.collect_functions(ast)
         )
 
-    def glsl_expected_type_conversion(self, expr, generated, expected_type):
+    def glsl_expected_type_conversion(
+        self, expr, generated, expected_type, is_array_constructor_element=False
+    ):
         if expected_type is None or not isinstance(generated, str):
             return generated
         registered_binding = self.glsl_registered_scalar_structure_contract(
@@ -9897,6 +9899,29 @@ class GLSLCodeGen(
             )
         expected = self.glsl_value_type_info(expected_type)
         if expected is None:
+            # Matrices are not arithmetic types, so a matrix expected type
+            # has no value info. A scalar for one is written as the matrix
+            # constructor ONLY for an array constructor's element (#3636:
+            # ``mat4(1.0)`` there is the identity, so the meaning is
+            # settled). Everywhere else CrossGL has no rule for an implicit
+            # scalar-to-matrix conversion, so the scalar is left exactly as
+            # written and glslang rejects it instead of silently compiling
+            # with diagonal semantics (#5077 review).
+            if not is_array_constructor_element:
+                return generated
+            try:
+                mapped_expected_type = self.map_type(expected_type)
+            except OpenGLTemplateTypeError:
+                return generated
+            if self.glsl_matrix_dimensions(mapped_expected_type) is not None:
+                actual_type = self.glsl_source_expression_type(expr)
+                actual = self.glsl_value_type_info(actual_type)
+                if (
+                    actual is not None
+                    and actual["width"] == 1
+                    and actual["family"] in {"float", "int", "uint"}
+                ):
+                    return f"{mapped_expected_type}({generated})"
             return generated
         actual_type = self.glsl_source_expression_type(expr)
         actual = self.glsl_value_type_info(actual_type)
@@ -10069,6 +10094,60 @@ class GLSLCodeGen(
             for _ in range(extent - len(padded))
         )
         return padded
+
+    def glsl_array_constructor_element_parameter_infos(
+        self, func_name, call_args, expr
+    ):
+        """Per-argument expected types for a GLSL array constructor call.
+
+        A GLSL array constructor takes one value of the element type per
+        element (GLSL 4.60 section 5.4.4), so a scalar argument where a
+        vector or matrix element is expected is rejected by glslang with
+        ``'constructor' : not enough data provided for construction``. Give
+        each scalar argument the element type as its expected type, so it
+        is written as the element type's constructor (``vec3(1.0)``,
+        ``mat4(1.0)``); every other argument keeps no expected type and is
+        written exactly as before. Returns ``None`` when the callee is not
+        an array constructor whose element type is a vector or matrix. Each
+        returned info is ``(name, expected_type, qualifiers,
+        is_array_constructor_element)``; the flag marks the expected types
+        this helper assigned, so ``glsl_expected_type_conversion`` wraps a
+        scalar for a matrix expected type only here and never for an
+        assignment, initializer, return, or call argument (#5077 review).
+        """
+        if func_name is None:
+            func_name = self.glsl_array_of_arrays_constructor_name(
+                getattr(expr, "function", None)
+            )
+        # An array constructor's name ends with its extent; a generic call with an
+        # array type argument, such as ``pick<float[2]>``, is not one.
+        if not isinstance(func_name, str) or not func_name.rstrip().endswith("]"):
+            return None
+        array_type = self.glsl_outer_array_type(
+            fold_array_type_counts(func_name, self.glsl_active_literal_int_constants())
+        )
+        if array_type is None:
+            return None
+        _extent_text, element_type = array_type
+        mapped_element_type = self.map_type(element_type)
+        if not (
+            self.is_vector_value_type(mapped_element_type)
+            or self.glsl_matrix_dimensions(mapped_element_type) is not None
+        ):
+            return None
+        parameter_infos = []
+        for arg in call_args:
+            expected_type = None
+            if not isinstance(arg, str):
+                info = self.glsl_value_type_info(self.glsl_source_expression_type(arg))
+                if (
+                    info is not None
+                    and info["width"] == 1
+                    and info["family"] in {"float", "int", "uint"}
+                ):
+                    expected_type = element_type
+            parameter_infos.append((None, expected_type, (), expected_type is not None))
+        return parameter_infos
 
     @staticmethod
     def glsl_array_of_arrays_constructor_name(callee):

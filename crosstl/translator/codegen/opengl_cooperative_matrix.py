@@ -40,7 +40,9 @@ from .opengl_values import (
 class OpenGLCooperativeMatrixMixin:
     """Cooperative matrix members of ``GLSLCodeGen``."""
 
-    def generate_expression_with_expected(self, expr, expected_type):
+    def generate_expression_with_expected(
+        self, expr, expected_type, is_array_constructor_element=False
+    ):
         expected_type = self.type_name_string(expected_type)
         narrowed = narrowed_integer_literal(self, expr, expected_type)
         if narrowed is not None:
@@ -62,7 +64,12 @@ class OpenGLCooperativeMatrixMixin:
                 generated = self.generate_expression(expr)
         finally:
             self.current_expression_expected_type = previous_expected_type
-        converted = self.glsl_expected_type_conversion(expr, generated, expected_type)
+        converted = self.glsl_expected_type_conversion(
+            expr,
+            generated,
+            expected_type,
+            is_array_constructor_element=is_array_constructor_element,
+        )
         half_width = self.glsl_half_width(expected_type)
         if half_width is not None and half_width == self.glsl_half_width(
             self.glsl_source_expression_type(expr)

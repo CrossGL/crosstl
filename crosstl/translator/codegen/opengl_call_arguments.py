@@ -489,12 +489,25 @@ class OpenGLCallArgumentMixin:
         ]
         pairs = []
         for index, arg in enumerate(call_args):
-            param_name, param_type, param_qualifiers = (
+            param_info = (
                 filtered_parameter_infos[index]
                 if index < len(filtered_parameter_infos)
                 else (None, None, ())
             )
-            pairs.append((arg, param_name, param_type, param_qualifiers))
+            # Parameter infos are usually 3-tuples; the array-constructor
+            # helper appends a fourth element marking an expected type it
+            # assigned to an array element (#3636, #5077).
+            param_name, param_type, param_qualifiers = param_info[:3]
+            is_array_constructor_element = len(param_info) > 3 and bool(param_info[3])
+            pairs.append(
+                (
+                    arg,
+                    param_name,
+                    param_type,
+                    param_qualifiers,
+                    is_array_constructor_element,
+                )
+            )
         return pairs
 
     def generate_function_call_arguments(
@@ -506,11 +519,17 @@ class OpenGLCallArgumentMixin:
             param_name,
             param_type,
             param_qualifiers,
+            is_array_constructor_element,
         ) in self.function_call_argument_pairs(
             func_name, call_args, parameter_infos=parameter_infos
         ):
             generated = self.generate_function_call_argument(
-                func_name, arg, param_name, param_type, param_qualifiers
+                func_name,
+                arg,
+                param_name,
+                param_type,
+                param_qualifiers,
+                is_array_constructor_element=is_array_constructor_element,
             )
             if isinstance(generated, list):
                 args.extend(generated)
@@ -519,7 +538,13 @@ class OpenGLCallArgumentMixin:
         return args
 
     def generate_function_call_argument(
-        self, func_name, arg, param_name, param_type, param_qualifiers=()
+        self,
+        func_name,
+        arg,
+        param_name,
+        param_type,
+        param_qualifiers=(),
+        is_array_constructor_element=False,
     ):
         self.union_storage.validate_argument(arg, param_type, param_qualifiers)
         validate_range_reference_argument(self, arg, param_type, param_qualifiers)
@@ -619,7 +644,11 @@ class OpenGLCallArgumentMixin:
                 return self.generate_expression(arg)
         generated = self.glsl_wide_integer_literal_argument(
             arg,
-            self.generate_expression_with_expected(arg, param_type),
+            self.generate_expression_with_expected(
+                arg,
+                param_type,
+                is_array_constructor_element=is_array_constructor_element,
+            ),
             param_type,
         )
         return self.glsl_precise_argument(arg, generated, param_type)
