@@ -185,3 +185,72 @@ def test_generic_callees_with_bindable_arguments_translate(tmp_path, backend):
     )
     assert "bump_vec2(w, " in code
     assert "bump_float(v.x, a);" in code
+
+
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+@pytest.mark.parametrize(
+    ("signature", "call", "message"),
+    [
+        (
+            "void count(out int k)",
+            "count(f);",
+            "count receives argument 1 of type float for a parameter of type int",
+        ),
+        (
+            "void count(inout float k)",
+            "count(n);",
+            "count receives argument 1 of type int for a parameter of type float",
+        ),
+    ],
+)
+def test_output_arguments_of_another_type_are_refused(
+    tmp_path, backend, signature, call, message
+):
+    # Issue #3197: a C++ reference binds only an object of its own type.
+    source = f"""
+    shader main {{
+        buffer float* results;
+        {signature} {{ k = k + 3; }}
+        compute {{
+        @ numthreads(1, 1, 1)
+        void main() {{
+            float f = 0.0;
+            int n = 1;
+            {call}
+            results[0] = f + float(n);
+        }}
+        }}
+    }}
+    """
+    with pytest.raises(REFUSED[backend]) as error:
+        _translate(tmp_path, source, backend)
+    assert "out/inout argument of another type" in str(error.value)
+    assert message in str(error.value)
+
+
+@pytest.mark.parametrize("backend", ["cuda", "hip"])
+def test_output_argument_types_of_overloads_and_generics_are_not_compared(
+    tmp_path, backend
+):
+    # The function index keeps one overload per name, and a generic ``T`` is
+    # deduced from the call, so neither is compared with the argument's type.
+    source = """
+    shader main {
+        buffer float* results;
+        void inc(inout float value) { value = value + 1.0; }
+        void inc(inout int value) { value = value + 1; }
+        void bump<T>(inout T value) { value = value + T(1.0); }
+        compute {
+        @ numthreads(1, 1, 1)
+        void main() {
+            float f = 1.0;
+            int n = 1;
+            inc(f);
+            inc(n);
+            bump(f);
+            results[0] = f + float(n);
+        }
+        }
+    }
+    """
+    _translate(tmp_path, source, backend)

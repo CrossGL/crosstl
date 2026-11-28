@@ -29,6 +29,7 @@ from ..ast import (
 __all__ = [
     "OUTPUT_QUALIFIERS",
     "is_output_parameter",
+    "mismatched_output_arguments",
     "multi_component_swizzle_arguments",
     "overlapping_output_arguments",
     "reference_declarator",
@@ -134,4 +135,35 @@ def multi_component_swizzle_arguments(parameters, arguments, swizzle_components)
                 current = getattr(
                     current, "array", getattr(current, "array_expr", None)
                 )
+    return found
+
+
+def mismatched_output_arguments(
+    parameters, arguments, parameter_type, argument_type, generic_names=()
+):
+    """``(position, argument type, parameter type)`` for each ``out``/``inout`` argument of another type.
+
+    GLSL converts such an argument on the way in and out, but an lvalue reference binds only an object of its own
+    type, so a ``float`` passed to ``out int`` does not compile. ``parameter_type`` and ``argument_type`` return
+    the target spelling of a parameter or argument, or ``None`` when it is not known; unknown types are skipped,
+    and so is a parameter whose type is one of the callee's ``generic_names``, such as ``T``, which a call deduces.
+    ``position`` counts from 1.
+    """
+    found = []
+    for position, (parameter, argument) in enumerate(
+        zip(parameters, arguments), start=1
+    ):
+        if not is_output_parameter(parameter):
+            continue
+        if isinstance(
+            getattr(parameter, "param_type", getattr(parameter, "vtype", None)),
+            ArrayType,
+        ):
+            continue
+        expected = parameter_type(parameter)
+        actual = argument_type(argument)
+        if expected in generic_names:
+            continue
+        if expected and actual and expected != actual:
+            found.append((position, actual, expected))
     return found

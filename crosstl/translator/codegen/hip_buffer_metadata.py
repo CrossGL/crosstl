@@ -7,6 +7,7 @@ from ..ast import (
     MemberAccessNode,
 )
 from .c_reference_parameters import (
+    mismatched_output_arguments,
     multi_component_swizzle_arguments,
     overlapping_output_arguments,
 )
@@ -306,6 +307,41 @@ class HipBufferMetadataMixin:
                     "and assign it back"
                 ]
             )
+        # The function index keeps one overload per name, so the parameters of an
+        # overloaded name may belong to another overload than the one called.
+        mismatched = []
+        if func_name not in self.overloaded_function_names:
+            callee = self.query_functions_by_name.get(func_name)
+            mismatched = mismatched_output_arguments(
+                params,
+                raw_args,
+                self.hip_output_parameter_type,
+                self.hip_output_argument_type,
+                {
+                    getattr(generic, "name", generic)
+                    for generic in getattr(callee, "generic_params", None) or []
+                },
+            )
+        if mismatched:
+            raise HipLoweringRefused(
+                [
+                    f"out/inout argument of another type: {func_name} receives "
+                    + ", ".join(
+                        f"argument {position} of type {actual} for a parameter of type {expected}"
+                        for position, actual, expected in mismatched
+                    )
+                    + "; a HIP reference binds only an object of its own type; copy "
+                    "it into a local of the parameter type, pass that and assign it back"
+                ]
+            )
+
+    def hip_output_parameter_type(self, parameter):
+        type_node = getattr(parameter, "param_type", getattr(parameter, "vtype", None))
+        return self.map_type(type_node) if type_node is not None else None
+
+    def hip_output_argument_type(self, argument):
+        type_node = self.expression_result_type(argument)
+        return self.map_type(type_node) if type_node else None
 
     def hip_user_function_call_arguments(self, func_name, raw_args, args):
         """Expand user calls with HIP sidecar resource arguments."""
