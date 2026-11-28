@@ -2,9 +2,9 @@
 
 ``threadgroup float* words = (threadgroup float*)tile;`` over ``threadgroup float tile[128]`` views the array with
 its own element type, so it is the array itself plus an offset. GLSL output refused every such view with "without a
-concrete shared-array backing object" because the pointer binding did not look through the view. A view that
-changes the element type stays refused with a typed diagnostic: a GLSL ``shared`` array has one element type and
-cannot be aliased.
+concrete shared-array backing object" because the pointer binding did not look through the view. A view of another
+scalar width packs the array into 32-bit words instead (see ``test_glsl_groupshared_word_views.py``); only a view
+that keeps the 32-bit width but changes the element type stays refused with a typed diagnostic.
 """
 
 import shutil
@@ -112,7 +112,7 @@ def test_metal_reinterpret_cast_to_its_own_element_type(tmp_path):
     )
 
 
-@pytest.mark.parametrize("element", ["half", "uint", "int"])
+@pytest.mark.parametrize("element", ["uint", "int"])
 def test_views_that_change_the_element_type_are_refused(tmp_path, element):
     with pytest.raises(PointerReinterpretationError) as raised:
         _translate(tmp_path, SOURCE % {"element": element})

@@ -121,6 +121,7 @@ from .glsl_exact_lookups import glsl_call_names_resolving_to
 from .glsl_float_atomic_storage import FloatAtomicStorage
 from .glsl_fragment_depth_layout import entry_depth_redeclarations
 from .glsl_fragment_interlock import plan_fragment_interlock, wrap_fragment_interlock
+from .glsl_groupshared_word_views import lower_glsl_groupshared_word_views
 from .glsl_guarded_offsets import call_offset_relation
 from .glsl_helper_stage_guards import (
     glsl_helper_stage_macros,
@@ -2808,6 +2809,9 @@ class GLSLCodeGen(
         )
         ast = lower_reference_aliases(ast)
         ast = lower_private_vector_views(ast, "opengl")
+        # Shared arrays cannot alias another element type, so views of
+        # another width share one array of 32-bit words.
+        ast = lower_glsl_groupshared_word_views(ast)
         separate_ast = ast
         ast, self.combined_sampler_records = lower_combined_sampler_pairs(
             ast, self.LOWERING_REFUSAL_TYPE.label
